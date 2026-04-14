@@ -39,7 +39,8 @@ services:
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     env_file: .env
     depends_on: [clickhouse]
-    # Port 8000 intentionally NOT exposed — Caddy reverse proxies via Docker network
+    ports:
+      - "8000:8000"  # direct access until domain + Caddy added in Phase 6
     profiles: [prod]
 
   litellm:
