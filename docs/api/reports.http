@@ -1,0 +1,22 @@
+### Technical report for NVDA
+GET http://localhost:8000/api/v1/reports/technical/NVDA
+
+###
+
+### Fundamental report for NVDA
+GET http://localhost:8000/api/v1/reports/fundamental/NVDA
+
+###
+
+### Summary report for NVDA
+GET http://localhost:8000/api/v1/reports/summary/NVDA
+
+###
+
+### News report for NVDA
+GET http://localhost:8000/api/v1/reports/news/NVDA
+
+###
+
+### Technical report for AAPL
+GET http://localhost:8000/api/v1/reports/technical/AAPL

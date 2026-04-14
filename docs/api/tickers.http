@@ -1,0 +1,2 @@
+### List all active tickers
+GET http://localhost:8000/api/v1/tickers

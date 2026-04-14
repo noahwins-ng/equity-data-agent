@@ -1,0 +1,7 @@
+### Search news for NVDA earnings
+GET http://localhost:8000/api/v1/search/news?ticker=NVDA&query=earnings&limit=5
+
+###
+
+### Search news for AAPL supply chain
+GET http://localhost:8000/api/v1/search/news?ticker=AAPL&query=supply%20chain&limit=5

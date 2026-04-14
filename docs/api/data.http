@@ -1,0 +1,62 @@
+### OHLCV data for NVDA (daily)
+GET http://localhost:8000/api/v1/ohlcv/NVDA?timeframe=daily
+
+###
+
+### OHLCV data for NVDA (weekly)
+GET http://localhost:8000/api/v1/ohlcv/NVDA?timeframe=weekly
+
+###
+
+### OHLCV data for NVDA (monthly)
+GET http://localhost:8000/api/v1/ohlcv/NVDA?timeframe=monthly
+
+###
+
+### Indicator data for NVDA (daily)
+GET http://localhost:8000/api/v1/indicators/NVDA?timeframe=daily
+
+###
+
+### Indicator data for AAPL (weekly)
+GET http://localhost:8000/api/v1/indicators/AAPL?timeframe=weekly
+
+###
+
+### Fundamental ratios for NVDA
+GET http://localhost:8000/api/v1/fundamentals/NVDA
+
+###
+
+### Dashboard summary (all tickers, single request)
+GET http://localhost:8000/api/v1/dashboard/summary
+
+###
+
+### Ticker list (from shared registry)
+GET http://localhost:8000/api/v1/tickers
+
+###
+
+### Health check (ClickHouse + Qdrant connectivity)
+GET http://localhost:8000/api/v1/health
+
+###
+
+### Technical report for NVDA (text — for agent)
+GET http://localhost:8000/api/v1/reports/technical/NVDA
+
+###
+
+### Fundamental report for NVDA (text — for agent)
+GET http://localhost:8000/api/v1/reports/fundamental/NVDA
+
+###
+
+### Summary report for NVDA (text — for agent, "at a glance")
+GET http://localhost:8000/api/v1/reports/summary/NVDA
+
+###
+
+### News report for NVDA (text — depends on Phase 4 data)
+GET http://localhost:8000/api/v1/reports/news/NVDA

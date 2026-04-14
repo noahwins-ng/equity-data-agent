@@ -1,0 +1,36 @@
+# Environment
+.env
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+
+# uv
+uv.lock
+
+# Dagster
+.dagster/
+storage/
+schedules/
+history/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Type checking
+.pyright/
+.mypy_cache/
