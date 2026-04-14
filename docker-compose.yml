@@ -17,7 +17,7 @@ services:
     build:
       context: .
       target: dagster
-    command: dagster-webserver -m dagster_pipelines.definitions -h 0.0.0.0 -p 3000
+    command: uv run dagster-webserver -m dagster_pipelines.definitions -h 0.0.0.0 -p 3000
     env_file: .env
     depends_on: [clickhouse]
     # Port 3000 intentionally NOT exposed — access via SSH tunnel only
@@ -27,7 +27,7 @@ services:
     build:
       context: .
       target: dagster
-    command: dagster-daemon run -m dagster_pipelines.definitions
+    command: uv run dagster-daemon run -m dagster_pipelines.definitions
     env_file: .env
     depends_on: [clickhouse]
     profiles: [prod]
@@ -36,7 +36,7 @@ services:
     build:
       context: .
       target: api
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    command: uv run uvicorn api.main:app --host 0.0.0.0 --port 8000
     env_file: .env
     depends_on: [clickhouse]
     ports:
