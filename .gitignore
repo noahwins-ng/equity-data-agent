@@ -10,8 +10,6 @@ dist/
 build/
 .venv/
 
-# uv
-uv.lock
 
 # Dagster
 .dagster/
