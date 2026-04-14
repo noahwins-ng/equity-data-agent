@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.git/
+.github/
+frontend/
+node_modules/
+.env
+docs/
+migrations/
+tests/
