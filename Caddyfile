@@ -1,0 +1,7 @@
+# Replace your-domain.com with your actual domain before first deploy.
+# Caddy automatically provisions a Let's Encrypt TLS certificate — DNS must
+# resolve to this server's public IP before starting, or HTTPS provisioning fails.
+
+your-domain.com {
+    reverse_proxy api:8000
+}
