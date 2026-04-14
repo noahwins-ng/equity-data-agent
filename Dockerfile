@@ -13,6 +13,8 @@ RUN uv sync --frozen --no-dev --all-packages
 
 ENV PATH="/app/.venv/bin:$PATH"
 
+RUN mkdir -p /dagster_home
+
 # ── Dagster target ────────────────────────────────────────────────────────────
 FROM base AS dagster
 
