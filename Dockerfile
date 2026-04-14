@@ -9,7 +9,7 @@ WORKDIR /app
 COPY . .
 
 # Install all workspace deps in one pass — simpler and reliable for uv workspaces
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --all-packages
 
 ENV PATH="/app/.venv/bin:$PATH"
 
