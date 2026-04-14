@@ -4,6 +4,8 @@ One-time setup for a fresh server. After this, every push to `main` auto-deploys
 
 **Prerequisites:** QNT-36 (Docker Compose) and QNT-37 (DDL migrations) merged to main.
 
+> **Domain/Caddy is a Phase 6 concern.** Caddy + DNS is only needed so Vercel (HTTPS) can call the FastAPI backend without mixed-content errors. Until the frontend exists, skip steps 5 and 6 and access the API directly on port 8000.
+
 ---
 
 ## 1. Provision the Server
@@ -71,35 +73,30 @@ Set all production values:
 
 ---
 
-## 5. Set Your Domain in Caddyfile
+## 5. Expose Port 8000 (no-domain setup)
+
+Until you have a domain, expose the API port directly so you can verify the stack. Edit `docker-compose.yml`:
 
 ```bash
-nano Caddyfile
+nano docker-compose.yml
 ```
 
-Replace `your-domain.com` with your actual domain. Example:
+Add `ports` under the `api` service:
 
+```yaml
+  api:
+    ...
+    ports:
+      - "8000:8000"
 ```
-api.myequityagent.com {
-    reverse_proxy api:8000
-}
-```
+
+Skip the `caddy` service entirely for now — it requires a domain for TLS. You can remove it from the `prod` profile or just leave it (it will fail to start without a valid domain, but the rest of the stack will still come up).
+
+> **Phase 6:** When the frontend is ready, remove the `ports` exposure, update `Caddyfile` with your real domain, point DNS, and let Caddy handle HTTPS termination.
 
 ---
 
-## 6. Point DNS
-
-In your DNS provider, add an **A record**:
-
-```
-your-domain.com  →  <hetzner-public-ip>
-```
-
-Caddy requires DNS to resolve before it can obtain a Let's Encrypt TLS certificate. Wait for propagation before starting services.
-
----
-
-## 7. Add GitHub Secrets
+## 6. Add GitHub Secrets
 
 In GitHub: repo **Settings → Secrets and variables → Actions → New repository secret**
 
@@ -116,7 +113,7 @@ cat ~/.ssh/id_ed25519   # or whichever key you added to the server
 
 ---
 
-## 8. First Deploy
+## 7. First Deploy
 
 On the server:
 
@@ -129,7 +126,7 @@ This will pull images and build the `dagster` and `api` containers. Takes a few 
 
 ---
 
-## 9. Run DDL Migrations
+## 8. Run DDL Migrations
 
 Wait for ClickHouse to be healthy, then run migrations:
 
@@ -143,24 +140,26 @@ make migrate
 
 ---
 
-## 10. Verify
+## 9. Verify
 
 ```bash
 # All services running
 docker compose ps
 
-# API health check
-curl https://your-domain.com/health
+# API health check (no domain — direct IP)
+curl http://<your-ip>:8000/health
 ```
 
 Expected: all services `Up`, health check returns `200 OK`.
 
 **Acceptance criteria (from QNT-83):**
-- [ ] All prod services healthy: `clickhouse`, `dagster`, `dagster-daemon`, `api`, `litellm`, `caddy`
-- [ ] `https://your-domain.com/health` returns 200 with valid TLS
+- [ ] All prod services healthy: `clickhouse`, `dagster`, `dagster-daemon`, `api`, `litellm`
+- [ ] `http://<your-ip>:8000/health` returns 200
 - [ ] GitHub Actions CD completes on next push to main
 - [ ] ClickHouse databases `equity_raw` and `equity_derived` with all 9 tables exist
 - [ ] GitHub secrets configured
+
+> `caddy` is deferred to Phase 6 when a domain is available.
 
 ---
 
