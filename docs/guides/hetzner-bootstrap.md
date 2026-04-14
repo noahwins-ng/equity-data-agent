@@ -19,13 +19,14 @@ In the [Hetzner Cloud dashboard](https://console.hetzner.cloud):
 
 ---
 
-## 2. Install Docker
+## 2. Install Docker and Make
 
-SSH into the server and install Docker Engine:
+SSH into the server and install Docker Engine and make:
 
 ```bash
 ssh root@<your-ip>
 curl -fsSL https://get.docker.com | sh
+apt install make -y
 ```
 
 Verify:
@@ -33,6 +34,7 @@ Verify:
 ```bash
 docker --version
 docker compose version
+make --version
 ```
 
 ---
