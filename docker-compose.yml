@@ -19,6 +19,8 @@ services:
       target: dagster
     command: /app/.venv/bin/dagster-webserver -m dagster_pipelines.definitions -h 0.0.0.0 -p 3000
     env_file: .env
+    environment:
+      - DAGSTER_HOME=/dagster_home
     depends_on: [clickhouse]
     # Port 3000 intentionally NOT exposed — access via SSH tunnel only
     profiles: [prod]
@@ -29,6 +31,8 @@ services:
       target: dagster
     command: /app/.venv/bin/dagster-daemon run -m dagster_pipelines.definitions
     env_file: .env
+    environment:
+      - DAGSTER_HOME=/dagster_home
     depends_on: [clickhouse]
     profiles: [prod]
 
