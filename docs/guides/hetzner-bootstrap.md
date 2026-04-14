@@ -19,7 +19,7 @@ In the [Hetzner Cloud dashboard](https://console.hetzner.cloud):
 
 ---
 
-## 2. Install Docker and Make
+## 2. Install Docker and Make (first SSH into the server)
 
 SSH into the server and install Docker Engine and make:
 
