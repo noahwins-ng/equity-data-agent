@@ -30,4 +30,5 @@ jobs:
         run: uv run pyright
 
       - name: Test
-        run: uv run pytest
+        # Exit code 5 = no tests collected; treat as success during bootstrap
+        run: uv run pytest || [ $? -eq 5 ]
