@@ -75,24 +75,11 @@ Set all production values:
 
 ## 5. Expose Port 8000 (no-domain setup)
 
-Until you have a domain, expose the API port directly so you can verify the stack. Edit `docker-compose.yml`:
+Port 8000 is already exposed in `docker-compose.yml` — no manual edit needed. This allows direct access via `http://<your-ip>:8000` until a domain + Caddy is added in Phase 6.
 
-```bash
-nano docker-compose.yml
-```
+The `caddy` service will fail to start without a valid domain — that's expected and won't affect the rest of the stack.
 
-Add `ports` under the `api` service:
-
-```yaml
-  api:
-    ...
-    ports:
-      - "8000:8000"
-```
-
-Skip the `caddy` service entirely for now — it requires a domain for TLS. You can remove it from the `prod` profile or just leave it (it will fail to start without a valid domain, but the rest of the stack will still come up).
-
-> **Phase 6:** When the frontend is ready, remove the `ports` exposure, update `Caddyfile` with your real domain, point DNS, and let Caddy handle HTTPS termination.
+> **Phase 6:** Remove the `ports` exposure from the `api` service, update `Caddyfile` with your real domain, point DNS, and Caddy handles HTTPS automatically.
 
 ---
 
