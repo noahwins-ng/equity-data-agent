@@ -1,4 +1,4 @@
-# Resume
+# Start Session
 
 Restore context for the current work-in-progress. Run this at the start of a new session when you're picking up where you left off.
 

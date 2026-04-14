@@ -1,0 +1,67 @@
+services:
+  # ── Shared ──────────────────────────────────────────────────────────────────
+  clickhouse:
+    image: clickhouse/clickhouse-server:24-alpine
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    ports:
+      - "8123:8123"  # exposed for local dev; blocked by Hetzner firewall in prod
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+    profiles: [dev, prod]
+
+  # ── Prod-only services ───────────────────────────────────────────────────────
+  dagster:
+    build:
+      context: .
+      target: dagster
+    command: dagster-webserver -m dagster_pipelines.definitions -h 0.0.0.0 -p 3000
+    env_file: .env
+    depends_on: [clickhouse]
+    # Port 3000 intentionally NOT exposed — access via SSH tunnel only
+    profiles: [prod]
+
+  dagster-daemon:
+    build:
+      context: .
+      target: dagster
+    command: dagster-daemon run -m dagster_pipelines.definitions
+    env_file: .env
+    depends_on: [clickhouse]
+    profiles: [prod]
+
+  api:
+    build:
+      context: .
+      target: api
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    env_file: .env
+    depends_on: [clickhouse]
+    # Port 8000 intentionally NOT exposed — Caddy reverse proxies via Docker network
+    profiles: [prod]
+
+  litellm:
+    image: ghcr.io/berriai/litellm:v1.56.0
+    command: --config /app/config.yaml --port 4000
+    env_file: .env
+    volumes:
+      - ./litellm_config.yaml:/app/config.yaml
+    # Port 4000 intentionally NOT exposed — services call http://litellm:4000 internally
+    profiles: [prod]
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+    depends_on: [api]
+    profiles: [prod]
+
+volumes:
+  clickhouse_data:  # persists ClickHouse data — NEVER omit this volume
+  caddy_data:       # persists TLS certificates across restarts

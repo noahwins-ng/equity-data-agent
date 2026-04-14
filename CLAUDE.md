@@ -121,7 +121,7 @@ make pr QNT=34 TITLE="description"  # Push + create PR
 
 ### Workflow Commands (Claude Code slash commands)
 ```
-/resume                   # Start of session: restore context from branch + Linear
+/start-session            # Start of session: restore context from branch + Linear
 /cycle-start              # Start of week: show cycle issues, suggest next pick
 /cycle-end                # End of week: summarize shipped, roll over incomplete
 /sync-linear QNT-34       # Sync issue status (Todo/In Progress/In Review/Done)
