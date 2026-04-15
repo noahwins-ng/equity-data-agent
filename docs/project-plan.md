@@ -74,7 +74,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - **Leverage**: D/E
     - **Liquidity**: current ratio
     - Downstream dependency on BOTH `fundamentals` AND `ohlcv_raw` — price-based ratios (P/E, P/B, P/S, FCF yield) require latest close price from `ohlcv_raw`
-- [ ] Add Dagster sensors to trigger downstream recomputation when raw data refreshes — QNT-46
+- [x] Add Dagster sensors to trigger downstream recomputation when raw data refreshes — QNT-46
     - `ohlcv_raw` materialization → triggers `ohlcv_weekly`, `ohlcv_monthly`, `technical_indicators_daily`, `fundamental_summary`
     - `fundamentals` materialization → triggers `fundamental_summary`
     - This means price-based ratios (P/E, P/B, P/S, FCF yield) update daily with fresh close prices, while statement-based ratios (margins, growth) update weekly with fresh fundamentals
