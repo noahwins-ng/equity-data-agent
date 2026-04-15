@@ -43,7 +43,7 @@ Review `docs/architecture/system-overview.md` against what was actually shipped 
 Update any sections that no longer reflect reality. If nothing changed, skip.
 
 ### Step 6: Cleanup
-Run `/sync-docs` to reconcile `docs/project-plan.md` — the completed milestone's items should all be ticked and any cancelled issues removed.
+Invoke `/sync-docs` via the Skill tool to reconcile `docs/project-plan.md` with Linear. Do NOT re-implement its logic here.
 
 ### Step 7: Post Linear Project Status Update
 Post a status update on the Equity Data Agent project using `save_status_update`:
