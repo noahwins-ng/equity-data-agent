@@ -31,7 +31,7 @@ Updated automatically by `/ship` and `/sync-docs`.
 - **Schedule**: Daily OHLCV at ~5-6 PM ET (after market close, data settles). Weekly fundamentals on weekends.
 
 **Deliverables**:
-- [ ] Implement `ohlcv_raw` Dagster asset (yfinance → ClickHouse) — QNT-41
+- [x] Implement `ohlcv_raw` Dagster asset (yfinance → ClickHouse) — QNT-41
     - `StaticPartitionsDefinition` by ticker
     - Backfill: `period="2y"`, Incremental: `period="5d"`
     - Rate limiting: 1-2s sleep between tickers, exponential backoff on 429s
