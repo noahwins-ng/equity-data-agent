@@ -1,4 +1,4 @@
-.PHONY: setup dev-dagster dev-api dev-frontend test lint format migrate seed tunnel issue pr build help
+.PHONY: setup dev-dagster dev-api dev-frontend test test-integration lint format migrate seed tunnel issue pr build check-prod help
 
 # ─── Setup ────────────────────────────────────────────────────
 
@@ -28,13 +28,23 @@ tunnel: ## Open SSH tunnel to Hetzner ClickHouse (port 8123)
 
 # ─── Docker ───────────────────────────────────────────────────
 
+check-prod: ## Check prod service status and API health via SSH
+	@echo "=== Services ==="
+	@ssh hetzner "cd /opt/equity-data-agent && docker compose --profile prod ps"
+	@echo ""
+	@echo "=== API Health ==="
+	@ssh hetzner "curl -sf http://localhost:8000/health && echo '' || echo 'UNREACHABLE'"
+
 build: ## Build prod Docker images locally (run when changing Dockerfile, docker-compose.yml, or deps)
 	docker compose --profile prod build
 
 # ─── Quality ──────────────────────────────────────────────────
 
-test: ## Run all tests
-	uv run pytest
+test: ## Run unit tests (no infrastructure required)
+	uv run pytest -m "not integration" || [ $$? -eq 5 ]
+
+test-integration: ## Run integration tests (requires: make tunnel)
+	uv run pytest -m integration -v
 
 lint: ## Run linter + type checker
 	uv run ruff check .

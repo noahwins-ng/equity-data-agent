@@ -19,3 +19,23 @@ jobs:
             cd /opt/equity-data-agent
             git pull origin main
             docker compose --profile prod up -d --build
+
+      - name: Verify deploy
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HETZNER_HOST }}
+          username: ${{ secrets.HETZNER_USER }}
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          script: |
+            echo "Waiting for API to come up..."
+            for i in $(seq 1 12); do
+              if curl -sf http://localhost:8000/health; then
+                echo ""
+                echo "Deploy verified OK"
+                exit 0
+              fi
+              echo "Attempt $i/12 — retrying in 5s..."
+              sleep 5
+            done
+            echo "API health check failed after 60s"
+            exit 1
