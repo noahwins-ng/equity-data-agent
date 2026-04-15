@@ -87,6 +87,7 @@ Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`
 The `docs/` folder is the shared brain for this project. Read relevant sections when starting work on a new area.
 
 - `docs/architecture/` — how the system works (read first)
+- `docs/patterns.md` — established code recipes (read before implementing)
 - `docs/decisions/` — ADRs: why we chose X over Y (read when questioning a design choice)
 - `docs/guides/` — how to do common tasks
 - `docs/api/*.http` — API test files (open with VS Code REST Client)
@@ -125,7 +126,8 @@ make pr QNT=34 TITLE="description"  # Push + create PR
 
 #### Session & Cycle
 ```
-/session-check            # Start of session: restore context from branch + Linear
+/session-check            # Full context restore: branch + Linear + AC status
+/status                   # Quick glance: branch, commits, uncommitted (no API calls)
 /cycle-start              # Start of week: show cycle issues, check plan staleness, suggest next pick
 /cycle-end                # End of week: summarize shipped, roll over incomplete, prompt retro if milestone done
 /retro                    # End of milestone: review, capture lessons, sync docs, prep next phase
@@ -133,11 +135,12 @@ make pr QNT=34 TITLE="description"  # Push + create PR
 
 #### Issue Lifecycle
 ```
-/go QNT-34                # Full pipeline: pick → implement → review pause → sanity-check → ship
+/go QNT-34                # Full orchestrator: pick → implement (WIP commits) → sanity-check (auto-fix) → ship
 /pick QNT-34              # Start an issue: checkout branch + Linear In Progress + show acceptance criteria
-/implement QNT-34         # Implement the code: explore codebase → write code → lint/format/types
-/sanity-check QNT-34      # Pre-PR gate: lint + types + tests + acceptance criteria → Linear In Review
-/ship QNT-34              # Full pipeline: sanity check → tick project-plan.md → PR → CI → merge → Linear Done
+/implement QNT-34         # Implement: read patterns → write code → WIP commits → targeted tests → AC validation
+/sanity-check QNT-34      # Pre-PR gate: lint + types + tests + AC (code/dev/prod classification) → In Review
+/ship QNT-34              # Ship: squash WIPs → tick project-plan.md → PR → CI → merge → post-deploy verify → Done
+/fix QNT-34               # Error recovery: diagnose failure → fix → resume pipeline from failed step
 /sync-linear QNT-34       # Manual override: sync issue status when Linear has drifted
 ```
 
@@ -146,3 +149,14 @@ make pr QNT=34 TITLE="description"  # Push + create PR
 /change-scope             # Formalise a requirement change (add/drop/modify): spec + Linear + ADR if warranted
 /sync-docs                # Reconcile project-plan.md with Linear: tick Done, remove Cancelled, surface gaps
 ```
+
+### Hooks (Automatic — no manual invocation)
+
+Configured in `.claude/settings.json`, scripts in `.claude/hooks/`:
+
+| Hook | Trigger | Effect |
+|------|---------|--------|
+| session-start | Session begins | Auto-detects branch, injects QNT context |
+| auto-format | After Edit/Write | Runs `ruff format` on every Python file edited |
+| protect-repo | Before Bash | Blocks force push, push to main, hard reset, rm -rf |
+| check-uncommitted | Session ends | Warns about uncommitted work |
