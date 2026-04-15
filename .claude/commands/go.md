@@ -67,7 +67,9 @@ Before moving on, evaluate each acceptance criterion:
 
 Run the full `/sanity-check` logic:
 - `uv run ruff check .`, `uv run ruff format --check .`, `uv run pyright`, `uv run pytest`
-- Verify all AC from Linear — classify each as **[code AC]** (verifiable by reading), **[dev execution AC]** (must have actually been run locally), or **[prod execution AC]** (verify post-deploy). Any dev execution AC not yet demonstrated is `✗ BLOCKED` and prevents ship.
+- Verify all AC from Linear — classify each as **[code AC]** (verifiable by reading), **[dev execution AC]** (must have actually been run locally), or **[prod execution AC]** (verify post-deploy).
+- **For every dev execution AC: run the verification command and paste its output.** Do not classify without evidence — this has failed twice. If the AC contains words like "populated", "data in", "visible", "returns", "backfill", "no duplicates" — it is ALWAYS an execution AC.
+- Any dev execution AC without command + output evidence is `✗ BLOCKED` and prevents ship.
 - **On failure**: Do NOT stop. Read the error, fix the code, and re-run. Only stop after 2 failed fix attempts.
 - On pass (all code AC ✓ + all dev execution AC ✓): move Linear → **In Review**
 

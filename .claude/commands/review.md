@@ -49,6 +49,11 @@ Read the full diff and review it as if you did NOT write this code. You are a sk
 - What happens with network failures? (timeouts, connection refused)
 - API rate limits (yfinance 429s, LLM API limits)
 
+#### Execution AC Evidence Check
+- Re-read the AC list from Linear (or from the sanity-check output in this session)
+- For each AC containing "populated", "data in", "visible", "returns", "backfill", "no duplicates", "row count": was a verification command actually run with output pasted?
+- If any execution AC was marked ✓ without command + output evidence, this is a **BLOCKING** review issue — do not ship
+
 #### Code Quality (only flag significant issues, not style)
 - Dead code or unreachable branches
 - Misleading variable names that could cause future bugs
