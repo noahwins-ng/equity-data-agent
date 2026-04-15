@@ -14,7 +14,7 @@ setup: ## First-time repo setup: hooks, deps, env
 # ─── Development ──────────────────────────────────────────────
 
 dev-dagster: ## Start Dagster UI on localhost:3000
-	uv run dagster dev -m dagster_pipelines.definitions -p 3000
+	DAGSTER_HOME=$(CURDIR)/.dagster uv run dagster dev -m dagster_pipelines.definitions -p 3000
 
 dev-api: ## Start FastAPI on localhost:8000
 	uv run uvicorn api.main:app --reload --port 8000
