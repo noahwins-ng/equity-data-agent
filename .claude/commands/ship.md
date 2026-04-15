@@ -102,6 +102,23 @@ This SSHs to Hetzner, checks `docker compose ps`, and hits `/health`. If it fail
 If all prod execution AC pass: move Linear → **Done** (manual API call — do not rely on GitHub auto-close).
 If any prod execution AC fail: keep Linear → **In Review**, report what failed and how to fix it.
 
+### Step 7b: Post Shipped Comment on Linear Issue
+
+Post a comment on the Linear issue summarizing the ship:
+```
+**Shipped** — PR #<number> merged, deployed, verified
+
+✓ Lint  ✓ Format  ✓ Types  ✓ Tests  ✓ AC
+
+**Dev execution AC verified:**
+- <each dev execution AC with evidence summary>
+
+**Prod execution AC verified:**
+- <each prod execution AC result>
+```
+
+This creates a permanent audit trail on the issue. Every shipped issue should have at least one comment showing what was verified.
+
 ### Step 8: Report
 Query the active cycle for the highest-priority open issue (not Done) to populate "Next up". If no active cycle exists, omit the "Next up" line.
 
