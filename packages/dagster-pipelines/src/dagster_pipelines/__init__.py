@@ -1,4 +1,5 @@
 from dagster_pipelines.assets import (
+    fundamental_summary,
     ohlcv_monthly,
     ohlcv_raw,
     ohlcv_weekly,
@@ -20,6 +21,7 @@ __all__ = [
     "fundamentals_weekly_schedule",
     "ohlcv_daily_job",
     "ohlcv_daily_schedule",
+    "fundamental_summary",
     "ohlcv_monthly",
     "ohlcv_raw",
     "ohlcv_weekly",
