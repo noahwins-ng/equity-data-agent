@@ -1,13 +1,15 @@
 import logging
+from typing import Any
 
 from dagster import (
     AssetKey,
     AssetSelection,
-    EventLogEntry,
+    DagsterEventType,
+    EventRecordsFilter,
     RunRequest,
     SensorEvaluationContext,
-    asset_sensor,
     define_asset_job,
+    sensor,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,34 +37,57 @@ fundamentals_downstream_job = define_asset_job(
 # ── Sensors ───────────────────────────────────────────────────
 
 
-@asset_sensor(asset_key=AssetKey("ohlcv_raw"), job=ohlcv_downstream_job)
-def ohlcv_raw_sensor(context: SensorEvaluationContext, asset_event: EventLogEntry):
-    """Trigger downstream recomputation when ohlcv_raw materializes.
+def _build_materialization_sensor(
+    name: str,
+    asset_key: AssetKey,
+    job: Any,
+):
+    """Build a sensor that watches for materialization events on a partitioned asset
+    and triggers a downstream job for each partition that materialized.
 
-    ohlcv_raw → ohlcv_weekly, ohlcv_monthly, technical_indicators (all timeframes),
-    fundamental_summary. Dagster respects the dependency DAG within the job,
-    so aggregation runs before indicators.
+    Unlike @asset_sensor which processes one event per tick, this queries ALL
+    new events since the cursor in a single evaluation.
     """
-    dagster_event = asset_event.dagster_event
-    partition = dagster_event.partition if dagster_event else None
-    if partition:
-        yield RunRequest(
-            run_key=f"ohlcv_downstream_{partition}_{context.cursor}",
-            partition_key=partition,
+
+    @sensor(name=name, job=job)
+    def _sensor(context: SensorEvaluationContext):
+        cursor = int(context.cursor) if context.cursor else None
+
+        events = context.instance.get_event_records(
+            EventRecordsFilter(
+                event_type=DagsterEventType.ASSET_MATERIALIZATION,
+                asset_key=asset_key,
+                after_cursor=cursor,
+            ),
+            ascending=True,
+            limit=100,
         )
 
+        if not events:
+            return
 
-@asset_sensor(asset_key=AssetKey("fundamentals"), job=fundamentals_downstream_job)
-def fundamentals_sensor(context: SensorEvaluationContext, asset_event: EventLogEntry):
-    """Trigger fundamental_summary recomputation when fundamentals materializes.
+        for event in events:
+            partition = event.partition_key
+            if partition:
+                yield RunRequest(
+                    run_key=f"{name}_{partition}_{event.storage_id}",
+                    partition_key=partition,
+                )
 
-    Price-based ratios update daily (via ohlcv_raw sensor), while statement-based
-    ratios (margins, growth) update weekly with fresh fundamentals.
-    """
-    dagster_event = asset_event.dagster_event
-    partition = dagster_event.partition if dagster_event else None
-    if partition:
-        yield RunRequest(
-            run_key=f"fundamentals_downstream_{partition}_{context.cursor}",
-            partition_key=partition,
-        )
+        # Advance cursor past all processed events
+        context.update_cursor(str(events[-1].storage_id))
+
+    return _sensor
+
+
+ohlcv_raw_sensor = _build_materialization_sensor(
+    name="ohlcv_raw_sensor",
+    asset_key=AssetKey("ohlcv_raw"),
+    job=ohlcv_downstream_job,
+)
+
+fundamentals_sensor = _build_materialization_sensor(
+    name="fundamentals_sensor",
+    asset_key=AssetKey("fundamentals"),
+    job=fundamentals_downstream_job,
+)
