@@ -8,6 +8,17 @@ jobs:
   lint-and-test:
     runs-on: ubuntu-latest
 
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:24
+        ports:
+          - 8123:8123
+        options: >-
+          --health-cmd "wget -q --spider http://localhost:8123/ping || exit 1"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+
     steps:
       - uses: actions/checkout@v4
 
@@ -29,6 +40,12 @@ jobs:
       - name: Type check
         run: uv run pyright
 
-      - name: Test
+      - name: Unit tests
         # Exit code 5 = no tests collected; treat as success during bootstrap
-        run: uv run pytest || [ $? -eq 5 ]
+        run: uv run pytest -m "not integration" || [ $? -eq 5 ]
+
+      - name: Integration tests
+        run: uv run pytest -m integration -v
+        env:
+          CLICKHOUSE_HOST: localhost
+          CLICKHOUSE_PORT: 8123
