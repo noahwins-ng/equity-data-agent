@@ -69,6 +69,49 @@ If `/sanity-check` finds failures, fix them and re-run. Or use `/fix QNT-XX` to 
 
 ---
 
+## Command Invocation Architecture
+
+Commands are either **leaf** (self-contained) or **composite** (invoke other commands via the Skill tool). Composite commands never re-implement sub-command logic inline — they invoke the actual command so its full instructions load fresh.
+
+### Leaf Commands (depth 0)
+
+These never invoke another command:
+
+`/status`, `/session-check`, `/pick`, `/implement`, `/sanity-check`, `/review`, `/sync-linear`, `/sync-docs`, `/change-scope`, `/cycle-start`
+
+### Composite Commands
+
+| Command | Invokes | Max Depth | Notes |
+|---------|---------|-----------|-------|
+| `/ship` | `/sanity-check` | 1 | Conditional — skipped if issue already In Review |
+| `/fix` | `/sanity-check`, `/review`, `/ship` | 2 | Subset depends on which step failed; `/ship` may invoke `/sanity-check` |
+| `/retro` | `/sync-docs` | 1 | Always, in cleanup step |
+| `/cycle-end` | `/sync-docs` | 1 | Always, in cleanup step |
+| `/go` | `/pick`, `/implement`, `/sanity-check`, `/review`, `/ship` | 2 | All 5 in sequence |
+
+### Invocation Chains
+
+```
+/go → /pick                                  (depth 1)
+/go → /implement                             (depth 1)
+/go → /sanity-check                          (depth 1)
+/go → /review                                (depth 1)
+/go → /ship                                  (depth 1, issue already In Review)
+/go → /ship → /sanity-check                  (depth 2, only if In Review was skipped)
+
+/fix → /sanity-check                         (depth 1)
+/fix → /review                               (depth 1)
+/fix → /ship                                 (depth 1)
+/fix → /ship → /sanity-check                 (depth 2, only if issue not In Review)
+
+/retro → /sync-docs                          (depth 1)
+/cycle-end → /sync-docs                      (depth 1)
+```
+
+**Design rule**: Max depth is 2. No command invokes a composite that invokes another composite beyond one level. This keeps context window growth predictable.
+
+---
+
 ## Quick Commands
 
 | Command | Purpose | Speed |
