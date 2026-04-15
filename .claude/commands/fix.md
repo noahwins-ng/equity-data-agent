@@ -77,6 +77,17 @@ After fixing, resume the `/go` pipeline from where it failed:
 - If fixed during `/review` → continue to `/ship`
 - If fixed during `/ship` → complete the ship (CI, merge, cleanup)
 
+### Step 3b: Post Fix Comment on Linear Issue
+
+Post a comment on the Linear issue documenting the failure and recovery:
+```
+**Fix applied** — resumed pipeline from /<step>
+
+**Problem:** <what failed and why>
+**Fix:** <what was changed>
+**Resumed from:** /<step> → /<next steps>
+```
+
 ### Step 4: Report
 
 ```
