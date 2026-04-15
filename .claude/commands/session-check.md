@@ -21,8 +21,9 @@ Restore context for the current work-in-progress. Run this at the start of a new
    - `git status` — any uncommitted work
 
 4. **Assess AC status** — for each acceptance criterion:
-   - Identify the 1-2 most relevant source files based on the system area from Step 2
-   - Read those files and check whether the implementation exists
+   - Get the list of files changed on this branch: `git diff --name-only main...HEAD`
+   - Read the files that map to AC items (prioritise primary implementation files over tests and config; cap at 5 files to stay fast)
+   - If no files changed yet, note "no implementation started" for all AC
    - Mark ✓ if clearly present, ○ if partial or uncertain, ✗ if not found
    - Keep this fast and directional — deep verification is `/sanity-check`'s job
 

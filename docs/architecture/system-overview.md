@@ -132,4 +132,6 @@ LiteLLM proxy (v1.56.0, pinned) routes model requests:
 - **Prod Frontend**: Vercel (Next.js 15, free tier) → calls FastAPI over HTTPS
 - **HTTPS**: Caddy service in Docker Compose handles TLS termination (auto HTTPS via Let's Encrypt)
 - **CI/CD**: GitHub Actions → backend: SSH → git pull → `make migrate` → docker compose up; frontend: Vercel auto-deploy on push to main
+- **Rollback**: `make rollback` — SSHs to Hetzner, checks out `HEAD~1`, rebuilds Docker, verifies health (60s timeout with retries)
+- **Health Monitoring**: `scripts/health-monitor.sh` runs every 15 min on Hetzner via cron — checks API `/health` + Docker service status, logs failures to `health-monitor.log`. Session-start hook reads this log and warns on failures. Install: `make monitor-install`. Check: `make monitor-log`.
 - **Dagster UI**: Internal only in prod — access via SSH tunnel (`ssh -L 3000:localhost:3000 hetzner`), no auth configured

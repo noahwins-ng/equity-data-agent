@@ -98,6 +98,7 @@ When making a significant architectural decision, create a new ADR using `docs/d
 
 - **Langfuse**: Agent tracing — LLM calls, tool calls, latency
 - **Sentry**: FastAPI error tracking in production
+- **Health Monitor**: Cron on Hetzner (every 15 min) — checks API `/health` + Docker services, logs failures. `make monitor-log` to check. Session-start hook auto-warns on failures.
 - **ClickHouse Play**: `http://localhost:8123/play` — SQL editor for data exploration (via SSH tunnel)
 - **Dagster UI**: `http://localhost:3000` — asset lineage, run history, sensor status
 
@@ -118,6 +119,9 @@ make migrate                        # Run ClickHouse DDL migrations (via HTTP)
 make seed                           # Quick seed: 30 days, 3 tickers (fast dev data)
 make types                          # Generate TS types from FastAPI OpenAPI schema
 make build                          # Build prod Docker images locally (run when changing Dockerfile, docker-compose.yml, or deps)
+make rollback                       # Rollback prod to previous commit and rebuild (emergency use)
+make monitor-install                # Install health monitor cron on Hetzner (every 15 min)
+make monitor-log                    # Show recent prod health failures
 make issue QNT=34                   # Checkout branch for Linear issue
 make pr QNT=34 TITLE="description"  # Push + create PR
 ```
@@ -135,10 +139,11 @@ make pr QNT=34 TITLE="description"  # Push + create PR
 
 #### Issue Lifecycle
 ```
-/go QNT-34                # Full orchestrator: pick → implement (WIP commits) → sanity-check (auto-fix) → ship
+/go QNT-34                # Full orchestrator: pick → implement → sanity-check → review → ship
 /pick QNT-34              # Start an issue: checkout branch + Linear In Progress + show acceptance criteria
 /implement QNT-34         # Implement: read patterns → write code → WIP commits → targeted tests → AC validation
 /sanity-check QNT-34      # Pre-PR gate: lint + types + tests + AC (code/dev/prod classification) → In Review
+/review QNT-34            # Adversarial code review: logic errors, security, architecture, edge cases
 /ship QNT-34              # Ship: squash WIPs → tick project-plan.md → PR → CI → merge → post-deploy verify → Done
 /fix QNT-34               # Error recovery: diagnose failure → fix → resume pipeline from failed step
 /sync-linear QNT-34       # Manual override: sync issue status when Linear has drifted
@@ -156,7 +161,7 @@ Configured in `.claude/settings.json`, scripts in `.claude/hooks/`:
 
 | Hook | Trigger | Effect |
 |------|---------|--------|
-| session-start | Session begins | Auto-detects branch, injects QNT context |
+| session-start | Session begins | Auto-detects branch, injects QNT context, warns on prod health failures |
 | auto-format | After Edit/Write | Runs `ruff format` on every Python file edited |
 | protect-repo | Before Bash | Blocks force push, push to main, hard reset, rm -rf |
 | check-uncommitted | Session ends | Warns about uncommitted work |

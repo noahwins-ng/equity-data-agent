@@ -4,10 +4,19 @@
 
 BRANCH=$(git branch --show-current 2>/dev/null)
 
+# Check for recent prod health failures (non-blocking, 3s timeout)
+HEALTH_WARN=""
+FAILURES=$(ssh -o ConnectTimeout=3 -o BatchMode=yes hetzner "tail -5 /opt/equity-data-agent/health-monitor.log 2>/dev/null" 2>/dev/null)
+if [ -n "$FAILURES" ]; then
+  HEALTH_WARN="⚠ PROD HEALTH FAILURES DETECTED — run 'make monitor-log' for details:
+$FAILURES
+"
+fi
+
 if [ -z "$BRANCH" ] || [ "$BRANCH" = "main" ]; then
   # On main or not in a git repo — nudge toward cycle-start
-  jq -n '{
-    additionalContext: "You are on the main branch. No active issue. Suggest: run /cycle-start to review the cycle or /pick QNT-XX to start an issue."
+  jq -n --arg health "$HEALTH_WARN" '{
+    additionalContext: ($health + "You are on the main branch. No active issue. Suggest: run /cycle-start to review the cycle or /pick QNT-XX to start an issue.")
   }'
   exit 0
 fi
@@ -24,7 +33,7 @@ UNCOMMITTED=$(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
 COMMITS=$(git log --oneline main...HEAD 2>/dev/null | head -5)
 LAST_COMMIT=$(git log --oneline -1 2>/dev/null)
 
-CONTEXT="Resuming session on branch: $BRANCH (QNT-$QNT).
+CONTEXT="${HEALTH_WARN}Resuming session on branch: $BRANCH (QNT-$QNT).
 Uncommitted files: $UNCOMMITTED
 Recent commits on branch:
 $COMMITS

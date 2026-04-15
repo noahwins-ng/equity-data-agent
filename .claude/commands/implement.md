@@ -31,7 +31,7 @@ For each acceptance criterion (or logical group):
    - Respect CLAUDE.md rules: LLM never does math, agent never touches DB, three-role architecture
    - Use `shared.Settings` for all config — never hardcode hosts, ports, or credentials
    - Keep it minimal — implement exactly what the AC requires, nothing more
-2. **Quick lint** the changed files (not the whole repo):
+2. **Quick lint** the changed files (not the whole repo — save pyright for the project-level check in Step 7):
    - `uv run ruff check <file>` — fix any issues
    - `uv run ruff format <file>` — auto-format (the PostToolUse hook handles this for edits, but run it for new files)
 3. **WIP commit** after each meaningful chunk:
