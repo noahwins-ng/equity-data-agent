@@ -1,106 +1,78 @@
 # Go
 
-Full end-to-end orchestrator for a single issue: pick → implement → sanity-check → review → ship. Handles WIP commits, AC validation, targeted tests, adversarial code review, and error recovery. Pass the issue identifier as an argument (e.g., `/go QNT-40`).
+Full end-to-end orchestrator for a single issue. Invokes each step as a sub-command so every step gets its full instructions loaded. Pass the issue identifier as an argument (e.g., `/go QNT-40`).
 
 The issue identifier is: $ARGUMENTS
 
 ## Instructions
 
-Run each step in sequence. **On failure: diagnose, fix, and retry the failed step — do not stop unless you are truly stuck.** Only ask the user after two failed attempts at the same step.
+Run each step in sequence by **invoking the actual slash command** via the Skill tool. Do NOT re-implement sub-command logic inline — the whole point is that each command's full prompt loads fresh with all its rules and checklists.
+
+**On failure at any step**: diagnose, fix, and re-invoke the failed step. Only ask the user after two failed attempts at the same step.
 
 ---
 
 ### Step 1: Pick
 
-Run the full `/pick` logic:
-- Fetch the issue from Linear (title, description, AC, milestone, relations)
-- If any blocking issues are not Done, stop and warn: "Blocked by QNT-XX — resolve before proceeding."
-- Checkout the branch using `gitBranchName` from Linear (`git checkout <branch>` or `git checkout -b <branch>` if new)
-- Move Linear → **In Progress**
-- Show the AC so the user knows what will be built
+Invoke `/pick` with the issue identifier via the Skill tool.
 
-**Capture the acceptance criteria list — you will reference it throughout all subsequent steps.**
+Wait for it to complete. Confirm the output shows:
+- Branch checked out
+- Linear → In Progress
+- Acceptance criteria listed
+
+If blocked by another issue, stop and warn the user.
 
 ---
 
-### Step 2: Implement (with inline AC tracking and WIP commits)
+### Step 2: Implement
 
-Run the full `/implement` logic with these enhancements:
+Invoke `/implement` with the issue identifier via the Skill tool.
 
-#### 2a: Load Context
-1. **Do not re-fetch from Linear** — use the issue data (title, description, AC, milestone) already captured in Step 1
-2. Confirm you're on the correct branch
-3. Read `docs/architecture/system-overview.md`
-4. Read `docs/patterns.md` — follow established patterns instead of re-discovering them each time
-5. Identify the target package and read its structure
+Wait for it to complete. Confirm the output shows:
+- All ACs marked DONE (or NEEDS MANUAL VERIFICATION with reason)
+- Lint, format, types passed
+- WIP commits created
 
-#### 2b: Explore Patterns
-Before writing code:
-1. Check `docs/patterns.md` for a matching recipe (e.g., "Adding a Dagster asset", "Adding an API endpoint")
-2. If a pattern exists, follow it exactly. If not, explore 1-2 similar files and follow their structure.
-
-#### 2c: Implement with AC Checkpoints
-For each acceptance criterion:
-1. Write the code that satisfies it
-2. Run `uv run ruff check` and `uv run ruff format` on the changed files (save pyright for the project-level check after all ACs are done — it needs full project context)
-3. **Checkpoint**: After satisfying each AC (or a logical group of ACs), create a WIP commit:
-   ```
-   QNT-XX: wip: <what was just implemented>
-   ```
-
-#### 2d: Targeted Tests
-After all AC code is written:
-1. Identify which package was changed (e.g., `packages/dagster-pipelines`)
-2. Run tests scoped to that package: `uv run pytest packages/<package>/tests/ -x -q` (if tests directory exists)
-3. If no tests exist for this package, skip with a note
-4. If tests fail: read the error, fix the code, re-run. Do NOT defer to sanity-check.
-
-#### 2e: AC Self-Assessment
-Before moving on, evaluate each acceptance criterion:
-- Read the relevant code you wrote
-- Mark each AC as: DONE / PARTIAL / NOT STARTED
-- If any are PARTIAL or NOT STARTED, go back and finish them before proceeding
+If any ACs are PARTIAL, re-invoke `/implement` to finish them.
 
 ---
 
 ### Step 3: Sanity Check
 
-Run the full `/sanity-check` logic:
-- `uv run ruff check .`, `uv run ruff format --check .`, `uv run pyright`, `uv run pytest`
-- Verify all AC from Linear — classify each as **[code AC]** (verifiable by reading), **[dev execution AC]** (must have actually been run locally), or **[prod execution AC]** (verify post-deploy).
-- **For every dev execution AC: run the verification command and paste its output.** Do not classify without evidence — this has failed twice. If the AC contains words like "populated", "data in", "visible", "returns", "backfill", "no duplicates" — it is ALWAYS an execution AC.
-- Any dev execution AC without command + output evidence is `✗ BLOCKED` and prevents ship.
-- **On failure**: Do NOT stop. Read the error, fix the code, and re-run. Only stop after 2 failed fix attempts.
-- On pass (all code AC ✓ + all dev execution AC ✓): move Linear → **In Review**
+Invoke `/sanity-check` with the issue identifier via the Skill tool.
+
+**This is a hard gate.** Wait for it to complete and read the verdict:
+- **READY TO SHIP**: proceed to Step 4
+- **NEEDS FIXES**: fix the issues, then re-invoke `/sanity-check` (do NOT skip to ship)
+
+Do NOT proceed past this step unless the sanity check verdict is READY TO SHIP.
 
 ---
 
 ### Step 4: Review
 
-Run the full `/review` logic:
-- Read the full diff (`git diff main...HEAD`) with adversarial eyes
-- Check for: logic errors, security issues, architectural violations, edge cases
-- **On BLOCKING issues**: fix them immediately, then re-verify the fix
-- **On SHIP**: proceed to Step 5
+Invoke `/review` with the issue identifier via the Skill tool.
+
+Wait for it to complete and read the verdict:
+- **SHIP**: proceed to Step 5
+- **FIX FIRST**: fix the blocking issues, then re-invoke `/review`
 
 ---
 
 ### Step 5: Ship
 
-Run the full `/ship` logic:
-- Issue is already In Review — skip code quality re-checks, re-verify AC only
-- Squash all WIP commits into a clean commit: `QNT-XX: type(scope): description`
-- Tick `docs/project-plan.md`
-- Push the branch: `git push -u origin HEAD`
-- Create PR (or use existing) with body including `Closes QNT-XX`
-- Wait for CI
-- Squash merge + delete branch
-- Post-deploy: run `make check-prod`, verify any `⏳ PENDING` prod execution AC items
-- Linear → Done only after prod verification passes
+Invoke `/ship` with the issue identifier via the Skill tool.
+
+Wait for it to complete. Confirm the output shows:
+- PR created/merged
+- Linear → Done (or blocked on prod verification)
 
 ---
 
 ### Step 6: Report
+
+After all steps complete, output the final summary:
 
 ```
 Done: QNT-XX — Title
