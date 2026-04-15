@@ -39,7 +39,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - `StaticPartitionsDefinition` by ticker
     - Fetches all available quarterly + annual data each run
 - [ ] Add Dagster schedules: daily for OHLCV (~5-6 PM ET), weekly for fundamentals — QNT-43
-- [ ] Implement Dagster resource for ClickHouse client (shared across assets) — QNT-40
+- [x] Implement Dagster resource for ClickHouse client (shared across assets) — QNT-40
 - [ ] Implement `make seed` — quick seed script (30 days, 3 tickers) for fast local dev data setup without a full backfill — QNT-82
 - [ ] Verify: Run backfill for all 10 tickers, confirm data in ClickHouse, check Dagster lineage graph
 
