@@ -35,7 +35,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - `StaticPartitionsDefinition` by ticker
     - Backfill: `period="2y"`, Incremental: `period="5d"`
     - Rate limiting: 1-2s sleep between tickers, exponential backoff on 429s
-- [ ] Implement `fundamentals` Dagster asset (yfinance → ClickHouse) — QNT-42
+- [x] Implement `fundamentals` Dagster asset (yfinance → ClickHouse) — QNT-42
     - `StaticPartitionsDefinition` by ticker
     - Fetches all available quarterly + annual data each run
 - [ ] Add Dagster schedules: daily for OHLCV (~5-6 PM ET), weekly for fundamentals — QNT-43
