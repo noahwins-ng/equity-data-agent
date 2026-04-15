@@ -52,10 +52,23 @@ If none of the above apply, skip this step.
 - Title, description, acceptance criteria
 - Assign to correct milestone/phase
 - Set priority
+- Project: Equity Data Agent
 
-**drop**: Cancel the corresponding Linear issue. Add a brief comment explaining why it was dropped.
+**drop**: Cancel the corresponding Linear issue.
 
 **modify**: Update the Linear issue description and acceptance criteria to reflect the new scope.
+
+### Step 3b: Log activity on the issue
+Post a comment on the affected Linear issue (for all three change types) to create a permanent audit trail:
+
+```
+**Scope change [add | drop | modify]** — YYYY-MM-DD
+
+What changed: <one-line summary>
+Reason: <from the user's argument>
+Spec: docs/project-requirement.md — <section>
+ADR: docs/decisions/00N-title.md | none
+```
 
 ### Step 4: ADR Check
 Assess whether the change warrants an Architecture Decision Record:

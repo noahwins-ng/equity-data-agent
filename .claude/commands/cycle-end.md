@@ -18,7 +18,30 @@ End-of-week cycle wrap-up. Run this at the end of each work cycle.
 
 5. **Check milestone completion** — for each milestone that has issues in this cycle, check if ALL of its issues are now Done (query Linear for the full milestone issue list, not just this cycle's slice). If a milestone is fully complete, prompt: "Phase X is complete — run `/retro Phase X` when ready." Do NOT auto-run retro.
 
-6. **Show a summary report** formatted as:
+6. **Run `/sync-docs`** — reconcile `docs/project-plan.md` with Linear: tick Done issues, remove Cancelled issues, surface any gaps.
+
+7. **Post a Linear project status update** on the Equity Data Agent project using `save_status_update`:
+   - `type`: `project`
+   - `project`: `Equity Data Agent`
+   - `health`: `onTrack` if velocity ≥ 50% of planned, `atRisk` if 25–49%, `offTrack` if < 25%
+   - `body`: markdown summary with shipped issues (linked), rollover count, velocity, and milestone progress
+
+   Example body:
+   ```
+   ## Cycle N wrap-up
+
+   **Shipped (X issues):**
+   - QNT-XX: Title
+   - QNT-YY: Title
+
+   **Rolled over (Y issues):** QNT-ZZ, ...
+
+   **Velocity:** X/N planned issues closed
+
+   **Milestone:** Phase X — Z% complete
+   ```
+
+8. **Show a summary report** formatted as:
    ```
    Cycle N (Date — Date)
    ✓ Shipped: X issues
@@ -29,6 +52,5 @@ End-of-week cycle wrap-up. Run this at the end of each work cycle.
      Phase Y — Z% complete  (include all milestones with issues in this cycle)
 
    Next steps:
-     → run /sync-docs to ensure project-plan.md is current
      → run /cycle-start on Monday to kick off the next cycle
    ```

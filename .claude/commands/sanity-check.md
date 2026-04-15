@@ -52,5 +52,12 @@ Verdict: READY TO SHIP / NEEDS FIXES
 ### Step 4: If READY TO SHIP
 Move the Linear issue status to **In Review**.
 
+Post a comment on the Linear issue:
+```
+**Sanity check passed** — ready for review
+
+✓ Lint  ✓ Format  ✓ Types  ✓ Tests (X passed)  ✓ AC
+```
+
 ### Step 5: If NEEDS FIXES
 List the specific issues found and offer to fix them before shipping.

@@ -23,7 +23,24 @@ Start-of-week cycle kickoff. Run this at the beginning of each work cycle.
 
 6. **Check if `docs/project-plan.md` may be stale** — if there are Done issues in Linear with unchecked items in the plan, note it: "project-plan.md may be out of sync — run `/sync-docs` to reconcile."
 
-7. **Report** formatted as:
+7. **Post a Linear project status update** on the Equity Data Agent project using `save_status_update`:
+   - `type`: `project`
+   - `project`: `Equity Data Agent`
+   - `health`: `onTrack`
+   - `body`: markdown summary listing the cycle's planned issues
+
+   Example body:
+   ```
+   ## Cycle N kickoff
+
+   **Planned (X issues):**
+   - QNT-XX: Title
+   - QNT-YY: Title
+
+   **Milestone:** Phase X — Z% complete
+   ```
+
+8. **Report** formatted as:
    ```
    Cycle N (Date — Date)
    ━━━━━━━━━━━━━━━━━━━━━━━━━

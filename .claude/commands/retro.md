@@ -45,8 +45,25 @@ Update any sections that no longer reflect reality. If nothing changed, skip.
 ### Step 6: Cleanup
 Run `/sync-docs` to reconcile `docs/project-plan.md` — the completed milestone's items should all be ticked and any cancelled issues removed.
 
-### Step 7: Save Retro Report
-Write the final report (formatted per Step 8) to `docs/retros/phase-X-name.md` (e.g., `docs/retros/phase-1-data-ingestion.md`). Commit: `docs: add retro for Phase X — Name`.
+### Step 7: Post Linear Project Status Update
+Post a status update on the Equity Data Agent project using `save_status_update`:
+- `type`: `project`
+- `project`: `Equity Data Agent`
+- `health`: `onTrack` if milestone shipped mostly as planned, `atRisk` if >30% of issues rolled over or were descoped
+- `body`: markdown summary:
+  ```
+  ## Phase X — Complete
+
+  **Shipped:** X issues across Y cycles
+
+  **What went well:**
+  - ...
+
+  **Key lessons:**
+  - ...
+
+  **Up next:** Phase Y — <brief description>
+  ```
 
 ### Step 8: Report
 Format as:
@@ -70,3 +87,6 @@ Lessons saved to memory:
 
 Next up: Phase Y — Title (Z issues)
 ```
+
+### Step 9: Save Retro Report
+Write the final report (formatted per Step 8) to `docs/retros/phase-X-name.md` (e.g., `docs/retros/phase-1-data-ingestion.md`). Commit: `docs: add retro for Phase X — Name`.

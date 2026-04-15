@@ -10,9 +10,9 @@ How the commands chain together week to week. For command reference (one-liners)
 Monday                    Tuesday–Thursday           Friday
 ──────────────────────    ──────────────────────    ──────────────────
 /cycle-start              /session-check            /cycle-end
-  ↓                         ↓ (per session)           ↓
-/go QNT-XX                /go QNT-XX (next)         /sync-docs
-  ↓                         ↓                       (if plan may be stale)
+  ↓                         ↓ (per session)           (auto-runs /sync-docs,
+/go QNT-XX                /go QNT-XX (next)          posts Linear update,
+  ↓                         ↓                         rolls over incomplete)
   shipped ✓                 shipped ✓
 ```
 
@@ -78,7 +78,8 @@ Note: `/change-scope` updates `project-plan.md` text directly for all three chan
 ```
 /cycle-end
   → summarizes shipped, rolls over incomplete to next cycle
-  → prompts: run /sync-docs + run /cycle-start Monday
+  → auto-runs /sync-docs (ticks Done items, removes Cancelled)
+  → posts Linear project status update
   → if milestone complete: "run /retro Phase X when ready"
 
 /retro [Phase X]

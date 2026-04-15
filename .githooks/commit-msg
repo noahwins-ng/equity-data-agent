@@ -1,13 +1,23 @@
 #!/bin/sh
 #
-# Enforces commit message format: QNT-XX: type(scope): description
+# Enforces commit message format.
 #
-# Valid examples:
-#   QNT-34: feat(shared): add Settings class
-#   QNT-37: fix(db): handle migration edge case
-#   QNT-41: refactor(dagster): extract rate limiter
+# Two valid patterns:
 #
-# Valid types: feat, fix, refactor, test, docs, chore
+# 1. Issue-linked (code changes, features, fixes):
+#      QNT-XX: type(scope): description
+#    Examples:
+#      QNT-34: feat(shared): add Settings class
+#      QNT-37: fix(db): handle migration edge case
+#      QNT-41: refactor(dagster): extract rate limiter
+#
+# 2. Meta/process (docs, commands, workflow — no issue needed):
+#      docs: description
+#      chore: description
+#    Examples:
+#      docs: add retro for Phase 0 — Foundation
+#      docs: sync project-plan.md with Linear
+#      chore: update dev-workflow guide
 
 commit_msg_file="$1"
 commit_msg=$(cat "$commit_msg_file")
@@ -17,20 +27,34 @@ if echo "$commit_msg" | grep -qE "^(Merge|Revert) "; then
     exit 0
 fi
 
-# Allow Co-Authored-By lines (check only the first line)
+# Check only the first line
 first_line=$(echo "$commit_msg" | head -1)
 
-pattern="^QNT-[0-9]+: (feat|fix|refactor|test|docs|chore)\(.+\): .+"
+# Pattern 1: issue-linked commits
+issue_pattern="^QNT-[0-9]+: (feat|fix|refactor|test|docs|chore)\(.+\): .+"
 
-if ! echo "$first_line" | grep -qE "$pattern"; then
-    echo ""
-    echo "ERROR: Invalid commit message format."
-    echo ""
-    echo "Expected: QNT-XX: type(scope): description"
-    echo "Got:      $first_line"
-    echo ""
-    echo "Valid types: feat, fix, refactor, test, docs, chore"
-    echo "Example:     QNT-34: feat(shared): add Settings class"
-    echo ""
-    exit 1
+# Pattern 2: meta/process commits (no issue required)
+meta_pattern="^(docs|chore): .+"
+
+if echo "$first_line" | grep -qE "$issue_pattern"; then
+    exit 0
 fi
+
+if echo "$first_line" | grep -qE "$meta_pattern"; then
+    exit 0
+fi
+
+echo ""
+echo "ERROR: Invalid commit message format."
+echo ""
+echo "For code changes:    QNT-XX: type(scope): description"
+echo "For docs/meta work:  docs: description  |  chore: description"
+echo ""
+echo "Got: $first_line"
+echo ""
+echo "Examples:"
+echo "  QNT-34: feat(shared): add Settings class"
+echo "  docs: add retro for Phase 0 — Foundation"
+echo "  docs: sync project-plan.md with Linear"
+echo ""
+exit 1

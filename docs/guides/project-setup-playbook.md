@@ -85,10 +85,19 @@ make pr TEAM=XX TITLE="..." # Push + create PR
 ```
 
 ### 2.5 Git hook (commit-msg)
-Enforce your commit format. Example pattern:
+Enforce two commit patterns:
+
 ```
+# Code changes — must reference a Linear issue
 TEAM-XX: type(scope): description
+
+# Meta/process work — no issue needed (docs, commands, workflow tweaks)
+docs: description
+chore: description
 ```
+
+The `docs:` / `chore:` exception covers ongoing maintenance like retro reports, plan syncs, and command updates that happen outside any specific issue. Without it, every workflow tweak needs a throwaway housekeeping issue.
+
 Store in `.githooks/` and configure via `make setup`:
 ```bash
 git config core.hooksPath .githooks
@@ -140,6 +149,8 @@ Create `.claude/commands/` with workflow commands:
 - `/pick` and `/go` must use the `gitBranchName` field from Linear for the full branch name — never create short branches without the description suffix
 - When assigning issues to a cycle, always move status Backlog → Todo — Backlog issues don't appear on the Linear cycle board
 - Maintain a `docs/guides/dev-workflow.md` as a cadence cheat sheet (not a command reference — that's CLAUDE.md)
+- `/cycle-start`, `/cycle-end`, and `/retro` post Linear project status updates — keeps the project feed as a lightweight audit trail without manual updates
+- `/sanity-check` and `/change-scope` post comments on individual Linear issues for traceability
 
 ---
 
