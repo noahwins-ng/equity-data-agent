@@ -1,4 +1,11 @@
-from dagster_pipelines.assets import ohlcv_monthly, ohlcv_raw, ohlcv_weekly
+from dagster_pipelines.assets import (
+    ohlcv_monthly,
+    ohlcv_raw,
+    ohlcv_weekly,
+    technical_indicators_daily,
+    technical_indicators_monthly,
+    technical_indicators_weekly,
+)
 from dagster_pipelines.resources import ClickHouseResource
 from dagster_pipelines.schedules import (
     fundamentals_weekly_job,
@@ -16,4 +23,7 @@ __all__ = [
     "ohlcv_monthly",
     "ohlcv_raw",
     "ohlcv_weekly",
+    "technical_indicators_daily",
+    "technical_indicators_monthly",
+    "technical_indicators_weekly",
 ]

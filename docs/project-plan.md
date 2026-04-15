@@ -59,7 +59,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - Same aggregation logic (open=first, close=last, adj_close=last, high=max, low=min, volume=sum) with `toStartOfMonth(date)` grouping
     - **Skip the current incomplete month** — same rationale as weekly
     - Downstream dependency on `ohlcv_raw` asset
-- [ ] Implement `technical_indicators` Dagster assets (daily, weekly, monthly) — QNT-44
+- [x] Implement `technical_indicators` Dagster assets (daily, weekly, monthly) — QNT-44
     - Computes RSI-14, MACD (12/26/9), SMA-20/50, EMA-12/26, Bollinger Bands (20,2)
     - **Price input: `adj_close`** — use adjusted close to avoid false signals at stock split boundaries
     - **Warm-up**: indicators are `null` until enough prior data exists (RSI-14: 14 rows, SMA-50: 50 rows, MACD signal: 35 rows). Rows are still written with nulls — FastAPI and frontend handle display.
