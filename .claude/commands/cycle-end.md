@@ -22,7 +22,7 @@ End-of-week cycle wrap-up. Run this at the end of each work cycle.
    ```bash
    git checkout main && git pull
    ```
-   Then **run `/sync-docs`** — reconcile `docs/project-plan.md` with Linear: tick Done issues, remove Cancelled issues, surface any gaps.
+   Then invoke `/sync-docs` via the Skill tool. Do NOT re-implement its logic here.
 
 7. **Post a Linear project status update** on the Equity Data Agent project using `save_status_update`:
    - `type`: `project`

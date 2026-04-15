@@ -59,23 +59,22 @@ Based on the failure point:
 **If failed during `/sanity-check`**:
 1. Read the failing check output (lint, format, types, or tests)
 2. Fix the specific issues
-3. Re-run all checks: `uv run ruff check .`, `uv run ruff format --check .`, `uv run pyright`, `uv run pytest`
-4. If all pass, move Linear → **In Review**
+3. Create a WIP commit with the fix
 
 **If failed during `/ship`**:
 1. Check if a PR already exists: look for open PRs on this branch
 2. If PR exists but CI failed: read the CI error, fix, push
-3. If no PR: resume from the `/ship` step (commit, push, create PR)
+3. If no PR: the fix is done — resume will handle the rest
 4. If merge conflict: report to user — this needs manual resolution
 
 ### Step 3: Resume Pipeline
 
-After fixing, resume the `/go` pipeline from where it failed:
+After fixing, resume by invoking the remaining sub-commands via the Skill tool in sequence. Do NOT re-implement their logic — invoke the actual commands:
 
-- If fixed during `/implement` → continue to `/sanity-check` → `/review` → `/ship`
-- If fixed during `/sanity-check` → continue to `/review` → `/ship`
-- If fixed during `/review` → continue to `/ship`
-- If fixed during `/ship` → complete the ship (CI, merge, cleanup)
+- If fixed during `/implement` → invoke `/sanity-check`, then `/review`, then `/ship`
+- If fixed during `/sanity-check` → invoke `/sanity-check` (re-run it fresh), then `/review`, then `/ship`
+- If fixed during `/review` → invoke `/review` (re-run it fresh), then `/ship`
+- If fixed during `/ship` → invoke `/ship` (it will detect existing PR/state and resume)
 
 ### Step 3b: Post Fix Comment on Linear Issue
 

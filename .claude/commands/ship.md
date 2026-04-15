@@ -10,16 +10,14 @@ The issue identifier is: $ARGUMENTS
 Fetch the current Linear status of the issue first.
 
 **If the issue is already In Review** (meaning `/sanity-check` was run and passed recently):
-- Skip lint, format, type check, and tests
+- Skip the full sanity check
 - Re-verify acceptance criteria from Linear only (a quick read of relevant files)
 - Confirm: "Issue already In Review — skipping code quality checks, re-verifying AC only."
 
-**Otherwise**, run the full sanity check (same as `/sanity-check`):
-- Lint, format, type check, tests
-- Verify acceptance criteria from Linear issue
-- Move Linear issue → **In Review** on pass
-
-**If any check fails**: stop here, report the failures, and offer to fix them. Do NOT proceed to PR creation.
+**Otherwise**, invoke `/sanity-check` with the issue identifier via the Skill tool. Do NOT re-implement its logic here.
+- Wait for it to complete
+- If verdict is NEEDS FIXES: stop here, fix the issues, and re-invoke `/sanity-check`
+- If verdict is READY TO SHIP: proceed to Step 2
 
 ### Step 2: Update Project Plan
 - Open `docs/project-plan.md`
