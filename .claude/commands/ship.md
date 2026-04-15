@@ -63,8 +63,26 @@ Fetch the current Linear status of the issue first.
 - Once CI passes, squash merge: `gh pr merge <pr-number> --squash --delete-branch`
 - Switch back to main: `git checkout main && git pull`
 
-### Step 7: Confirm Linear Close
-- Note: the `Closes QNT-XX` in the PR body auto-closes the issue on merge via GitHub integration — no need to manually mark Done
+### Step 7: Post-Deploy Verification
+After merge, CD runs automatically. Verify the deployed system before marking Done.
+
+**Always run:**
+```
+make check-prod
+```
+This SSHs to Hetzner, checks `docker compose ps`, and hits `/health`. If it fails: report the failure and do NOT mark Done.
+
+**For each `⏳ PENDING` prod execution AC item** identified in the sanity check, run the appropriate verification:
+
+| AC type | How to verify |
+|---|---|
+| Dagster asset registered in prod | `make check-prod` shows dagster service up; or SSH → check prod Dagster API |
+| Data in ClickHouse (if not tunnel-verified) | SSH → `docker exec clickhouse clickhouse-client --query "SELECT count() FROM equity_raw.ohlcv_raw"` |
+| API endpoint responds in prod | `curl http://<prod-host>:8000/<endpoint>` |
+| Prod service healthy | `make check-prod` (health endpoint) |
+
+If all prod execution AC pass: move Linear → **Done** (manual API call — do not rely on GitHub auto-close).
+If any prod execution AC fail: keep Linear → **In Review**, report what failed and how to fix it.
 
 ### Step 8: Report
 Query the active cycle for the highest-priority open issue (not Done) to populate "Next up". If no active cycle exists, omit the "Next up" line.

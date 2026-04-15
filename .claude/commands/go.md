@@ -27,9 +27,9 @@ Run the full `/implement` logic:
 ### Step 3: Sanity Check
 Run the full `/sanity-check` logic:
 - `uv run ruff check .`, `uv run ruff format --check .`, `uv run pyright`, `uv run pytest`
-- Verify all AC from Linear
-- If any check fails: stop, report failures, offer to fix. Do NOT proceed to ship.
-- On pass: move Linear → **In Review**
+- Verify all AC from Linear — classify each as **code AC** (verifiable by reading) or **execution AC** (must have actually been run). Any execution AC not yet demonstrated is `✗ BLOCKED` and prevents ship.
+- If any check fails or any AC is BLOCKED: stop, report what must be run, do NOT proceed to ship.
+- On pass (all AC satisfied including execution ones): move Linear → **In Review**
 
 ### Step 4: Ship
 Run the full `/ship` logic:
@@ -39,7 +39,8 @@ Run the full `/ship` logic:
 - Create PR (or use existing)
 - Wait for CI
 - Squash merge + delete branch
-- Linear → Done (auto via "Closes QNT-XX")
+- Post-deploy: run `make check-prod`, verify any `⏳ PENDING` prod execution AC items
+- Linear → Done only after prod verification passes
 
 ### Step 5: Report
 ```
