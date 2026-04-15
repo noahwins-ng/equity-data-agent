@@ -48,7 +48,7 @@ Updated automatically by `/ship` and `/sync-docs`.
 ### Phase 2 — Calculation Layer
 **Scope**: Technical indicators, fundamental ratio computation, and multi-timeframe aggregation.
 
-- [ ] Implement `ohlcv_weekly` and `ohlcv_monthly` Dagster aggregation assets — QNT-70
+- [x] Implement `ohlcv_weekly` and `ohlcv_monthly` Dagster aggregation assets — QNT-70
 - [ ] `ohlcv_weekly`:
     - Reads from `ohlcv_raw`, aggregates daily bars → weekly (Monday-based) OHLCV
     - Aggregation via pandas groupby (`toMonday(date)`): open=first, close=last, adj_close=last, high=max, low=min, volume=sum
