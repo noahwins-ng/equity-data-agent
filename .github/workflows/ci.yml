@@ -10,7 +10,7 @@ jobs:
 
     services:
       clickhouse:
-        image: clickhouse/clickhouse-server:24-alpine
+        image: clickhouse/clickhouse-server:24
         ports:
           - 8123:8123
         options: >-
