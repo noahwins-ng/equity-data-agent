@@ -56,6 +56,27 @@ class ClickHouseResource(ConfigurableResource):
                     time.sleep(_RETRY_DELAY)
         raise RuntimeError(f"ClickHouse execute failed after {_MAX_RETRIES} attempts") from last_exc
 
+    def query_df(self, query: str, parameters: dict[str, Any] | None = None) -> pd.DataFrame:
+        """Execute a SQL query and return results as a pandas DataFrame."""
+        last_exc: Exception | None = None
+        for attempt in range(1, _MAX_RETRIES + 1):
+            try:
+                return self._client().query_df(query, parameters=parameters)
+            except Exception as exc:
+                last_exc = exc
+                if attempt < _MAX_RETRIES:
+                    logger.warning(
+                        "ClickHouse query_df failed (attempt %d/%d): %s — retrying in %.1fs",
+                        attempt,
+                        _MAX_RETRIES,
+                        exc,
+                        _RETRY_DELAY,
+                    )
+                    time.sleep(_RETRY_DELAY)
+        raise RuntimeError(
+            f"ClickHouse query_df failed after {_MAX_RETRIES} attempts"
+        ) from last_exc
+
     def insert_df(self, table: str, df: pd.DataFrame) -> None:
         """Insert a pandas DataFrame into ClickHouse.
 
