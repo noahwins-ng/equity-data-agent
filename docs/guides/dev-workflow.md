@@ -28,6 +28,7 @@ Monday                    Tuesday–Thursday           Friday
   → pick
   → implement (with WIP commits + AC checkpoints + targeted tests)
   → sanity-check (with auto-fix on failure)
+  → review (adversarial code review — logic, security, edge cases)
   → ship (squash WIPs, PR, CI, merge)
 ```
 
@@ -50,6 +51,10 @@ Monday                    Tuesday–Thursday           Friday
 /sanity-check QNT-XX
   → lint + format + types + tests + AC check
   → Linear → In Review on pass
+
+/review QNT-XX
+  → adversarial diff review (logic, security, architecture, edge cases)
+  → auto-fixes blocking issues
 
 /ship QNT-XX
   → squashes WIP commits into clean commit
@@ -80,7 +85,7 @@ Hooks run automatically — you don't invoke them. They're configured in `.claud
 
 | Hook | Event | What it does |
 |------|-------|--------------|
-| **session-start** | Session begins | Detects branch, injects QNT context, suggests next action |
+| **session-start** | Session begins | Detects branch, injects QNT context, warns on prod health failures |
 | **auto-format** | After Edit/Write | Runs `ruff format` on every Python file Claude edits |
 | **protect-repo** | Before Bash | Blocks `git push --force`, `git reset --hard`, `rm -rf .`, push to main |
 | **check-uncommitted** | Session ends | Warns about uncommitted work before Claude stops |
@@ -138,6 +143,42 @@ Note: `/change-scope` updates `project-plan.md` text directly for all three chan
 | Linear status out of sync with git/PR | `/sync-linear QNT-XX` |
 | project-plan.md has unchecked Done items | `/sync-docs` |
 | Unsure what to work on next | `/cycle-start` |
+| Prod health failures detected at session start | `make monitor-log` — check details, then `make check-prod` or `make rollback` |
+
+---
+
+## Production Operations
+
+### Health Monitoring
+
+A cron job on Hetzner checks API health + Docker services every 15 minutes.
+
+```bash
+make monitor-install    # one-time setup (already done)
+make monitor-log        # check heartbeat + recent failures
+make check-prod         # manual full health check (services + /health)
+```
+
+The **session-start hook** automatically checks for recent prod failures and warns at the top of every session. If you see the warning, run `make monitor-log` for details.
+
+### Rollback
+
+If a deploy breaks prod:
+
+```bash
+make rollback           # reverts to previous commit, rebuilds, verifies health
+```
+
+This is also suggested automatically by `/ship` if post-deploy verification fails.
+
+### Incident Response
+
+| Situation | Action |
+|-----------|--------|
+| Session-start warns about prod failures | `make monitor-log` → diagnose → `make check-prod` or `make rollback` |
+| `/ship` post-deploy health check fails | Retry after 60s → if still failing, `make rollback` |
+| Service down but API healthy | `ssh hetzner` → `docker compose --profile prod restart <service>` |
+| Need to redeploy without new code | `ssh hetzner 'cd /opt/equity-data-agent && docker compose --profile prod up -d --build'` |
 
 ---
 

@@ -8,27 +8,39 @@ The issue identifier is: $ARGUMENTS
 
 ### Step 1: Diagnose
 
-1. **Check current state**:
+1. **Check git state** (primary signal — always reliable):
    - `git branch --show-current` — confirm we're on the right branch
-   - `git log --oneline main...HEAD` — see WIP commits (tells us how far `/implement` got)
+   - `git log --oneline main...HEAD` — see commits on branch
    - `git status` — any uncommitted work from the failed run?
-   - Fetch the Linear issue status — tells us which pipeline step was reached:
-     - **In Progress** → failed during `/implement` (never reached sanity-check)
-     - **In Review** → failed during `/ship` (sanity-check passed but ship failed)
-     - **Todo/Backlog** → `/pick` may not have completed
+   - `gh pr list --head <branch> --state open` — is there an open PR?
+   - `gh pr list --head <branch> --state merged` — was the PR already merged?
 
-2. **Identify the failure point** from the evidence above and report:
+2. **Determine failure point from git state** (use this hierarchy, not Linear status):
+   - **No commits on branch** → `/pick` completed but `/implement` never started
+   - **WIP commits only + code quality checks fail** → `/implement` incomplete (lint/type/test failures)
+   - **WIP commits only + checks pass + unfinished AC** → `/implement` incomplete (missing AC)
+   - **WIP commits only + checks pass + all AC done** → `/sanity-check` or early `/ship` failed
+   - **One clean conventional commit (squashed)** → `/ship` failed post-squash (during push, PR, CI, or merge)
+   - **Open PR exists** → `/ship` failed during CI or merge step
+   - **Merged PR exists** → `/ship` failed during post-deploy verification
+
+3. **Cross-check with Linear** (secondary — may have drifted):
+   - Fetch the Linear issue status to confirm, but do NOT override the git-based diagnosis if they disagree
+   - If Linear status contradicts git state, note the discrepancy in the report
+
+4. **Report the diagnosis**:
    ```
    Diagnosing: QNT-XX — Title
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
    Branch:     noahwinsdev/qnt-XX-description
-   Linear:     In Progress
+   Linear:     In Progress (matches git state | DRIFTED — git says <X>)
    WIP commits: 3
    Uncommitted: 2 modified files
+   Open PR:    none
 
    Last failure likely at: /implement (Step 2)
-   Reason: <inferred from state — e.g., "lint errors in uncommitted files", "tests failing", "incomplete AC">
+   Reason: <inferred from git state — e.g., "lint errors in uncommitted files", "tests failing", "incomplete AC">
    ```
 
 ### Step 2: Fix
@@ -60,8 +72,9 @@ Based on the failure point:
 
 After fixing, resume the `/go` pipeline from where it failed:
 
-- If fixed during `/implement` → continue to `/sanity-check` → `/ship`
-- If fixed during `/sanity-check` → continue to `/ship`
+- If fixed during `/implement` → continue to `/sanity-check` → `/review` → `/ship`
+- If fixed during `/sanity-check` → continue to `/review` → `/ship`
+- If fixed during `/review` → continue to `/ship`
 - If fixed during `/ship` → complete the ship (CI, merge, cleanup)
 
 ### Step 4: Report

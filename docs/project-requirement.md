@@ -138,6 +138,8 @@ graph TD
 
     subgraph Observability
         LF[Langfuse Tracing]
+        SE[Sentry Error Tracking]
+        HM[Health Monitor Cron]
         DUI[Dagster UI]
     end
 
@@ -632,10 +634,15 @@ Backend (GitHub Actions):
               └── git pull origin main
                     └── docker compose --profile prod up -d --build
                           └── make migrate   # run DDL migrations after ClickHouse is healthy
+                                └── Verify deploy: curl /health with 60s retry loop
 
 Frontend (Vercel):
   └── Auto-deploy from main (zero-config, triggered by GitHub push)
 ```
+
+**Rollback:** If a deploy breaks prod, `make rollback` SSHs to Hetzner, checks out `HEAD~1`, rebuilds Docker, and verifies health. The `/ship` command suggests this automatically if post-deploy verification fails.
+
+**Health Monitoring:** `scripts/health-monitor.sh` runs every 15 minutes on Hetzner via cron. Checks API `/health` + Docker service status, logs failures to `health-monitor.log`. The Claude session-start hook reads this log and warns on failures. Install: `make monitor-install`. Check: `make monitor-log`.
 
 ### 7.4 Environment Switching
 
@@ -805,6 +812,7 @@ One-time setup for a fresh Hetzner CX41. After this, the CI/CD pipeline in Secti
 | **Qdrant Cloud unreachable** | News search unavailable | `GET /search/news` returns HTTP 503. `GET /reports/news/{ticker}` returns 200 with partial report (headlines from ClickHouse, no semantic search). Agent `search_news` tool returns empty results. |
 | **ClickHouse unreachable** | All data API endpoints fail | `GET /health` returns HTTP 503. All data/report endpoints return 503. Frontend shows offline banner. |
 | **News API rate-limited** | News ingestion stale | Dagster retry + stale data is acceptable — news is not real-time. |
+| **Bad deploy breaks prod** | Services crash or /health fails | Health monitor detects within 15 min and logs failure. `make rollback` reverts to previous commit + rebuilds. `/ship` suggests rollback automatically if post-deploy verification fails. |
 
 ### Health Endpoint Contract
 

@@ -18,7 +18,11 @@ End-of-week cycle wrap-up. Run this at the end of each work cycle.
 
 5. **Check milestone completion** — for each milestone that has issues in this cycle, check if ALL of its issues are now Done (query Linear for the full milestone issue list, not just this cycle's slice). If a milestone is fully complete, prompt: "Phase X is complete — run `/retro Phase X` when ready." Do NOT auto-run retro.
 
-6. **Run `/sync-docs`** — reconcile `docs/project-plan.md` with Linear: tick Done issues, remove Cancelled issues, surface any gaps.
+6. **Switch to main before syncing docs** — ensure doc commits land on main, not a stale feature branch:
+   ```bash
+   git checkout main && git pull
+   ```
+   Then **run `/sync-docs`** — reconcile `docs/project-plan.md` with Linear: tick Done issues, remove Cancelled issues, surface any gaps.
 
 7. **Post a Linear project status update** on the Equity Data Agent project using `save_status_update`:
    - `type`: `project`

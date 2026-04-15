@@ -1,4 +1,4 @@
-.PHONY: setup dev-dagster dev-api dev-frontend test test-integration lint format migrate seed tunnel issue pr build check-prod help
+.PHONY: setup dev-dagster dev-api dev-frontend test test-integration lint format migrate seed tunnel issue pr build check-prod rollback monitor-install monitor-log help
 
 # ─── Setup ────────────────────────────────────────────────────
 
@@ -35,8 +35,35 @@ check-prod: ## Check prod service status and API health via SSH
 	@echo "=== API Health ==="
 	@ssh hetzner "curl -sf http://localhost:8000/health && echo '' || echo 'UNREACHABLE'"
 
+rollback: ## Rollback prod to previous commit and rebuild
+	@echo "=== Current prod commit ==="
+	@ssh hetzner "cd /opt/equity-data-agent && git log --oneline -1"
+	@echo ""
+	@echo "=== Rolling back to previous commit ==="
+	@ssh hetzner "cd /opt/equity-data-agent && git checkout HEAD~1 && docker compose --profile prod up -d --build"
+	@echo ""
+	@echo "=== Waiting for API to come up (60s max) ==="
+	@ssh hetzner 'for i in $$(seq 1 12); do if curl -sf http://localhost:8000/health; then echo ""; echo "Rollback verified OK"; exit 0; fi; echo "Attempt $$i/12..."; sleep 5; done; echo "Health check failed"; exit 1'
+	@echo ""
+	@echo "=== Rolled back to ==="
+	@ssh hetzner "cd /opt/equity-data-agent && git log --oneline -1"
+
 build: ## Build prod Docker images locally (run when changing Dockerfile, docker-compose.yml, or deps)
 	docker compose --profile prod build
+
+monitor-install: ## Install health monitor cron on Hetzner (runs every 15 min)
+	ssh hetzner "mkdir -p /opt/equity-data-agent/scripts"
+	scp scripts/health-monitor.sh hetzner:/opt/equity-data-agent/scripts/health-monitor.sh
+	ssh hetzner "chmod +x /opt/equity-data-agent/scripts/health-monitor.sh"
+	ssh hetzner '(crontab -l 2>/dev/null | grep -v health-monitor; echo "*/15 * * * * /opt/equity-data-agent/scripts/health-monitor.sh") | crontab -'
+	@echo "Health monitor installed — runs every 15 minutes"
+
+monitor-log: ## Show recent health check failures from prod
+	@echo "=== Last heartbeat ==="
+	@ssh hetzner "cat /opt/equity-data-agent/health-monitor-heartbeat 2>/dev/null || echo 'No heartbeat yet — monitor may not be installed (run make monitor-install)'"
+	@echo ""
+	@echo "=== Recent failures (last 20) ==="
+	@ssh hetzner "tail -20 /opt/equity-data-agent/health-monitor.log 2>/dev/null || echo 'No failures logged'"
 
 # ─── Quality ──────────────────────────────────────────────────
 

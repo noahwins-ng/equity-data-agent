@@ -1,6 +1,6 @@
 # Go
 
-Full end-to-end orchestrator for a single issue: pick → implement → sanity-check → ship. Handles WIP commits, AC validation, targeted tests, and error recovery. Pass the issue identifier as an argument (e.g., `/go QNT-40`).
+Full end-to-end orchestrator for a single issue: pick → implement → sanity-check → review → ship. Handles WIP commits, AC validation, targeted tests, adversarial code review, and error recovery. Pass the issue identifier as an argument (e.g., `/go QNT-40`).
 
 The issue identifier is: $ARGUMENTS
 
@@ -28,7 +28,7 @@ Run the full `/pick` logic:
 Run the full `/implement` logic with these enhancements:
 
 #### 2a: Load Context
-1. Fetch the issue from Linear — title, description, acceptance criteria, milestone
+1. **Do not re-fetch from Linear** — use the issue data (title, description, AC, milestone) already captured in Step 1
 2. Confirm you're on the correct branch
 3. Read `docs/architecture/system-overview.md`
 4. Read `docs/patterns.md` — follow established patterns instead of re-discovering them each time
@@ -42,9 +42,8 @@ Before writing code:
 #### 2c: Implement with AC Checkpoints
 For each acceptance criterion:
 1. Write the code that satisfies it
-2. Run `uv run ruff check` and `uv run ruff format` on the changed files
-3. Run `uv run pyright` on the changed files
-4. **Checkpoint**: After satisfying each AC (or a logical group of ACs), create a WIP commit:
+2. Run `uv run ruff check` and `uv run ruff format` on the changed files (save pyright for the project-level check after all ACs are done — it needs full project context)
+3. **Checkpoint**: After satisfying each AC (or a logical group of ACs), create a WIP commit:
    ```
    QNT-XX: wip: <what was just implemented>
    ```
@@ -74,7 +73,17 @@ Run the full `/sanity-check` logic:
 
 ---
 
-### Step 4: Ship
+### Step 4: Review
+
+Run the full `/review` logic:
+- Read the full diff (`git diff main...HEAD`) with adversarial eyes
+- Check for: logic errors, security issues, architectural violations, edge cases
+- **On BLOCKING issues**: fix them immediately, then re-verify the fix
+- **On SHIP**: proceed to Step 5
+
+---
+
+### Step 5: Ship
 
 Run the full `/ship` logic:
 - Issue is already In Review — skip code quality re-checks, re-verify AC only
@@ -89,7 +98,7 @@ Run the full `/ship` logic:
 
 ---
 
-### Step 5: Report
+### Step 6: Report
 
 ```
 Done: QNT-XX — Title
@@ -103,7 +112,7 @@ Acceptance Criteria:
   ✓ Criterion 2
   ✓ Criterion 3
 
-Pipeline: pick ✓ → implement ✓ → sanity-check ✓ → ship ✓
+Pipeline: pick ✓ → implement ✓ → sanity-check ✓ → review ✓ → ship ✓
 
 Milestone: Phase X — Y% complete
 Next up:   QNT-YY — <title>  (run /go QNT-YY to continue)
@@ -113,7 +122,13 @@ Next up:   QNT-YY — <title>  (run /go QNT-YY to continue)
 
 ## Error Recovery
 
-If any step fails and cannot be auto-fixed after 2 attempts:
+**Tracking attempts**: After each failed fix attempt, create a WIP commit:
+```
+QNT-XX: wip: fix attempt — <what was tried and why it failed>
+```
+To check how many attempts have been made at the current step, count commits matching `fix attempt` in `git log --oneline main...HEAD`. This is durable across context compressions.
+
+If any step fails and cannot be auto-fixed after 2 attempts (i.e., 2 "fix attempt" commits for the same step):
 
 1. **Commit a WIP checkpoint** of any progress made so far
 2. **Report what failed** with the specific error

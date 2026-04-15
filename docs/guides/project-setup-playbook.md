@@ -126,7 +126,7 @@ Create `.claude/commands/` with workflow commands:
 #### Issue Lifecycle
 | Command | When | What |
 |---|---|---|
-| `/go TEAM-XX` | Work on an issue end-to-end | pick → implement → sanity-check → ship — fully automated, stops only on failure |
+| `/go TEAM-XX` | Work on an issue end-to-end | pick → implement → sanity-check → review → ship — fully automated, stops only on failure |
 | `/pick TEAM-XX` | Starting an issue manually | Checkout branch (uses `gitBranchName` from Linear for full name) → Linear In Progress → display AC |
 | `/implement TEAM-XX` | After pick (manual flow) | Explore codebase → write code → lint + format + types self-check |
 | `/sanity-check TEAM-XX` | Before shipping (manual flow) | Lint + format + types + tests + AC verification → Linear In Review |

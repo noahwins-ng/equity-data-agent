@@ -92,5 +92,6 @@ Plan:     Updated docs/project-plan.md — <entry added | removed | text updated
 Linear:   QNT-XX [created | cancelled | updated] — <title>
 ADR:      docs/decisions/00N-<title>.md (if applicable) | none
 
-Next: run /sync-docs to reconcile any remaining Done/Cancelled statuses in docs/project-plan.md
+Plan updated inline. Run /sync-docs only if you also need to reconcile
+unrelated Done/Cancelled issues that drifted since the last sync.
 ```

@@ -28,10 +28,22 @@ Fetch the current Linear status of the issue first.
 - Stage the file: it will be included in the next commit
 - If no matching entry is found, note it in the Step 8 report as "Not in plan — run `/sync-docs` to surface"
 
-### Step 3: Commit & Push
+### Step 3: Squash WIP Commits, Commit & Push
 - Check for uncommitted changes via `git status`
-- If the working tree is clean (nothing to commit), skip the commit and proceed to push
-- Otherwise stage and commit everything (code + doc update) using the format: `QNT-XX: type(scope): description`
+- If there are uncommitted changes, stage them: `git add -A`
+- **Squash all WIP commits** into one clean conventional commit:
+  ```bash
+  git reset --soft $(git merge-base main HEAD)
+  git commit -m "QNT-XX: type(scope): description"
+  ```
+  This preserves all changes but replaces the WIP history with a single commit.
+- If there are no WIP commits (only one clean commit already), skip the squash
+- **Check if branch is behind main** before pushing:
+  ```bash
+  git fetch origin main
+  git log HEAD..origin/main --oneline
+  ```
+  If main has new commits: rebase first with `git rebase origin/main`. If conflicts arise, report them and stop — do not auto-resolve.
 - Push the branch: `git push -u origin HEAD`
 
 ### Step 4: Create PR
@@ -64,13 +76,19 @@ Fetch the current Linear status of the issue first.
 - Switch back to main: `git checkout main && git pull`
 
 ### Step 7: Post-Deploy Verification
-After merge, CD runs automatically. Verify the deployed system before marking Done.
+After merge, CD runs automatically. **Wait for deployment to propagate before verifying** — the old containers need time to be replaced.
 
-**Always run:**
+1. Check CD status first: `ssh hetzner 'docker compose -f /opt/equity-data-agent/docker-compose.yml ps --format json'` to see container uptimes. If containers were created more than 5 minutes ago, CD may not have triggered yet — wait and re-check.
+2. If CI/CD is still running, wait ~90 seconds and re-check. Do not run `make check-prod` against a stale deployment.
+
+**Once deployment is fresh, run:**
 ```
 make check-prod
 ```
-This SSHs to Hetzner, checks `docker compose ps`, and hits `/health`. If it fails: report the failure and do NOT mark Done.
+This SSHs to Hetzner, checks `docker compose ps`, and hits `/health`. If it fails: retry once after 60 seconds. If it still fails:
+- Report the failure and do NOT mark Done
+- Suggest rollback: `make rollback` (reverts prod to the previous commit and rebuilds)
+- If the user confirms rollback, run it and report the result
 
 **For each `⏳ PENDING` prod execution AC item** identified in the sanity check, run the appropriate verification:
 
