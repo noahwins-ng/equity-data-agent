@@ -1,6 +1,7 @@
 from dagster import Definitions
 
 from dagster_pipelines.assets.aggregation import ohlcv_monthly, ohlcv_weekly
+from dagster_pipelines.assets.fundamental_summary import fundamental_summary
 from dagster_pipelines.assets.fundamentals import fundamentals
 from dagster_pipelines.assets.indicators import (
     technical_indicators_daily,
@@ -22,6 +23,7 @@ defs = Definitions(
         fundamentals,
         ohlcv_weekly,
         ohlcv_monthly,
+        fundamental_summary,
         technical_indicators_daily,
         technical_indicators_weekly,
         technical_indicators_monthly,

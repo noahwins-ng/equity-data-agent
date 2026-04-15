@@ -66,7 +66,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - Same indicator code, three input sources: `ohlcv_raw`, `ohlcv_weekly`, `ohlcv_monthly`
     - Writes to `technical_indicators_daily`, `_weekly`, `_monthly`
     - Uses pandas/numpy — all math in Python, never in the LLM
-- [ ] Implement `fundamental_summary` Dagster asset (15 ratios) — QNT-45
+- [x] Implement `fundamental_summary` Dagster asset (15 ratios) — QNT-45
     - **Valuation**: P/E, EV/EBITDA, P/B, P/S, EPS
     - **Growth**: revenue YoY%, net income YoY%, FCF YoY%
     - **Profitability**: net margin%, gross margin%, ROE, ROA

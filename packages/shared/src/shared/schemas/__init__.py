@@ -1,3 +1,4 @@
+from shared.schemas.fundamental_summary import FundamentalSummaryRow
 from shared.schemas.fundamentals import FundamentalsRow
 from shared.schemas.indicators import (
     TechnicalIndicatorsDailyRow,
@@ -11,6 +12,7 @@ __all__ = [
     "OHLCVRow",
     "OHLCVWeeklyRow",
     "OHLCVMonthlyRow",
+    "FundamentalSummaryRow",
     "FundamentalsRow",
     "TechnicalIndicatorsDailyRow",
     "TechnicalIndicatorsWeeklyRow",
