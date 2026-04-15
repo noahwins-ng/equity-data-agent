@@ -6,6 +6,11 @@ The issue identifier is: $ARGUMENTS
 
 ## Instructions
 
+### Step 0: Check for Uncommitted Work
+Run `git status`. If there are uncommitted changes or untracked files:
+- Warn the user: "Uncommitted work detected — checks will run on the committed state. Stage and commit first if you want these included."
+- Proceed with checks anyway, but flag this in the report.
+
 ### Step 1: Code Quality
 Run these checks and report pass/fail for each:
 - `uv run ruff check .` (lint)
@@ -27,6 +32,9 @@ Format the results as:
 Sanity Check: QNT-XX — Title
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+Warnings:
+  ⚠ Uncommitted work detected — checks ran on committed state  (if applicable)
+
 Code Quality:
   ✓ Lint          passed
   ✓ Format        passed
@@ -35,11 +43,21 @@ Code Quality:
 
 Acceptance Criteria:
   ✓ Criterion 1 description
-  ✓ Criterion 2 description
-  ✗ Criterion 3 description — [reason]
+  ✗ Criterion 2 description — [reason]
+  ? Criterion 3 description — needs manual verification
 
 Verdict: READY TO SHIP / NEEDS FIXES
 ```
 
-### Step 4: If NEEDS FIXES
+### Step 4: If READY TO SHIP
+Move the Linear issue status to **In Review**.
+
+Post a comment on the Linear issue:
+```
+**Sanity check passed** — ready for review
+
+✓ Lint  ✓ Format  ✓ Types  ✓ Tests (X passed)  ✓ AC
+```
+
+### Step 5: If NEEDS FIXES
 List the specific issues found and offer to fix them before shipping.

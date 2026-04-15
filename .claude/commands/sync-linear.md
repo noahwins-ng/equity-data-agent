@@ -1,6 +1,6 @@
 # Sync Linear
 
-Sync the current issue status with Linear. Pass the issue identifier as an argument (e.g., `/sync-linear QNT-34`).
+Manual override to sync an issue's status with Linear. Use this when status has drifted out of sync — normal transitions are handled automatically by `/pick` (→ In Progress), `/sanity-check` (→ In Review), and `/ship` (→ Done). Pass the issue identifier as an argument (e.g., `/sync-linear QNT-34`).
 
 The issue identifier is: $ARGUMENTS
 
@@ -13,6 +13,7 @@ The issue identifier is: $ARGUMENTS
    - If there's an open PR → **In Review**
    - If the PR is merged → **Done**
    - If no branch exists yet → **Todo**
+   - If the branch was deleted and no PR was ever merged → **Cancelled** (confirm with user before setting)
 
    Check with: `git branch --list '*qnt-XX*'`, `gh pr list --head <branch>`, `gh pr list --state merged`.
 

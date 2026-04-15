@@ -3,7 +3,8 @@
 Living documentation for the equity-data-agent codebase. This is the shared context for both human developers and AI assistants. When starting a session, read the relevant sections to understand how things work and why they were built that way.
 
 ## Project
-- [project-requirement.md](project-requirement.md) — Full requirements, architecture, phased plan, data model
+- [project-requirement.md](project-requirement.md) — Full requirements, architecture, data model, infrastructure, deployment
+- [project-plan.md](project-plan.md) — Phase-by-phase delivery checklists, synced with Linear via `/ship` and `/sync-docs`
 
 ## Structure
 
@@ -26,8 +27,15 @@ Architecture Decision Records (ADRs). Read these to understand **why** we chose 
 ### [guides/](guides/)
 How to do common tasks. Operational runbooks.
 
+- [dev-workflow.md](guides/dev-workflow.md) — Weekly cadence: how commands chain together (Monday kickoff → daily work → Friday close)
 - [local-dev-setup.md](guides/local-dev-setup.md) — Getting started from a clean clone
+- [hetzner-bootstrap.md](guides/hetzner-bootstrap.md) — One-time production server setup on Hetzner CX41
 - [project-setup-playbook.md](guides/project-setup-playbook.md) — Reusable checklist for bootstrapping new projects
+
+### [retros/](retros/)
+End-of-phase retrospectives. What shipped, what was hard, lessons learned.
+
+- [phase-0-foundation.md](retros/phase-0-foundation.md) — Foundation: monorepo, shared package, Docker, migrations, CI/CD, Hetzner bootstrap
 
 ### [api/](api/)
 HTTP request files for testing FastAPI endpoints. Open with VS Code REST Client extension.
