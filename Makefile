@@ -1,4 +1,4 @@
-.PHONY: setup dev-dagster dev-api dev-frontend test lint format migrate seed tunnel issue pr help
+.PHONY: setup dev-dagster dev-api dev-frontend test lint format migrate seed tunnel issue pr build help
 
 # ─── Setup ────────────────────────────────────────────────────
 
@@ -25,6 +25,11 @@ dev-frontend: ## Start Next.js on localhost:3001
 tunnel: ## Open SSH tunnel to Hetzner ClickHouse (port 8123)
 	@echo "Opening SSH tunnel: localhost:8123 → Hetzner ClickHouse"
 	ssh -N -L 8123:localhost:8123 hetzner
+
+# ─── Docker ───────────────────────────────────────────────────
+
+build: ## Build prod Docker images locally (run when changing Dockerfile, docker-compose.yml, or deps)
+	docker compose --profile prod build
 
 # ─── Quality ──────────────────────────────────────────────────
 

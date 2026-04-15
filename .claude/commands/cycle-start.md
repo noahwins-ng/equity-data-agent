@@ -19,6 +19,23 @@ Start-of-week cycle kickoff. Run this at the beginning of each work cycle.
    - Dependencies (blocked issues come after their blockers)
    - Status (skip Done issues)
 
-5. **If the cycle is empty**, suggest pulling issues from the next milestone's backlog into the cycle.
+5. **If the cycle is empty**, suggest pulling issues from the next milestone's backlog into the cycle. When adding issues to the cycle, also move their status from **Backlog → Todo** — Backlog issues don't appear on the Linear cycle board.
 
-6. **Set session context** — state which cycle and milestone we're in so subsequent commands have context.
+6. **Check if `docs/project-plan.md` may be stale** — if there are Done issues in Linear with unchecked items in the plan, note it: "project-plan.md may be out of sync — run `/sync-docs` to reconcile."
+
+7. **Report** formatted as:
+   ```
+   Cycle N (Date — Date)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━
+
+   Issues:
+     QNT-XX  Title                  Todo      High
+     QNT-YY  Title                  Done      Medium
+     ...
+
+   Milestone: Phase X — Name (Z/N done)
+
+   Suggested next: QNT-XX — Title  (Priority)
+
+   ⚠ project-plan.md may be out of sync — run /sync-docs  (if applicable)
+   ```

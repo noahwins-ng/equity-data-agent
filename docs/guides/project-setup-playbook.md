@@ -23,7 +23,7 @@ A reusable checklist for bootstrapping new projects with Claude Code, Linear, an
 - [ ] Create **issues** for each deliverable within a phase
   - Each issue has: scope, deliverables, acceptance criteria
 - [ ] Enable **1-week cycles** on the team (Settings → Team → Cycles)
-- [ ] Pull first milestone's issues into Cycle 1
+- [ ] Pull first milestone's issues into Cycle 1 and set their status to **Todo** (Backlog issues don't appear on the cycle board)
 
 ---
 
@@ -60,6 +60,8 @@ Include these sections:
 
 ### 2.4 Makefile commands to include
 
+> **Stack note**: the quality commands below assume Python (`ruff`, `pyright`, `pytest`). Substitute the equivalent for your stack (e.g. `eslint`/`tsc`/`vitest` for TypeScript, `golangci-lint`/`go test` for Go). The structure and targets should stay the same.
+
 ```makefile
 # Setup
 make setup          # First-time: hooks + deps + .env copy
@@ -68,7 +70,7 @@ make setup          # First-time: hooks + deps + .env copy
 make dev-<service>  # One per service (separate terminals)
 make tunnel         # If using remote DB via SSH
 
-# Quality
+# Quality (adapt commands to your stack)
 make test           # Run tests
 make lint           # Linter + type checker
 make format         # Auto-format
@@ -77,9 +79,9 @@ make format         # Auto-format
 make migrate        # Run migrations
 make seed           # Quick seed for dev data
 
-# Git workflow
-make issue QNT=XX   # Checkout branch for Linear issue
-make pr QNT=XX TITLE="..." # Push + create PR
+# Git workflow (replace TEAM prefix to match your Linear project)
+make issue TEAM=XX   # Checkout branch for Linear issue
+make pr TEAM=XX TITLE="..." # Push + create PR
 ```
 
 ### 2.5 Git hook (commit-msg)
@@ -96,23 +98,48 @@ git config core.hooksPath .githooks
 
 ## Phase 3: Slash Commands
 
+> **Starting point**: copy `.claude/commands/` from `equity-data-agent` — the full 12-command framework is already written and battle-tested. Then do two project-wide replacements:
+> 1. Linear team ID (e.g. `6da338db-71b2-4d14-9519-8a19231e1ccd`) → your new team's ID (find it via `list_teams` in Linear MCP)
+> 2. Issue prefix `QNT-` → your project's prefix (e.g. `SVC-`, `PLT-`)
+>
+> Also update the lint/test commands in `sanity-check.md` if your stack differs from Python/uv.
+
 Create `.claude/commands/` with workflow commands:
 
+#### Session & Cycle
 | Command | When | What |
 |---|---|---|
-| `/resume` | Start of session | Detect branch, pull Linear context, show recent work |
-| `/cycle-start` | Start of week | Fetch cycle, list issues, suggest next pick |
-| `/cycle-end` | End of week | Summarize shipped, roll over incomplete, velocity |
-| `/sync-linear TEAM-XX` | Mid-session | Detect state (branch/PR/merged), update Linear |
-| `/sanity-check TEAM-XX` | Before shipping | Lint + types + tests + acceptance criteria check |
-| `/ship TEAM-XX` | Done with issue | Sanity check → PR → CI → merge → Linear Done → update phase checklist in project-requirement.md (`- [ ]` → `- [x]`) |
-| `/retro` | End of milestone | Review velocity, capture lessons to memory, prep next |
+| `/session-check` | Start of every session | Detect branch → fetch Linear issue → show recent commits + AC status (reads source files, not git log) |
+| `/cycle-start` | Start of week | Fetch active cycle, list issues by status/priority, suggest next pick, flag stale plan |
+| `/cycle-end` | End of week | Summarize shipped, roll over incomplete issues to next cycle, check milestone completion |
+| `/retro [Phase]` | End of milestone | Gather data, capture lessons to memory, update system-overview, sync docs, write retro report |
+
+#### Issue Lifecycle
+| Command | When | What |
+|---|---|---|
+| `/go TEAM-XX` | Work on an issue end-to-end | pick → implement → sanity-check → ship — fully automated, stops only on failure |
+| `/pick TEAM-XX` | Starting an issue manually | Checkout branch (uses `gitBranchName` from Linear for full name) → Linear In Progress → display AC |
+| `/implement TEAM-XX` | After pick (manual flow) | Explore codebase → write code → lint + format + types self-check |
+| `/sanity-check TEAM-XX` | Before shipping (manual flow) | Lint + format + types + tests + AC verification → Linear In Review |
+| `/ship TEAM-XX` | Ready to merge (manual flow) | Sanity check (skipped if already In Review) → tick project-plan.md → PR → CI → squash merge → Linear Done |
+
+#### Docs & Scope
+| Command | When | What |
+|---|---|---|
+| `/change-scope add\|drop\|modify` | Requirement changes | Update spec + system-overview + project-plan.md + Linear + ADR if warranted — all in one command |
+| `/sync-docs` | Post-change or post-cycle | Tick Done items in project-plan.md, remove Cancelled, surface gaps |
+| `/sync-linear TEAM-XX` | Recovery only | Detect state from git/PR, correct Linear status |
 
 ### Command design principles
 - Each command is self-contained markdown with clear step-by-step instructions
 - Commands that take arguments use `$ARGUMENTS` placeholder
-- Commands reference specific Linear team IDs and conventions from the project
-- `/ship` should include the full pipeline including auto-merge for solo dev
+- Commands reference the specific Linear team ID and conventions from the project
+- `/ship` skips code quality re-checks if the issue is already In Review (avoids redundant work after `/sanity-check`)
+- `/change-scope` handles `project-plan.md` updates directly for add/drop/modify — no manual follow-up on the plan
+- AC assessment in `/session-check` reads source files, not git log keywords — keyword matching produces false positives
+- `/pick` and `/go` must use the `gitBranchName` field from Linear for the full branch name — never create short branches without the description suffix
+- When assigning issues to a cycle, always move status Backlog → Todo — Backlog issues don't appear on the Linear cycle board
+- Maintain a `docs/guides/dev-workflow.md` as a cadence cheat sheet (not a command reference — that's CLAUDE.md)
 
 ---
 
@@ -123,17 +150,23 @@ Create `docs/` as the project's shared brain:
 ```
 docs/
 ├── INDEX.md                    # Navigation and purpose
-├── project-requirement.md      # Full requirements (moved from root)
+├── project-requirement.md      # Full requirements, architecture, stack
+├── project-plan.md             # Phase-by-phase delivery checklists (synced via /ship + /sync-docs)
 ├── architecture/
-│   └── system-overview.md      # How the system works, data flow
+│   └── system-overview.md      # How the system works, data flow, component responsibilities
 ├── decisions/
 │   ├── TEMPLATE.md             # ADR template
 │   └── 001-first-decision.md   # Why X over Y
 ├── guides/
+│   ├── dev-workflow.md         # Weekly cadence: how commands chain together
 │   └── local-dev-setup.md      # Getting started from clone
+├── retros/
+│   └── phase-0-name.md         # End-of-milestone retrospectives
 └── api/
     └── *.http                  # REST Client test files
 ```
+
+`project-plan.md` is the living delivery checklist — checkboxes per phase, referenced by QNT-XX. It's distinct from `project-requirement.md` (the spec). `/ship` ticks it automatically; `/sync-docs` reconciles it with Linear.
 
 ### ADR template
 ```markdown
@@ -206,6 +239,7 @@ Save to `.claude/projects/<project>/memory/`:
 
 ```
 [ ] Project brief written (docs/project-requirement.md)
+[ ] Project plan written (docs/project-plan.md — phase checklists with QNT-XX references)
 [ ] Linear: project + milestones + issues + cycles
 [ ] Git repo initialized + GitHub remote
 [ ] CLAUDE.md with project conventions
@@ -213,8 +247,9 @@ Save to `.claude/projects/<project>/memory/`:
 [ ] .env.example with all vars
 [ ] .gitignore
 [ ] .githooks/commit-msg
-[ ] .claude/commands/ (7 slash commands)
-[ ] docs/ structure (architecture, decisions, guides, api)
+[ ] .claude/commands/ (12 slash commands)
+[ ] docs/ structure (architecture, decisions, guides, retros, api)
+[ ] docs/guides/dev-workflow.md (weekly cadence cheat sheet)
 [ ] GitHub branch protection enabled
 [ ] CI/CD workflows (at least CI)
 [ ] Memory files saved for the project

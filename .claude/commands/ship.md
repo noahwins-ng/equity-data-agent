@@ -7,19 +7,37 @@ The issue identifier is: $ARGUMENTS
 ## Instructions
 
 ### Step 1: Sanity Check
-Run the full sanity check (same as `/sanity-check`):
+Fetch the current Linear status of the issue first.
+
+**If the issue is already In Review** (meaning `/sanity-check` was run and passed recently):
+- Skip lint, format, type check, and tests
+- Re-verify acceptance criteria from Linear only (a quick read of relevant files)
+- Confirm: "Issue already In Review — skipping code quality checks, re-verifying AC only."
+
+**Otherwise**, run the full sanity check (same as `/sanity-check`):
 - Lint, format, type check, tests
 - Verify acceptance criteria from Linear issue
+- Move Linear issue → **In Review** on pass
 
 **If any check fails**: stop here, report the failures, and offer to fix them. Do NOT proceed to PR creation.
 
-### Step 2: Commit & Push
+### Step 2: Update Project Plan
+- Open `docs/project-plan.md`
+- Find the deliverable(s) that correspond to the shipped issue (match by QNT-XX reference or deliverable description)
+- Change `- [ ]` → `- [x]` for each completed deliverable
+- Stage the file: it will be included in the next commit
+- If no matching entry is found, note it in the Step 8 report as "Not in plan — run `/sync-docs` to surface"
+
+### Step 3: Commit & Push
 - Check for uncommitted changes via `git status`
-- If there are changes, stage and commit using the format: `QNT-XX: type(scope): description`
+- If the working tree is clean (nothing to commit), skip the commit and proceed to push
+- Otherwise stage and commit everything (code + doc update) using the format: `QNT-XX: type(scope): description`
 - Push the branch: `git push -u origin HEAD`
 
-### Step 3: Create PR
-- Create a pull request using `gh pr create`
+### Step 4: Create PR
+- First check if a PR already exists: `gh pr list --head <branch> --state open`
+  - If one exists, use that PR number and skip creation
+- Otherwise create a pull request using `gh pr create`
 - Title: `QNT-XX: <issue title from Linear>`
 - Body must include:
   ```
@@ -34,27 +52,23 @@ Run the full sanity check (same as `/sanity-check`):
   ---
   Generated with [Claude Code](https://claude.com/claude-code)
   ```
+- Add the PR URL as a link attachment on the Linear issue (do this now, while the issue is still open)
 
-### Step 4: Wait for CI
+### Step 5: Wait for CI
 - Check CI status using `gh pr checks <pr-number> --watch`
+- If no CI checks are present, proceed directly to Step 6
 - If CI fails: report the failure, do NOT merge, offer to fix
 
-### Step 5: Auto-Merge
+### Step 6: Auto-Merge
 - Once CI passes, squash merge: `gh pr merge <pr-number> --squash --delete-branch`
 - Switch back to main: `git checkout main && git pull`
 
-### Step 6: Update Project Requirement
-- Open `docs/project-requirement.md`
-- Find the deliverable(s) that correspond to the shipped issue (match by QNT-XX reference or deliverable description)
-- Change `- [ ]` → `- [x]` for each completed deliverable
-- Commit: `QNT-XX: docs: mark deliverable complete in project-requirement.md`
-- Push to main: `git push`
-
-### Step 7: Update Linear
-- Mark the issue as **Done** on Linear
-- Add the PR URL as a link attachment on the issue
+### Step 7: Confirm Linear Close
+- Note: the `Closes QNT-XX` in the PR body auto-closes the issue on merge via GitHub integration — no need to manually mark Done
 
 ### Step 8: Report
+Query the active cycle for the highest-priority open issue (not Done) to populate "Next up". If no active cycle exists, omit the "Next up" line.
+
 ```
 Shipped QNT-XX: Title
 ━━━━━━━━━━━━━━━━━━━━
@@ -63,5 +77,5 @@ Status: Done
 Branch: deleted
 
 Milestone: Phase X — Y% complete
-Next up:   QNT-YY — <next issue title>
+Next up:   QNT-YY — <next issue title>  (highest-priority open issue in active cycle)
 ```

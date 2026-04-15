@@ -70,6 +70,7 @@ Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`
 - One PR per issue
 - PR body must include `Closes QNT-XX` for Linear auto-close
 - Squash merge to main
+- Run `make build` locally before pushing if `Dockerfile`, `docker-compose.yml`, or any `pyproject.toml` was changed
 
 ## Environment
 
@@ -115,17 +116,33 @@ make format                         # Auto-format code
 make migrate                        # Run ClickHouse DDL migrations (via HTTP)
 make seed                           # Quick seed: 30 days, 3 tickers (fast dev data)
 make types                          # Generate TS types from FastAPI OpenAPI schema
+make build                          # Build prod Docker images locally (run when changing Dockerfile, docker-compose.yml, or deps)
 make issue QNT=34                   # Checkout branch for Linear issue
 make pr QNT=34 TITLE="description"  # Push + create PR
 ```
 
 ### Workflow Commands (Claude Code slash commands)
+
+#### Session & Cycle
 ```
-/start-session            # Start of session: restore context from branch + Linear
-/cycle-start              # Start of week: show cycle issues, suggest next pick
-/cycle-end                # End of week: summarize shipped, roll over incomplete
-/sync-linear QNT-34       # Sync issue status (Todo/In Progress/In Review/Done)
-/sanity-check QNT-34      # Pre-PR gate: lint + types + tests + acceptance criteria
-/ship QNT-34              # Full pipeline: sanity check → PR → CI → merge → Done → update phase checklist in project-requirement.md
-/retro                    # End of milestone: review, capture lessons, prep next phase
+/session-check            # Start of session: restore context from branch + Linear
+/cycle-start              # Start of week: show cycle issues, check plan staleness, suggest next pick
+/cycle-end                # End of week: summarize shipped, roll over incomplete, prompt retro if milestone done
+/retro                    # End of milestone: review, capture lessons, sync docs, prep next phase
+```
+
+#### Issue Lifecycle
+```
+/go QNT-34                # Full pipeline: pick → implement → review pause → sanity-check → ship
+/pick QNT-34              # Start an issue: checkout branch + Linear In Progress + show acceptance criteria
+/implement QNT-34         # Implement the code: explore codebase → write code → lint/format/types
+/sanity-check QNT-34      # Pre-PR gate: lint + types + tests + acceptance criteria → Linear In Review
+/ship QNT-34              # Full pipeline: sanity check → tick project-plan.md → PR → CI → merge → Linear Done
+/sync-linear QNT-34       # Manual override: sync issue status when Linear has drifted
+```
+
+#### Docs & Scope
+```
+/change-scope             # Formalise a requirement change (add/drop/modify): spec + Linear + ADR if warranted
+/sync-docs                # Reconcile project-plan.md with Linear: tick Done, remove Cancelled, surface gaps
 ```
