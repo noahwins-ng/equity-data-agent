@@ -59,7 +59,15 @@ def compute_fundamental_ratios(
 
     # Valuation
     df["eps"] = _safe_divide(df["net_income"], shares)
-    df["pe_ratio"] = _safe_divide(market_cap, df["net_income"])
+    # P/E uses TTM (trailing twelve months) earnings on quarterly rows — a
+    # single quarter's net_income divided by full market cap inflates the
+    # ratio ~4x. Annual rows already carry full-year net_income. Asset is
+    # ticker-partitioned, so df is one ticker and rolling-sum over the
+    # quarterly slice is the correct TTM.
+    q_mask = df["period_type"] == "quarterly"
+    ni_for_pe = df["net_income"].copy()
+    ni_for_pe.loc[q_mask] = df.loc[q_mask, "net_income"].rolling(window=4, min_periods=4).sum()
+    df["pe_ratio"] = _safe_divide(market_cap, ni_for_pe.replace(0, np.nan))
     # Financial convention: P/E is "N/M" (not meaningful) when earnings are
     # near zero — the ratio is arithmetically valid but not comparable.
     df.loc[df["eps"].abs() < _EPS_NM_THRESHOLD, "pe_ratio"] = np.nan
