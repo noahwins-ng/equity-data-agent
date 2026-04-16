@@ -206,7 +206,7 @@ Updated automatically by `/ship` and `/sync-docs`.
 **Scope**: Tracing, alerting, and production hardening.
 
 - [ ] Integrate Langfuse for agent trace logging (thoughts, tool calls, latency) — QNT-61
-- [ ] Integrate Sentry for FastAPI error tracking (`sentry-sdk[fastapi]`, uses `SENTRY_DSN` from `.env`) — QNT-64
+- [ ] Integrate Sentry for FastAPI error tracking (`sentry-sdk[fastapi]`, uses `SENTRY_DSN` from `.env`) — QNT-86
 - [ ] Add Dagster alerting on asset materialization failures — QNT-62
 - [ ] Implement retry logic for flaky external API calls (yfinance, news APIs) — QNT-63
 - [ ] Load test FastAPI endpoints (confirm response times under 10 tickers) — QNT-65
