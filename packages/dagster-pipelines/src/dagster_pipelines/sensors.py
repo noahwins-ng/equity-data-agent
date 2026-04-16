@@ -5,6 +5,7 @@ from dagster import (
     AssetKey,
     AssetSelection,
     DagsterEventType,
+    DefaultSensorStatus,
     EventRecordsFilter,
     RunRequest,
     SensorEvaluationContext,
@@ -49,7 +50,7 @@ def _build_materialization_sensor(
     new events since the cursor in a single evaluation.
     """
 
-    @sensor(name=name, job=job)
+    @sensor(name=name, job=job, default_status=DefaultSensorStatus.RUNNING)
     def _sensor(context: SensorEvaluationContext):
         cursor = int(context.cursor) if context.cursor else None
 

@@ -2,6 +2,7 @@ import logging
 
 from dagster import (
     AssetSelection,
+    DefaultScheduleStatus,
     RunConfig,
     RunRequest,
     ScheduleEvaluationContext,
@@ -34,6 +35,7 @@ fundamentals_weekly_job = define_asset_job(
     job=ohlcv_daily_job,
     cron_schedule="0 17 * * 1-5",  # 5 PM ET, weekdays only
     execution_timezone="America/New_York",
+    default_status=DefaultScheduleStatus.RUNNING,
 )
 def ohlcv_daily_schedule(context: ScheduleEvaluationContext):
     """Daily OHLCV refresh at market close (5 PM ET, Mon-Fri).
@@ -54,6 +56,7 @@ def ohlcv_daily_schedule(context: ScheduleEvaluationContext):
     job=fundamentals_weekly_job,
     cron_schedule="0 22 * * 0",  # 10 PM ET, Sunday night
     execution_timezone="America/New_York",
+    default_status=DefaultScheduleStatus.RUNNING,
 )
 def fundamentals_weekly_schedule(context: ScheduleEvaluationContext):
     """Weekly fundamentals refresh (Sunday 10 PM ET).
