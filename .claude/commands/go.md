@@ -108,3 +108,14 @@ If any step fails and cannot be auto-fixed after 2 attempts (i.e., 2 "fix attemp
 2. **Report what failed** with the specific error
 3. **Suggest `/fix`** — e.g., "Run `/fix QNT-XX` after resolving the issue to resume the pipeline"
 4. **Note which step to resume from** — so `/fix` knows where to pick up
+
+### Detecting sanity-check flapping
+
+If `/sanity-check` returns different verdicts (READY TO SHIP ↔ NEEDS FIXES) on two consecutive invocations at the **same branch tip SHA** (i.e., no new commits between runs), the disagreement is not about the code — something upstream changed between runs (prod state, CD pipeline, tunnel availability, Linear data, a running process stopping, etc.).
+
+When this happens:
+
+1. Do NOT re-invoke `/sanity-check` a third time — retrying doesn't fix non-deterministic inputs.
+2. Pause and ask the user, reporting both verdicts, the SHA, and what looked different between the two runs (e.g., "tunnel was up for run #1, down for run #2").
+
+Track each run's SHA + verdict in your session context (or by re-reading the prior `/sanity-check` report in the conversation) — do NOT record them as commits, because a tracking commit would change the branch tip SHA and defeat the same-SHA detection.

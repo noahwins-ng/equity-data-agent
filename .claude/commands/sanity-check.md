@@ -21,10 +21,14 @@ Run these checks and report pass/fail for each:
 ### Step 2: Acceptance Criteria
 1. Fetch the issue from Linear using the provided identifier
 2. Extract the **Acceptance Criteria** section from the issue description
-3. For each criterion, **classify it before evaluating**:
+3. **Check `docs/AC-templates.md` for implicit AC** — run `git diff --name-only main...HEAD` and if any changed file matches a template's trigger list (e.g., infra PRs when `docker-compose.yml` / `.github/workflows/` / `Dockerfile` / `Makefile` changed), append those template AC items to the list. Treat them as required even if the Linear issue author didn't include them.
+4. For each criterion, **classify it before evaluating**:
    - **[code AC]** — verifiable by reading the implementation (e.g., "handles 429 with exponential backoff", "uses ReplacingMergeTree", "validates ticker against TICKERS"). Read relevant files and mark PASS / FAIL.
    - **[dev execution AC]** — must actually run locally before ship (e.g., "backfill ran successfully", "no duplicates on re-run", "asset visible in Dagster lineage graph", "endpoint returns 200"). **You must run the verification command and paste its output as evidence.** Classification alone is not enough — this has failed twice (QNT-41, QNT-42).
-     - **Keyword trigger**: if an AC contains "populated", "data in", "visible", "returns", "responds", "runs", "backfill", "no duplicates", "row count", "available", "accessible", or "healthy" — it is ALWAYS a dev/prod execution AC, never a code AC.
+     - **Keyword trigger**: if an AC contains any of these phrases, it is ALWAYS a dev/prod execution AC, never a code AC:
+       - **Data-oriented**: "populated", "data in", "returns", "responds", "runs", "backfill", "no duplicates", "row count", "available", "accessible", "healthy"
+       - **Visibility/UI**: "visible", "visible in", "in dagster", "in the ui", "lineage"
+       - **Deployment/runtime**: "in prod", "deployed", "loaded", "registered", "schedule enabled", "sensor running", "asset graph", "cd passes", "cd runs green"
      - **Evidence format** (required for every dev execution AC):
        ```
        ✓ AC text  [dev execution AC]
@@ -32,10 +36,15 @@ Run these checks and report pass/fail for each:
          Output:  <actual output>
        ```
      - If you cannot show command + output, mark `✗ BLOCKED` and tell the user exactly what to run. **Blocks ship.**
-     - Note: for data assets, running locally with `make tunnel` active writes to the same Hetzner ClickHouse as prod — tunnel-verified data counts as prod data.
+     - **Tunnel-as-prod — narrow scope**: with `make tunnel` active, local queries hit prod ClickHouse, so a ClickHouse row count via tunnel is valid evidence for "data exists in prod" claims **for that specific table**. This shortcut is ONLY valid for ClickHouse data counts. It does NOT cover:
+       - Dagster runtime (is the asset graph loaded? are schedules registered in prod?)
+       - FastAPI endpoints (are routes actually deployed at the prod host?)
+       - Schedule / sensor state (is it STARTED in the prod daemon?)
+       - CD pipeline status (did the code we think is running actually deploy?)
+       Those claims require ssh-to-prod verification (`ssh hetzner '<command>'`), not tunnel.
    - **[prod execution AC]** — can only be confirmed in the deployed environment after merge (e.g., "prod service healthy after deploy", "prod Dagster can trigger the asset", "prod API endpoint responds correctly"). Mark `⏳ PENDING — verify post-deploy`. **Does not block ship, but blocks Linear → Done.**
-4. Any `✗ BLOCKED` dev execution AC means NEEDS FIXES — do not proceed to ship until resolved.
-5. Any `⏳ PENDING` prod execution AC is carried forward into the `/ship` post-deploy verification step.
+5. Any `✗ BLOCKED` dev execution AC means NEEDS FIXES — do not proceed to ship until resolved.
+6. Any `⏳ PENDING` prod execution AC is carried forward into the `/ship` post-deploy verification step.
 
 ### Step 3: Report
 Format the results as:
