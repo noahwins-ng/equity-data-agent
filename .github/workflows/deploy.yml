@@ -16,7 +16,11 @@ jobs:
           username: ${{ secrets.HETZNER_USER }}
           key: ${{ secrets.HETZNER_SSH_KEY }}
           script: |
+            set -euo pipefail
             cd /opt/equity-data-agent
+            # Ensure working tree is clean so git pull can't silently abort on SCP'd hotfixes.
+            # If this fails, fix it manually — do NOT mask drift behind a passing deploy.
+            git diff --quiet && git diff --cached --quiet || { echo "::error::Prod working tree has uncommitted changes; aborting deploy."; git status; exit 1; }
             git pull origin main
             docker compose --profile prod up -d --build
 
