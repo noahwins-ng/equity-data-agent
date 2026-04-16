@@ -22,9 +22,11 @@ dev-api: ## Start FastAPI on localhost:8000
 dev-frontend: ## Start Next.js on localhost:3001
 	cd frontend && npm run dev -- --port 3001
 
-tunnel: ## Open SSH tunnel to Hetzner ClickHouse (port 8123)
-	@echo "Opening SSH tunnel: localhost:8123 → Hetzner ClickHouse"
-	ssh -N -L 8123:localhost:8123 hetzner
+tunnel: ## Open SSH tunnel to Hetzner: ClickHouse (8123) + prod Dagster UI on :3100
+	@echo "Opening SSH tunnel:"
+	@echo "  localhost:8123 → ClickHouse"
+	@echo "  localhost:3100 → prod Dagster UI (local dev Dagster stays on :3000)"
+	ssh -N -L 8123:localhost:8123 -L 3100:localhost:3000 hetzner
 
 # ─── Docker ───────────────────────────────────────────────────
 

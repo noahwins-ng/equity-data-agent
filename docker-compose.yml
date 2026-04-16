@@ -21,8 +21,11 @@ services:
     env_file: .env
     environment:
       - DAGSTER_HOME=/dagster_home
+    volumes:
+      - dagster_home:/dagster_home
+    ports:
+      - "127.0.0.1:3000:3000"  # bound to loopback only; reach via SSH tunnel
     depends_on: [clickhouse]
-    # Port 3000 intentionally NOT exposed — access via SSH tunnel only
     profiles: [prod]
 
   dagster-daemon:
@@ -33,6 +36,8 @@ services:
     env_file: .env
     environment:
       - DAGSTER_HOME=/dagster_home
+    volumes:
+      - dagster_home:/dagster_home
     depends_on: [clickhouse]
     profiles: [prod]
 
@@ -70,3 +75,5 @@ services:
 volumes:
   clickhouse_data:  # persists ClickHouse data — NEVER omit this volume
   caddy_data:       # persists TLS certificates across restarts
+  dagster_home:     # persists Dagster run history + schedule/sensor cursors across rebuilds;
+                    # shared between dagster and dagster-daemon so they see the same state
