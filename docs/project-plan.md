@@ -92,7 +92,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - Snapshot tests with fixed datasets and expected outputs
     - Cross-reference RSI, MACD, P/E for 2-3 tickers against TradingView / Yahoo Finance
     - Tolerance: 1% for technical indicators, exact match for fundamental ratios; fixtures committed for determinism
-- [ ] Verify: Run full pipeline Raw → Aggregation → Indicators, spot-check calculations against external sources (e.g., TradingView)
+- [x] Verify: Run full pipeline Raw → Aggregation → Indicators, spot-check calculations against external sources (e.g., TradingView) — covered by QNT-47 (canonical Wilder/Appel cross-reference tests) + QNT-68 asset checks + `docs/retros/phase-2-ac-audit.md`
 
 ---
 
