@@ -79,7 +79,36 @@ After merge, CD runs automatically. **Wait for deployment to propagate before ve
 1. Check CD status first: `ssh hetzner 'docker compose -f /opt/equity-data-agent/docker-compose.yml ps --format json'` to see container uptimes. If containers were created more than 5 minutes ago, CD may not have triggered yet — wait and re-check.
 2. If CI/CD is still running, wait ~90 seconds and re-check. Do not run `make check-prod` against a stale deployment.
 
-**Once deployment is fresh, run:**
+**Hard gates — verify deployed code before trusting any AC result:**
+
+CD already runs these assertions (QNT-88 + QNT-89), but `/ship` must re-verify them at ship time in case CD was skipped, manually overridden, or raced with a drift. If either gate fails, STOP — do not run `make check-prod` or per-AC verification. AC checks on the wrong code are meaningless.
+
+a) **Prod SHA matches the merge commit**:
+```bash
+REMOTE_SHA=$(ssh hetzner "cd /opt/equity-data-agent && git rev-parse HEAD")
+MERGE_SHA=$(gh pr view <pr-number> --json mergeCommit --jq .mergeCommit.oid)
+if [ "$REMOTE_SHA" != "$MERGE_SHA" ]; then
+  echo "DRIFT: prod=$REMOTE_SHA, merged=$MERGE_SHA"
+  exit 1
+fi
+```
+Replace `<pr-number>` with the PR number created in Step 4. If SHAs differ, the deploy did not land. Inspect CD logs (`gh run list --workflow deploy.yml --limit 3`), investigate drift on prod (`ssh hetzner 'cd /opt/equity-data-agent && git status --short'`), fix, and re-trigger CD. Do NOT proceed to hard gate (b) or `make check-prod`.
+
+b) **Dagster loaded the expected asset graph**:
+```bash
+ssh hetzner 'docker exec equity-data-agent-dagster-daemon-1 python -c "
+from dagster_pipelines.definitions import defs
+ag = defs.resolve_asset_graph()
+n = len(ag.get_all_asset_keys())
+c = len(list(ag.asset_check_keys))
+s = len(list(defs.schedules))
+assert n >= 8 and c >= 17 and s >= 2, f\"assets={n} checks={c} schedules={s}\"
+print(f\"OK: assets={n} checks={c} schedules={s}\")
+"'
+```
+If this fails, the container is up but the definitions module did not load cleanly. Check `docker compose logs dagster --tail=50` for import errors. Do NOT proceed.
+
+**Once both hard gates pass, run:**
 ```
 make check-prod
 ```

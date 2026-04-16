@@ -5,6 +5,8 @@ Living documentation for the equity-data-agent codebase. This is the shared cont
 ## Project
 - [project-requirement.md](project-requirement.md) — Full requirements, architecture, data model, infrastructure, deployment
 - [project-plan.md](project-plan.md) — Phase-by-phase delivery checklists, synced with Linear via `/ship` and `/sync-docs`
+- [patterns.md](patterns.md) — Established code recipes — read before implementing
+- [AC-templates.md](AC-templates.md) — Default acceptance criteria for common PR classes (infra/CI, etc.)
 
 ## Structure
 

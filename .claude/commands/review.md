@@ -51,7 +51,8 @@ Read the full diff and review it as if you did NOT write this code. You are a sk
 
 #### Execution AC Evidence Check
 - Re-read the AC list from Linear (or from the sanity-check output in this session)
-- For each AC containing "populated", "data in", "visible", "returns", "backfill", "no duplicates", "row count": was a verification command actually run with output pasted?
+- For each AC containing an execution-trigger phrase (see `sanity-check.md` Step 2 keyword list), was a verification command actually run with output pasted?
+- **Template AC from `docs/AC-templates.md`**: if the diff touches infra paths (`docker-compose.yml`, `.github/workflows/`, `Dockerfile`, `Makefile`, root config files), the infra-PR template AC (CD green, no prod drift, post-deploy smoke) apply implicitly. Verify each has evidence even if the Linear issue description omitted them.
 - If any execution AC was marked ✓ without command + output evidence, this is a **BLOCKING** review issue — do not ship
 
 #### Code Quality (only flag significant issues, not style)

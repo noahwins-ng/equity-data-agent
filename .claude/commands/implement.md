@@ -34,11 +34,13 @@ For each acceptance criterion (or logical group):
 2. **Quick lint** the changed files (not the whole repo — save pyright for the project-level check in Step 7):
    - `uv run ruff check <file>` — fix any issues
    - `uv run ruff format <file>` — auto-format (the PostToolUse hook handles this for edits, but run it for new files)
-3. **WIP commit** after each meaningful chunk:
+3. **WIP commit** after each meaningful chunk (must satisfy `.githooks/commit-msg`):
    ```
-   QNT-XX: wip: <brief description of what was just done>
+   QNT-XX: <type>(<scope>): wip - <brief description>
    ```
-   This protects against session crashes and makes `/fix` recovery possible.
+   where `<type>` ∈ {feat, fix, refactor, test, docs, chore} and `<scope>` names the package or area. Example: `QNT-90: chore(workflow): wip - add hard gates to /ship`. Plain `QNT-XX: wip:` is rejected by the hook.
+
+   WIP commits protect against session crashes and make `/fix` recovery possible. They are squashed into one clean commit at `/ship`.
 
 ### Step 4: Wire Up
 Ensure the new code is importable and connected:
@@ -56,9 +58,11 @@ Run tests scoped to the changed package:
 ### Step 6: AC Self-Assessment
 Before reporting, evaluate each acceptance criterion against the code:
 - Read the relevant files you wrote/modified
-- For each AC, mark: DONE / PARTIAL / NEEDS MANUAL VERIFICATION
+- For each AC, mark: DONE / PARTIAL / BLOCKED
 - **If any are PARTIAL**: go back to Step 3 and finish them
-- Only proceed when all ACs are DONE or NEEDS MANUAL VERIFICATION
+- **If any are BLOCKED**: you MUST name the exact command the user (or Claude) needs to run to unblock it — e.g. `uv run pytest packages/foo/tests/test_x.py::test_y`, `make tunnel && <specific query>`, `ssh hetzner "<specific command>"`. If you cannot name a specific command, the AC is ambiguous — stop and ask the user to clarify rather than marking it manual.
+- "Needs manual verification" is NOT an acceptable state. That language has been used in past sessions (QNT-41, QNT-42) as a loophole to ship work before it was actually verified. Either you know the exact verification command (→ BLOCKED with command) or the AC needs the user (→ stop and ask).
+- Only proceed when all ACs are DONE or BLOCKED-with-a-specific-command.
 
 ### Step 7: Type Check
 Run `uv run pyright` on the project. Fix any type errors before reporting.
@@ -75,7 +79,7 @@ Files written:
 Acceptance Criteria:
   ✓ Criterion 1 — implemented in file.py:42
   ✓ Criterion 2 — implemented in file.py:87
-  ? Criterion 3 — needs manual verification: <reason>
+  ✗ Criterion 3 — BLOCKED: run `<exact command>` to verify
 
 Checks:
   ✓ Lint      passed
@@ -88,4 +92,4 @@ WIP commits: 3 (will be squashed at /ship)
 Ready for /sanity-check QNT-XX
 ```
 
-If any AC cannot be implemented without manual steps (e.g., requires a live ClickHouse connection to verify), mark it as `? needs manual verification` and explain what to check.
+If an AC requires an action Claude cannot take (user decision, external credentials, live-system verification), mark it `✗ BLOCKED` with the EXACT command the user should run — e.g. `✗ BLOCKED: run \`make tunnel && docker exec ... clickhouse-client --query '...'\``. "Needs manual verification" without a specific command is not acceptable; if you cannot name a command, the AC is ambiguous and you should stop and ask the user to clarify.
