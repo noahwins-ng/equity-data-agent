@@ -1,5 +1,6 @@
 from dagster import Definitions
 
+from dagster_pipelines.asset_checks import ALL_ASSET_CHECKS
 from dagster_pipelines.assets.aggregation import ohlcv_monthly, ohlcv_weekly
 from dagster_pipelines.assets.fundamental_summary import fundamental_summary
 from dagster_pipelines.assets.fundamentals import fundamentals
@@ -34,6 +35,7 @@ defs = Definitions(
         technical_indicators_weekly,
         technical_indicators_monthly,
     ],
+    asset_checks=ALL_ASSET_CHECKS,
     jobs=[
         ohlcv_daily_job,
         fundamentals_weekly_job,

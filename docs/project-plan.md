@@ -86,7 +86,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - `ohlcv_raw` materialization → triggers `ohlcv_weekly`, `ohlcv_monthly`, `technical_indicators_daily`, `fundamental_summary`
     - `fundamentals` materialization → triggers `fundamental_summary`
     - This means price-based ratios (P/E, P/B, P/S, FCF yield) update daily with fresh close prices, while statement-based ratios (margins, growth) update weekly with fresh fundamentals
-- [ ] Add Dagster asset checks for data quality validation — QNT-68
+- [x] Add Dagster asset checks for data quality validation — QNT-68
     - e.g., no NaN close prices, volume > 0, RSI within 0-100, no future dates
 - [ ] Validation tests: indicators vs external sources — QNT-47
     - Snapshot tests with fixed datasets and expected outputs
