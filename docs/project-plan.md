@@ -88,7 +88,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - This means price-based ratios (P/E, P/B, P/S, FCF yield) update daily with fresh close prices, while statement-based ratios (margins, growth) update weekly with fresh fundamentals
 - [x] Add Dagster asset checks for data quality validation — QNT-68
     - e.g., no NaN close prices, volume > 0, RSI within 0-100, no future dates
-- [ ] Validation tests: indicators vs external sources — QNT-47
+- [x] Validation tests: indicators vs external sources — QNT-47
     - Snapshot tests with fixed datasets and expected outputs
     - Cross-reference RSI, MACD, P/E for 2-3 tickers against TradingView / Yahoo Finance
     - Tolerance: 1% for technical indicators, exact match for fundamental ratios; fixtures committed for determinism
