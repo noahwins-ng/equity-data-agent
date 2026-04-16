@@ -24,6 +24,24 @@ jobs:
             git pull origin main
             docker compose --profile prod up -d --build
 
+      - name: Verify prod SHA matches merged commit
+        uses: appleboy/ssh-action@v1
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        with:
+          host: ${{ secrets.HETZNER_HOST }}
+          username: ${{ secrets.HETZNER_USER }}
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          envs: EXPECTED_SHA
+          script: |
+            set -euo pipefail
+            REMOTE_SHA=$(cd /opt/equity-data-agent && git rev-parse HEAD)
+            if [ "$REMOTE_SHA" != "$EXPECTED_SHA" ]; then
+              echo "::error::Prod at $REMOTE_SHA, expected $EXPECTED_SHA — deploy did not update the code"
+              exit 1
+            fi
+            echo "Prod at expected SHA: $REMOTE_SHA"
+
       - name: Verify deploy
         uses: appleboy/ssh-action@v1
         with:
