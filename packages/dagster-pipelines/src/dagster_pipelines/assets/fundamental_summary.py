@@ -20,6 +20,11 @@ logger = logging.getLogger(__name__)
 ticker_partitions = StaticPartitionsDefinition(TICKERS)
 
 
+# EPS floor below which P/E ratio is considered "not meaningful" (N/M).
+# Chosen so max P/E for a $1,000 stock stays near the 10,000 check band.
+_EPS_NM_THRESHOLD = 0.10
+
+
 def _safe_divide(numerator: Any, denominator: Any) -> pd.Series:
     """Divide two Series, returning NaN where denominator is zero or NaN."""
     return numerator / denominator.replace(0, np.nan)
@@ -55,6 +60,9 @@ def compute_fundamental_ratios(
     # Valuation
     df["eps"] = _safe_divide(df["net_income"], shares)
     df["pe_ratio"] = _safe_divide(market_cap, df["net_income"])
+    # Financial convention: P/E is "N/M" (not meaningful) when earnings are
+    # near zero — the ratio is arithmetically valid but not comparable.
+    df.loc[df["eps"].abs() < _EPS_NM_THRESHOLD, "pe_ratio"] = np.nan
     ev = market_cap + df["total_debt"] - df["cash_and_equivalents"]
     df["ev_ebitda"] = _safe_divide(ev, df["ebitda"].replace(0, np.nan))
     df["price_to_book"] = _safe_divide(market_cap, equity)
