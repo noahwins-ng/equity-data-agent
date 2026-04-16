@@ -16,6 +16,14 @@ Updated automatically by `/ship` and `/sync-docs`.
 - [x] Set up ClickHouse with DDL migration scripts (raw + derived databases)
 - [x] Configure GitHub Actions for CI (lint + test) and CD (SSH deploy)
 - [x] Create `.env.example` with all required environment variables
+- [x] Bootstrap Hetzner CX41 production server: provision VPS, install Docker, configure GitHub deploy secrets, first manual deploy — QNT-83
+- [x] Integration test infrastructure + prod health visibility — QNT-85
+    - `/health` endpoint with ClickHouse connectivity check (200 ok / 503 degraded)
+    - `tests/integration/` with auto-skip when ClickHouse unreachable locally
+    - CI: ClickHouse service container + integration test step on every PR
+    - Deploy pipeline: post-deploy health check gate (fails if API doesn't come up within 60s)
+    - `make check-prod` and `make test-integration` helpers
+- [x] Claude Code slash command framework (12 commands in `.claude/commands/`) and dev workflow docs (`docs/guides/dev-workflow.md`, this `project-plan.md`) — QNT-84
 - [x] Verify: SSH tunnel to ClickHouse works, Dagster UI starts locally, CI pipeline passes
 
 ---
@@ -49,12 +57,12 @@ Updated automatically by `/ship` and `/sync-docs`.
 **Scope**: Technical indicators, fundamental ratio computation, and multi-timeframe aggregation.
 
 - [x] Implement `ohlcv_weekly` and `ohlcv_monthly` Dagster aggregation assets — QNT-70
-- [ ] `ohlcv_weekly`:
+- [x] `ohlcv_weekly`:
     - Reads from `ohlcv_raw`, aggregates daily bars → weekly (Monday-based) OHLCV
     - Aggregation via pandas groupby (`toMonday(date)`): open=first, close=last, adj_close=last, high=max, low=min, volume=sum
     - **Skip the current incomplete week** — only emit bars for weeks where the last trading day has passed (avoids partial bars that would distort indicators)
     - Downstream dependency on `ohlcv_raw` asset
-- [ ] `ohlcv_monthly`:
+- [x] `ohlcv_monthly`:
     - Reads from `ohlcv_raw`, aggregates daily bars → monthly OHLCV
     - Same aggregation logic (open=first, close=last, adj_close=last, high=max, low=min, volume=sum) with `toStartOfMonth(date)` grouping
     - **Skip the current incomplete month** — same rationale as weekly
@@ -80,6 +88,10 @@ Updated automatically by `/ship` and `/sync-docs`.
     - This means price-based ratios (P/E, P/B, P/S, FCF yield) update daily with fresh close prices, while statement-based ratios (margins, growth) update weekly with fresh fundamentals
 - [ ] Add Dagster asset checks for data quality validation — QNT-68
     - e.g., no NaN close prices, volume > 0, RSI within 0-100, no future dates
+- [ ] Validation tests: indicators vs external sources — QNT-47
+    - Snapshot tests with fixed datasets and expected outputs
+    - Cross-reference RSI, MACD, P/E for 2-3 tickers against TradingView / Yahoo Finance
+    - Tolerance: 1% for technical indicators, exact match for fundamental ratios; fixtures committed for determinism
 - [ ] Verify: Run full pipeline Raw → Aggregation → Indicators, spot-check calculations against external sources (e.g., TradingView)
 
 ---
@@ -93,7 +105,10 @@ Updated automatically by `/ship` and `/sync-docs`.
 - [ ] `GET /api/v1/reports/fundamental/{ticker}` — formatted text report with ratio context — QNT-49
 - [ ] `GET /api/v1/reports/news/{ticker}` — recent news summary with sentiment (returns top-N headlines + brief sentiment narrative). Sentiment is computed by FastAPI at query time via simple keyword/headline analysis (positive/negative/neutral count) — not LLM-generated. Depends on Phase 4 `news_raw` data — returns 200 with `{"report": "No news data available."}` until Phase 4 populates data. — QNT-79
 - [ ] `GET /api/v1/reports/summary/{ticker}` — combined text overview: latest price context, RSI interpretation, trend narrative, and sector context. Sector context derived from a static mapping in `shared/tickers.py`. Used by the agent as a quick "at a glance" tool. — QNT-50
-- [ ] Report formatting: human-readable strings with context (e.g., "RSI at 72.3 — approaching overbought territory")
+- [ ] Design report templates for LLM consumption — QNT-69
+    - Structured sections (not walls of text), comparative context ("RSI 72.3 — above 70, approaching overbought"), historical context ("Revenue grew 23% YoY, accelerating from 18%"), explicit signal clarity (bullish / bearish / neutral)
+    - Templates stored under `packages/api/src/api/templates/` or as formatter functions in services
+    - Used by `/reports/technical`, `/reports/fundamental`, `/reports/summary`, `/reports/news`
 
 **Data endpoints (JSON — for the frontend):**
 - [ ] `GET /api/v1/ohlcv/{ticker}?timeframe=daily|weekly|monthly` — returns `[{time, open, high, low, close, adj_close, volume}]` for TradingView chart rendering. `time` is an ISO date string `"YYYY-MM-DD"` — QNT-76
@@ -191,7 +206,7 @@ Updated automatically by `/ship` and `/sync-docs`.
 **Scope**: Tracing, alerting, and production hardening.
 
 - [ ] Integrate Langfuse for agent trace logging (thoughts, tool calls, latency) — QNT-61
-- [ ] Integrate Sentry for FastAPI error tracking (`sentry-sdk[fastapi]`, uses `SENTRY_DSN` from `.env`) — QNT-64
+- [ ] Integrate Sentry for FastAPI error tracking (`sentry-sdk[fastapi]`, uses `SENTRY_DSN` from `.env`) — QNT-86
 - [ ] Add Dagster alerting on asset materialization failures — QNT-62
 - [ ] Implement retry logic for flaky external API calls (yfinance, news APIs) — QNT-63
 - [ ] Load test FastAPI endpoints (confirm response times under 10 tickers) — QNT-65
