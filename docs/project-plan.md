@@ -100,16 +100,19 @@ Updated automatically by `/ship` and `/sync-docs`.
 **Scope**: FastAPI endpoints serving machine-readable data (frontend charts) and human-readable reports (agent).
 **Dependencies**: Requires Phase 2 (data must exist in ClickHouse). Can proceed in parallel with Phase 4 — news endpoints gracefully degrade to empty responses until Phase 4 populates `news_raw`.
 
-**Report endpoints (text — for the agent):**
-- [ ] `GET /api/v1/reports/technical/{ticker}` — formatted text report with indicator context — QNT-48
+**Report template — build this FIRST (QNT-69):**
+- [ ] Design **one** report template end-to-end against real ClickHouse data — QNT-69 **[start of Phase 3]**
+    - **Target: the technical report** (`/reports/technical/{ticker}`). Build the full pipeline — query CH → format into a report string → expose at the endpoint — against live Phase 2 data. Iterate with eyes on the actual output until it reads well. THEN parameterise the pattern for fundamental / news / summary.
+    - **Rationale**: the templates are where the "intelligence vs math" thesis actually lives in the product — they determine what the agent can reason over. Parameterising a bad template 4 times is waste; finding the right shape once and then applying it is not.
+    - Structured sections (not walls of text), comparative context ("RSI 72.3 — above 70, approaching overbought"), historical context ("Revenue grew 23% YoY, accelerating from 18%"), explicit signal clarity (bullish / bearish / neutral).
+    - **Null/N/M display conventions** (Phase 2 retro finding): P/E nulled when `|EPS| < $0.10` → "N/M (near-zero earnings)", quarterly P/E uses TTM net income, indicator warm-up nulls → "Insufficient data (N bars required)". These conventions apply to all report endpoints.
+    - Templates stored under `packages/api/src/api/templates/` or as formatter functions in services.
+
+**Report endpoints (text — for the agent; all apply the QNT-69 template pattern):**
+- [ ] `GET /api/v1/reports/technical/{ticker}` — formatted text report with indicator context — QNT-48 *(first concrete output of QNT-69)*
 - [ ] `GET /api/v1/reports/fundamental/{ticker}` — formatted text report with ratio context — QNT-49
 - [ ] `GET /api/v1/reports/news/{ticker}` — recent news summary with sentiment (returns top-N headlines + brief sentiment narrative). Sentiment is computed by FastAPI at query time via simple keyword/headline analysis (positive/negative/neutral count) — not LLM-generated. Depends on Phase 4 `news_raw` data — returns 200 with `{"report": "No news data available."}` until Phase 4 populates data. — QNT-79
 - [ ] `GET /api/v1/reports/summary/{ticker}` — combined text overview: latest price context, RSI interpretation, trend narrative, and sector context. Sector context derived from a static mapping in `shared/tickers.py`. Used by the agent as a quick "at a glance" tool. — QNT-50
-- [ ] Design report templates for LLM consumption — QNT-69
-    - Structured sections (not walls of text), comparative context ("RSI 72.3 — above 70, approaching overbought"), historical context ("Revenue grew 23% YoY, accelerating from 18%"), explicit signal clarity (bullish / bearish / neutral)
-    - **Null/N/M display conventions** (Phase 2 retro finding): define how edge cases render in report text — P/E nulled when `|EPS| < $0.10` shows as "N/M (near-zero earnings)", quarterly P/E uses TTM net income, indicator warm-up nulls show as "Insufficient data (N bars required)". These conventions apply to all report endpoints.
-    - Templates stored under `packages/api/src/api/templates/` or as formatter functions in services
-    - Used by `/reports/technical`, `/reports/fundamental`, `/reports/summary`, `/reports/news`
 
 **Data endpoints (JSON — for the frontend):**
 - [ ] `GET /api/v1/ohlcv/{ticker}?timeframe=daily|weekly|monthly` — returns `[{time, open, high, low, close, adj_close, volume}]` for TradingView chart rendering. `time` is an ISO date string `"YYYY-MM-DD"` — QNT-76
