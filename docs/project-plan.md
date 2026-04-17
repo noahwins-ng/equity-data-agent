@@ -24,6 +24,8 @@ Updated automatically by `/ship` and `/sync-docs`.
     - Deploy pipeline: post-deploy health check gate (fails if API doesn't come up within 60s)
     - `make check-prod` and `make test-integration` helpers
 - [x] Claude Code slash command framework (12 commands in `.claude/commands/`) and dev workflow docs (`docs/guides/dev-workflow.md`, this `project-plan.md`) — QNT-84
+- [x] CD hard gate: verify prod `git rev-parse HEAD` equals merged commit SHA — QNT-88 **[added post-Apr-16 outage]**
+- [x] CD hard gate: verify Dagster definitions module loads expected asset / check / schedule counts — QNT-89 **[added post-Apr-16 outage]**
 - [x] Verify: SSH tunnel to ClickHouse works, Dagster UI starts locally, CI pipeline passes
 
 ---
@@ -109,10 +111,10 @@ Updated automatically by `/ship` and `/sync-docs`.
     - Templates stored under `packages/api/src/api/templates/` or as formatter functions in services.
 
 **Report endpoints (text — for the agent; all apply the QNT-69 template pattern):**
-- [ ] `GET /api/v1/reports/technical/{ticker}` — formatted text report with indicator context — QNT-48 *(first concrete output of QNT-69)*
-- [ ] `GET /api/v1/reports/fundamental/{ticker}` — formatted text report with ratio context — QNT-49
-- [ ] `GET /api/v1/reports/news/{ticker}` — recent news summary with sentiment (returns top-N headlines + brief sentiment narrative). Sentiment is computed by FastAPI at query time via simple keyword/headline analysis (positive/negative/neutral count) — not LLM-generated. Depends on Phase 4 `news_raw` data — returns 200 with `{"report": "No news data available."}` until Phase 4 populates data. — QNT-79
-- [ ] `GET /api/v1/reports/summary/{ticker}` — combined text overview: latest price context, RSI interpretation, trend narrative, and sector context. Sector context derived from a static mapping in `shared/tickers.py`. Used by the agent as a quick "at a glance" tool. — QNT-50
+- [x] `GET /api/v1/reports/technical/{ticker}` — formatted text report with indicator context — QNT-48 *(first concrete output of QNT-69)*
+- [x] `GET /api/v1/reports/fundamental/{ticker}` — formatted text report with ratio context — QNT-49
+- [x] `GET /api/v1/reports/news/{ticker}` — recent news summary. Depends on Phase 4 `news_raw` data — returns 200 with a well-formed text report containing an `N/M (no news ingested…)` block until Phase 4 populates data. Sentiment narrative lands when QNT-55 (Qdrant search) ships. — QNT-79
+- [x] `GET /api/v1/reports/summary/{ticker}` — combined text overview: latest price context, RSI interpretation, trend narrative, and sector context. Sector context derived from a static mapping in `shared/tickers.py`. Used by the agent as a quick "at a glance" tool. — QNT-50
 
 **Data endpoints (JSON — for the frontend):**
 - [ ] `GET /api/v1/ohlcv/{ticker}?timeframe=daily|weekly|monthly` — returns `[{time, open, high, low, close, adj_close, volume}]` for TradingView chart rendering. `time` is an ISO date string `"YYYY-MM-DD"` — QNT-76
