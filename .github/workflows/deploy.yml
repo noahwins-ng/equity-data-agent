@@ -11,10 +11,13 @@ jobs:
     steps:
       - name: Deploy to Hetzner
         uses: appleboy/ssh-action@v1
+        env:
+          GIT_SHA: ${{ github.sha }}
         with:
           host: ${{ secrets.HETZNER_HOST }}
           username: ${{ secrets.HETZNER_USER }}
           key: ${{ secrets.HETZNER_SSH_KEY }}
+          envs: GIT_SHA
           script: |
             set -euo pipefail
             cd /opt/equity-data-agent
@@ -22,6 +25,11 @@ jobs:
             # If this fails, fix it manually — do NOT mask drift behind a passing deploy.
             git diff --quiet && git diff --cached --quiet || { echo "::error::Prod working tree has uncommitted changes; aborting deploy."; git status; exit 1; }
             git pull origin main
+            # GIT_SHA is read by the api service in docker-compose.yml and surfaced
+            # on /health so external monitoring can distinguish "up" from "up and
+            # running the expected commit" (QNT-51 — the runtime counterpart to
+            # the CD SHA gate in QNT-88).
+            export GIT_SHA
             docker compose --profile prod up -d --build
 
       - name: Verify prod SHA matches merged commit
