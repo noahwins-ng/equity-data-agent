@@ -194,7 +194,17 @@ Updated automatically by `/ship` and `/sync-docs`.
     - **Built after the CLI + evals** — same graph, different transport. The CLI shakes out prompt regressions before they reach the UI.
     - **Request**: `{"ticker": "NVDA", "message": "Analyze this stock"}` — stateless, single-analysis
     - **SSE events**: `tool_call` → `thinking` → `thesis` → `done`
-- [ ] Verify: Run agent on 2-3 tickers, review thesis quality, confirm zero hallucinated calculations in Langfuse traces
+- [ ] Portfolio README — QNT-66 **[moved from Phase 7 — front-page recruiter artifact]**
+    - Architecture diagram (mermaid, reused from `project-requirement.md` §3.1)
+    - One Langfuse trace screenshot (a full `plan → gather → synthesize` run)
+    - One Dagster lineage screenshot (the `ohlcv_raw → indicators → fundamental_summary` graph)
+    - One agent-thesis screenshot (CLI output, NVDA or similar)
+    - One-paragraph hallucination-resistance pitch (ties ADR-003 + QNT-67 eval harness)
+    - This matters more than anything in Phase 7. Recruiters read the README before opening any code file.
+- [ ] 30-second CLI demo screencast — QNT-NEW
+    - Record `python -m agent analyze NVDA` producing a thesis end-to-end; commit as `docs/demo.mp4` (or host and link from README above-the-fold)
+    - Single most-watched portfolio artifact. Must show: command invocation → first tool call → streamed thinking → final thesis, within ≤45s (target 30s).
+- [ ] Verify: Run agent on 2-3 tickers, review thesis quality, confirm zero hallucinated calculations in Langfuse traces; hallucination eval passes on all golden-set questions; README renders correctly on GitHub with all screenshots and the embedded/linked demo
 
 ---
 
@@ -230,5 +240,4 @@ Updated automatically by `/ship` and `/sync-docs`.
 - [ ] Implement retry logic for flaky external API calls (yfinance, news APIs) — QNT-63
 - [ ] Load test FastAPI endpoints (confirm response times under 10 tickers) — QNT-65
 - [ ] Write integration tests for critical paths (ingestion → calculation → report → agent) — QNT-64
-- [ ] Write README with setup instructions and architecture diagram — QNT-66
 - [ ] Verify: End-to-end run on all 10 tickers, review Langfuse dashboard, confirm no orphaned errors in Sentry
