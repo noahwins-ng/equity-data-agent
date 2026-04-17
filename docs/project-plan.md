@@ -166,6 +166,9 @@ Updated automatically by `/ship` and `/sync-docs`.
     - **Default**: routes to Ollama Cloud (`https://ollama.com/v1`) via `OLLAMA_API_KEY`
     - **Override**: routes to Claude API via `ANTHROPIC_API_KEY`
     - Model alias: `equity-agent/default` — zero agent code changes to switch backends
+- [ ] Integrate Langfuse tracing — QNT-61 **[day-one of Phase 5, moved from Phase 7]**
+    - `LangfuseResource` in the agent package; `@observe` decorator on every tool and graph node from the first commit of agent code — traces are needed *while* iterating on the prompt, not bolted on after shipping.
+    - Portfolio artifact: one Langfuse trace screenshot is embedded in the README (QNT-66).
 - [ ] Define LangGraph state schema (ticker under analysis, gathered reports, thesis draft) — QNT-56
 - [ ] Implement tools — QNT-57
     - `get_summary_report` → calls `/reports/summary/{ticker}` (agent calls this first)
@@ -216,7 +219,6 @@ Updated automatically by `/ship` and `/sync-docs`.
 ### Phase 7 — Observability & Polish
 **Scope**: Tracing, alerting, and production hardening.
 
-- [ ] Integrate Langfuse for agent trace logging (thoughts, tool calls, latency) — QNT-61
 - [ ] Integrate Sentry for FastAPI error tracking (`sentry-sdk[fastapi]`, uses `SENTRY_DSN` from `.env`) — QNT-86
 - [ ] Add Dagster alerting on asset materialization failures — QNT-62
 - [ ] Implement retry logic for flaky external API calls (yfinance, news APIs) — QNT-63
