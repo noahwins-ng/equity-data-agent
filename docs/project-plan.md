@@ -203,7 +203,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - One agent-thesis screenshot (CLI output, NVDA or similar)
     - One-paragraph hallucination-resistance pitch (ties ADR-003 + QNT-67 eval harness)
     - This matters more than anything in Phase 7. Recruiters read the README before opening any code file.
-- [ ] 30-second CLI demo screencast — QNT-NEW
+- [ ] 30-second CLI demo screencast — QNT-94
     - Record `python -m agent analyze NVDA` producing a thesis end-to-end; commit as `docs/demo.mp4` (or host and link from README above-the-fold)
     - Single most-watched portfolio artifact. Must show: command invocation → first tool call → streamed thinking → final thesis, within ≤45s (target 30s).
 - [ ] Verify: Run agent on 2-3 tickers, review thesis quality, confirm zero hallucinated calculations in Langfuse traces; hallucination eval passes on all golden-set questions; README renders correctly on GitHub with all screenshots and the embedded/linked demo
