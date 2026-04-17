@@ -25,6 +25,8 @@ Architecture Decision Records (ADRs). Read these to understand **why** we chose 
 - [004-batch-ingestion-over-streaming.md](decisions/004-batch-ingestion-over-streaming.md)
 - [005-nextjs-vercel-over-python-native-frontend.md](decisions/005-nextjs-vercel-over-python-native-frontend.md)
 - [006-multi-timeframe-via-aggregation.md](decisions/006-multi-timeframe-via-aggregation.md)
+- [007-minimal-agent-graph-first.md](decisions/007-minimal-agent-graph-first.md)
+- [008-no-vercel-ai-sdk.md](decisions/008-no-vercel-ai-sdk.md)
 
 ### [guides/](guides/)
 How to do common tasks. Operational runbooks.
