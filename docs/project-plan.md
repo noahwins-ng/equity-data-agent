@@ -179,7 +179,12 @@ Updated automatically by `/ship` and `/sync-docs`.
 - [ ] `POST /api/v1/agent/chat` SSE endpoint for frontend chat page — QNT-56
     - **Request**: `{"ticker": "NVDA", "message": "Analyze this stock"}` — stateless, single-analysis
     - **SSE events**: `tool_call` → `thinking` → `thesis` → `done`
-- [ ] Agent evaluation framework — QNT-67
+- [ ] Agent evaluation framework — QNT-67 **[highest-priority Phase 5 item — the single biggest AI-Engineer hiring signal]**
+    - Lives under `packages/agent/evals/`. Three eval types — all required, not optional:
+    - **(a) Numeric-claim hallucination detector** (`evals/hallucination.py`): regex every number out of the agent's thesis; assert each appears verbatim in one of the report strings the agent received as tool output. Any mismatch = test failure. Operationalises the ADR-003 contract.
+    - **(b) Golden set** (`evals/golden_set.py` + `evals/goldens/questions.yaml`): 15–20 curated `(ticker, question, reference_thesis, expected_tools)` pairs. Per run, track LLM-as-judge score + cosine similarity of generated thesis vs reference thesis. Commit `evals/history.csv` so prompt-version quality is visible in `git log -p`.
+    - **(c) Tool-call correctness** (`evals/tool_calls.py`): for each golden-set question, assert the expected tool was called — e.g., valuation questions MUST call `get_fundamental_report`, technical questions MUST call `get_technical_report`.
+    - Design goal: harness is reusable enough to extract as a standalone repo later.
 - [ ] Verify: Run agent on 2-3 tickers, review thesis quality, confirm zero hallucinated calculations in Langfuse traces
 
 ---
