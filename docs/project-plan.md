@@ -107,6 +107,7 @@ Updated automatically by `/ship` and `/sync-docs`.
 - [ ] `GET /api/v1/reports/summary/{ticker}` — combined text overview: latest price context, RSI interpretation, trend narrative, and sector context. Sector context derived from a static mapping in `shared/tickers.py`. Used by the agent as a quick "at a glance" tool. — QNT-50
 - [ ] Design report templates for LLM consumption — QNT-69
     - Structured sections (not walls of text), comparative context ("RSI 72.3 — above 70, approaching overbought"), historical context ("Revenue grew 23% YoY, accelerating from 18%"), explicit signal clarity (bullish / bearish / neutral)
+    - **Null/N/M display conventions** (Phase 2 retro finding): define how edge cases render in report text — P/E nulled when `|EPS| < $0.10` shows as "N/M (near-zero earnings)", quarterly P/E uses TTM net income, indicator warm-up nulls show as "Insufficient data (N bars required)". These conventions apply to all report endpoints.
     - Templates stored under `packages/api/src/api/templates/` or as formatter functions in services
     - Used by `/reports/technical`, `/reports/fundamental`, `/reports/summary`, `/reports/news`
 
@@ -123,7 +124,7 @@ Updated automatically by `/ship` and `/sync-docs`.
 
 **Utility endpoints:**
 - [ ] `GET /api/v1/tickers` — returns the ticker list from `shared.tickers.TICKERS` — QNT-78
-- [ ] `GET /api/v1/health` — health check with ClickHouse + Qdrant connectivity status — QNT-51
+- [ ] `GET /api/v1/health` — health check with ClickHouse + Qdrant connectivity status + deploy identity (git SHA, Dagster asset/check counts) — QNT-51
 
 **Cross-cutting:**
 - [ ] CORS middleware configured (allow production domain, `*.vercel.app` for preview deploys, and `localhost:3001` for dev)
@@ -138,9 +139,10 @@ Updated automatically by `/ship` and `/sync-docs`.
 
 - [ ] Evaluate and select free news API (NewsAPI.org, GNews, or RSS feeds) — QNT-52
 - [ ] Implement `news_raw` Dagster asset (free API → `equity_raw.news_raw` in ClickHouse) — QNT-53
-    - Schedule: every 4 hours during market hours
+    - Schedule: every 4 hours during market hours, `default_status=RUNNING` (Phase 2 lesson: QNT-92)
     - Dedup key: `id = hash(ticker + url)`
     - Stores: `headline`, `body`, `source`, `url`, `published_at` per ticker
+    - Downstream sensor (`news_raw` → `news_embeddings`) must batch all pending events per tick from day one (Phase 2 lesson: QNT-46 rewrite)
 - [ ] Create Qdrant `equity_news` collection (384-dim Float32, cosine distance) — auto-create in the Qdrant Dagster resource on first use, or via a setup script
 - [ ] Implement `news_embeddings` Dagster asset (`news_raw` → Qdrant Cloud) — QNT-54
     - Embeds `headline` text using `sentence-transformers/all-MiniLM-L6-v2` (384-dim)
@@ -149,6 +151,10 @@ Updated automatically by `/ship` and `/sync-docs`.
 - [ ] `GET /api/v1/search/news?ticker=NVDA&query=earnings` — QNT-55
     - Returns `[{headline, source, url, published_at, score}]` — top-N results ranked by cosine similarity
     - Both `ticker` and `query` are required. Returns `[]` if Qdrant is unreachable or no news data exists.
+- [ ] Add Dagster asset checks for `news_raw` and `news_embeddings` data quality — QNT-93
+    - `news_raw`: no empty headlines, valid URLs, no future `published_at` dates, row count per ticker
+    - `news_embeddings`: vector count matches source row count, no orphaned vectors
+    - Phase 2 lesson: QNT-68 asset checks caught 2 real formula bugs — apply same pattern to news assets
 - [ ] Verify: Search for recent news about a ticker, confirm relevance ranking
 
 ---

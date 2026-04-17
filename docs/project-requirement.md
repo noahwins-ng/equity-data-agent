@@ -823,11 +823,17 @@ One-time setup for a fresh Hetzner CX41. After this, the CI/CD pipeline in Secti
   "services": {
     "clickhouse": "ok" | "down",
     "qdrant": "ok" | "down"
+  },
+  "deploy": {
+    "git_sha": "abc1234",
+    "dagster_assets": 12,
+    "dagster_checks": 17
   }
 }
 ```
 - **HTTP 200**: `status` is `"ok"` (all services up) or `"degraded"` (Qdrant down, ClickHouse up — read-only data still available)
 - **HTTP 503**: `status` is `"down"` (ClickHouse unreachable — no data can be served)
+- **`deploy` block**: Exposes runtime identity so monitoring can detect stale deploys (Phase 2 lesson — QNT-88/89: CD green + `/health` 200 while prod was 17 commits behind). `git_sha` read from env var set at build time; `dagster_assets`/`dagster_checks` counted from the loaded definitions module.
 
 ### Empty Data Contracts
 

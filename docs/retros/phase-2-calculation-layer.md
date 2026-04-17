@@ -20,7 +20,7 @@
 
 | Issue | Deliverable | PR |
 |---|---|---|
-| QNT-87 | Null out P/E when `\|EPS\| < $0.10` (N/M convention) | #43 |
+| QNT-87 | Null out P/E when `|EPS| < $0.10` (N/M convention) | #43 |
 | QNT-88 | CD asserts prod git SHA matches merged commit | #44 |
 | QNT-89 | CD asserts Dagster loads expected asset graph | #45 |
 | QNT-90 | Harden `/go` pipeline AC gates | #46 |
@@ -53,10 +53,27 @@ Plus two non-QNT infra fixes (PR #41 prod Dagster persistence + UI tunnel, PR #4
 - **`feedback_deploy_green_isnt_code_deployed`** — CD green + `/health` green ≠ new code running. Always assert SHA + runtime-load identity. `set -euo pipefail` on every bash heredoc in CD.
 - **`feedback_runtime_state_must_be_declarative`** — Any stateful runtime config (Dagster default_status, cron enabled, feature flags, log levels) must be declared in code. "It works because someone toggled it two weeks ago" is an invisible dependency.
 - **`feedback_linear_links_resets_state`** — `save_issue(links=...)` on Linear can silently revert status (In Review → In Progress). Re-assert state after attaching or at /ship Step 7.
+- **`feedback_sensor_batch_from_day_one`** (new) — Dagster sensors should batch all pending events per tick from day one. Single-event-per-tick is too slow for catch-up and forced a mid-phase rewrite.
+- **`feedback_sample_ac_broadly`** (new) — AC spot-checks must vary across all row-type dimensions. Checking only annual rows missed the quarterly P/E bug; two follow-up PRs (QNT-87, QNT-91) were needed to fix what one broad sample would have caught up front.
 
 ## System-overview updates
 
 Added the CD hard-gate step to the Infrastructure section (SHA match + asset-graph load). Added a note to `equity_derived.fundamental_summary` documenting the TTM-quarterly-P/E + N/M-threshold behaviour. Added a "Data quality" line summarising the 17 asset checks registered.
+
+## Phase review — applying lessons to upcoming phases
+
+Phase 2 taught four concrete things. Each was cross-referenced against the upcoming phase specs, producing four actioned scope changes rather than just flags.
+
+| Phase | Action | Issue | Change | Lesson applied |
+|---|---|---|---|---|
+| 3 | modify | QNT-69 | Report templates must specify null/N/M display conventions (near-zero EPS → N/M, quarterly TTM, warm-up Insufficient-data) | QNT-87 + QNT-91 |
+| 3 | modify | QNT-51 | `/health` exposes `deploy.git_sha`, `dagster_assets`, `dagster_checks` for runtime identity verification | QNT-88 + QNT-89 |
+| 4 | modify | QNT-53 | News schedule declares `default_status=RUNNING`; downstream sensor batches all pending events per tick from day one | QNT-46 + QNT-92 |
+| 4 | add    | QNT-93 | Dagster asset checks for `news_raw` and `news_embeddings` (real domain bounds, not just "not null") | QNT-68 |
+
+All four updated in Linear with audit-trail comments. Plan (`docs/project-plan.md`) and spec (`docs/project-requirement.md`) updated inline. No ADR warranted — these refine existing requirements rather than changing architecture.
+
+Phases 5, 6, 7 reviewed — no changes warranted. The "interpret, don't calculate" agent boundary is validated by Phase 2 (all math lives in Dagster). Frontend null handling is already implicit in the Phase 6 spec. Phase 7 observability is covered by the CD hardening that already shipped.
 
 ## Up next — Phase 3: API Layer
 
@@ -66,16 +83,12 @@ Suggested pull for the first Phase-3 cycle (capped at ~6 issues — Phase 2's ob
 
 | Priority | Issue | Notes |
 |---|---|---|
-| High | QNT-48 `/reports/technical/{ticker}` | First report endpoint; template for the rest |
-| High | QNT-76 `/ohlcv/{ticker}?timeframe=` | Feeds the frontend candlestick chart |
-| High | QNT-77 `/indicators/{ticker}?timeframe=` | Pairs with QNT-76 for chart overlays |
-| High | QNT-69 Design report templates for LLM consumption | Unblocks all `/reports/*` endpoints |
-| High | QNT-51 `/health` enhanced (ClickHouse + Qdrant status) | Superseding the trivial current `/health` |
-| Medium | QNT-78 `/tickers` | Cheap utility, good first-endpoint test |
-
-Risky / underspecified based on Phase-2 lessons:
-- **QNT-69 report templates** is listed as High but not yet scoped; Phase 2 showed that pre-defined output shape matters a lot for downstream verification. Scope it before QNT-48 or expect rework.
-- **QNT-51 enhanced /health** should verify identity (SHA, asset graph), not just liveness — apply the QNT-88/89 lesson.
+| High | QNT-69 | Design report templates (now includes null/N/M conventions) — unblocks all `/reports/*` |
+| High | QNT-48 | `/reports/technical/{ticker}` — template for the other report endpoints |
+| High | QNT-76 | `/ohlcv/{ticker}?timeframe=` — feeds the frontend candlestick chart |
+| High | QNT-77 | `/indicators/{ticker}?timeframe=` — pairs with QNT-76 for chart overlays |
+| High | QNT-51 | `/health` enhanced (services + deploy identity) |
+| Medium | QNT-78 | `/tickers` — cheap utility, good first-endpoint test |
 
 ## Timeline reference
 
