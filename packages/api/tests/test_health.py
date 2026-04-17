@@ -1,0 +1,149 @@
+"""Tests for /health and /api/v1/health.
+
+Covers the deploy-identity contract added in QNT-51:
+- 200 when ClickHouse is reachable (even if Qdrant is not)
+- 503 when ClickHouse is unreachable
+- ``deploy.git_sha`` comes from the GIT_SHA env var
+- ``deploy.dagster_assets`` / ``dagster_checks`` are integers
+- Both paths return identical payloads so monitoring keeps working
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+
+import pytest
+from api import clickhouse as clickhouse_module
+from api import main as main_module
+from fastapi.testclient import TestClient
+
+
+@pytest.fixture
+def client() -> Iterable[TestClient]:
+    """Fresh TestClient per test. The CH client is cached via lru_cache so we
+    clear it here; ``_dagster_counts`` is replaced whole by ``_stub`` in each
+    test (via monkeypatch), so its cache state is irrelevant."""
+    clickhouse_module.get_client.cache_clear()
+    with TestClient(main_module.app) as c:
+        yield c
+    clickhouse_module.get_client.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _fixed_git_sha(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GIT_SHA", "test-sha-abc1234")
+
+
+def _stub(monkeypatch: pytest.MonkeyPatch, *, ch_ok: bool, qdrant_ok: bool) -> None:
+    monkeypatch.setattr(main_module, "_check_clickhouse", lambda: "ok" if ch_ok else "down")
+    monkeypatch.setattr(main_module, "_check_qdrant", lambda: "ok" if qdrant_ok else "down")
+    monkeypatch.setattr(main_module, "_dagster_counts", lambda: (8, 17))
+
+
+def test_health_ok_when_both_services_up(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub(monkeypatch, ch_ok=True, qdrant_ok=True)
+    r = client.get("/api/v1/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["services"] == {"clickhouse": "ok", "qdrant": "ok"}
+
+
+def test_health_degraded_when_qdrant_down(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub(monkeypatch, ch_ok=True, qdrant_ok=False)
+    r = client.get("/api/v1/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "degraded"
+    assert body["services"]["clickhouse"] == "ok"
+    assert body["services"]["qdrant"] == "down"
+
+
+def test_health_503_when_clickhouse_down(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub(monkeypatch, ch_ok=False, qdrant_ok=False)
+    r = client.get("/api/v1/health")
+    assert r.status_code == 503
+    body = r.json()
+    assert body["status"] == "down"
+    assert body["services"]["clickhouse"] == "down"
+
+
+def test_health_payload_includes_deploy_identity(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub(monkeypatch, ch_ok=True, qdrant_ok=True)
+    r = client.get("/api/v1/health")
+    deploy = r.json()["deploy"]
+    assert deploy["git_sha"] == "test-sha-abc1234"
+    # Counts come from the actual dagster_pipelines definitions module;
+    # assert they are sane integers (the CD hard gate (QNT-89) asserts minimums).
+    assert isinstance(deploy["dagster_assets"], int) and deploy["dagster_assets"] >= 0
+    assert isinstance(deploy["dagster_checks"], int) and deploy["dagster_checks"] >= 0
+
+
+def test_git_sha_falls_back_to_unknown_without_env(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GIT_SHA", raising=False)
+    _stub(monkeypatch, ch_ok=True, qdrant_ok=True)
+    r = client.get("/api/v1/health")
+    assert r.json()["deploy"]["git_sha"] == "unknown"
+
+
+def test_legacy_health_path_matches_v1_payload(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub(monkeypatch, ch_ok=True, qdrant_ok=True)
+    v1 = client.get("/api/v1/health")
+    legacy = client.get("/health")
+    assert v1.status_code == legacy.status_code == 200
+    assert v1.json() == legacy.json()
+
+
+def test_legacy_health_still_503_on_clickhouse_down(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Prod monitoring (scripts/health-monitor.sh, make check-prod) relies on the
+    # legacy /health path returning 503 when CH is unreachable. Don't regress it.
+    _stub(monkeypatch, ch_ok=False, qdrant_ok=False)
+    r = client.get("/health")
+    assert r.status_code == 503
+
+
+def test_legacy_health_not_in_openapi_schema(client: TestClient) -> None:
+    schema = client.get("/openapi.json").json()
+    paths = schema["paths"]
+    assert "/api/v1/health" in paths
+    assert "/health" not in paths  # intentionally hidden — legacy alias only
+
+
+def test_openapi_metadata_populated(client: TestClient) -> None:
+    schema = client.get("/openapi.json").json()
+    info = schema["info"]
+    assert info["title"] == "Equity Data Agent API"
+    assert info["version"] == "0.1.0"
+    assert info["description"]  # non-empty
+
+
+def test_cors_allows_localhost_3001(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub(monkeypatch, ch_ok=True, qdrant_ok=True)
+    r = client.get("/api/v1/health", headers={"Origin": "http://localhost:3001"})
+    assert r.headers["access-control-allow-origin"] == "http://localhost:3001"
+
+
+def test_cors_allows_vercel_preview(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub(monkeypatch, ch_ok=True, qdrant_ok=True)
+    r = client.get(
+        "/api/v1/health",
+        headers={"Origin": "https://equity-data-agent-git-feature.vercel.app"},
+    )
+    assert (
+        r.headers["access-control-allow-origin"]
+        == "https://equity-data-agent-git-feature.vercel.app"
+    )

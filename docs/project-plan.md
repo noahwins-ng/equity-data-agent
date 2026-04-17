@@ -129,7 +129,7 @@ Updated automatically by `/ship` and `/sync-docs`.
 
 **Utility endpoints:**
 - [ ] `GET /api/v1/tickers` — returns the ticker list from `shared.tickers.TICKERS` — QNT-78
-- [ ] `GET /api/v1/health` — health check with ClickHouse + Qdrant connectivity status + deploy identity (git SHA, Dagster asset/check counts) — QNT-51
+- [x] `GET /api/v1/health` — health check with ClickHouse + Qdrant connectivity status + deploy identity (git SHA, Dagster asset/check counts) — QNT-51
 
 **Cross-cutting:**
 - [ ] CORS middleware configured (allow production domain, `*.vercel.app` for preview deploys, and `localhost:3001` for dev)
