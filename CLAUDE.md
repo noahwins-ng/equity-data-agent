@@ -134,7 +134,7 @@ make pr QNT=34 TITLE="description"  # Push + create PR
 /status                   # Quick glance: branch, commits, uncommitted (no API calls)
 /cycle-start              # Start of week: show cycle issues, check plan staleness, suggest next pick
 /cycle-end                # End of week: summarize shipped, roll over incomplete, prompt retro if milestone done
-/retro                    # End of milestone: review, capture lessons, sync docs, prep next phase
+/retro                    # End of milestone: review, capture lessons, review upcoming phases, sync docs
 ```
 
 #### Issue Lifecycle

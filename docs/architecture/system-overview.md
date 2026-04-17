@@ -57,7 +57,9 @@ News API ──→ Dagster ──→ ClickHouse (equity_raw.news_raw)
 - `technical_indicators_daily` — RSI-14, MACD(12/26/9), SMA-20/50, EMA-12/26, BB(20,2) on daily bars (computed from `adj_close`)
 - `technical_indicators_weekly` — same indicators computed on weekly bars
 - `technical_indicators_monthly` — same indicators computed on monthly bars
-- `fundamental_summary` — 15 derived ratios (P/E, EV/EBITDA, margins, YoY growth, etc.) from fundamentals + ohlcv_raw
+- `fundamental_summary` — 15 derived ratios (P/E, EV/EBITDA, margins, YoY growth, etc.) from fundamentals + ohlcv_raw. Quarterly P/E uses TTM (trailing-four-quarter) net_income; P/E is nulled out (N/M convention) when `|EPS| < $0.10`.
+
+**Data quality**: 17 Dagster `@asset_check`s registered across 6 assets (QNT-68) — row counts, null/bound checks, RSI 0-100, MACD/signal coherence, P/E and margin domain bounds. Checks run inline with the asset and surface in the Dagster UI.
 
 All tables use `ReplacingMergeTree` for idempotency. FastAPI queries **must** use `SELECT ... FROM table FINAL` for consistent reads (see ADR-001).
 
@@ -131,7 +133,7 @@ LiteLLM proxy (v1.56.0, pinned) routes model requests:
 - **Prod Backend**: Hetzner CX41 (16GB) → Docker Compose (ClickHouse 4GB + Dagster/FastAPI/Caddy/LiteLLM 12GB — no local Ollama, inference via Ollama Cloud)
 - **Prod Frontend**: Vercel (Next.js 15, free tier) → calls FastAPI over HTTPS
 - **HTTPS**: Caddy service in Docker Compose handles TLS termination (auto HTTPS via Let's Encrypt)
-- **CI/CD**: GitHub Actions → backend: SSH → git pull → `make migrate` → docker compose up; frontend: Vercel auto-deploy on push to main
+- **CI/CD**: GitHub Actions → backend: SSH → git pull → `make migrate` → docker compose up, then two hard gates (QNT-88/89): assert `git rev-parse HEAD` equals the merged commit SHA and assert the Dagster definitions module loads with the expected asset/check/schedule counts. Frontend: Vercel auto-deploy on push to main.
 - **Rollback**: `make rollback` — SSHs to Hetzner, checks out `HEAD~1`, rebuilds Docker, verifies health (60s timeout with retries)
 - **Health Monitoring**: `scripts/health-monitor.sh` runs every 15 min on Hetzner via cron — checks API `/health` + Docker service status, logs failures to `health-monitor.log`. Session-start hook reads this log and warns on failures. Install: `make monitor-install`. Check: `make monitor-log`.
 - **Dagster UI**: Internal only in prod — access via SSH tunnel (`ssh -L 3000:localhost:3000 hetzner`), no auth configured
