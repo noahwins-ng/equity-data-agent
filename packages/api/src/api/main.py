@@ -2,7 +2,10 @@ import clickhouse_connect
 from fastapi import FastAPI, Response
 from shared.config import settings
 
+from api.routers import reports_router
+
 app = FastAPI(title="Equity Data Agent API")
+app.include_router(reports_router)
 
 
 @app.get("/health")

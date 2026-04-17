@@ -101,7 +101,7 @@ Updated automatically by `/ship` and `/sync-docs`.
 **Dependencies**: Requires Phase 2 (data must exist in ClickHouse). Can proceed in parallel with Phase 4 — news endpoints gracefully degrade to empty responses until Phase 4 populates `news_raw`.
 
 **Report template — build this FIRST (QNT-69):**
-- [ ] Design **one** report template end-to-end against real ClickHouse data — QNT-69 **[start of Phase 3]**
+- [x] Design **one** report template end-to-end against real ClickHouse data — QNT-69 **[start of Phase 3]**
     - **Target: the technical report** (`/reports/technical/{ticker}`). Build the full pipeline — query CH → format into a report string → expose at the endpoint — against live Phase 2 data. Iterate with eyes on the actual output until it reads well. THEN parameterise the pattern for fundamental / news / summary.
     - **Rationale**: the templates are where the "intelligence vs math" thesis actually lives in the product — they determine what the agent can reason over. Parameterising a bad template 4 times is waste; finding the right shape once and then applying it is not.
     - Structured sections (not walls of text), comparative context ("RSI 72.3 — above 70, approaching overbought"), historical context ("Revenue grew 23% YoY, accelerating from 18%"), explicit signal clarity (bullish / bearish / neutral).
