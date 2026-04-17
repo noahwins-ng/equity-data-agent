@@ -176,18 +176,21 @@ Updated automatically by `/ship` and `/sync-docs`.
     - `get_fundamental_report` → calls `/reports/fundamental/{ticker}`
     - `get_news_report` → calls `/reports/news/{ticker}`
     - `search_news` → calls `/search/news`
-- [ ] Build agent graph: plan → gather data → analyze → synthesize thesis — QNT-56
+- [ ] Build agent graph — **3 nodes: plan → gather → synthesize** (per ADR-007) — QNT-56
+    - No critique / reflect / retry loop until the baseline has failed in specific, observed ways. Adding loops prematurely is indistinguishable from the baseline working.
 - [ ] System prompt enforcing the "interpret, don't calculate" mandate — QNT-58
 - [ ] Agent CLI: `python -m agent analyze NVDA` — run single-ticker analysis from terminal — QNT-60
-- [ ] `POST /api/v1/agent/chat` SSE endpoint for frontend chat page — QNT-56
-    - **Request**: `{"ticker": "NVDA", "message": "Analyze this stock"}` — stateless, single-analysis
-    - **SSE events**: `tool_call` → `thinking` → `thesis` → `done`
+    - **Built before the SSE endpoint** — ~50× faster prompt iteration without a frontend round-trip. Pairs with the eval harness below.
 - [ ] Agent evaluation framework — QNT-67 **[highest-priority Phase 5 item — the single biggest AI-Engineer hiring signal]**
     - Lives under `packages/agent/evals/`. Three eval types — all required, not optional:
     - **(a) Numeric-claim hallucination detector** (`evals/hallucination.py`): regex every number out of the agent's thesis; assert each appears verbatim in one of the report strings the agent received as tool output. Any mismatch = test failure. Operationalises the ADR-003 contract.
     - **(b) Golden set** (`evals/golden_set.py` + `evals/goldens/questions.yaml`): 15–20 curated `(ticker, question, reference_thesis, expected_tools)` pairs. Per run, track LLM-as-judge score + cosine similarity of generated thesis vs reference thesis. Commit `evals/history.csv` so prompt-version quality is visible in `git log -p`.
     - **(c) Tool-call correctness** (`evals/tool_calls.py`): for each golden-set question, assert the expected tool was called — e.g., valuation questions MUST call `get_fundamental_report`, technical questions MUST call `get_technical_report`.
     - Design goal: harness is reusable enough to extract as a standalone repo later.
+- [ ] `POST /api/v1/agent/chat` SSE endpoint for frontend chat page — QNT-56
+    - **Built after the CLI + evals** — same graph, different transport. The CLI shakes out prompt regressions before they reach the UI.
+    - **Request**: `{"ticker": "NVDA", "message": "Analyze this stock"}` — stateless, single-analysis
+    - **SSE events**: `tool_call` → `thinking` → `thesis` → `done`
 - [ ] Verify: Run agent on 2-3 tickers, review thesis quality, confirm zero hallucinated calculations in Langfuse traces
 
 ---
