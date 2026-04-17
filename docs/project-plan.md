@@ -100,16 +100,19 @@ Updated automatically by `/ship` and `/sync-docs`.
 **Scope**: FastAPI endpoints serving machine-readable data (frontend charts) and human-readable reports (agent).
 **Dependencies**: Requires Phase 2 (data must exist in ClickHouse). Can proceed in parallel with Phase 4 — news endpoints gracefully degrade to empty responses until Phase 4 populates `news_raw`.
 
-**Report endpoints (text — for the agent):**
-- [ ] `GET /api/v1/reports/technical/{ticker}` — formatted text report with indicator context — QNT-48
+**Report template — build this FIRST (QNT-69):**
+- [ ] Design **one** report template end-to-end against real ClickHouse data — QNT-69 **[start of Phase 3]**
+    - **Target: the technical report** (`/reports/technical/{ticker}`). Build the full pipeline — query CH → format into a report string → expose at the endpoint — against live Phase 2 data. Iterate with eyes on the actual output until it reads well. THEN parameterise the pattern for fundamental / news / summary.
+    - **Rationale**: the templates are where the "intelligence vs math" thesis actually lives in the product — they determine what the agent can reason over. Parameterising a bad template 4 times is waste; finding the right shape once and then applying it is not.
+    - Structured sections (not walls of text), comparative context ("RSI 72.3 — above 70, approaching overbought"), historical context ("Revenue grew 23% YoY, accelerating from 18%"), explicit signal clarity (bullish / bearish / neutral).
+    - **Null/N/M display conventions** (Phase 2 retro finding): P/E nulled when `|EPS| < $0.10` → "N/M (near-zero earnings)", quarterly P/E uses TTM net income, indicator warm-up nulls → "Insufficient data (N bars required)". These conventions apply to all report endpoints.
+    - Templates stored under `packages/api/src/api/templates/` or as formatter functions in services.
+
+**Report endpoints (text — for the agent; all apply the QNT-69 template pattern):**
+- [ ] `GET /api/v1/reports/technical/{ticker}` — formatted text report with indicator context — QNT-48 *(first concrete output of QNT-69)*
 - [ ] `GET /api/v1/reports/fundamental/{ticker}` — formatted text report with ratio context — QNT-49
 - [ ] `GET /api/v1/reports/news/{ticker}` — recent news summary with sentiment (returns top-N headlines + brief sentiment narrative). Sentiment is computed by FastAPI at query time via simple keyword/headline analysis (positive/negative/neutral count) — not LLM-generated. Depends on Phase 4 `news_raw` data — returns 200 with `{"report": "No news data available."}` until Phase 4 populates data. — QNT-79
 - [ ] `GET /api/v1/reports/summary/{ticker}` — combined text overview: latest price context, RSI interpretation, trend narrative, and sector context. Sector context derived from a static mapping in `shared/tickers.py`. Used by the agent as a quick "at a glance" tool. — QNT-50
-- [ ] Design report templates for LLM consumption — QNT-69
-    - Structured sections (not walls of text), comparative context ("RSI 72.3 — above 70, approaching overbought"), historical context ("Revenue grew 23% YoY, accelerating from 18%"), explicit signal clarity (bullish / bearish / neutral)
-    - **Null/N/M display conventions** (Phase 2 retro finding): define how edge cases render in report text — P/E nulled when `|EPS| < $0.10` shows as "N/M (near-zero earnings)", quarterly P/E uses TTM net income, indicator warm-up nulls show as "Insufficient data (N bars required)". These conventions apply to all report endpoints.
-    - Templates stored under `packages/api/src/api/templates/` or as formatter functions in services
-    - Used by `/reports/technical`, `/reports/fundamental`, `/reports/summary`, `/reports/news`
 
 **Data endpoints (JSON — for the frontend):**
 - [ ] `GET /api/v1/ohlcv/{ticker}?timeframe=daily|weekly|monthly` — returns `[{time, open, high, low, close, adj_close, volume}]` for TradingView chart rendering. `time` is an ISO date string `"YYYY-MM-DD"` — QNT-76
@@ -137,8 +140,10 @@ Updated automatically by `/ship` and `/sync-docs`.
 ### Phase 4 — Narrative Data
 **Scope**: News ingestion, embedding, and semantic search via Qdrant.
 
-- [ ] Evaluate and select free news API (NewsAPI.org, GNews, or RSS feeds) — QNT-52
-- [ ] Implement `news_raw` Dagster asset (free API → `equity_raw.news_raw` in ClickHouse) — QNT-53
+- [ ] Ingest news via **RSS + `feedparser`** — QNT-52
+    - Per-ticker Yahoo Finance RSS (`https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US`), plus 1–2 broad market feeds (e.g., Reuters markets RSS)
+    - No paid news API evaluation — RSS is free, unrate-limited, and deterministic enough for a 10-ticker scope. The news-API comparison rabbit hole is not the portfolio story; RSS + embeddings + semantic search is.
+- [ ] Implement `news_raw` Dagster asset (RSS feeds → `equity_raw.news_raw` in ClickHouse) — QNT-53
     - Schedule: every 4 hours during market hours, `default_status=RUNNING` (Phase 2 lesson: QNT-92)
     - Dedup key: `id = hash(ticker + url)`
     - Stores: `headline`, `body`, `source`, `url`, `published_at` per ticker
@@ -166,6 +171,9 @@ Updated automatically by `/ship` and `/sync-docs`.
     - **Default**: routes to Ollama Cloud (`https://ollama.com/v1`) via `OLLAMA_API_KEY`
     - **Override**: routes to Claude API via `ANTHROPIC_API_KEY`
     - Model alias: `equity-agent/default` — zero agent code changes to switch backends
+- [ ] Integrate Langfuse tracing — QNT-61 **[day-one of Phase 5, moved from Phase 7]**
+    - `LangfuseResource` in the agent package; `@observe` decorator on every tool and graph node from the first commit of agent code — traces are needed *while* iterating on the prompt, not bolted on after shipping.
+    - Portfolio artifact: one Langfuse trace screenshot is embedded in the README (QNT-66).
 - [ ] Define LangGraph state schema (ticker under analysis, gathered reports, thesis draft) — QNT-56
 - [ ] Implement tools — QNT-57
     - `get_summary_report` → calls `/reports/summary/{ticker}` (agent calls this first)
@@ -173,14 +181,32 @@ Updated automatically by `/ship` and `/sync-docs`.
     - `get_fundamental_report` → calls `/reports/fundamental/{ticker}`
     - `get_news_report` → calls `/reports/news/{ticker}`
     - `search_news` → calls `/search/news`
-- [ ] Build agent graph: plan → gather data → analyze → synthesize thesis — QNT-56
+- [ ] Build agent graph — **3 nodes: plan → gather → synthesize** (per ADR-007) — QNT-56
+    - No critique / reflect / retry loop until the baseline has failed in specific, observed ways. Adding loops prematurely is indistinguishable from the baseline working.
 - [ ] System prompt enforcing the "interpret, don't calculate" mandate — QNT-58
 - [ ] Agent CLI: `python -m agent analyze NVDA` — run single-ticker analysis from terminal — QNT-60
+    - **Built before the SSE endpoint** — ~50× faster prompt iteration without a frontend round-trip. Pairs with the eval harness below.
+- [ ] Agent evaluation framework — QNT-67 **[highest-priority Phase 5 item — the single biggest AI-Engineer hiring signal]**
+    - Lives under `packages/agent/evals/`. Three eval types — all required, not optional:
+    - **(a) Numeric-claim hallucination detector** (`evals/hallucination.py`): regex every number out of the agent's thesis; assert each appears verbatim in one of the report strings the agent received as tool output. Any mismatch = test failure. Operationalises the ADR-003 contract.
+    - **(b) Golden set** (`evals/golden_set.py` + `evals/goldens/questions.yaml`): 15–20 curated `(ticker, question, reference_thesis, expected_tools)` pairs. Per run, track LLM-as-judge score + cosine similarity of generated thesis vs reference thesis. Commit `evals/history.csv` so prompt-version quality is visible in `git log -p`.
+    - **(c) Tool-call correctness** (`evals/tool_calls.py`): for each golden-set question, assert the expected tool was called — e.g., valuation questions MUST call `get_fundamental_report`, technical questions MUST call `get_technical_report`.
+    - Design goal: harness is reusable enough to extract as a standalone repo later.
 - [ ] `POST /api/v1/agent/chat` SSE endpoint for frontend chat page — QNT-56
+    - **Built after the CLI + evals** — same graph, different transport. The CLI shakes out prompt regressions before they reach the UI.
     - **Request**: `{"ticker": "NVDA", "message": "Analyze this stock"}` — stateless, single-analysis
     - **SSE events**: `tool_call` → `thinking` → `thesis` → `done`
-- [ ] Agent evaluation framework — QNT-67
-- [ ] Verify: Run agent on 2-3 tickers, review thesis quality, confirm zero hallucinated calculations in Langfuse traces
+- [ ] Portfolio README — QNT-66 **[moved from Phase 7 — front-page recruiter artifact]**
+    - Architecture diagram (mermaid, reused from `project-requirement.md` §3.1)
+    - One Langfuse trace screenshot (a full `plan → gather → synthesize` run)
+    - One Dagster lineage screenshot (the `ohlcv_raw → indicators → fundamental_summary` graph)
+    - One agent-thesis screenshot (CLI output, NVDA or similar)
+    - One-paragraph hallucination-resistance pitch (ties ADR-003 + QNT-67 eval harness)
+    - This matters more than anything in Phase 7. Recruiters read the README before opening any code file.
+- [ ] 30-second CLI demo screencast — QNT-94
+    - Record `python -m agent analyze NVDA` producing a thesis end-to-end; commit as `docs/demo.mp4` (or host and link from README above-the-fold)
+    - Single most-watched portfolio artifact. Must show: command invocation → first tool call → streamed thinking → final thesis, within ≤45s (target 30s).
+- [ ] Verify: Run agent on 2-3 tickers, review thesis quality, confirm zero hallucinated calculations in Langfuse traces; hallucination eval passes on all golden-set questions; README renders correctly on GitHub with all screenshots and the embedded/linked demo
 
 ---
 
@@ -211,11 +237,9 @@ Updated automatically by `/ship` and `/sync-docs`.
 ### Phase 7 — Observability & Polish
 **Scope**: Tracing, alerting, and production hardening.
 
-- [ ] Integrate Langfuse for agent trace logging (thoughts, tool calls, latency) — QNT-61
 - [ ] Integrate Sentry for FastAPI error tracking (`sentry-sdk[fastapi]`, uses `SENTRY_DSN` from `.env`) — QNT-86
 - [ ] Add Dagster alerting on asset materialization failures — QNT-62
 - [ ] Implement retry logic for flaky external API calls (yfinance, news APIs) — QNT-63
 - [ ] Load test FastAPI endpoints (confirm response times under 10 tickers) — QNT-65
 - [ ] Write integration tests for critical paths (ingestion → calculation → report → agent) — QNT-64
-- [ ] Write README with setup instructions and architecture diagram — QNT-66
 - [ ] Verify: End-to-end run on all 10 tickers, review Langfuse dashboard, confirm no orphaned errors in Sentry
