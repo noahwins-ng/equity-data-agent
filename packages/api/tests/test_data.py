@@ -17,6 +17,7 @@ from api import clickhouse as clickhouse_module
 from api.main import app
 from api.routers import data as data_module
 from fastapi.testclient import TestClient
+from shared.tickers import TICKERS
 
 
 class _FakeResult:
@@ -434,3 +435,70 @@ def test_fundamentals_returns_ratios_and_validates_ticker(
     r_bad = client.get("/api/v1/fundamentals/BOGUS")
     assert r_bad.status_code == 404
     assert "Unknown ticker" in r_bad.json()["detail"]
+
+
+_SUMMARY_COLS = ("ticker", "price", "prior_close", "rsi_14", "sma_50")
+
+
+def test_dashboard_summary_categorizes_all_tickers(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Three rows covering every categorization branch: overbought+bullish,
+    # oversold+bearish, and a neutral/neutral row whose SMA-50 is still in the
+    # 50-day warm-up window (must fall back to "neutral" trend).
+    fake = _FakeClient(
+        _FakeResult(
+            _SUMMARY_COLS,
+            [
+                ("NVDA", 153.0, 149.49, 72.3, 140.0),
+                ("AAPL", 180.0, 185.0, 28.5, 195.0),
+                ("MSFT", 400.0, 400.0, 50.0, None),
+            ],
+        )
+    )
+    _install_fake(monkeypatch, fake)
+
+    r = client.get("/api/v1/dashboard/summary")
+    assert r.status_code == 200
+    body = r.json()
+    by_ticker = {row["ticker"]: row for row in body}
+
+    assert by_ticker["NVDA"] == {
+        "ticker": "NVDA",
+        "price": 153.0,
+        "daily_change_pct": pytest.approx((153.0 - 149.49) / 149.49 * 100),
+        "rsi_14": 72.3,
+        "rsi_signal": "overbought",
+        "trend_status": "bullish",
+    }
+    assert by_ticker["AAPL"]["rsi_signal"] == "oversold"
+    assert by_ticker["AAPL"]["trend_status"] == "bearish"
+    assert by_ticker["AAPL"]["daily_change_pct"] == pytest.approx((180.0 - 185.0) / 185.0 * 100)
+    # SMA-50 null → trend collapses to neutral regardless of price.
+    assert by_ticker["MSFT"]["trend_status"] == "neutral"
+    assert by_ticker["MSFT"]["rsi_signal"] == "neutral"
+    assert by_ticker["MSFT"]["daily_change_pct"] == pytest.approx(0.0)
+
+    # Rows are emitted in TICKERS-registry order so the frontend doesn't re-sort.
+    assert [row["ticker"] for row in body] == ["NVDA", "AAPL", "MSFT"]
+
+    # Query must cover both source tables, use FINAL (ReplacingMergeTree), and
+    # pass every configured ticker to ClickHouse in one round trip.
+    assert fake.last_query is not None
+    assert "equity_raw.ohlcv_raw" in fake.last_query
+    assert "equity_derived.technical_indicators_daily" in fake.last_query
+    assert fake.last_query.count("FINAL") >= 2
+    assert fake.last_parameters == {"tickers": list(TICKERS)}
+
+
+def test_dashboard_summary_handles_missing_prior_close(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Single-day history (no prior close) → daily_change_pct must be null
+    # rather than throwing or defaulting to zero.
+    fake = _FakeClient(_FakeResult(_SUMMARY_COLS, [("NVDA", 153.0, None, 50.0, 140.0)]))
+    _install_fake(monkeypatch, fake)
+
+    r = client.get("/api/v1/dashboard/summary")
+    assert r.status_code == 200
+    assert r.json()[0]["daily_change_pct"] is None
