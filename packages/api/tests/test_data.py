@@ -155,3 +155,170 @@ def test_ohlcv_lowercase_ticker_is_normalized(
 def test_ohlcv_invalid_timeframe_returns_422(client: TestClient) -> None:
     r = client.get("/api/v1/ohlcv/NVDA", params={"timeframe": "hourly"})
     assert r.status_code == 422
+
+
+_INDICATOR_COLS = (
+    "time",
+    "sma_20",
+    "sma_50",
+    "ema_12",
+    "ema_26",
+    "rsi_14",
+    "macd",
+    "macd_signal",
+    "macd_hist",
+    "bb_upper",
+    "bb_middle",
+    "bb_lower",
+)
+
+
+def _fake_indicator_result(rows: list[tuple[Any, ...]]) -> _FakeResult:
+    return _FakeResult(_INDICATOR_COLS, rows)
+
+
+def test_indicators_daily_returns_iso_date_and_all_fields(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # First row is inside the SMA-50 warm-up window → nulls must survive the round-trip.
+    fake = _FakeClient(
+        _fake_indicator_result(
+            [
+                (
+                    date(2026, 1, 2),
+                    148.5,
+                    None,
+                    151.2,
+                    146.8,
+                    58.3,
+                    1.2,
+                    0.9,
+                    0.3,
+                    160.0,
+                    148.5,
+                    137.0,
+                ),
+                (
+                    date(2026, 1, 3),
+                    148.9,
+                    142.1,
+                    151.4,
+                    147.0,
+                    59.1,
+                    1.3,
+                    0.95,
+                    0.35,
+                    160.5,
+                    149.0,
+                    137.5,
+                ),
+            ]
+        )
+    )
+    _install_fake(monkeypatch, fake)
+
+    r = client.get("/api/v1/indicators/NVDA")
+    assert r.status_code == 200
+    body = r.json()
+    assert body[0] == {
+        "time": "2026-01-02",
+        "sma_20": 148.5,
+        "sma_50": None,
+        "ema_12": 151.2,
+        "ema_26": 146.8,
+        "rsi_14": 58.3,
+        "macd": 1.2,
+        "macd_signal": 0.9,
+        "macd_hist": 0.3,
+        "bb_upper": 160.0,
+        "bb_middle": 148.5,
+        "bb_lower": 137.0,
+    }
+    assert body[1]["sma_50"] == 142.1
+    assert fake.last_query is not None
+    assert "equity_derived.technical_indicators_daily" in fake.last_query
+    assert "FINAL" in fake.last_query
+    assert "ORDER BY date ASC" in fake.last_query
+    assert fake.last_parameters == {"ticker": "NVDA"}
+
+
+def test_indicators_weekly_uses_derived_weekly_table(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeClient(
+        _fake_indicator_result(
+            [
+                (
+                    date(2026, 1, 5),
+                    148.0,
+                    142.0,
+                    151.0,
+                    146.0,
+                    60.0,
+                    1.5,
+                    1.0,
+                    0.5,
+                    161.0,
+                    149.0,
+                    137.0,
+                )
+            ]
+        )
+    )
+    _install_fake(monkeypatch, fake)
+
+    r = client.get("/api/v1/indicators/NVDA", params={"timeframe": "weekly"})
+    assert r.status_code == 200
+    assert r.json()[0]["time"] == "2026-01-05"
+    assert fake.last_query is not None
+    assert "equity_derived.technical_indicators_weekly" in fake.last_query
+    assert "week_start" in fake.last_query
+
+
+def test_indicators_monthly_uses_derived_monthly_table(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeClient(
+        _fake_indicator_result(
+            [
+                (
+                    date(2026, 1, 1),
+                    148.0,
+                    142.0,
+                    151.0,
+                    146.0,
+                    60.0,
+                    1.5,
+                    1.0,
+                    0.5,
+                    161.0,
+                    149.0,
+                    137.0,
+                )
+            ]
+        )
+    )
+    _install_fake(monkeypatch, fake)
+
+    r = client.get("/api/v1/indicators/NVDA", params={"timeframe": "monthly"})
+    assert r.status_code == 200
+    assert r.json()[0]["time"] == "2026-01-01"
+    assert fake.last_query is not None
+    assert "equity_derived.technical_indicators_monthly" in fake.last_query
+    assert "month_start" in fake.last_query
+
+
+def test_indicators_unknown_ticker_returns_404(client: TestClient) -> None:
+    r = client.get("/api/v1/indicators/BOGUS")
+    assert r.status_code == 404
+    assert "Unknown ticker" in r.json()["detail"]
+
+
+def test_indicators_lowercase_ticker_is_normalized(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeClient(_fake_indicator_result([]))
+    _install_fake(monkeypatch, fake)
+    r = client.get("/api/v1/indicators/nvda")
+    assert r.status_code == 200
+    assert fake.last_parameters == {"ticker": "NVDA"}
