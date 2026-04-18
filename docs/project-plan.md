@@ -24,9 +24,23 @@ Updated automatically by `/ship` and `/sync-docs`.
     - Deploy pipeline: post-deploy health check gate (fails if API doesn't come up within 60s)
     - `make check-prod` and `make test-integration` helpers
 - [x] Claude Code slash command framework (12 commands in `.claude/commands/`) and dev workflow docs (`docs/guides/dev-workflow.md`, this `project-plan.md`) — QNT-84
-- [x] CD hard gate: verify prod `git rev-parse HEAD` equals merged commit SHA — QNT-88 **[added post-Apr-16 outage]**
-- [x] CD hard gate: verify Dagster definitions module loads expected asset / check / schedule counts — QNT-89 **[added post-Apr-16 outage]**
 - [x] Verify: SSH tunnel to ClickHouse works, Dagster UI starts locally, CI pipeline passes
+
+---
+
+### Ops & Reliability
+**Scope**: Cross-phase hardening that responds to prod incidents. Each item is reactive — triggered by a specific failure mode rather than a planned Phase deliverable. Lives outside the Phase 0–7 axis because the work cuts across phases.
+
+- [x] CD hard gate: verify prod `git rev-parse HEAD` equals merged commit SHA — QNT-88
+    - **Triggered by**: Apr 16 2026 outage during Phase 2 Calculation Layer work — CD reported success while prod was 17 commits behind main. Root cause was a SCP'd hotfix that blocked `git pull` during deploy, masked by a passing /health check on stale code.
+- [x] CD hard gate: verify Dagster definitions module loads expected asset / check / schedule counts — QNT-89
+    - **Triggered by**: Same Apr 16 2026 outage — container uptime didn't prove the deployed Python actually loaded the asset graph we thought we shipped.
+- [x] Harden /go pipeline with three-class AC taxonomy (code vs dev-exec vs prod-exec) — QNT-90
+    - **Triggered by**: Apr 16 2026 retrospective during Phase 3 API Layer work — `/sanity-check` had been marking AC ✓ based on code inspection alone, so "shipped but broken in prod" was technically allowed. Introduced the three-class AC taxonomy + evidence requirements + `/ship` post-deploy hard gates.
+- [x] Add `restart: unless-stopped` to prod services in docker-compose.yml — QNT-95
+    - **Triggered by**: Apr 18 2026 outage immediately after shipping QNT-51 (Phase 3 `/health` endpoint) — Hetzner VPS rebooted for a kernel update at 04:00 UTC, all 6 containers cleanly exited with `Exited (0)`, nothing came back up. ~48 min API outage until manual `docker compose --profile prod up -d`. Docker default restart policy is `no`.
+- [x] Alert on pending kernel reboots (health-monitor log + unattended-upgrades mail via Resend SMTP) — QNT-96
+    - **Triggered by**: Same Apr 18 2026 outage — `/var/run/reboot-required` had been set 21 hours earlier by `unattended-upgrades`, but no-one saw it. Fix adds a `REBOOT REQUIRED` line to `scripts/health-monitor.sh` (surfaced by `make monitor-log` + session-start hook) and wires `Unattended-Upgrade::Mail` through a postfix → Resend SMTP relay (documented in `docs/guides/hetzner-bootstrap.md` §10).
 
 ---
 
