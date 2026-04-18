@@ -322,3 +322,115 @@ def test_indicators_lowercase_ticker_is_normalized(
     r = client.get("/api/v1/indicators/nvda")
     assert r.status_code == 200
     assert fake.last_parameters == {"ticker": "NVDA"}
+
+
+_FUNDAMENTAL_COLS = (
+    "ticker",
+    "period_end",
+    "period_type",
+    "pe_ratio",
+    "ev_ebitda",
+    "price_to_book",
+    "price_to_sales",
+    "eps",
+    "revenue_yoy_pct",
+    "net_income_yoy_pct",
+    "fcf_yoy_pct",
+    "net_margin_pct",
+    "gross_margin_pct",
+    "roe",
+    "roa",
+    "fcf_yield",
+    "debt_to_equity",
+    "current_ratio",
+)
+
+
+def test_fundamentals_returns_ratios_and_validates_ticker(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Two rows: a fully-populated annual row, and a quarterly row whose
+    # denominator-division fields are null to verify nulls round-trip.
+    fake = _FakeClient(
+        _FakeResult(
+            _FUNDAMENTAL_COLS,
+            [
+                (
+                    "NVDA",
+                    date(2025, 12, 31),
+                    "annual",
+                    32.5,
+                    22.1,
+                    18.4,
+                    15.0,
+                    4.80,
+                    60.0,
+                    120.0,
+                    85.0,
+                    50.0,
+                    75.0,
+                    65.0,
+                    35.0,
+                    0.03,
+                    0.25,
+                    3.5,
+                ),
+                (
+                    "NVDA",
+                    date(2025, 9, 30),
+                    "quarterly",
+                    None,
+                    None,
+                    None,
+                    None,
+                    1.20,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+            ],
+        )
+    )
+    _install_fake(monkeypatch, fake)
+
+    r = client.get("/api/v1/fundamentals/nvda")
+    assert r.status_code == 200
+    body = r.json()
+    assert body[0] == {
+        "ticker": "NVDA",
+        "period_end": "2025-12-31",
+        "period_type": "annual",
+        "pe_ratio": 32.5,
+        "ev_ebitda": 22.1,
+        "price_to_book": 18.4,
+        "price_to_sales": 15.0,
+        "eps": 4.80,
+        "revenue_yoy_pct": 60.0,
+        "net_income_yoy_pct": 120.0,
+        "fcf_yoy_pct": 85.0,
+        "net_margin_pct": 50.0,
+        "gross_margin_pct": 75.0,
+        "roe": 65.0,
+        "roa": 35.0,
+        "fcf_yield": 0.03,
+        "debt_to_equity": 0.25,
+        "current_ratio": 3.5,
+    }
+    assert body[1]["period_end"] == "2025-09-30"
+    assert body[1]["pe_ratio"] is None
+    assert fake.last_query is not None
+    assert "equity_derived.fundamental_summary" in fake.last_query
+    assert "FINAL" in fake.last_query
+    assert "ORDER BY period_end DESC" in fake.last_query
+    assert fake.last_parameters == {"ticker": "NVDA"}
+
+    r_bad = client.get("/api/v1/fundamentals/BOGUS")
+    assert r_bad.status_code == 404
+    assert "Unknown ticker" in r_bad.json()["detail"]

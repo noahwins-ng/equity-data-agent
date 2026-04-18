@@ -51,6 +51,27 @@ _INDICATOR_TIMEFRAME_QUERY: dict[Timeframe, tuple[str, str]] = {
     Timeframe.monthly: ("equity_derived.technical_indicators_monthly", "month_start"),
 }
 
+_FUNDAMENTAL_COLUMNS = (
+    "ticker",
+    "period_end",
+    "period_type",
+    "pe_ratio",
+    "ev_ebitda",
+    "price_to_book",
+    "price_to_sales",
+    "eps",
+    "revenue_yoy_pct",
+    "net_income_yoy_pct",
+    "fcf_yoy_pct",
+    "net_margin_pct",
+    "gross_margin_pct",
+    "roe",
+    "roa",
+    "fcf_yield",
+    "debt_to_equity",
+    "current_ratio",
+)
+
 
 @router.get("/ohlcv/{ticker}")
 def get_ohlcv(
@@ -83,6 +104,41 @@ def get_ohlcv(
         time_value = record["time"]
         if isinstance(time_value, date):
             record["time"] = time_value.isoformat()
+        rows.append(record)
+    return rows
+
+
+@router.get("/fundamentals/{ticker}")
+def get_fundamentals(ticker: str) -> list[dict[str, Any]]:
+    """Return computed fundamental ratios for ``ticker``.
+
+    Response shape is ``{ticker, period_end, period_type, pe_ratio, ev_ebitda,
+    price_to_book, price_to_sales, eps, revenue_yoy_pct, net_income_yoy_pct,
+    fcf_yoy_pct, net_margin_pct, gross_margin_pct, roe, roa, fcf_yield,
+    debt_to_equity, current_ratio}[]`` where ``period_end`` is an ISO date
+    string (``YYYY-MM-DD``). Rows are returned most-recent-first to match the
+    ticker-detail ratios table layout, and every ratio column is nullable
+    (undefined when the denominator is zero or data is missing).
+    """
+    ticker = ticker.upper()
+    if ticker not in TICKERS:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+
+    columns = ", ".join(_FUNDAMENTAL_COLUMNS)
+    query = f"""
+        SELECT {columns}
+        FROM equity_derived.fundamental_summary FINAL
+        WHERE ticker = %(ticker)s
+        ORDER BY period_end DESC, period_type ASC
+    """
+    result = get_client().query(query, parameters={"ticker": ticker})
+
+    rows: list[dict[str, Any]] = []
+    for row in result.result_rows:
+        record = dict(zip(result.column_names, row, strict=True))
+        period_end = record["period_end"]
+        if isinstance(period_end, date):
+            record["period_end"] = period_end.isoformat()
         rows.append(record)
     return rows
 
