@@ -2,6 +2,7 @@ services:
   # ── Shared ──────────────────────────────────────────────────────────────────
   clickhouse:
     image: clickhouse/clickhouse-server:24-alpine
+    restart: unless-stopped
     volumes:
       - clickhouse_data:/var/lib/clickhouse
     ports:
@@ -17,6 +18,7 @@ services:
     build:
       context: .
       target: dagster
+    restart: unless-stopped
     command: /app/.venv/bin/dagster-webserver -m dagster_pipelines.definitions -h 0.0.0.0 -p 3000
     env_file: .env
     environment:
@@ -32,6 +34,7 @@ services:
     build:
       context: .
       target: dagster
+    restart: unless-stopped
     command: /app/.venv/bin/dagster-daemon run -m dagster_pipelines.definitions
     env_file: .env
     environment:
@@ -45,6 +48,7 @@ services:
     build:
       context: .
       target: api
+    restart: unless-stopped
     command: /app/.venv/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000
     env_file: .env
     environment:
@@ -59,6 +63,7 @@ services:
 
   litellm:
     image: litellm/litellm:v1.56.5
+    restart: unless-stopped
     command: --config /app/config.yaml --port 4000
     env_file: .env
     volumes:
@@ -68,6 +73,7 @@ services:
 
   caddy:
     image: caddy:2-alpine
+    restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
