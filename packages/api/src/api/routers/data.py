@@ -51,6 +51,26 @@ _INDICATOR_TIMEFRAME_QUERY: dict[Timeframe, tuple[str, str]] = {
     Timeframe.monthly: ("equity_derived.technical_indicators_monthly", "month_start"),
 }
 
+_RSI_OVERBOUGHT = 70.0
+_RSI_OVERSOLD = 30.0
+
+
+def _rsi_signal(rsi: float | None) -> str:
+    if rsi is None:
+        return "neutral"
+    if rsi >= _RSI_OVERBOUGHT:
+        return "overbought"
+    if rsi <= _RSI_OVERSOLD:
+        return "oversold"
+    return "neutral"
+
+
+def _trend_status(price: float, sma_50: float | None) -> str:
+    if sma_50 is None:
+        return "neutral"
+    return "bullish" if price >= sma_50 else "bearish"
+
+
 _FUNDAMENTAL_COLUMNS = (
     "ticker",
     "period_end",
@@ -71,6 +91,82 @@ _FUNDAMENTAL_COLUMNS = (
     "debt_to_equity",
     "current_ratio",
 )
+
+
+@router.get("/dashboard/summary")
+def get_dashboard_summary() -> list[dict[str, Any]]:
+    """Return a compact summary row per ticker for the dashboard landing page.
+
+    One JSON array covering all configured tickers — avoids the N+1 request
+    fan-out the frontend would otherwise need on page load. Each row carries
+    today's actual ``close`` (not ``adj_close`` — we want market price), the
+    day-over-day change, the latest RSI-14 + SMA-50, and pre-categorized
+    ``rsi_signal`` / ``trend_status`` labels so the frontend renders without
+    re-deriving thresholds. Tickers without at least one OHLCV row are omitted.
+    """
+    query = """
+        WITH
+        ohlcv_recent AS (
+            SELECT
+                ticker,
+                anyIf(close, rn = 1) AS price,
+                anyIf(close, rn = 2) AS prior_close
+            FROM (
+                SELECT
+                    ticker,
+                    close,
+                    row_number() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+                FROM equity_raw.ohlcv_raw FINAL
+                WHERE ticker IN %(tickers)s
+            )
+            WHERE rn <= 2
+            GROUP BY ticker
+        ),
+        indicators_latest AS (
+            SELECT
+                ticker,
+                argMax(rsi_14, date) AS rsi_14,
+                argMax(sma_50, date) AS sma_50
+            FROM equity_derived.technical_indicators_daily FINAL
+            WHERE ticker IN %(tickers)s
+            GROUP BY ticker
+        )
+        SELECT
+            o.ticker AS ticker,
+            o.price AS price,
+            o.prior_close AS prior_close,
+            i.rsi_14 AS rsi_14,
+            i.sma_50 AS sma_50
+        FROM ohlcv_recent AS o
+        LEFT JOIN indicators_latest AS i ON o.ticker = i.ticker
+    """
+    result = get_client().query(query, parameters={"tickers": list(TICKERS)})
+
+    order = {ticker: idx for idx, ticker in enumerate(TICKERS)}
+    rows: list[dict[str, Any]] = []
+    for row in result.result_rows:
+        record = dict(zip(result.column_names, row, strict=True))
+        price = float(record["price"])
+        prior_close = record["prior_close"]
+        rsi = record["rsi_14"]
+        sma_50 = record["sma_50"]
+
+        daily_change_pct: float | None = None
+        if prior_close is not None and float(prior_close) != 0.0:
+            daily_change_pct = (price - float(prior_close)) / float(prior_close) * 100
+
+        rows.append(
+            {
+                "ticker": record["ticker"],
+                "price": price,
+                "daily_change_pct": daily_change_pct,
+                "rsi_14": rsi,
+                "rsi_signal": _rsi_signal(rsi),
+                "trend_status": _trend_status(price, sma_50),
+            }
+        )
+    rows.sort(key=lambda r: order.get(r["ticker"], len(order)))
+    return rows
 
 
 @router.get("/ohlcv/{ticker}")
