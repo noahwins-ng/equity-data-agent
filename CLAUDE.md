@@ -155,6 +155,11 @@ make pr QNT=34 TITLE="description"  # Push + create PR
 /sync-docs                # Reconcile project-plan.md with Linear: tick Done, remove Cancelled, surface gaps
 ```
 
+#### Ops
+```
+/server-audit             # Audit Hetzner prod: durability / host / security / drift. Proposes Linear tickets for gaps, files on approval.
+```
+
 ### Hooks (Automatic — no manual invocation)
 
 Configured in `.claude/settings.json`, scripts in `.claude/hooks/`:
