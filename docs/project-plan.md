@@ -132,7 +132,7 @@ Updated automatically by `/ship` and `/sync-docs`.
 
 **Data endpoints (JSON — for the frontend):**
 - [x] `GET /api/v1/ohlcv/{ticker}?timeframe=daily|weekly|monthly` — returns `[{time, open, high, low, close, adj_close, volume}]` for TradingView chart rendering. `time` is an ISO date string `"YYYY-MM-DD"` — QNT-76
-- [ ] `GET /api/v1/indicators/{ticker}?timeframe=daily|weekly|monthly` — returns `[{time, rsi_14, macd, macd_signal, macd_hist, sma_20, sma_50, ema_12, ema_26, bb_upper, bb_middle, bb_lower}]` as row-oriented time-series (`null` during indicator warm-up period) — QNT-77
+- [x] `GET /api/v1/indicators/{ticker}?timeframe=daily|weekly|monthly` — returns `[{time, rsi_14, macd, macd_signal, macd_hist, sma_20, sma_50, ema_12, ema_26, bb_upper, bb_middle, bb_lower}]` as row-oriented time-series (`null` during indicator warm-up period) — QNT-77
     - **Warm-up periods**: RSI-14: 14, EMA-12: 12, EMA-26/MACD/MACD signal: 35, SMA-20/BB: 20, SMA-50: 50. All non-null from row 50 onward.
 - [ ] `GET /api/v1/fundamentals/{ticker}` — latest fundamental ratios as structured JSON for the ticker detail page ratios table — QNT-80
 - [ ] `GET /api/v1/dashboard/summary` — returns `[{ticker, price, daily_change_pct, rsi_14, rsi_signal, trend_status}]` for ALL tickers in a single response. Avoids N+1 requests on dashboard load. — QNT-81

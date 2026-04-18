@@ -31,6 +31,26 @@ _TIMEFRAME_QUERY: dict[Timeframe, tuple[str, str]] = {
     Timeframe.monthly: ("equity_derived.ohlcv_monthly", "month_start"),
 }
 
+_INDICATOR_COLUMNS = (
+    "sma_20",
+    "sma_50",
+    "ema_12",
+    "ema_26",
+    "rsi_14",
+    "macd",
+    "macd_signal",
+    "macd_hist",
+    "bb_upper",
+    "bb_middle",
+    "bb_lower",
+)
+
+_INDICATOR_TIMEFRAME_QUERY: dict[Timeframe, tuple[str, str]] = {
+    Timeframe.daily: ("equity_derived.technical_indicators_daily", "date"),
+    Timeframe.weekly: ("equity_derived.technical_indicators_weekly", "week_start"),
+    Timeframe.monthly: ("equity_derived.technical_indicators_monthly", "month_start"),
+}
+
 
 @router.get("/ohlcv/{ticker}")
 def get_ohlcv(
@@ -51,6 +71,43 @@ def get_ohlcv(
     table, date_col = _TIMEFRAME_QUERY[timeframe]
     query = f"""
         SELECT {date_col} AS time, open, high, low, close, adj_close, volume
+        FROM {table} FINAL
+        WHERE ticker = %(ticker)s
+        ORDER BY {date_col} ASC
+    """
+    result = get_client().query(query, parameters={"ticker": ticker})
+
+    rows: list[dict[str, Any]] = []
+    for row in result.result_rows:
+        record = dict(zip(result.column_names, row, strict=True))
+        time_value = record["time"]
+        if isinstance(time_value, date):
+            record["time"] = time_value.isoformat()
+        rows.append(record)
+    return rows
+
+
+@router.get("/indicators/{ticker}")
+def get_indicators(
+    ticker: str,
+    timeframe: Timeframe = Timeframe.daily,
+) -> list[dict[str, Any]]:
+    """Return pre-computed technical indicator rows for ``ticker``.
+
+    Response shape is ``{time, sma_20, sma_50, ema_12, ema_26, rsi_14, macd,
+    macd_signal, macd_hist, bb_upper, bb_middle, bb_lower}[]`` where ``time``
+    is an ISO date string (``YYYY-MM-DD``). Indicator fields are nullable during
+    the warm-up period (e.g. SMA-50 needs 50 prior closes) and those nulls are
+    preserved in the response — the frontend whitepaints them on the overlay.
+    """
+    ticker = ticker.upper()
+    if ticker not in TICKERS:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+
+    table, date_col = _INDICATOR_TIMEFRAME_QUERY[timeframe]
+    columns = ", ".join(_INDICATOR_COLUMNS)
+    query = f"""
+        SELECT {date_col} AS time, {columns}
         FROM {table} FINAL
         WHERE ticker = %(ticker)s
         ORDER BY {date_col} ASC
