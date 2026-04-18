@@ -25,6 +25,19 @@ if [ -n "$DOWN_SERVICES" ]; then
   echo "$(timestamp) SERVICES DOWN: $DOWN_SERVICES" >> "$LOG"
 fi
 
+# Surface pending kernel reboots. unattended-upgrades touches
+# /var/run/reboot-required when a package (usually kernel or libc) needs a
+# host reboot. Left unattended, the next host reboot can silently drop prod
+# — see 2026-04-18 incident and QNT-95.
+if [ -f /var/run/reboot-required ]; then
+  if [ -f /var/run/reboot-required.pkgs ]; then
+    PKGS=$(tr '\n' ',' < /var/run/reboot-required.pkgs | sed 's/,$//')
+  else
+    PKGS=""
+  fi
+  echo "$(timestamp) REBOOT REQUIRED: ${PKGS:-unknown}" >> "$LOG"
+fi
+
 # If everything is fine, write a heartbeat (one line, overwritten each run)
 if [ "$API_STATUS" = "ok" ] && [ -z "$DOWN_SERVICES" ]; then
   echo "$(timestamp) OK" > /opt/equity-data-agent/health-monitor-heartbeat
