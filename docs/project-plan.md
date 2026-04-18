@@ -41,6 +41,8 @@ Updated automatically by `/ship` and `/sync-docs`.
     - **Triggered by**: Apr 18 2026 outage immediately after shipping QNT-51 (Phase 3 `/health` endpoint) — Hetzner VPS rebooted for a kernel update at 04:00 UTC, all 6 containers cleanly exited with `Exited (0)`, nothing came back up. ~48 min API outage until manual `docker compose --profile prod up -d`. Docker default restart policy is `no`.
 - [x] Alert on pending kernel reboots (health-monitor log + unattended-upgrades mail via Resend SMTP) — QNT-96
     - **Triggered by**: Same Apr 18 2026 outage — `/var/run/reboot-required` had been set 21 hours earlier by `unattended-upgrades`, but no-one saw it. Fix adds a `REBOOT REQUIRED` line to `scripts/health-monitor.sh` (surfaced by `make monitor-log` + session-start hook) and wires `Unattended-Upgrade::Mail` through a postfix → Resend SMTP relay (documented in `docs/guides/hetzner-bootstrap.md` §10).
+- [ ] Spike: evaluate Coolify for deploy/ops consolidation — QNT-97
+    - **Triggered by**: Apr 19 2026 retro on the bespoke-compose vs OSS-PaaS tradeoff after shipping QNT-81. QNT-95 and QNT-88 are compensating for defaults Coolify ships for free (restart-on-failure; webhook-only deploys that eliminate SCP-hotfix class of failure). Counter-weight: Coolify becomes critical infra, doesn't model Dagster's multi-process stateful shape cleanly, and preview-env value doesn't unlock until frontend work. Spike ends at an ADR with Adopt / Defer-with-trigger / Reject verdict — no migration work inside this ticket.
 
 ---
 
