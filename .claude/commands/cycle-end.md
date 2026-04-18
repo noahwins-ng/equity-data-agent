@@ -18,6 +18,8 @@ End-of-week cycle wrap-up. Run this at the end of each work cycle.
 
 5. **Check milestone completion** — for each milestone that has issues in this cycle, check if ALL of its issues are now Done (query Linear for the full milestone issue list, not just this cycle's slice). If a milestone is fully complete, prompt: "Phase X is complete — run `/retro Phase X` when ready." Do NOT auto-run retro.
 
+   **Exception: perpetual / cross-cutting milestones.** Skip the retro prompt entirely for milestones that are deliberate catch-alls rather than finite phases. Right now that means `Ops & Reliability` (reactive hardening that cuts across phases — new tickets land there whenever prod teaches us something, so "queue drained" is not the same as "milestone complete"). If a future cross-cutting milestone is added (e.g., `Security`, `Cost Optimization`), treat the same way. The user will invoke `/retro Ops & Reliability` manually if they want a periodic reflection — it should never be auto-prompted.
+
 6. **Switch to main before syncing docs** — ensure doc commits land on main, not a stale feature branch:
    ```bash
    git checkout main && git pull
