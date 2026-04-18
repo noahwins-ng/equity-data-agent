@@ -152,6 +152,40 @@ Expected: all services `Up`, health check returns `200 OK`.
 
 ---
 
+## 10. Unattended-Upgrades Mail Alerts
+
+`unattended-upgrades` silently schedules a host reboot when a kernel/libc update requires one. On 2026-04-18 this went unnoticed for ~21 hours — see the QNT-95/QNT-96 incident — so we require mail delivery on every upgrade run.
+
+**Install a mail transport** (once):
+
+```bash
+apt install -y bsd-mailx
+# `bsd-mailx` pulls in postfix with sensible defaults (local smarthost).
+# Alternative: `mailutils` + `msmtp` if you need SMTP relay to Gmail/SES.
+```
+
+**Edit** `/etc/apt/apt.conf.d/50unattended-upgrades` to uncomment + set:
+
+```
+Unattended-Upgrade::Mail "noahwins.dev@gmail.com";
+Unattended-Upgrade::MailReport "on-change";
+```
+
+`on-change` emits a mail only when packages were actually upgraded (or an error occurred) — not on every no-op run.
+
+**Verify mail actually sends**:
+
+```bash
+echo "test from $(hostname) $(date -u +%FT%TZ)" | mail -s "hetzner mail test" noahwins.dev@gmail.com
+# Then check the inbox. If nothing arrives, inspect /var/log/mail.log.
+```
+
+Mail that never leaves the box is worse than no alerting — don't skip this check.
+
+**Pending-reboot surfacing.** `scripts/health-monitor.sh` also logs a `REBOOT REQUIRED` line whenever `/var/run/reboot-required` exists (every 15 min via cron), so `make monitor-log` and the Claude Code session-start hook both surface it even if mail delivery is broken.
+
+---
+
 ## Subsequent Deploys
 
 After the bootstrap, every merge to `main` triggers automatic deployment:
