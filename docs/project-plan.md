@@ -41,8 +41,18 @@ Updated automatically by `/ship` and `/sync-docs`.
     - **Triggered by**: Apr 18 2026 outage immediately after shipping QNT-51 (Phase 3 `/health` endpoint) — Hetzner VPS rebooted for a kernel update at 04:00 UTC, all 6 containers cleanly exited with `Exited (0)`, nothing came back up. ~48 min API outage until manual `docker compose --profile prod up -d`. Docker default restart policy is `no`.
 - [x] Alert on pending kernel reboots (health-monitor log + unattended-upgrades mail via Resend SMTP) — QNT-96
     - **Triggered by**: Same Apr 18 2026 outage — `/var/run/reboot-required` had been set 21 hours earlier by `unattended-upgrades`, but no-one saw it. Fix adds a `REBOOT REQUIRED` line to `scripts/health-monitor.sh` (surfaced by `make monitor-log` + session-start hook) and wires `Unattended-Upgrade::Mail` through a postfix → Resend SMTP relay (documented in `docs/guides/hetzner-bootstrap.md` §10).
-- [ ] Spike: evaluate Coolify for deploy/ops consolidation — QNT-97
-    - **Triggered by**: Apr 19 2026 retro on the bespoke-compose vs OSS-PaaS tradeoff after shipping QNT-81. QNT-95 and QNT-88 are compensating for defaults Coolify ships for free (restart-on-failure; webhook-only deploys that eliminate SCP-hotfix class of failure). Counter-weight: Coolify becomes critical infra, doesn't model Dagster's multi-process stateful shape cleanly, and preview-env value doesn't unlock until frontend work. Spike ends at an ADR with Adopt / Defer-with-trigger / Reject verdict — no migration work inside this ticket.
+- [ ] Create ops runbook skeleton with failure-mode catalog — QNT-99
+    - **Triggered by**: Apr 19 2026 retro — the Ops & Reliability work has turned specific incidents into permanent detectors, but there's no consolidated document to grep when something breaks at 3am. Runbook is the index into the muscle memory. Small scaffolding ticket; subsequent Ops & Reliability tickets add their own entries.
+- [ ] Harden docker-compose.yml: HEALTHCHECK + log rotation + resource limits — QNT-100
+    - **Triggered by**: Apr 19 2026 retro on the bespoke-compose vs OSS-PaaS tradeoff — evaluated adopting Coolify to get these defaults for free, concluded that configuring them directly is strictly better (fewer moving parts, no new critical infra). Closes three specific gaps: "sick but still up" (no healthchecks), "disk fills with logs" (no rotation), "one leaky service OOMs the box" (no resource limits).
+- [ ] Alerting pipeline: uptime monitoring + container state notifications — QNT-101
+    - **Triggered by**: Same Apr 19 2026 retro — Apr 18 outage surfaced that `/health` failures go into a log file nobody reads. Need real pager (SMS/email) for downtime + Discord notifications for container state changes.
+- [ ] Encrypt .env at rest with SOPS — QNT-102
+    - **Triggered by**: Same Apr 19 2026 retro — plaintext `.env` on VPS = all credentials leak on compromise. Replace with SOPS-encrypted file + decrypt-on-deploy. (ClickHouse backup ticket deferred: current data <1GB, re-ingestible from yfinance in 1-2h; revisit after Phase 4 news+embeddings populate.)
+- [ ] Observability stack: Dozzle logs UI + Prometheus/Grafana/cAdvisor metrics — QNT-103
+    - **Triggered by**: Same Apr 19 2026 retro — unified logs UI (Dozzle, lightweight) + resource trend visibility (Prometheus stack) are the Coolify UX wins we'd replicate directly. Enables diagnosing slow leaks before they become outages.
+- [x] ~~Spike: evaluate Coolify for deploy/ops consolidation — QNT-97~~ (Cancelled 2026-04-19 — decision made directly without spike; superseded by QNT-99 through QNT-103.)
+- [x] ~~Bootstrap Coolify on Hetzner CX41 — QNT-98~~ (Cancelled 2026-04-19 — decided not to adopt Coolify; gaps being addressed via targeted config tickets instead.)
 
 ---
 
