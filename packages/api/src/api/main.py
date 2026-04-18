@@ -26,7 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from shared.config import settings
 
 from api.clickhouse import get_client
-from api.routers import reports_router
+from api.routers import data_router, reports_router
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +137,7 @@ app.add_middleware(
 )
 
 app.include_router(reports_router)
+app.include_router(data_router)
 
 
 @app.get("/api/v1/health", tags=["health"])
