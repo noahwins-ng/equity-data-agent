@@ -185,9 +185,11 @@ Updated automatically by `/ship` and `/sync-docs`.
     - Embeds `headline` text using `sentence-transformers/all-MiniLM-L6-v2` (384-dim)
     - Sensor-triggered when `news_raw` materializes new rows
     - Stores vector + full payload (headline, source, url, published_at, ticker) in Qdrant
+    - **Tests use a fake Qdrant client** (analogous to the `_FakeClient` for ClickHouse in `packages/api/tests/test_data.py`) so CI is deterministic with no Qdrant Cloud connection — Phase 3 lesson
 - [ ] `GET /api/v1/search/news?ticker=NVDA&query=earnings` — QNT-55
     - Returns `[{headline, source, url, published_at, score}]` — top-N results ranked by cosine similarity
     - Both `ticker` and `query` are required. Returns `[]` if Qdrant is unreachable or no news data exists.
+    - **Tests use a fake Qdrant client** (same `_FakeClient` pattern) covering ranking, payload shape, and the empty-results/unreachable fallback — Phase 3 lesson
 - [ ] Add Dagster asset checks for `news_raw` and `news_embeddings` data quality — QNT-93
     - `news_raw`: no empty headlines, valid URLs, no future `published_at` dates, row count per ticker
     - `news_embeddings`: vector count matches source row count, no orphaned vectors
@@ -213,6 +215,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - `get_fundamental_report` → calls `/reports/fundamental/{ticker}`
     - `get_news_report` → calls `/reports/news/{ticker}`
     - `search_news` → calls `/search/news`
+    - **Ship as one PR using the template-pattern approach from QNT-69**: all 5 tools share the same shape (`httpx.get(url).text → return string`) with only the URL template varying. Build the hardest tool end-to-end first (`search_news` — has extra `query` arg + empty-results fallback), then parameterise for the other 4 in the same PR. Resist splitting into 5 PRs. Phase 3 lesson (PR #53 bundled QNT-69 + 4 report endpoints).
 - [ ] Build agent graph — **3 nodes: plan → gather → synthesize** (per ADR-007) — QNT-56
     - No critique / reflect / retry loop until the baseline has failed in specific, observed ways. Adding loops prematurely is indistinguishable from the baseline working.
 - [ ] System prompt enforcing the "interpret, don't calculate" mandate — QNT-58
@@ -262,6 +265,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - Shows which tools the agent called (transparency)
 - [ ] Generate TypeScript types from FastAPI's `/openapi.json` via `openapi-typescript` (`make types`) — do not handwrite types in `lib/api.ts`
 - [ ] Deploy to Vercel, set `NEXT_PUBLIC_API_URL` in Vercel dashboard
+- [ ] **Cross-cutting**: Ticker list is sourced from `GET /api/v1/tickers` across every page (dashboard cards, detail-page switcher, chat-page selector) — never hardcoded. Inherits QNT-78's ⏳ PENDING AC; hardcoding the list anywhere defeats the endpoint's purpose. Phase 3 lesson.
 - [ ] Verify: Dashboard loads all 10 tickers, chart renders with timeframe toggle, agent chat streams a thesis
 
 ---
