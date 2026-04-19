@@ -41,7 +41,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - **Triggered by**: Apr 18 2026 outage immediately after shipping QNT-51 (Phase 3 `/health` endpoint) — Hetzner VPS rebooted for a kernel update at 04:00 UTC, all 6 containers cleanly exited with `Exited (0)`, nothing came back up. ~48 min API outage until manual `docker compose --profile prod up -d`. Docker default restart policy is `no`.
 - [x] Alert on pending kernel reboots (health-monitor log + unattended-upgrades mail via Resend SMTP) — QNT-96
     - **Triggered by**: Same Apr 18 2026 outage — `/var/run/reboot-required` had been set 21 hours earlier by `unattended-upgrades`, but no-one saw it. Fix adds a `REBOOT REQUIRED` line to `scripts/health-monitor.sh` (surfaced by `make monitor-log` + session-start hook) and wires `Unattended-Upgrade::Mail` through a postfix → Resend SMTP relay (documented in `docs/guides/hetzner-bootstrap.md` §10).
-- [ ] Create ops runbook skeleton with failure-mode catalog — QNT-99
+- [x] Create ops runbook skeleton with failure-mode catalog — QNT-99
     - **Triggered by**: Apr 19 2026 retro — the Ops & Reliability work has turned specific incidents into permanent detectors, but there's no consolidated document to grep when something breaks at 3am. Runbook is the index into the muscle memory. Small scaffolding ticket; subsequent Ops & Reliability tickets add their own entries.
 - [ ] Harden docker-compose.yml: HEALTHCHECK + log rotation + resource limits — QNT-100
     - **Triggered by**: Apr 19 2026 retro — raw compose defaults leave three specific gaps we hadn't closed: "sick but still up" (no healthchecks), "disk fills with logs" (no rotation), "one leaky service OOMs the box" (no resource limits). Addressing each directly on the existing stack.
