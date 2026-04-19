@@ -49,11 +49,19 @@ Monday                    Tuesday–Thursday           Friday
   → validates all AC before reporting
 
 /sanity-check QNT-XX
-  → lint + format + types + tests + AC check
+  → lint + format + types + tests
+  → AC check using the three-class taxonomy (QNT-90):
+      • [code AC]          — verified by reading the code; mark PASS/FAIL
+      • [dev execution AC] — must run the command + paste output as evidence (keywords like
+                             "populated", "returns", "visible", "schedule enabled" trigger this)
+      • [prod execution AC] — only verifiable post-deploy; mark ⏳ PENDING
+      • ⏳ PENDING         — verifier belongs to a later phase (e.g., frontend selector on
+                             an API ticket); consumer ticket inherits the AC (Phase 3 lesson)
   → Linear → In Review on pass
 
 /review QNT-XX
   → adversarial diff review (logic, security, architecture, edge cases)
+  → re-checks that every dev execution AC has command + output evidence
   → auto-fixes blocking issues
 
 /ship QNT-XX
@@ -61,7 +69,16 @@ Monday                    Tuesday–Thursday           Friday
   → if already In Review: skips code checks, re-verifies AC only
   → ticks project-plan.md
   → creates PR, waits for CI, squash merges
-  → Linear → Done (auto via "Closes QNT-XX")
+  → post-deploy hard gates (must both pass before trusting any AC result):
+      (a) prod `git rev-parse HEAD` equals merge-commit SHA (QNT-88 — catches silent
+          stale-deploy drift, Apr-16 outage pattern)
+      (b) Dagster definitions module loads with the expected asset/check/schedule counts
+          (QNT-89 — catches "container up but Python didn't actually load" drift)
+  → make check-prod (services + /health)
+  → verifies each ⏳ PENDING prod-execution AC with the appropriate command
+  → Linear → Done via explicit API call (NOT relying on GitHub "Closes QNT-XX" — save_issue
+    with links can silently revert state; a manual state write is load-bearing)
+  → posts shipped comment on Linear with evidence (audit trail)
   → branch deleted
 ```
 
@@ -77,7 +94,7 @@ Commands are either **leaf** (self-contained) or **composite** (invoke other com
 
 These never invoke another command:
 
-`/status`, `/session-check`, `/pick`, `/implement`, `/sanity-check`, `/review`, `/sync-linear`, `/sync-docs`, `/change-scope`, `/cycle-start`
+`/status`, `/session-check`, `/pick`, `/implement`, `/sanity-check`, `/review`, `/sync-linear`, `/sync-docs`, `/change-scope`, `/cycle-start`, `/server-audit`
 
 ### Composite Commands
 
@@ -85,7 +102,7 @@ These never invoke another command:
 |---------|---------|-----------|-------|
 | `/ship` | `/sanity-check` | 1 | Conditional — skipped if issue already In Review |
 | `/fix` | `/sanity-check`, `/review`, `/ship` | 2 | Subset depends on which step failed; `/ship` may invoke `/sanity-check` |
-| `/retro` | `/sync-docs` | 1 | Always, in cleanup step |
+| `/retro` | `/sync-docs`, `/change-scope` | 1 | `/sync-docs` always (cleanup); `/change-scope` conditionally, one invocation per approved forward-looking scope change |
 | `/cycle-end` | `/sync-docs` | 1 | Always, in cleanup step |
 | `/go` | `/pick`, `/implement`, `/sanity-check`, `/review`, `/ship` | 2 | All 5 in sequence |
 
@@ -105,6 +122,7 @@ These never invoke another command:
 /fix → /ship → /sanity-check                 (depth 2, only if issue not In Review)
 
 /retro → /sync-docs                          (depth 1)
+/retro → /change-scope (× N, optional)       (depth 1, one per approved scope change)
 /cycle-end → /sync-docs                      (depth 1)
 ```
 
@@ -168,10 +186,14 @@ Note: `/change-scope` updates `project-plan.md` text directly for all three chan
 
 /retro [Phase X]
   → git + Linear data gathered automatically
-  → lessons saved to memory
-  → system-overview.md updated
+  → lessons saved to memory (workflow rules)
+  → system-overview.md reviewed + updated if shipped scope changed it
+  → forward-looking scope changes applied via /change-scope (after user approval)
   → /sync-docs runs as part of retro
   → retro written to docs/retros/phase-X-name.md
+  → Linear project status update posted (onTrack / atRisk)
+  → manual follow-up (not yet automated): promote reusable code recipes to
+    docs/patterns.md — see "Codebase Patterns → Where patterns come from" below
 ```
 
 ---
@@ -214,6 +236,17 @@ make rollback           # reverts to previous commit, rebuilds, verifies health
 
 This is also suggested automatically by `/ship` if post-deploy verification fails.
 
+### Server Audit
+
+```
+/server-audit
+  → audits Hetzner prod across four dimensions: durability / host / security / drift
+  → surfaces gaps as proposed Linear tickets (Ops & Reliability milestone)
+  → files them on approval
+```
+
+Run periodically (e.g., monthly) or after any incident. Complements the reactive QNT-88/89/95/96 hardening by sweeping for gaps that haven't triggered an incident yet.
+
 ### Incident Response
 
 | Situation | Action |
@@ -227,11 +260,24 @@ This is also suggested automatically by `/ship` if post-deploy verification fail
 
 ## Codebase Patterns
 
-Before implementing, check `docs/patterns.md` — it catalogs established recipes for common tasks:
-- Adding a Dagster asset
-- Adding a FastAPI endpoint
-- Adding an agent tool
-- Adding a new ticker
-- Adding a ClickHouse migration
+Before implementing, check `docs/patterns.md` — it catalogs established recipes for common tasks (Dagster asset, FastAPI endpoint, agent tool, new ticker, ClickHouse migration, export patterns, etc.).
 
 Follow the existing pattern. Don't reinvent structure.
+
+### Where patterns come from
+
+`patterns.md` is maintained manually. Retros are the natural discovery moment — a ticket that invented a reusable recipe in a specific package should have that recipe lifted into `patterns.md` so the next session finds it.
+
+**Memory vs patterns (they're different)**:
+
+| | Memory (`feedback_*.md`) | `patterns.md` |
+|---|---|---|
+| **Scope** | Workflow rule — "when/why to apply" | Code recipe — literal paste-ready implementation |
+| **Discovery** | Auto-loaded every session | Manually read during `/implement` Step 1 |
+| **Example** | "When testing external services, mock at the client boundary" | The 15-line `_FakeClient` class + the `monkeypatch.setattr(...)` wiring |
+
+If a retro identifies a reusable code recipe but the recipe never makes it into `patterns.md`, the next `/go` either rediscovers it (waste) or reinvents a worse version (drift). Treat pattern extraction as a retro follow-up, not a nice-to-have.
+
+**Pending extractions** (recipes surfaced but not yet in `patterns.md`):
+
+- Fake external-service client fixture (Phase 3 `_FakeClient` in `packages/api/tests/test_data.py`) — applies to ClickHouse today, Qdrant in Phase 4 (QNT-54/55 scope explicitly requires it)
