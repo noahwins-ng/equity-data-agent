@@ -111,7 +111,7 @@ make monitor-log                                                                
 
 **Symptoms**:
 
-- BetterStack (or other uptime monitor) alert fires on `/api/v1/health`.
+- Uptime monitor alert (UptimeRobot / BetterStack / uptime-kuma) fires on `/api/v1/health`.
 - Direct probe: `curl -sf http://<prod-host>:8000/api/v1/health` returns 503 or times out.
 - User-visible: frontend/agent requests fail with 500/502/504 or hang.
 
@@ -134,12 +134,12 @@ ssh hetzner 'docker inspect equity-data-agent-api-1 --format "{{.State.Health.St
 1. If `services.clickhouse == "down"`: jump to "Host reboot outage" if containers are `Exited`, or to "Container wedged but still up" if `clickhouse` is `Up (unhealthy)`.
 2. If the API container itself is wedged (`health.Status` is `unhealthy` but `State.Status` is `running`): `ssh hetzner "docker restart equity-data-agent-api-1"` and confirm `/api/v1/health` returns 200 within 30 s.
 3. If the API container is crash-looping: see "Container crash loop" below — the underlying cause is almost always in the logs from the most recent exit.
-4. Post-recovery: check the BetterStack incident timeline against the Discord `[DIE]`/`[OOM KILL]` messages — the two should line up on the same window, and together tell you what failed and why.
+4. Post-recovery: check the uptime-monitor incident timeline against the Discord `[DIE]`/`[OOM KILL]` messages — the two should line up on the same window, and together tell you what failed and why.
 
 **Prevention**:
 
 - [QNT-100](https://linear.app/noahwins/issue/QNT-100) — compose-level HEALTHCHECKs make wedged-but-running detectable (the `/health` endpoint can itself wedge).
-- [QNT-101](https://linear.app/noahwins/issue/QNT-101) — external uptime probe (BetterStack) catches the case where the host is unreachable and local health monitoring can't help.
+- [QNT-101](https://linear.app/noahwins/issue/QNT-101) — external uptime probe (UptimeRobot or equivalent) catches the case where the host is unreachable and local health monitoring can't help.
 
 **Last occurred**: not yet occurred — preventative
 
