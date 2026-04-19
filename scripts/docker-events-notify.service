@@ -1,0 +1,24 @@
+[Unit]
+Description=Docker events -> Discord webhook notifier (QNT-101)
+Documentation=https://linear.app/noahwins/issue/QNT-101
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+EnvironmentFile=/opt/equity-data-agent/.env
+ExecStart=/opt/equity-data-agent/scripts/docker-events-notify.sh
+Restart=always
+RestartSec=10
+# systemd keeps the process alive; structured output lands in the journal.
+StandardOutput=journal
+StandardError=journal
+# Minimal hardening — the script only needs docker.sock + outbound network.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/equity-data-agent
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

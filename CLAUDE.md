@@ -99,6 +99,7 @@ When making a significant architectural decision, create a new ADR using `docs/d
 - **Langfuse**: Agent tracing — LLM calls, tool calls, latency
 - **Sentry**: FastAPI error tracking in production
 - **Health Monitor**: Cron on Hetzner (every 15 min) — checks API `/health` + Docker services, logs failures. `make monitor-log` to check. Session-start hook auto-warns on failures.
+- **Alerting**: Two independent channels (QNT-101) — external uptime probe on `/api/v1/health` (BetterStack free tier, alerts ≤3 min) + `docker-events-notify.service` on Hetzner streaming die/kill/oom/restart to a Discord webhook (alerts ≤30 s). Setup: `docs/guides/uptime-monitoring.md`. Self-monitored via heartbeat file + optional external heartbeat URL. Install: `make events-notify-install`. Test: `make events-notify-test`.
 - **Ops Runbook**: `docs/guides/ops-runbook.md` — failure-mode catalog with symptoms, diagnosis, response, and prevention. Grep this first when prod breaks; every Ops & Reliability ticket extends it.
 - **ClickHouse Play**: `http://localhost:8123/play` — SQL editor for data exploration (via SSH tunnel)
 - **Dagster UI**: `http://localhost:3000` — asset lineage, run history, sensor status
@@ -123,6 +124,9 @@ make build                          # Build prod Docker images locally (run when
 make rollback                       # Rollback prod to previous commit and rebuild (emergency use)
 make monitor-install                # Install health monitor cron on Hetzner (every 15 min)
 make monitor-log                    # Show recent prod health failures
+make events-notify-install          # Install docker-events → Discord notifier on Hetzner (QNT-101)
+make events-notify-status           # Show notifier systemd status + last heartbeat
+make events-notify-test             # Kill litellm to verify the Discord webhook path end-to-end
 make issue QNT=34                   # Checkout branch for Linear issue
 make pr QNT=34 TITLE="description"  # Push + create PR
 ```

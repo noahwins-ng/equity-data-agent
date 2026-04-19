@@ -107,6 +107,89 @@ make monitor-log                                                                
 
 ---
 
+### API down / 503
+
+**Symptoms**:
+
+- BetterStack (or other uptime monitor) alert fires on `/api/v1/health`.
+- Direct probe: `curl -sf http://<prod-host>:8000/api/v1/health` returns 503 or times out.
+- User-visible: frontend/agent requests fail with 500/502/504 or hang.
+
+**Diagnosis**:
+
+```bash
+# Does the endpoint still respond, and what does it say is down?
+ssh hetzner 'curl -sS http://localhost:8000/api/v1/health; echo'
+# Expect JSON like {"status":"down","services":{"clickhouse":"down",...}} — the
+# payload names the failing dependency. 503 = ClickHouse unreachable; 200 with
+# status=degraded = Qdrant down (not alerting-worthy until Phase 4 matures).
+
+make check-prod                                 # all services Up?
+ssh hetzner "docker compose --profile prod logs api --tail=50"
+ssh hetzner 'docker inspect equity-data-agent-api-1 --format "{{.State.Health.Status}}"'
+```
+
+**Response**:
+
+1. If `services.clickhouse == "down"`: jump to "Host reboot outage" if containers are `Exited`, or to "Container wedged but still up" if `clickhouse` is `Up (unhealthy)`.
+2. If the API container itself is wedged (`health.Status` is `unhealthy` but `State.Status` is `running`): `ssh hetzner "docker restart equity-data-agent-api-1"` and confirm `/api/v1/health` returns 200 within 30 s.
+3. If the API container is crash-looping: see "Container crash loop" below — the underlying cause is almost always in the logs from the most recent exit.
+4. Post-recovery: check the BetterStack incident timeline against the Discord `[DIE]`/`[OOM KILL]` messages — the two should line up on the same window, and together tell you what failed and why.
+
+**Prevention**:
+
+- [QNT-100](https://linear.app/noahwins/issue/QNT-100) — compose-level HEALTHCHECKs make wedged-but-running detectable (the `/health` endpoint can itself wedge).
+- [QNT-101](https://linear.app/noahwins/issue/QNT-101) — external uptime probe (BetterStack) catches the case where the host is unreachable and local health monitoring can't help.
+
+**Last occurred**: not yet occurred — preventative
+
+---
+
+### Container crash loop
+
+**Symptoms**:
+
+- Repeated Discord `[DIE]` or `[RESTART]` notifications for the same container name within minutes (`restart: unless-stopped` keeps relaunching it).
+- `ssh hetzner "docker ps"` shows the container in `Restarting` state, or uptime is <1 min on every inspection.
+- Possibly also an uptime alert if the crashing service is API/ClickHouse.
+
+**Diagnosis**:
+
+```bash
+# Exit code + last-state reason
+ssh hetzner 'docker inspect equity-data-agent-<service>-1 --format "exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}}"'
+
+# Logs from the dying process — --tail 200 usually captures the stack trace
+ssh hetzner "docker compose --profile prod logs <service> --tail=200"
+
+# If OOMKilled=true, check resource pressure pre-crash
+ssh hetzner 'docker stats --no-stream'
+```
+
+**Response**:
+
+1. **Stop the loop first.** A crash-looping container burns CPU and log volume.
+   ```bash
+   ssh hetzner "docker stop equity-data-agent-<service>-1"
+   ```
+2. Root-cause by exit-code class:
+   - `exit=137` + `OOMKilled=true` → memory limit too tight (compare `mem_limit` in `docker-compose.yml` to the process's working set). If tight: raise the limit **or** revert the commit that introduced the regression.
+   - `exit=139` (SIGSEGV) → native-extension crash, almost always a bad image. Roll back: `make rollback`.
+   - `exit=1` or `exit=2` → Python unhandled exception; logs name the traceback. Fix in code, ship a new commit.
+   - `exit=0` + repeated restarts → process exits cleanly because its main loop terminated (config error, failed healthcheck dependency). Check the service's `command` / entrypoint args.
+3. After a code fix, re-deploy via normal CD. Do **not** `scp` a patched file to prod — see `feedback_prod_hotfix_scp.md`.
+4. Restart only when you've named the root cause: `ssh hetzner "docker compose --profile prod up -d <service>"`.
+
+**Prevention**:
+
+- [QNT-101](https://linear.app/noahwins/issue/QNT-101) — this ticket: container-state notifier surfaces the crash within 30 s rather than waiting for the 15-min health-monitor cron.
+- [QNT-100](https://linear.app/noahwins/issue/QNT-100) — resource limits keep a leaking container from starving its neighbours; log rotation prevents crash-loop logs from filling the disk.
+- [QNT-104](https://linear.app/noahwins/issue/QNT-104) *(pending)* — autoheal sidecar for the wedged-but-not-crashed case.
+
+**Last occurred**: not yet occurred — preventative
+
+---
+
 ### Container wedged but still "up" (healthcheck unhealthy, no crash)
 
 **Symptoms**:
