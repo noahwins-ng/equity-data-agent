@@ -49,8 +49,6 @@ Updated automatically by `/ship` and `/sync-docs`.
     - **Triggered by**: Same Apr 19 2026 retro — Apr 18 outage surfaced that `/health` failures go into a log file nobody reads. Need real pager (SMS/email) for downtime + Discord notifications for container state changes.
 - [ ] Encrypt .env at rest with SOPS — QNT-102
     - **Triggered by**: Same Apr 19 2026 retro — plaintext `.env` on VPS = all credentials leak on compromise. Replace with SOPS-encrypted file + decrypt-on-deploy. (ClickHouse backup ticket deferred: current data <1GB, re-ingestible from yfinance in 1-2h; revisit after Phase 4 news+embeddings populate.)
-- [ ] Observability stack: Dozzle logs UI + Prometheus/Grafana/cAdvisor metrics — QNT-103
-    - **Triggered by**: Same Apr 19 2026 retro — unified logs UI + resource trend visibility are the observability surfaces missing from the current setup. Enables diagnosing slow leaks before they become outages.
 
 ---
 
@@ -273,6 +271,8 @@ Updated automatically by `/ship` and `/sync-docs`.
 ### Phase 7 — Observability & Polish
 **Scope**: Tracing, alerting, and production hardening.
 
+- [ ] Observability stack: Dozzle logs UI + Prometheus/Grafana/cAdvisor metrics — QNT-103 **[moved from Ops & Reliability — Apr 19 2026 retro surfaced the need; full observability stack is Phase 7-shaped planned infra, not narrow reactive hardening]**
+    - **Triggered by**: Apr 19 2026 retro — unified logs UI + resource trend visibility are the observability surfaces missing from the current setup. Enables diagnosing slow leaks before they become outages.
 - [ ] Integrate Sentry for FastAPI error tracking (`sentry-sdk[fastapi]`, uses `SENTRY_DSN` from `.env`) — QNT-86
 - [ ] Add Dagster alerting on asset materialization failures — QNT-62
 - [ ] Implement retry logic for flaky external API calls (yfinance, news APIs) — QNT-63
