@@ -75,7 +75,7 @@ Updated automatically by `/ship` and `/sync-docs`.
 - [x] Add Dagster schedules: daily for OHLCV (~5-6 PM ET), weekly for fundamentals — QNT-43
 - [x] Implement Dagster resource for ClickHouse client (shared across assets) — QNT-40
 - ~Implement `make seed`~ — cancelled: dev tunnels to prod ClickHouse, no local seed needed — QNT-82
-- [ ] Verify: Run backfill for all 10 tickers, confirm data in ClickHouse, check Dagster lineage graph
+- [x] Verify: Run backfill for all 10 tickers, confirm data in ClickHouse, check Dagster lineage graph — verified 2026-04-19 in prod: `ohlcv_raw` has 504 rows/ticker (2024-04-15 → 2026-04-17) for all 10 tickers; `fundamentals` has 9-11 quarters/ticker; derived tables populated (weekly=1040, monthly=240, tech_daily=5040, fund_summary=101); Dagster asset graph loads 8 assets + 17 checks + 2 schedules + 2 sensors
 
 ---
 
