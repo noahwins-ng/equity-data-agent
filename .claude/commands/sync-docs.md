@@ -27,13 +27,20 @@ An ADR is warranted if the drop represents a significant architectural or produc
 
 If yes → create a new ADR in `docs/decisions/` using `TEMPLATE.md`. Check `docs/decisions/` for the last numbered file and increment by 1 for the new ADR number. Add it to `docs/INDEX.md` under the decisions section.
 
-### Step 4: Report New Issues Not in Plan
-For each Done or Active Linear issue that has no matching entry in `docs/project-plan.md` (match by QNT-XX identifier present in the plan item text):
-- List it in the report under "Not in plan — add manually"
-- Do NOT auto-add — plan items have sub-bullets and context that can't be generated from a Linear title alone
+### Step 4: Sweep for Issues Not in Plan (mechanical — not by eye)
 
-Then assess: **does this addition warrant an ADR?**
-Same criteria as Step 3. If the new issue introduces a new architectural pattern, replaces an existing approach, or affects multiple phases → prompt to create an ADR.
+Build the gap list from two sets, not by scanning. Scan-by-eye is how drift accumulates:
+
+1. **Linear set**: every `QNT-XX` in the Quant-team `Equity Data Agent` project, excluding `Cancelled` and `Duplicate` (those must not be in plan).
+2. **Plan set**: `grep -oE 'QNT-[0-9]+' docs/project-plan.md | sort -u`
+3. **Gap** = Linear set − Plan set.
+
+For each ID in the gap, report: `QNT-XX: Title (Status, milestone)` under "Not in plan — add manually".
+
+Do NOT auto-add — plan items have sub-bullets and context that can't be generated from a Linear title alone. But DO prompt the user inline for each gap: "Add an entry for QNT-XX under `<milestone>`? (Y/n)". If yes, draft the entry (title + `**Triggered by:**` sub-bullet) and commit with the rest.
+
+Then assess: **does any of these additions warrant an ADR?**
+Same criteria as Step 3. If a new issue introduces a new architectural pattern, replaces an existing approach, or affects multiple phases → prompt to create an ADR.
 
 ### Step 5: Commit Changes
 If not on `main`, warn: "Currently on a feature branch — plan ticks for other issues will be bundled into this PR. Consider checking out main first."

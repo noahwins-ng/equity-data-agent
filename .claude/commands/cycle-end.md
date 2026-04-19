@@ -26,6 +26,8 @@ End-of-week cycle wrap-up. Run this at the end of each work cycle.
    ```
    Then invoke `/sync-docs` via the Skill tool. Do NOT re-implement its logic here.
 
+   **The /sync-docs Step 4 gap sweep is mandatory, not optional** — it must be mechanical (grep every Linear `QNT-XX` against `docs/project-plan.md`), not scan-by-eye. Tickets created mid-cycle for follow-up polish (e.g. QNT-105/106/107 created the day cycle 1 ended as follow-ups to QNT-101) routinely slip past a shallow pass. If `/sync-docs` reports zero gaps on a cycle where new tickets were created, re-run it — you almost certainly missed some.
+
 7. **Post a Linear project status update** on the Equity Data Agent project using `save_status_update`:
    - `type`: `project`
    - `project`: `Equity Data Agent`

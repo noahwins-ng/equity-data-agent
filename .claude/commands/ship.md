@@ -19,12 +19,22 @@ Fetch the current Linear status of the issue first.
 - If verdict is NEEDS FIXES: stop here, fix the issues, and re-invoke `/sanity-check`
 - If verdict is READY TO SHIP: proceed to Step 2
 
-### Step 2: Update Project Plan
-- Open `docs/project-plan.md`
-- Find the deliverable(s) that correspond to the shipped issue (match by QNT-XX reference or deliverable description)
-- Change `- [ ]` → `- [x]` for each completed deliverable
+### Step 2: Verify Project Plan Entry (hard gate)
+Every shipped ticket must have an entry in `docs/project-plan.md` before PR. The plan is the narrative of the project — Linear is the tracker; without a plan entry, the work is invisible to anyone reading the repo cold.
+
+Grep the plan for the issue identifier:
+```bash
+grep -n "QNT-XX" docs/project-plan.md
+```
+
+**If no matching line is found**: STOP. Ship is blocked.
+- Report: `QNT-XX has no entry in docs/project-plan.md — ship blocked`
+- Prompt the user: "Draft a plan entry (title + one-line `**Triggered by:**` or context sub-bullet) and confirm wording before I proceed. Or explain why this ticket doesn't need one (rare — only applies to pure housekeeping that leaves no product trace)."
+- Once confirmed, add the entry under the appropriate milestone section, then continue below.
+
+**Once an entry exists, tick it**:
+- Change `- [ ]` → `- [x]` for the line referencing this issue
 - Stage the file: it will be included in the next commit
-- If no matching entry is found, note it in the Step 8 report as "Not in plan — run `/sync-docs` to surface"
 
 ### Step 3: Squash WIP Commits, Commit & Push
 - Check for uncommitted changes via `git status`
