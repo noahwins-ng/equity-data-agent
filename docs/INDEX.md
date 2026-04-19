@@ -35,6 +35,7 @@ How to do common tasks. Operational runbooks.
 - [local-dev-setup.md](guides/local-dev-setup.md) — Getting started from a clean clone
 - [hetzner-bootstrap.md](guides/hetzner-bootstrap.md) — One-time production server setup on Hetzner CX41
 - [project-setup-playbook.md](guides/project-setup-playbook.md) — Reusable checklist for bootstrapping new projects
+- [ops-runbook.md](guides/ops-runbook.md) — Failure-mode catalog: symptoms, diagnosis, response, prevention (check here first when prod breaks)
 
 ### [retros/](retros/)
 End-of-phase retrospectives. What shipped, what was hard, lessons learned.

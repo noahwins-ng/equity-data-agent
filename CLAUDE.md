@@ -99,6 +99,7 @@ When making a significant architectural decision, create a new ADR using `docs/d
 - **Langfuse**: Agent tracing — LLM calls, tool calls, latency
 - **Sentry**: FastAPI error tracking in production
 - **Health Monitor**: Cron on Hetzner (every 15 min) — checks API `/health` + Docker services, logs failures. `make monitor-log` to check. Session-start hook auto-warns on failures.
+- **Ops Runbook**: `docs/guides/ops-runbook.md` — failure-mode catalog with symptoms, diagnosis, response, and prevention. Grep this first when prod breaks; every Ops & Reliability ticket extends it.
 - **ClickHouse Play**: `http://localhost:8123/play` — SQL editor for data exploration (via SSH tunnel)
 - **Dagster UI**: `http://localhost:3000` — asset lineage, run history, sensor status
 
