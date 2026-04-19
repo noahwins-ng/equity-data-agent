@@ -45,7 +45,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - **Triggered by**: Apr 19 2026 retro — the Ops & Reliability work has turned specific incidents into permanent detectors, but there's no consolidated document to grep when something breaks at 3am. Runbook is the index into the muscle memory. Small scaffolding ticket; subsequent Ops & Reliability tickets add their own entries.
 - [x] Harden docker-compose.yml: HEALTHCHECK + log rotation + resource limits — QNT-100
     - **Triggered by**: Apr 19 2026 retro — raw compose defaults leave three specific gaps we hadn't closed: "sick but still up" (no healthchecks), "disk fills with logs" (no rotation), "one leaky service OOMs the box" (no resource limits). Addressing each directly on the existing stack.
-- [ ] Alerting pipeline: uptime monitoring + container state notifications — QNT-101
+- [x] Alerting pipeline: uptime monitoring + container state notifications — QNT-101
     - **Triggered by**: Same Apr 19 2026 retro — Apr 18 outage surfaced that `/health` failures go into a log file nobody reads. Need real pager (SMS/email) for downtime + Discord notifications for container state changes.
 - [ ] Encrypt .env at rest with SOPS — QNT-102
     - **Triggered by**: Same Apr 19 2026 retro — plaintext `.env` on VPS = all credentials leak on compromise. Replace with SOPS-encrypted file + decrypt-on-deploy. (ClickHouse backup ticket deferred: current data <1GB, re-ingestible from yfinance in 1-2h; revisit after Phase 4 news+embeddings populate.)

@@ -1,4 +1,4 @@
-.PHONY: setup dev-dagster dev-api dev-frontend test test-integration lint format migrate seed tunnel issue pr build check-prod rollback monitor-install monitor-log help
+.PHONY: setup dev-dagster dev-api dev-frontend test test-integration lint format migrate seed tunnel issue pr build check-prod rollback monitor-install monitor-log events-notify-install events-notify-status events-notify-test help
 
 # ─── Setup ────────────────────────────────────────────────────
 
@@ -66,6 +66,28 @@ monitor-log: ## Show recent health check failures from prod
 	@echo ""
 	@echo "=== Recent failures (last 20) ==="
 	@ssh hetzner "tail -20 /opt/equity-data-agent/health-monitor.log 2>/dev/null || echo 'No failures logged'"
+
+events-notify-install: ## Install docker-events -> Discord webhook notifier as a systemd service on Hetzner
+	ssh hetzner "mkdir -p /opt/equity-data-agent/scripts"
+	scp scripts/docker-events-notify.sh hetzner:/opt/equity-data-agent/scripts/docker-events-notify.sh
+	scp scripts/docker-events-notify.service hetzner:/etc/systemd/system/docker-events-notify.service
+	ssh hetzner "chmod +x /opt/equity-data-agent/scripts/docker-events-notify.sh"
+	ssh hetzner "systemctl daemon-reload && systemctl enable --now docker-events-notify.service"
+	@echo ""
+	@echo "Installed. Expect a '[START] docker-events-notify' message in Discord within ~10s."
+	@echo "Status: make events-notify-status"
+
+events-notify-status: ## Show status of docker-events-notify service + heartbeat age
+	@echo "=== systemd status ==="
+	@ssh hetzner "systemctl status docker-events-notify --no-pager" || true
+	@echo ""
+	@echo "=== Last heartbeat (UTC) ==="
+	@ssh hetzner "cat /opt/equity-data-agent/events-notify-heartbeat 2>/dev/null || echo 'no heartbeat — service may be failing'"
+
+events-notify-test: ## Kill litellm to fire a Discord notification (auto-restarts via restart: unless-stopped)
+	@echo "Killing equity-data-agent-litellm-1 — expect a Discord [KILL]/[DIE] alert within 30s."
+	@ssh hetzner "docker kill equity-data-agent-litellm-1"
+	@echo "Verify in Discord, then confirm container recovered: make check-prod"
 
 # ─── Quality ──────────────────────────────────────────────────
 
