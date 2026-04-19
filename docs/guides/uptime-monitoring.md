@@ -78,17 +78,29 @@ This rsyncs `scripts/docker-events-notify.sh` + the systemd unit to Hetzner, ena
 # Service status + last heartbeat timestamp
 make events-notify-status
 
-# End-to-end test — kills litellm; restart: unless-stopped brings it back.
+# End-to-end test — kills litellm, fires Discord alert, leaves it stopped.
+# Docker treats `docker kill` as "manually stopped" and skips the
+# `restart: unless-stopped` policy — you'll need to bring it back by hand.
 make events-notify-test
 ```
 
-Expected in Discord within 30 s:
+Expected in Discord within 30 s — a pair of messages (kill signal, then the
+actual process exit):
 
 ```
-[KILL] `equity-data-agent-litellm-1` exit=137 image=`litellm/litellm:v1.56.5` host=`<hostname>`
+[KILL] `equity-data-agent-litellm-1` exit=n/a image=`litellm/litellm:v1.56.5` host=`<hostname>`
 ```
 ```
-<last 15 log lines>
+[DIE]  `equity-data-agent-litellm-1` exit=137 image=`litellm/litellm:v1.56.5` host=`<hostname>`
+```
+
+(`kill` events don't carry an exitCode — that's why they show `n/a`; the `die`
+event immediately after has the real signal-137 exit code.)
+
+Bring litellm back up after testing:
+
+```bash
+ssh hetzner "cd /opt/equity-data-agent && docker compose --profile prod up -d litellm"
 ```
 
 If no message arrives:

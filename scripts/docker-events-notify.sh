@@ -100,6 +100,11 @@ docker events \
     *) continue ;;
   esac
 
+  # Go templates render a missing attribute as the literal string "<no value>",
+  # so our ${exit_code:-n/a} fallback never triggers. Normalize it here — the
+  # kill event in particular has no exitCode until the container actually exits.
+  [ "$exit_code" = "<no value>" ] && exit_code="n/a"
+
   # Label per action — plain text, no emoji (grep-friendly in logs too).
   case "$action" in
     oom)     label="[OOM KILL]" ;;
