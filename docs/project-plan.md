@@ -156,9 +156,9 @@ Updated automatically by `/ship` and `/sync-docs`.
 - [x] `GET /api/v1/health` — health check with ClickHouse + Qdrant connectivity status + deploy identity (git SHA, Dagster asset/check counts) — QNT-51
 
 **Cross-cutting:**
-- [ ] CORS middleware configured (allow production domain, `*.vercel.app` for preview deploys, and `localhost:3001` for dev)
-- [ ] Ticker validation: all `{ticker}` path endpoints AND the `POST /agent/chat` request body validate the ticker against `shared.tickers.TICKERS` and return `404 {"detail": "Ticker not found"}` for unknown tickers
-- [ ] No API authentication in initial scope — the API is read-only and serves public market data
+- [x] CORS middleware configured (allow production domain, `*.vercel.app` for preview deploys, and `localhost:3001` for dev) — `packages/api/src/api/main.py:131-137`
+- [x] Ticker validation: all `{ticker}` path endpoints AND the `POST /agent/chat` request body validate the ticker against `shared.tickers.TICKERS` and return `404 {"detail": "Ticker not found"}` for unknown tickers — enforced in `packages/api/src/api/routers/data.py` and all report template formatters
+- [x] No API authentication in initial scope — the API is read-only and serves public market data
 - [ ] Verify: Hit all endpoints with VS Code REST Client (`.http` files), confirm chart data arrays are correctly structured, check OpenAPI docs at `/docs`
 
 ---
