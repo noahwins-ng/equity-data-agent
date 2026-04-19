@@ -47,6 +47,14 @@ Updated automatically by `/ship` and `/sync-docs`.
     - **Triggered by**: Apr 19 2026 retro — raw compose defaults leave three specific gaps we hadn't closed: "sick but still up" (no healthchecks), "disk fills with logs" (no rotation), "one leaky service OOMs the box" (no resource limits). Addressing each directly on the existing stack.
 - [x] Alerting pipeline: uptime monitoring + container state notifications — QNT-101
     - **Triggered by**: Same Apr 19 2026 retro — Apr 18 outage surfaced that `/health` failures go into a log file nobody reads. Need real pager (SMS/email) for downtime + Discord notifications for container state changes.
+- [ ] Autoheal sidecar + tighten resource limits after observation — QNT-104
+    - **Triggered by**: QNT-100 deferrals — plain compose's `restart: unless-stopped` only restarts on container *exit*, not *unhealthy* status; sick-but-still-up is a known gap. `willfarrell/autoheal` sidecar watches healthcheck status and kills unhealthy containers so the restart policy picks them up. Also tightens `mem_limit` / `cpus` (set generously in QNT-100) to peak + ~30% headroom after 1-2 weeks of observed usage.
+- [x] Docs: swap uptime monitoring guide from BetterStack to UptimeRobot — QNT-105
+    - **Triggered by**: QNT-101 rollout — BetterStack's free tier requires a paid plan for Discord webhooks, while UptimeRobot ships native Discord integration on free. Zero-cost polish to match the free-tier Discord path the project already uses elsewhere.
+- [x] API accepts HEAD on /health endpoints for HEAD-only uptime probes — QNT-106
+    - **Triggered by**: QNT-105 uptime-monitoring switch — UptimeRobot defaults to HEAD probes; FastAPI's auto-generated GET routes return 405 on HEAD. Explicit HEAD handlers let the uptime probe pass cleanly without needing UptimeRobot's paid advanced-monitor tier.
+- [x] Polish docker-events-notify: fix `<no value>` exit-code display + correct restart-policy docs — QNT-107
+    - **Triggered by**: QNT-101 runtime testing — Docker kill events don't carry `exitCode`, so Go template `<no value>` sentinel leaked past the bash `${var:-default}` fallback. Also corrected Makefile + uptime-monitoring.md that implied `restart: unless-stopped` auto-restarts after `docker kill` (it doesn't — Docker treats both `stop` and `kill` as "manually stopped" and skips the restart policy).
 - [ ] Encrypt .env at rest with SOPS — QNT-102
     - **Triggered by**: Same Apr 19 2026 retro — plaintext `.env` on VPS = all credentials leak on compromise. Replace with SOPS-encrypted file + decrypt-on-deploy. (ClickHouse backup ticket deferred: current data <1GB, re-ingestible from yfinance in 1-2h; revisit after Phase 4 news+embeddings populate.)
 
