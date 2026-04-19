@@ -104,3 +104,45 @@ make monitor-log                                                                
 - Health-monitor cron (`make monitor-install`) catches extended outages within 15 min.
 
 **Last occurred**: 2026-04-18
+
+---
+
+### Container wedged but still "up" (healthcheck unhealthy, no crash)
+
+**Symptoms**:
+
+- `docker compose ps` or `make check-prod` shows the container `Up`, but users see persistent HTTP 500s, stale data, or extremely slow responses.
+- `/health` (API) may return 503 or time out, while the container process stays alive.
+- No OOM kill, no container exit — the process is running but wedged (deadlock, blocked on I/O, exhausted worker pool).
+
+**Diagnosis**:
+
+```bash
+# Check healthcheck status — expect "healthy"; wedged containers report "unhealthy"
+ssh hetzner 'docker inspect equity-data-agent-api-1 --format "{{.State.Health.Status}}"'
+
+# Last few healthcheck probes (shows what the check actually returned)
+ssh hetzner 'docker inspect equity-data-agent-api-1 --format "{{json .State.Health.Log}}" | jq .'
+
+# Resource pressure — near-limit memory or CPU suggests leaking / saturated service
+ssh hetzner 'docker stats --no-stream equity-data-agent-api-1'
+```
+
+**Response**:
+
+1. Manual restart to clear the wedged state:
+   ```bash
+   ssh hetzner 'docker restart equity-data-agent-<service>-1'
+   ```
+2. Wait ~30s, then `make check-prod` to confirm recovery.
+3. Inspect logs for the window before the wedge to find the root cause:
+   ```bash
+   ssh hetzner 'docker compose -f /opt/equity-data-agent/docker-compose.yml logs <service> --since 10m --tail 200'
+   ```
+
+**Prevention**:
+
+- [QNT-100](https://linear.app/noahwins/issue/QNT-100) — compose-level HEALTHCHECK on every service surfaces the wedged state in `docker inspect` + `docker compose ps` + log UIs. Detection only; manual restart required.
+- [QNT-104](https://linear.app/noahwins/issue/QNT-104) *(pending)* — adds an `autoheal` sidecar that watches healthcheck status and kills unhealthy containers so `restart: unless-stopped` picks them up. Auto-recovery within ~90s of going unhealthy.
+
+**Last occurred**: not yet occurred — preventative

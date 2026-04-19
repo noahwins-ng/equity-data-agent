@@ -1,3 +1,11 @@
+# Shared logging config — compose-level (per-container) json-file rotation.
+# Applied on next container recreation via normal CD; no dockerd restart needed.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   # ── Shared ──────────────────────────────────────────────────────────────────
   clickhouse:
@@ -7,10 +15,16 @@ services:
       - clickhouse_data:/var/lib/clickhouse
     ports:
       - "8123:8123"  # exposed for local dev; blocked by Hetzner firewall in prod
-    deploy:
-      resources:
-        limits:
-          memory: 4G
+    mem_limit: 8g
+    mem_reservation: 2g
+    cpus: 2.0
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:8123/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     profiles: [dev, prod]
 
   # ── Prod-only services ───────────────────────────────────────────────────────
@@ -28,6 +42,16 @@ services:
     ports:
       - "127.0.0.1:3000:3000"  # bound to loopback only; reach via SSH tunnel
     depends_on: [clickhouse]
+    mem_limit: 2g
+    mem_reservation: 512m
+    cpus: 1.0
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000', timeout=5)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     profiles: [prod]
 
   dagster-daemon:
@@ -42,6 +66,17 @@ services:
     volumes:
       - dagster_home:/dagster_home
     depends_on: [clickhouse]
+    mem_limit: 1g
+    mem_reservation: 256m
+    cpus: 0.5
+    logging: *default-logging
+    # Process-check — slim images have no pgrep/ps, so read /proc/1/cmdline directly.
+    healthcheck:
+      test: ["CMD-SHELL", "grep -q dagster-daemon /proc/1/cmdline"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     profiles: [prod]
 
   api:
@@ -59,6 +94,16 @@ services:
     depends_on: [clickhouse]
     ports:
       - "8000:8000"  # direct access until domain + Caddy added in Phase 6
+    mem_limit: 1g
+    mem_reservation: 256m
+    cpus: 0.5
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     profiles: [prod]
 
   litellm:
@@ -69,6 +114,16 @@ services:
     volumes:
       - ./litellm_config.yaml:/app/config.yaml
     # Port 4000 intentionally NOT exposed — services call http://litellm:4000 internally
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 0.25
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=5)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     profiles: [prod]
 
   caddy:
@@ -81,6 +136,16 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile
       - caddy_data:/data
     depends_on: [api]
+    mem_limit: 256m
+    mem_reservation: 64m
+    cpus: 0.1
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:2019/config/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     profiles: [prod]
 
 volumes:

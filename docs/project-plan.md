@@ -43,7 +43,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - **Triggered by**: Same Apr 18 2026 outage — `/var/run/reboot-required` had been set 21 hours earlier by `unattended-upgrades`, but no-one saw it. Fix adds a `REBOOT REQUIRED` line to `scripts/health-monitor.sh` (surfaced by `make monitor-log` + session-start hook) and wires `Unattended-Upgrade::Mail` through a postfix → Resend SMTP relay (documented in `docs/guides/hetzner-bootstrap.md` §10).
 - [x] Create ops runbook skeleton with failure-mode catalog — QNT-99
     - **Triggered by**: Apr 19 2026 retro — the Ops & Reliability work has turned specific incidents into permanent detectors, but there's no consolidated document to grep when something breaks at 3am. Runbook is the index into the muscle memory. Small scaffolding ticket; subsequent Ops & Reliability tickets add their own entries.
-- [ ] Harden docker-compose.yml: HEALTHCHECK + log rotation + resource limits — QNT-100
+- [x] Harden docker-compose.yml: HEALTHCHECK + log rotation + resource limits — QNT-100
     - **Triggered by**: Apr 19 2026 retro — raw compose defaults leave three specific gaps we hadn't closed: "sick but still up" (no healthchecks), "disk fills with logs" (no rotation), "one leaky service OOMs the box" (no resource limits). Addressing each directly on the existing stack.
 - [ ] Alerting pipeline: uptime monitoring + container state notifications — QNT-101
     - **Triggered by**: Same Apr 19 2026 retro — Apr 18 outage surfaced that `/health` failures go into a log file nobody reads. Need real pager (SMS/email) for downtime + Discord notifications for container state changes.
