@@ -116,6 +116,38 @@ def test_legacy_health_still_503_on_clickhouse_down(
     assert r.status_code == 503
 
 
+def test_head_v1_health_200_and_empty_body(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """HEAD must return the same status as GET with an empty body.
+
+    UptimeRobot free tier only supports HEAD probes — see QNT-106. Keeping
+    this test live guards against a regression that would silently break
+    the prod uptime monitor.
+    """
+    _stub(monkeypatch, ch_ok=True, qdrant_ok=True)
+    r = client.head("/api/v1/health")
+    assert r.status_code == 200
+    assert r.content == b""
+
+
+def test_head_v1_health_503_when_clickhouse_down(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub(monkeypatch, ch_ok=False, qdrant_ok=False)
+    r = client.head("/api/v1/health")
+    assert r.status_code == 503
+    assert r.content == b""
+
+
+def test_head_legacy_health_matches_v1(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub(monkeypatch, ch_ok=True, qdrant_ok=True)
+    v1 = client.head("/api/v1/health")
+    legacy = client.head("/health")
+    assert v1.status_code == legacy.status_code == 200
+    assert v1.content == legacy.content == b""
+
+
 def test_legacy_health_not_in_openapi_schema(client: TestClient) -> None:
     schema = client.get("/openapi.json").json()
     paths = schema["paths"]

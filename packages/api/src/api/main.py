@@ -141,18 +141,22 @@ app.include_router(data_router)
 app.include_router(tickers_router)
 
 
-@app.get("/api/v1/health", tags=["health"])
+@app.api_route("/api/v1/health", methods=["GET", "HEAD"], tags=["health"])
 def health(response: Response) -> dict[str, Any]:
     """Service + deploy-identity health check.
 
     - ``status: "ok"``       — ClickHouse and Qdrant both reachable
     - ``status: "degraded"`` — ClickHouse up, Qdrant down (HTTP 200)
     - ``status: "down"``     — ClickHouse unreachable (HTTP 503)
+
+    GET returns the full JSON payload; HEAD returns headers + status code only
+    (Starlette strips the body on HEAD). HEAD is required by free-tier uptime
+    probes like UptimeRobot that only support HEAD requests — see QNT-106.
     """
     return _health_payload(response)
 
 
-@app.get("/health", include_in_schema=False)
+@app.api_route("/health", methods=["GET", "HEAD"], include_in_schema=False)
 def health_legacy(response: Response) -> dict[str, Any]:
     """Legacy path kept alive for prod monitoring (`scripts/health-monitor.sh`,
     `deploy.yml` verify-deploy step, `make check-prod`). Same payload as
