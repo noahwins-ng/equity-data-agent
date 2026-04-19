@@ -114,6 +114,12 @@ Updated automatically by `/ship` and `/sync-docs`.
     - This means price-based ratios (P/E, P/B, P/S, FCF yield) update daily with fresh close prices, while statement-based ratios (margins, growth) update weekly with fresh fundamentals
 - [x] Add Dagster asset checks for data quality validation — QNT-68
     - e.g., no NaN close prices, volume > 0, RSI within 0-100, no future dates
+- [x] Null out P/E when EPS is near zero (|EPS| < $0.10) to honor N/M convention — QNT-87
+    - **Triggered by**: Phase 2 QA — P/E was emitting absurd values (>1000x) during near-zero-EPS quarters, pretending precision where the ratio is meaningless. Now renders as `N/M (near-zero earnings)` in reports.
+- [x] Fix P/E to use TTM earnings on quarterly rows in fundamental_summary — QNT-91
+    - **Triggered by**: Phase 2 QA — quarterly P/E was dividing price by single-quarter EPS, inflating the ratio by ~4×. Switched to trailing-twelve-month EPS so quarterly and annual P/E are directly comparable.
+- [x] Set `default_status=RUNNING` on all sensors and schedules — QNT-92
+    - **Triggered by**: Runtime-state drift — Dagster defaults sensors/schedules to STOPPED, requiring a manual UI toggle after every redeploy. Declaring `RUNNING` in code makes prod runtime state fully reproducible from git.
 - [x] Validation tests: indicators vs external sources — QNT-47
     - Snapshot tests with fixed datasets and expected outputs
     - Cross-reference RSI, MACD, P/E for 2-3 tickers against TradingView / Yahoo Finance
@@ -159,7 +165,7 @@ Updated automatically by `/ship` and `/sync-docs`.
 - [x] CORS middleware configured (allow production domain, `*.vercel.app` for preview deploys, and `localhost:3001` for dev) — `packages/api/src/api/main.py:131-137`
 - [x] Ticker validation: all `{ticker}` path endpoints AND the `POST /agent/chat` request body validate the ticker against `shared.tickers.TICKERS` and return `404 {"detail": "Ticker not found"}` for unknown tickers — enforced in `packages/api/src/api/routers/data.py` and all report template formatters
 - [x] No API authentication in initial scope — the API is read-only and serves public market data
-- [ ] Verify: Hit all endpoints with VS Code REST Client (`.http` files), confirm chart data arrays are correctly structured, check OpenAPI docs at `/docs`
+- [x] Verify: Hit all endpoints with VS Code REST Client (`.http` files), confirm chart data arrays are correctly structured, check OpenAPI docs at `/docs` — verified 2026-04-19 via prod `curl` pass: 10 OpenAPI paths, correct row counts (504 daily / 104 weekly / 24 monthly / 10 fundamental / 10 dashboard), all `{ticker}` endpoints 404 on BOGUS, `/docs` 200
 
 ---
 
