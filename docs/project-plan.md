@@ -44,15 +44,13 @@ Updated automatically by `/ship` and `/sync-docs`.
 - [ ] Create ops runbook skeleton with failure-mode catalog — QNT-99
     - **Triggered by**: Apr 19 2026 retro — the Ops & Reliability work has turned specific incidents into permanent detectors, but there's no consolidated document to grep when something breaks at 3am. Runbook is the index into the muscle memory. Small scaffolding ticket; subsequent Ops & Reliability tickets add their own entries.
 - [ ] Harden docker-compose.yml: HEALTHCHECK + log rotation + resource limits — QNT-100
-    - **Triggered by**: Apr 19 2026 retro on the bespoke-compose vs OSS-PaaS tradeoff — evaluated adopting Coolify to get these defaults for free, concluded that configuring them directly is strictly better (fewer moving parts, no new critical infra). Closes three specific gaps: "sick but still up" (no healthchecks), "disk fills with logs" (no rotation), "one leaky service OOMs the box" (no resource limits).
+    - **Triggered by**: Apr 19 2026 retro — raw compose defaults leave three specific gaps we hadn't closed: "sick but still up" (no healthchecks), "disk fills with logs" (no rotation), "one leaky service OOMs the box" (no resource limits). Addressing each directly on the existing stack.
 - [ ] Alerting pipeline: uptime monitoring + container state notifications — QNT-101
     - **Triggered by**: Same Apr 19 2026 retro — Apr 18 outage surfaced that `/health` failures go into a log file nobody reads. Need real pager (SMS/email) for downtime + Discord notifications for container state changes.
 - [ ] Encrypt .env at rest with SOPS — QNT-102
     - **Triggered by**: Same Apr 19 2026 retro — plaintext `.env` on VPS = all credentials leak on compromise. Replace with SOPS-encrypted file + decrypt-on-deploy. (ClickHouse backup ticket deferred: current data <1GB, re-ingestible from yfinance in 1-2h; revisit after Phase 4 news+embeddings populate.)
 - [ ] Observability stack: Dozzle logs UI + Prometheus/Grafana/cAdvisor metrics — QNT-103
-    - **Triggered by**: Same Apr 19 2026 retro — unified logs UI (Dozzle, lightweight) + resource trend visibility (Prometheus stack) are the Coolify UX wins we'd replicate directly. Enables diagnosing slow leaks before they become outages.
-- [x] ~~Spike: evaluate Coolify for deploy/ops consolidation — QNT-97~~ (Cancelled 2026-04-19 — decision made directly without spike; superseded by QNT-99 through QNT-103.)
-- [x] ~~Bootstrap Coolify on Hetzner CX41 — QNT-98~~ (Cancelled 2026-04-19 — decided not to adopt Coolify; gaps being addressed via targeted config tickets instead.)
+    - **Triggered by**: Same Apr 19 2026 retro — unified logs UI + resource trend visibility are the observability surfaces missing from the current setup. Enables diagnosing slow leaks before they become outages.
 
 ---
 
