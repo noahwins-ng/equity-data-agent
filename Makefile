@@ -72,9 +72,9 @@ events-notify-install: ## Install docker-events -> Discord webhook notifier as a
 	scp scripts/docker-events-notify.sh hetzner:/opt/equity-data-agent/scripts/docker-events-notify.sh
 	scp scripts/docker-events-notify.service hetzner:/etc/systemd/system/docker-events-notify.service
 	ssh hetzner "chmod +x /opt/equity-data-agent/scripts/docker-events-notify.sh"
-	ssh hetzner "systemctl daemon-reload && systemctl enable --now docker-events-notify.service"
+	ssh hetzner "systemctl daemon-reload && systemctl enable --now docker-events-notify.service && systemctl restart docker-events-notify.service"
 	@echo ""
-	@echo "Installed. Expect a '[START] docker-events-notify' message in Discord within ~10s."
+	@echo "Installed and restarted. Expect a '[START] docker-events-notify' message in Discord within ~10s."
 	@echo "Status: make events-notify-status"
 
 events-notify-status: ## Show status of docker-events-notify service + heartbeat age
@@ -84,10 +84,12 @@ events-notify-status: ## Show status of docker-events-notify service + heartbeat
 	@echo "=== Last heartbeat (UTC) ==="
 	@ssh hetzner "cat /opt/equity-data-agent/events-notify-heartbeat 2>/dev/null || echo 'no heartbeat — service may be failing'"
 
-events-notify-test: ## Kill litellm to fire a Discord notification (auto-restarts via restart: unless-stopped)
+events-notify-test: ## Kill litellm to fire a Discord notification (then bring it back manually)
 	@echo "Killing equity-data-agent-litellm-1 — expect a Discord [KILL]/[DIE] alert within 30s."
 	@ssh hetzner "docker kill equity-data-agent-litellm-1"
-	@echo "Verify in Discord, then confirm container recovered: make check-prod"
+	@echo "Discord alert should land. The container will NOT auto-recover — Docker treats"
+	@echo "docker kill as 'manually stopped' and skips the restart: unless-stopped policy."
+	@echo "Restart with: ssh hetzner 'cd /opt/equity-data-agent && docker compose --profile prod up -d litellm'"
 
 # ─── Quality ──────────────────────────────────────────────────
 
