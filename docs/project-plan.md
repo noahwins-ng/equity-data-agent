@@ -152,7 +152,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - `trend_status`: `"bullish"` (close > SMA-50), `"bearish"` (close < SMA-50), `"neutral"` (warm-up)
 
 **Utility endpoints:**
-- [ ] `GET /api/v1/tickers` — returns the ticker list from `shared.tickers.TICKERS` — QNT-78
+- [x] `GET /api/v1/tickers` — returns the ticker list from `shared.tickers.TICKERS` — QNT-78
 - [x] `GET /api/v1/health` — health check with ClickHouse + Qdrant connectivity status + deploy identity (git SHA, Dagster asset/check counts) — QNT-51
 
 **Cross-cutting:**
