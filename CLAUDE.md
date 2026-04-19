@@ -99,7 +99,7 @@ When making a significant architectural decision, create a new ADR using `docs/d
 - **Langfuse**: Agent tracing — LLM calls, tool calls, latency
 - **Sentry**: FastAPI error tracking in production
 - **Health Monitor**: Cron on Hetzner (every 15 min) — checks API `/health` + Docker services, logs failures. `make monitor-log` to check. Session-start hook auto-warns on failures.
-- **Alerting**: Two independent channels (QNT-101) — external uptime probe on `/api/v1/health` (BetterStack free tier, alerts ≤3 min) + `docker-events-notify.service` on Hetzner streaming die/kill/oom/restart to a Discord webhook (alerts ≤30 s). Setup: `docs/guides/uptime-monitoring.md`. Self-monitored via heartbeat file + optional external heartbeat URL. Install: `make events-notify-install`. Test: `make events-notify-test`.
+- **Alerting**: Two independent channels (QNT-101) — external uptime probe on `/api/v1/health` (UptimeRobot or equivalent, native Discord on free tier) + `docker-events-notify.service` on Hetzner streaming die/kill/oom/restart to a Discord webhook (alerts ≤30 s). Setup: `docs/guides/uptime-monitoring.md`. Self-monitored via heartbeat file + optional external heartbeat URL (Healthchecks.io free tier). Install: `make events-notify-install`. Test: `make events-notify-test`.
 - **Ops Runbook**: `docs/guides/ops-runbook.md` — failure-mode catalog with symptoms, diagnosis, response, and prevention. Grep this first when prod breaks; every Ops & Reliability ticket extends it.
 - **ClickHouse Play**: `http://localhost:8123/play` — SQL editor for data exploration (via SSH tunnel)
 - **Dagster UI**: `http://localhost:3000` — asset lineage, run history, sensor status

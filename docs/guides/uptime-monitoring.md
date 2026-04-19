@@ -4,7 +4,7 @@ Two independent alerting channels that together answer the question *"how do I g
 
 | Channel | Detects | Latency | Hosted where |
 |---|---|---|---|
-| **Uptime monitor** (external) | `/health` returns non-200 or is unreachable | alert after 2–3 failed probes (≤3 min) | SaaS or second host |
+| **Uptime monitor** (external) | `/health` returns non-200 or is unreachable | alert after 2 failed probes (≤10 min on UptimeRobot free, ≤3 min on BetterStack free) | SaaS or second host |
 | **Container-state notifier** (on Hetzner) | `docker events` die/kill/oom/restart on any compose container | ≤30 s | `docker-events-notify.service` on the Hetzner host |
 
 Neither channel alone covers everything. Container exits can happen while `/health` still briefly reports 200 (healthcheck cadence, or a background service crashing). Conversely, the host itself going unreachable is only caught by an external probe. Run both.
@@ -13,41 +13,40 @@ Neither channel alone covers everything. Container exits can happen while `/heal
 
 ## 1. Uptime monitor (external `/health` probe)
 
-### 1a. BetterStack free tier (default choice)
+### 1a. UptimeRobot free tier (default choice)
 
-Simplest path — free for up to 10 monitors at 3 min interval, mobile app, integrates with Discord/email/SMS. Lives off-host so it still fires when Hetzner itself is down.
+Simplest path **with native Discord integration on free tier** — free for 50 monitors at 5-min probe interval, 5 integration instances included, iOS/Android app. Lives off-host so it still fires when Hetzner itself is down.
 
-1. Sign up at https://betterstack.com/uptime (free tier, no card required).
-2. **Create → Monitor**
+1. Sign up at https://uptimerobot.com (free tier, no card required).
+2. **Dashboard → + Add New Monitor**
+   - Monitor Type: **HTTP(s)**
+   - Friendly Name: `equity-data-agent prod API`
    - URL: `http://<hetzner-ip>:8000/api/v1/health` (swap for `https://<domain>/api/v1/health` once Caddy is live — Phase 6).
-   - Check frequency: **1 min** (tightest on free tier).
-   - Request timeout: **10 s**.
-   - Expected status: **200**.
-   - Recovery period: **2 min** (don't auto-resolve the alert the instant a single probe passes).
-   - Escalation: email to `noahwins.dev@gmail.com`, plus a second channel if you want louder.
-3. **Alerts → New → Discord**: paste the same webhook URL used for `DISCORD_WEBHOOK_URL` (container-state notifier). Having both channels in one Discord channel means every production event lands in one place.
-4. (Optional) **Heartbeat monitor**: create a heartbeat monitor with a 2 min expected interval, copy its push URL into the Hetzner `.env` as `HEARTBEAT_URL`, and restart `docker-events-notify.service`. BetterStack will alert if the notifier stops pinging — i.e. the monitor is monitored.
+   - Monitoring Interval: **5 min** (tightest on free tier).
+   - Monitor Timeout: **30 s**.
+   - **HTTP status codes**: alert on anything outside `200`. Don't use keyword matching — `/health` returns HTTP 200 with `status:"degraded"` when Qdrant is down, and we don't want to page on that.
+3. **My Settings → Alert Contacts → Add Alert Contact → Discord**: paste the same webhook URL used for `DISCORD_WEBHOOK_URL` (container-state notifier). Having both channels in one Discord channel means every production event lands in one place. Attach the alert contact to the monitor created in step 2.
+4. **Self-monitoring (optional but recommended)**: UptimeRobot's free tier doesn't include heartbeat monitors. Baseline is always available: the notifier writes `/opt/equity-data-agent/events-notify-heartbeat` every 60 s, and `make events-notify-status` shows its age — operator-polled. For push-based alerting use [Healthchecks.io](https://healthchecks.io) (free tier: 20 checks):
+   - Create a check with "period" = 2 min, "grace" = 1 min.
+   - Copy the check's ping URL into `/opt/equity-data-agent/.env` as `HEARTBEAT_URL`.
+   - `ssh hetzner "systemctl restart docker-events-notify"` to pick up the new env.
+   - Route alerts to Discord: Healthchecks.io supports generic webhook notifications — point one at your Discord webhook URL with body `{"content": "Heartbeat missed for $NAME"}`. Or use their email integration and accept a second notification surface.
 
-Verify: `ssh hetzner "docker stop equity-data-agent-api-1"` → alert should arrive within 3 min. Bring it back with `ssh hetzner "cd /opt/equity-data-agent && docker compose --profile prod up -d api"`.
+Verify: `ssh hetzner "docker stop equity-data-agent-api-1"` → alert should arrive within ≤10 min worst case (5-min interval × 2 failed checks). Bring it back with `ssh hetzner "cd /opt/equity-data-agent && docker compose --profile prod up -d api"`.
 
-### 1b. uptime-kuma self-hosted (alternative, requires a second host)
+### 1b. Alternatives
 
-Only meaningfully better than BetterStack if you run it on **a different host** than the VPS being monitored (home server, second VPS) — otherwise it shares the same failure domain as what it's probing.
-
-If you have a second host:
-
-```bash
-# On the second host (home server, Raspberry Pi, second VPS)
-docker run -d --restart=unless-stopped \
-  -p 3001:3001 \
-  -v uptime-kuma:/app/data \
-  --name uptime-kuma \
-  louislam/uptime-kuma:1
-```
-
-Then open `http://<second-host>:3001`, create an admin, and add an HTTP monitor against `http://<hetzner-ip>:8000/api/v1/health` with the same settings as the BetterStack recipe above. Wire Discord notifications under **Settings → Notifications → Add → Discord**.
-
-Don't run uptime-kuma on the same Hetzner VPS it's monitoring — a host outage takes both down at once and you get no alert.
+- **BetterStack free tier** — tighter 3-min probe interval and better incident UX, but the free tier only supports email + Slack (Discord requires a paid plan). Reasonable choice if you live in Slack or are willing to wire a custom webhook payload targeting your Discord webhook URL. Signup at https://betterstack.com/uptime.
+- **uptime-kuma self-hosted (on a *second* host)** — native Discord and unlimited monitors, but only meaningfully better than UptimeRobot if run on a **different host** (home server, second VPS) than the VPS being monitored. Same-host install shares the failure domain of what it's probing — if Hetzner is unreachable, so is kuma.
+  ```bash
+  # On a second host (home server, Raspberry Pi, second VPS)
+  docker run -d --restart=unless-stopped \
+    -p 3001:3001 \
+    -v uptime-kuma:/app/data \
+    --name uptime-kuma \
+    louislam/uptime-kuma:1
+  ```
+  Then open `http://<second-host>:3001`, create an admin, add an HTTP monitor against `/api/v1/health`, wire Discord under **Settings → Notifications → Add → Discord**.
 
 ---
 
@@ -107,8 +106,8 @@ Both channels land in the same Discord channel by design — one timeline of pro
 | Alert | Severity | First action | If unresolved |
 |---|---|---|---|
 | `[OOM KILL]` or repeated `[DIE]` within 5 min | **high** — crash loop | `make check-prod`, read the runbook entry for "Container crash loop" | `ssh hetzner "docker compose --profile prod logs <service> --since 15m"` and open a root-cause ticket |
-| BetterStack `/health` down >3 min | **high** — API unreachable | `make check-prod`, follow runbook "API down / 503" | If `/health` returns 503 from ClickHouse down, see runbook "Host reboot outage" or "Container wedged but still up" |
+| Uptime monitor reports `/health` down | **high** — API unreachable | `make check-prod`, follow runbook "API down / 503" | If `/health` returns 503 from ClickHouse down, see runbook "Host reboot outage" or "Container wedged but still up" |
 | Single `[KILL]` during a planned deploy | informational | ignore — CD restarts are expected | — |
-| BetterStack heartbeat missed | **medium** — notifier itself is dead | `make events-notify-status`, `journalctl -u docker-events-notify` | reinstall: `make events-notify-install` |
+| Heartbeat-monitor alert (Healthchecks.io or equivalent) | **medium** — notifier itself is dead | `make events-notify-status`, `journalctl -u docker-events-notify` | reinstall: `make events-notify-install` |
 
 For a full failure-mode index, see [`ops-runbook.md`](./ops-runbook.md).
