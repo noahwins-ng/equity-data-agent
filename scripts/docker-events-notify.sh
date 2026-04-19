@@ -26,6 +26,8 @@ fi
 HEARTBEAT_URL="${HEARTBEAT_URL:-}"
 COMPOSE_PROJECT="${COMPOSE_PROJECT:-equity-data-agent}"
 HEARTBEAT_FILE="${HEARTBEAT_FILE:-/opt/equity-data-agent/events-notify-heartbeat}"
+DEPLOY_SENTINEL="${DEPLOY_SENTINEL:-/opt/equity-data-agent/.deploy-in-progress}"
+DEPLOY_SENTINEL_MAX_AGE="${DEPLOY_SENTINEL_MAX_AGE:-600}"
 HOST="$(hostname)"
 
 # --- helpers ---------------------------------------------------------------
@@ -61,6 +63,20 @@ heartbeat() {
   if [ -n "$HEARTBEAT_URL" ]; then
     curl -sS --max-time 5 "$HEARTBEAT_URL" >/dev/null 2>&1 || true
   fi
+}
+
+# QNT-109: suppress events during a deploy window. CD writes the sentinel
+# before `docker compose up -d --build` and removes it after verify. A stale
+# sentinel (older than DEPLOY_SENTINEL_MAX_AGE seconds) is ignored fail-open —
+# if the deploy crashed mid-run we'd rather alert noisily than silently, since
+# a stuck sentinel would mute every real incident afterwards.
+in_deploy_window() {
+  [ -f "$DEPLOY_SENTINEL" ] || return 1
+  local mtime now age
+  mtime=$(stat -c %Y "$DEPLOY_SENTINEL" 2>/dev/null) || return 1
+  now=$(date +%s)
+  age=$((now - mtime))
+  [ "$age" -lt "$DEPLOY_SENTINEL_MAX_AGE" ]
 }
 
 # --- startup ---------------------------------------------------------------
@@ -99,6 +115,11 @@ docker events \
     "${COMPOSE_PROJECT}"-*) ;;
     *) continue ;;
   esac
+
+  # Skip expected churn while a deploy is in flight (QNT-109).
+  if in_deploy_window; then
+    continue
+  fi
 
   # Go templates render a missing attribute as the literal string "<no value>",
   # so our ${exit_code:-n/a} fallback never triggers. Normalize it here — the
