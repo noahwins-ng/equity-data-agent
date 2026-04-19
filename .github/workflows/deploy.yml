@@ -21,9 +21,16 @@ jobs:
           script: |
             set -euo pipefail
             cd /opt/equity-data-agent
+            # QNT-109: Mark the deploy window open so docker-events-notify.sh
+            # suppresses expected churn (container recreates from GIT_SHA change
+            # + image rebuild). The sentinel is removed by the cleanup step
+            # below once verify has run. Stale sentinels (>10 min) are ignored
+            # by the notifier, so a crashed deploy can't silently mute alerts.
+            touch .deploy-in-progress
             # Ensure working tree is clean so git pull can't silently abort on SCP'd hotfixes.
             # If this fails, fix it manually — do NOT mask drift behind a passing deploy.
-            git diff --quiet && git diff --cached --quiet || { echo "::error::Prod working tree has uncommitted changes; aborting deploy."; git status; exit 1; }
+            # Note: .deploy-in-progress is a deploy-side artifact, so exclude it from the check.
+            git diff --quiet -- ':!.deploy-in-progress' && git diff --cached --quiet -- ':!.deploy-in-progress' || { echo "::error::Prod working tree has uncommitted changes; aborting deploy."; git status; exit 1; }
             git pull origin main
             # GIT_SHA is read by the api service in docker-compose.yml and surfaced
             # on /health so external monitoring can distinguish "up" from "up and
@@ -89,3 +96,16 @@ jobs:
             assert s >= 2, f'expected >=2 schedules, got {s}'
             print(f'OK: assets={n} checks={c} schedules={s}')
             "
+
+      - name: Close deploy window (remove notifier sentinel)
+        if: always()
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HETZNER_HOST }}
+          username: ${{ secrets.HETZNER_USER }}
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          script: |
+            # QNT-109: always remove the sentinel, even on failed deploys.
+            # If this step is skipped entirely, the notifier's stale-sentinel
+            # check (>10 min = fail-open) ensures alerts resume automatically.
+            rm -f /opt/equity-data-agent/.deploy-in-progress

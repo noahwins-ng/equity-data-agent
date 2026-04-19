@@ -190,6 +190,45 @@ ssh hetzner 'docker stats --no-stream'
 
 ---
 
+### Deploy-noise alerts suppressed too long (stuck sentinel)
+
+**Symptoms**:
+
+- Real container failure on prod (crash, OOM, manual `docker kill`), but no Discord `[DIE]`/`[KILL]`/`[OOM KILL]` alert fires.
+- `ssh hetzner 'ls -la /opt/equity-data-agent/.deploy-in-progress'` shows the sentinel exists.
+- No CD workflow has run recently (check `gh run list --workflow=deploy.yml --limit 3`).
+
+**Diagnosis**:
+
+```bash
+# Is the sentinel present and how old is it?
+ssh hetzner 'ls -la /opt/equity-data-agent/.deploy-in-progress && date'
+
+# Check last CD run — the sentinel should be removed by the "Close deploy window" step
+gh run list --workflow=deploy.yml --limit 3
+
+# Is the notifier still running?
+make events-notify-status
+```
+
+**Response**:
+
+1. If the sentinel is older than 10 minutes, the notifier's stale-sentinel fail-open logic already ignores it — alerts should be firing on new events. If they aren't, the issue is elsewhere (notifier down, Discord webhook rotated). Check `make events-notify-status`.
+2. If the sentinel is fresh (<10 min) but no CD is running, a prior CD crashed mid-run and left it behind. Clear it manually:
+   ```bash
+   ssh hetzner 'rm -f /opt/equity-data-agent/.deploy-in-progress'
+   ```
+3. Verify recovery with a fake event: `make events-notify-test` should fire a Discord alert within ~30 s.
+4. Inspect the failed CD run (`gh run view <run-id>`) to understand why the cleanup step didn't run, and whether it's a recurring failure mode.
+
+**Prevention**:
+
+- [QNT-109](https://linear.app/noahwins/issue/QNT-109) — sentinel mechanism uses fail-open (>10 min = ignored) so a stuck sentinel can only mute alerts for 10 minutes max, not forever. The `if: always()` cleanup step in CD also runs on failed deploys.
+
+**Last occurred**: not yet occurred — preventative
+
+---
+
 ### Container wedged but still "up" (healthcheck unhealthy, no crash)
 
 **Symptoms**:
