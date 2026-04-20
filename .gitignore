@@ -1,6 +1,8 @@
 # Environment
 .env
 .env.local
+# CI-transient decryption output — never commit, never preserve between deploy steps
+.env.decrypted
 
 # Python
 __pycache__/

@@ -48,14 +48,18 @@ cd /opt/equity-data-agent
 
 ---
 
-## 4. Configure Environment
+## 4. Configure Environment (via SOPS)
 
-```bash
-cp .env.example .env
-nano .env
-```
+As of QNT-102, prod secrets are **SOPS-encrypted in git** (`.env.sops`) and decrypted
+in the GitHub Actions runner on every deploy. The VPS never holds the age private key
+and has no manually-placed `.env` — the file at `/opt/equity-data-agent/.env` is
+overwritten by CD on each push to `main`.
 
-Set all production values:
+For a **first-time setup** (new project or new prod environment), do the SOPS
+bootstrap from your dev machine before the first CD run — see §11 below. On the
+VPS itself there is nothing to do: skip to §5.
+
+Values you'll encrypt into `.env.sops`:
 
 | Variable | Value |
 |---|---|
@@ -94,8 +98,9 @@ In GitHub: repo **Settings → Secrets and variables → Actions → New reposit
 | `HETZNER_HOST` | Server public IP |
 | `HETZNER_USER` | `root` |
 | `HETZNER_SSH_KEY` | Contents of your private key (including `-----BEGIN` / `-----END` lines) |
+| `SOPS_AGE_KEY` | Full contents of `~/.config/sops/age/keys.txt` (both the `# created: …` / `# public key: …` comments and the `AGE-SECRET-KEY-…` line — see §11). Set via: `gh secret set SOPS_AGE_KEY < ~/.config/sops/age/keys.txt`. |
 
-To get your private key:
+To get your SSH private key:
 ```bash
 cat ~/.ssh/id_ed25519   # or whichever key you added to the server
 ```
@@ -260,6 +265,175 @@ Then check the Gmail inbox — including Promotions and Spam the first time, sin
 - The Claude Code session-start hook (auto-warns on new session)
 
 So even if Resend were down or the API key were rotated without updating postfix, pending reboots would still become visible within one cron tick.
+
+---
+
+## 11. SOPS secrets management
+
+Prod secrets live in `.env.sops` (committed, encrypted) and are decrypted by the
+GitHub Actions runner on every deploy. The runner then `scp`s the plaintext
+`.env` to `/opt/equity-data-agent/.env` on the VPS (mode 0600, owned by the
+deploy user). The age private key lives only in a password manager and in the
+`SOPS_AGE_KEY` GitHub secret — never on the VPS.
+
+### 11.1 One-time project bootstrap (on your dev machine)
+
+Run these once per project, from a clean clone:
+
+```bash
+# 1. Install sops + age (macOS; Linux uses the distro package manager)
+brew install sops age
+
+# 2. Generate the project's age keypair
+mkdir -p ~/.config/sops/age
+age-keygen -o ~/.config/sops/age/keys.txt
+chmod 600 ~/.config/sops/age/keys.txt
+
+# 2a. macOS gotcha: sops's default key-file path on macOS is
+#     ~/Library/Application Support/sops/age/keys.txt (not ~/.config/sops/age/keys.txt).
+#     We keep the Linux path for portability and point sops at it via env var.
+#     Skip this block on Linux — the default location is already correct there.
+if [ "$(uname)" = "Darwin" ]; then
+  export SOPS_AGE_KEY_FILE="$HOME/.config/sops/age/keys.txt"
+  if ! grep -q 'SOPS_AGE_KEY_FILE' ~/.zshrc 2>/dev/null; then
+    echo 'export SOPS_AGE_KEY_FILE="$HOME/.config/sops/age/keys.txt"' >> ~/.zshrc
+    echo "Added SOPS_AGE_KEY_FILE to ~/.zshrc — reload the shell or use 'source ~/.zshrc'"
+  fi
+fi
+
+# 3. Copy the public key into .sops.yaml
+#    age-keygen prints it to stderr and writes it as a comment inside the file:
+#      `# public key: age1xyz...`
+#    Replace the `age1REPLACE_WITH_...` placeholder in .sops.yaml with this value.
+$EDITOR .sops.yaml
+
+# 4. Create the initial .env locally (if you don't already have one), with all
+#    prod values populated. This file never gets committed; it's the plaintext
+#    source we're about to encrypt.
+$EDITOR .env
+
+# 5. Encrypt it into .env.sops (the committed ciphertext)
+#    Use `make sops-encrypt` which passes the required --input-type/--output-type
+#    flags; the `.env.sops` filename isn't auto-detected by sops as dotenv
+#    because it ends in `.sops`, so every sops invocation needs those flags.
+make sops-encrypt
+
+# 6. Verify round-trip works
+make sops-decrypt | diff - .env && echo "round-trip OK"
+
+# 7. Escrow the private key. Goal: a copy that survives your laptop dying
+#    and is INDEPENDENT of the GH secret. Any of:
+#      - Apple Notes locked entry titled "equity-data-agent / sops age key"
+#        (built-in, free, end-to-end encrypted in iCloud when locked).
+#        `pbcopy < ~/.config/sops/age/keys.txt` then paste; File → Lock Note.
+#      - Bitwarden Secure Note (free tier).
+#      - 1Password Secure Note.
+#      - Printed paper in a fireproof box (most disaster-resistant).
+#    Always paste the ENTIRE contents of ~/.config/sops/age/keys.txt
+#    (including the `# created: …` / `# public key: …` comments — SOPS needs
+#    the whole file to reconstruct identity).
+
+# 8. Add the SOPS_AGE_KEY GitHub secret. Value = full keys.txt contents:
+gh secret set SOPS_AGE_KEY < ~/.config/sops/age/keys.txt
+
+# 9. Commit .sops.yaml and .env.sops
+git add .sops.yaml .env.sops
+git commit -m "QNT-102: feat(infra): SOPS-encrypt .env secrets at rest"
+```
+
+### 11.2 Editing secrets (rotation of individual values)
+
+```bash
+# Opens .env.sops in $EDITOR with values transparently decrypted.
+# On save, SOPS re-encrypts and rewrites the file.
+make sops-edit          # wraps: sops --input-type dotenv --output-type dotenv .env.sops
+
+# Commit the re-encrypted ciphertext and push; CD picks it up on next deploy.
+git commit -am "QNT-XX: chore(secrets): rotate <key name>"
+git push
+```
+
+**Container-recreation gotcha**: Docker Compose only recreates a container when
+the *service definition* changes (image SHA, command, env_file path, ports,
+volumes). Editing the *contents* of `.env` does NOT count — the running
+container keeps the env vars it was launched with. So a value-only rotation
+push needs a force-recreate to take effect:
+
+```bash
+ssh hetzner "cd /opt/equity-data-agent && \
+    docker compose --profile prod up -d --force-recreate <service-name>"
+```
+
+Pick the service that consumes the rotated value (e.g. `litellm` for an LLM
+provider key, `api` for a Sentry DSN, `dagster` for ClickHouse host changes).
+If you're rotating a value used by *every* service, recreate the whole stack:
+`docker compose --profile prod up -d --force-recreate`.
+
+Verify the new value is active inside the container:
+```bash
+ssh hetzner "docker exec equity-data-agent-<service>-1 printenv <KEY>"
+```
+
+If the rotation is part of a code change push, no manual recreate is needed —
+the code change rebuilds the image, which docker compose treats as a service
+change and recreates the container automatically.
+
+### 11.3 Rotating the age key itself
+
+Do this if the private key is suspected leaked (laptop theft, accidental push,
+etc.) or on a scheduled rotation.
+
+```bash
+# 1. Generate a new keypair
+age-keygen -o ~/.config/sops/age/keys.new.txt
+
+# 2. Update .sops.yaml with the new public key
+#    (keep the old recipient listed temporarily if you want to decrypt history;
+#    otherwise replace outright)
+$EDITOR .sops.yaml
+
+# 3. Re-encrypt .env.sops under the new key
+#    `sops updatekeys` rewrites the sops metadata without changing plaintext:
+make sops-rotate-keys     # wraps: sops updatekeys .env.sops
+
+# 4. Swap the active key file
+mv ~/.config/sops/age/keys.txt ~/.config/sops/age/keys.old.txt
+mv ~/.config/sops/age/keys.new.txt ~/.config/sops/age/keys.txt
+
+# 5. Update the GitHub secret SOPS_AGE_KEY to the new keys.txt contents
+gh secret set SOPS_AGE_KEY < ~/.config/sops/age/keys.txt
+
+# 6. Update the escrow entry (Apple Notes / Bitwarden / 1Password / etc.)
+#    to the new keys.txt contents. Don't delete the old entry until step 7
+#    succeeds — the old key is still needed if the new CD run fails.
+
+# 7. Commit and push — next CD run will use the new key
+git add .sops.yaml .env.sops
+git commit -m "QNT-XX: chore(secrets): rotate SOPS age key"
+git push
+
+# 8. After the first successful CD run on the new key, destroy the old key
+shred -u ~/.config/sops/age/keys.old.txt
+```
+
+If a secret VALUE was also suspected leaked (not just the age key), rotate it
+at the upstream (Anthropic dashboard, Qdrant dashboard, etc.) first, then run
+§11.2 to update `.env.sops` with the new value.
+
+### 11.4 Recovering from a lost age key
+
+If the private key is gone and was not escrowed:
+
+1. Rotate every secret value at its upstream provider — you've lost the
+   ability to decrypt `.env.sops`, so treat all stored values as destroyed.
+2. Generate a new age keypair (§11.1 steps 2-3).
+3. Build a fresh `.env` with the new upstream values.
+4. Encrypt it under the new key (§11.1 step 5, overwriting `.env.sops`).
+5. Update the GitHub secret and password manager (§11.1 steps 7-8).
+6. Commit and push.
+
+The encrypted history in git is now orphaned — no key can decrypt it. That's
+fine; the point is that no one else can decrypt it either.
 
 ---
 

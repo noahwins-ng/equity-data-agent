@@ -65,7 +65,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - **Triggered by**: QNT-101 runtime testing — Docker kill events don't carry `exitCode`, so Go template `<no value>` sentinel leaked past the bash `${var:-default}` fallback. Also corrected Makefile + uptime-monitoring.md that implied `restart: unless-stopped` auto-restarts after `docker kill` (it doesn't — Docker treats both `stop` and `kill` as "manually stopped" and skips the restart policy).
 - [x] Suppress docker-events alerts during CD deploy window — QNT-109
     - **Triggered by**: QNT-101 noise during deploys — every main-branch merge fires ~4 Discord messages ([KILL]+[DIE] on api from GIT_SHA-driven recreate, [DIE] on both dagster services from image rebuild) plus 2-3 "can not get logs" races. Expected churn, not real incidents — but trains users to ignore the channel, eroding QNT-101's pager purpose. Sentinel-file deploy window (`/opt/equity-data-agent/.deploy-in-progress`) suppresses notifier events during CD; fail-open (>10 min) so a crashed deploy can never silently mute real alerts.
-- [ ] Encrypt .env at rest with SOPS — QNT-102
+- [x] Encrypt .env at rest with SOPS — QNT-102
     - **Triggered by**: Same Apr 19 2026 retro — plaintext `.env` on VPS = all credentials leak on compromise. Replace with SOPS-encrypted file + decrypt-on-deploy. (ClickHouse backup ticket deferred: current data <1GB, re-ingestible from yfinance in 1-2h; revisit after Phase 4 news+embeddings populate.)
 
 ---

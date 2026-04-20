@@ -1,4 +1,4 @@
-.PHONY: setup dev-dagster dev-api dev-frontend test test-integration lint format migrate seed tunnel issue pr build check-prod rollback monitor-install monitor-log events-notify-install events-notify-status events-notify-test help
+.PHONY: setup dev-dagster dev-api dev-frontend test test-integration lint format migrate seed tunnel issue pr build check-prod rollback monitor-install monitor-log events-notify-install events-notify-status events-notify-test sops-edit sops-encrypt sops-decrypt sops-rotate-keys help
 
 # ─── Setup ────────────────────────────────────────────────────
 
@@ -90,6 +90,32 @@ events-notify-test: ## Kill litellm to fire a Discord notification (then bring i
 	@echo "Discord alert should land. The container will NOT auto-recover — Docker treats"
 	@echo "docker kill as 'manually stopped' and skips the restart: unless-stopped policy."
 	@echo "Restart with: ssh hetzner 'cd /opt/equity-data-agent && docker compose --profile prod up -d litellm'"
+
+# ─── Secrets (SOPS) ───────────────────────────────────────────
+
+# sops infers file format from extension; `.env.sops` ends in `.sops` (unknown to
+# sops, defaults to JSON parser and chokes on `#` comments). Pass explicit
+# --input-type/--output-type flags everywhere so the filename stays semantic.
+
+sops-edit: ## Edit .env.sops in-place ($EDITOR opens decrypted; saved content re-encrypted)
+	@command -v sops >/dev/null 2>&1 || { echo "sops not installed — brew install sops age"; exit 1; }
+	sops --input-type dotenv --output-type dotenv .env.sops
+
+sops-encrypt: ## Encrypt a fresh .env → .env.sops (first-time bootstrap only)
+	@command -v sops >/dev/null 2>&1 || { echo "sops not installed — brew install sops age"; exit 1; }
+	@[ -f .env ] || { echo ".env not found — create it first with plaintext values"; exit 1; }
+	@[ ! -f .env.sops ] || { echo ".env.sops already exists — use 'make sops-edit' instead"; exit 1; }
+	sops -e --input-type dotenv --output-type dotenv .env > .env.sops
+	@echo "Encrypted .env → .env.sops. Commit .env.sops (keep .env gitignored)."
+
+sops-decrypt: ## Decrypt .env.sops to stdout (read-only; for inspection or round-trip checks)
+	@command -v sops >/dev/null 2>&1 || { echo "sops not installed — brew install sops age"; exit 1; }
+	@sops -d --input-type dotenv --output-type dotenv .env.sops
+
+sops-rotate-keys: ## Re-encrypt .env.sops under current .sops.yaml recipients (after rotating the age key)
+	@command -v sops >/dev/null 2>&1 || { echo "sops not installed — brew install sops age"; exit 1; }
+	sops updatekeys .env.sops
+	@echo "Re-encrypted .env.sops under the current .sops.yaml recipients."
 
 # ─── Quality ──────────────────────────────────────────────────
 
