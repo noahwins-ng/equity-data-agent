@@ -212,6 +212,50 @@ ORDER BY (ticker, date);
 
 ---
 
+## Retry policy (deploy-window protection)
+
+**Location**: `packages/dagster-pipelines/src/dagster_pipelines/retry.py` (QNT-110)
+
+Two layers protect Dagster runs from transient failures. Apply both to auto-triggered jobs; apply neither to manual / UI-launched jobs (real errors should fail loud — operator is watching).
+
+**Layer 1 — Op-level (`DEPLOY_WINDOW_RETRY`)**: handles flaky ops *inside* a running run. yfinance timeout, transient ClickHouse error, etc. Retries the failing step in place without re-launching the whole run.
+
+```python
+from dagster_pipelines.retry import DEPLOY_WINDOW_RETRY
+
+some_job = define_asset_job(
+    name="some_job",
+    selection=AssetSelection.assets(...),
+    op_retry_policy=DEPLOY_WINDOW_RETRY,   # 3 retries, 30s exp backoff, jitter
+)
+```
+
+**Layer 2 — Run-level (`DEPLOY_WINDOW_RUN_RETRY_TAGS`)**: handles whole-run failures including dequeue/launch errors. The Apr 19 incident was in this bucket — daemon got gRPC UNAVAILABLE while dequeuing a run because the code-server container was mid-restart from a deploy, so no op ever ran. Op-level retry doesn't help; the instance re-launches the whole run instead.
+
+```python
+from dagster_pipelines.retry import DEPLOY_WINDOW_RUN_RETRY_TAGS
+
+some_job = define_asset_job(
+    name="some_job",
+    selection=AssetSelection.assets(...),
+    tags=DEPLOY_WINDOW_RUN_RETRY_TAGS,     # dagster/max_retries: "3"
+)
+```
+
+Run-level retry is **activated globally** by `run_retries.enabled: true` in `dagster.yaml`, with `retry_on_asset_or_op_failure: false` so *only* launch-level failures retry. User errors inside ops still fail loud — a real bug in an asset should not silently retry (that's what layer 1 is for, scoped to transient ops).
+
+**Which layer for which job**:
+
+| Job type | Op retry (in-run) | Run retry (re-launch) |
+|---|---|---|
+| Sensor-triggered (`*_downstream_job`) | ✓ | ✓ |
+| Schedule-triggered (`*_daily_job`, `*_weekly_job`) | Skip — fresh materialization, re-launch is cleaner | ✓ |
+| Manual / UI-launched | Skip | Skip |
+
+**News jobs (QNT-53 / QNT-54)**: apply both layers from day one — same lesson as `feedback_sensor_batch_from_day_one`. Don't retrofit later; inherit the protection at build-time.
+
+---
+
 ## Adding a Ticker
 
 **Location**: `packages/shared/src/shared/tickers.py`

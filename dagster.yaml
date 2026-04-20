@@ -4,3 +4,16 @@ telemetry:
 code_servers:
   local_startup_timeout: 180
   reload_timeout: 180
+
+# QNT-110: re-launch failed runs on transient system/launch failures
+# (e.g. gRPC UNAVAILABLE when the code-server container is mid-restart during
+# deploy). Per-job opt-in via the `dagster/max_retries` tag — see
+# packages/dagster-pipelines/src/dagster_pipelines/retry.py and docs/patterns.md.
+#
+# retry_on_asset_or_op_failure: false ensures only LAUNCH-level failures retry.
+# User errors inside ops continue to fail loud — a real bug in an asset should
+# not silently retry (op-level retry is scoped separately via RetryPolicy).
+run_retries:
+  enabled: true
+  max_retries: 0  # default 0; jobs opt in via `dagster/max_retries` tag
+  retry_on_asset_or_op_failure: false

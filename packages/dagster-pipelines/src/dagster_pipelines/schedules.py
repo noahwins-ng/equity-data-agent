@@ -12,19 +12,26 @@ from dagster import (
 from shared.tickers import TICKERS
 
 from dagster_pipelines.assets.ohlcv_raw import OHLCVConfig
+from dagster_pipelines.retry import DEPLOY_WINDOW_RUN_RETRY_TAGS
 
 logger = logging.getLogger(__name__)
 
 # ── Jobs ──────────────────────────────────────────────────────
+# Run-level retry tags from QNT-110 protect schedule-triggered runs from the
+# same deploy-window gRPC UNAVAILABLE failure class as sensor-triggered runs.
+# (Op-level retry is scoped to sensor jobs per ticket — schedule jobs materialize
+# fresh yfinance data, so in-run op retry adds less value than re-launching.)
 
 ohlcv_daily_job = define_asset_job(
     name="ohlcv_daily_job",
     selection=AssetSelection.assets("ohlcv_raw"),
+    tags=DEPLOY_WINDOW_RUN_RETRY_TAGS,
 )
 
 fundamentals_weekly_job = define_asset_job(
     name="fundamentals_weekly_job",
     selection=AssetSelection.assets("fundamentals"),
+    tags=DEPLOY_WINDOW_RUN_RETRY_TAGS,
 )
 
 

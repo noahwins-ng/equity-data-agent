@@ -190,6 +190,58 @@ ssh hetzner 'docker stats --no-stream'
 
 ---
 
+### Sensor-triggered runs fail with `gRPC UNAVAILABLE` during deploy
+
+**Symptoms**:
+
+- Dagster UI shows one or more runs marked `Failure` with the run-event sequence:
+  ```
+  EngineEvent: Unexpected error in IPC client
+   → DagsterUserCodeUnreachableError: Could not reach user code server. gRPC Error code: UNAVAILABLE
+  EngineEvent: Caught an unrecoverable error while dequeuing the run. Marking the run as failed…
+  ```
+- Asset checks attached to the intended outputs show `EXECUTION_FAILED` even though the asset never ran.
+- Timing correlates with a recent `docker compose up -d` / CD deploy (code-server container was mid-restart).
+
+**Diagnosis**:
+
+```bash
+# Confirm a deploy was in flight when the run was dequeued
+gh run list --workflow=deploy.yml --limit 5                           # correlate timestamps
+
+# Inspect the failed run's event log in the Dagster UI or via CLI
+ssh hetzner 'docker exec equity-data-agent-dagster-daemon-1 \
+    dagster run list --limit 10'                                       # grab run IDs
+# Then view events in the UI — look for the IPC client / gRPC UNAVAILABLE sequence above.
+
+# Check current retry config is active (QNT-110)
+ssh hetzner 'docker exec equity-data-agent-dagster-daemon-1 \
+    cat /opt/dagster/dagster_home/dagster.yaml 2>/dev/null || \
+    grep -A 3 "run_retries" /opt/equity-data-agent/dagster.yaml'
+# Expect: run_retries.enabled: true, retry_on_asset_or_op_failure: false
+```
+
+**Response**:
+
+1. **If QNT-110 run_retries is active**: the daemon automatically re-launches the failed run up to 3 times (30s → 60s → 120s backoff). Wait ~4 min, then check the run's retry chain in the UI — the original run has a sibling tagged `dagster/parent_run_id`. No manual action needed unless all retries exhaust.
+2. **If retries exhaust or retry config is missing**: manually re-materialize the affected asset partitions:
+   ```bash
+   ssh hetzner 'docker exec equity-data-agent-dagster-daemon-1 \
+       /app/.venv/bin/dagster asset materialize \
+       --select <asset_name> --partition <TICKER> \
+       -m dagster_pipelines.definitions'
+   ```
+3. **If EXECUTION_FAILED asset checks are showing**: those are ghost failures — the checks never ran because the run never started. After re-materialization succeeds, the checks will re-evaluate.
+
+**Prevention**:
+
+- [QNT-110](https://linear.app/noahwins/issue/QNT-110) — two-layer retry protection. Run-level `run_retries` in `dagster.yaml` (enabled globally, opt-in per-job via `dagster/max_retries` tag) re-launches runs on launch-time failures. Op-level `DEPLOY_WINDOW_RETRY` (applied to sensor jobs) covers in-run transient failures. `retry_on_asset_or_op_failure: false` ensures only launch failures retry — real op errors still fail loud.
+- [QNT-109](https://linear.app/noahwins/issue/QNT-109) — deploy sentinel suppresses Discord notifier noise during deploys, so retried-and-succeeded runs don't generate false alarms.
+
+**Last occurred**: 2026-04-19 (before QNT-110)
+
+---
+
 ### Deploy-noise alerts suppressed too long (stuck sentinel)
 
 **Symptoms**:
