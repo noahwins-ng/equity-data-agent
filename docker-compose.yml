@@ -40,6 +40,11 @@ services:
       - DAGSTER_HOME=/dagster_home
     volumes:
       - dagster_home:/dagster_home
+      # QNT-112: bind-mount the repo's dagster.yaml on top of the named volume
+      # so `git pull` on every deploy reaches the container. The named volume
+      # holds Dagster-managed *state* (history, schedules, storage) that must
+      # persist; dagster.yaml is *config* and belongs in the repo.
+      - ./dagster.yaml:/dagster_home/dagster.yaml:ro
     ports:
       - "127.0.0.1:3000:3000"  # bound to loopback only; reach via SSH tunnel
     depends_on: [clickhouse]
@@ -66,6 +71,10 @@ services:
       - DAGSTER_HOME=/dagster_home
     volumes:
       - dagster_home:/dagster_home
+      # QNT-112: bind-mount dagster.yaml on top of the named volume (same
+      # reason as dagster service — config edits in repo must reach both
+      # the webserver and the daemon since both read DAGSTER_HOME/dagster.yaml).
+      - ./dagster.yaml:/dagster_home/dagster.yaml:ro
     depends_on: [clickhouse]
     # QNT-111: bumped 1g → 2g after Apr 20 02:00 UTC OOM cascade during
     # weekly fundamentals schedule tick. The 1g cgroup limit (set by QNT-100)

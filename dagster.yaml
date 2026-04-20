@@ -1,3 +1,6 @@
+# QNT-112 bind-mount smoke marker (2026-04-20): if this line appears inside
+# the running container via `docker exec … cat /dagster_home/dagster.yaml`,
+# the repo → container config-delivery path is healthy.
 telemetry:
   enabled: false
 
