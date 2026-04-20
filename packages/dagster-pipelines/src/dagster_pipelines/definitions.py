@@ -9,11 +9,14 @@ from dagster_pipelines.assets.indicators import (
     technical_indicators_monthly,
     technical_indicators_weekly,
 )
+from dagster_pipelines.assets.news_raw import news_raw
 from dagster_pipelines.assets.ohlcv_raw import ohlcv_raw
 from dagster_pipelines.resources.clickhouse import ClickHouseResource
 from dagster_pipelines.schedules import (
     fundamentals_weekly_job,
     fundamentals_weekly_schedule,
+    news_raw_job,
+    news_raw_schedule,
     ohlcv_daily_job,
     ohlcv_daily_schedule,
 )
@@ -28,6 +31,7 @@ defs = Definitions(
     assets=[
         ohlcv_raw,
         fundamentals,
+        news_raw,
         ohlcv_weekly,
         ohlcv_monthly,
         fundamental_summary,
@@ -39,10 +43,11 @@ defs = Definitions(
     jobs=[
         ohlcv_daily_job,
         fundamentals_weekly_job,
+        news_raw_job,
         ohlcv_downstream_job,
         fundamentals_downstream_job,
     ],
-    schedules=[ohlcv_daily_schedule, fundamentals_weekly_schedule],
+    schedules=[ohlcv_daily_schedule, fundamentals_weekly_schedule, news_raw_schedule],
     sensors=[ohlcv_raw_sensor, fundamentals_sensor],
     resources={
         "clickhouse": ClickHouseResource(),
