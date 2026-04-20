@@ -13,9 +13,14 @@ from dagster import (
     sensor,
 )
 
+from dagster_pipelines.retry import DEPLOY_WINDOW_RETRY, DEPLOY_WINDOW_RUN_RETRY_TAGS
+
 logger = logging.getLogger(__name__)
 
 # ── Jobs for sensor-triggered downstream recomputation ────────
+# Both layers of deploy-window protection from QNT-110:
+#   op_retry_policy — in-run retry for flaky ops
+#   tags             — instance-level re-launch on launch-time failures (gRPC UNAVAILABLE)
 
 ohlcv_downstream_job = define_asset_job(
     name="ohlcv_downstream_job",
@@ -27,11 +32,15 @@ ohlcv_downstream_job = define_asset_job(
         "technical_indicators_monthly",
         "fundamental_summary",
     ),
+    op_retry_policy=DEPLOY_WINDOW_RETRY,
+    tags=DEPLOY_WINDOW_RUN_RETRY_TAGS,
 )
 
 fundamentals_downstream_job = define_asset_job(
     name="fundamentals_downstream_job",
     selection=AssetSelection.assets("fundamental_summary"),
+    op_retry_policy=DEPLOY_WINDOW_RETRY,
+    tags=DEPLOY_WINDOW_RUN_RETRY_TAGS,
 )
 
 
