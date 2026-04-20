@@ -23,7 +23,13 @@ The argument is: $ARGUMENTS
 
 ### Step 2: Review (Adversarial)
 
-Read the full diff and review it as if you did NOT write this code. You are a skeptical reviewer seeing it for the first time. Check each category:
+**Step 2.0: Spawn `code-reviewer-ediff` subagent first** (experiment introduced 2026-04-21 — see `.claude/agents/README.md`).
+
+Invoke via the Agent tool with `subagent_type: "code-reviewer-ediff"`, passing the issue identifier + the PR number (if one exists) + the full AC list extracted from Linear. The agent reads only the final diff — no author context, no conversation history — so it's genuinely fresh eyes. Its report lands before you do your own pass.
+
+Incorporate the agent's findings as the starting point for your own review. Do NOT skip your own pass just because the agent ran — you may catch things it missed (and vice versa). If the agent returns `Verdict: FIX FIRST`, those are yours to triage before proceeding.
+
+**Step 2.1: Your own review.** Read the full diff and review it as if you did NOT write this code. You are a skeptical reviewer seeing it for the first time. Check each category:
 
 #### Logic Errors
 - Off-by-one errors, wrong comparisons, inverted conditions
