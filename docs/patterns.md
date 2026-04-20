@@ -149,6 +149,24 @@ def my_asset(
    ```
 4. Export from package `__init__.py`
 
+**Concurrency pre-flight** (required when adding a scheduled / sensor-triggered partitioned job):
+
+Every partitioned asset fans out to N subprocess workers per trigger. The `QueuedRunCoordinator` cap in `dagster.yaml` (set by QNT-113) limits how many can run concurrently — raising the cap without raising the daemon's `mem_limit` re-opens the Apr 20 2026 OOM-cascade failure mode.
+
+Before shipping a new scheduled/sensor asset, compute:
+
+```
+safe_concurrent_runs = (mem_limit_on_dagster_daemon − 660 MB) / 150 MB
+```
+
+Where `660 MB ≈ 260 MB daemon baseline + 400 MB sensor-tick headroom` and `150 MB` is the observed per-run-worker RSS.
+
+- If `max_concurrent_runs` in `dagster.yaml` is already less than `safe_concurrent_runs`, no change needed — your new asset will queue behind the existing jobs.
+- If the total fan-out across ALL scheduled/sensor jobs × their partition counts, triggered within a single cron firing window, would exceed `max_concurrent_runs`, either (a) raise `mem_limit` on `dagster-daemon` in `docker-compose.yml` AND scale `max_concurrent_runs` proportionally in the same PR, or (b) stagger the schedules so fan-out doesn't overlap.
+- Serialized throughput is the safe default. A backfill taking ~10× longer is correct; an OOM cascade that kills the daemon is not.
+
+Reference: `docs/guides/ops-runbook.md` §"Dagster backfill OOM-kill" for the incident history + diagnosis commands.
+
 ---
 
 ## Adding a FastAPI Endpoint
