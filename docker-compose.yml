@@ -80,6 +80,9 @@ services:
     # weekly fundamentals schedule tick. The 1g cgroup limit (set by QNT-100)
     # was blown out by concurrent partition-launcher subprocesses; kernel
     # OOM-killed 4+ python processes in 2 min, killed 7 runs before launch.
+    # QNT-113 then capped run concurrency in dagster.yaml so 2g is sufficient
+    # even under a 10-partition backfill (without it, the Apr 20 13:22 UTC
+    # backfill re-OOM'd the 2g cgroup by launching 10 workers at once).
     # QNT-104 owns the comprehensive resource-limit audit + autoheal sidecar.
     mem_limit: 2g
     mem_reservation: 256m
