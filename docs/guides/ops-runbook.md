@@ -370,3 +370,51 @@ ssh hetzner 'docker stats --no-stream equity-data-agent-api-1'
 - [QNT-104](https://linear.app/noahwins/issue/QNT-104) *(pending)* — adds an `autoheal` sidecar that watches healthcheck status and kills unhealthy containers so `restart: unless-stopped` picks them up. Auto-recovery within ~90s of going unhealthy.
 
 **Last occurred**: not yet occurred — preventative
+
+---
+
+### Dagster backfill OOM-kill (run fan-out exceeds daemon cgroup)
+
+**Symptoms**:
+
+- A manually launched backfill (e.g. `fundamentals_weekly_job` 10-partition) fails after several minutes with some partitions "Failed to start".
+- `[OOM KILL] equity-data-agent-dagster-daemon-1 exit=n/a` messages from `docker-events-notify` Discord webhook.
+- Dagster run history shows per-partition runs labelled `Failure — Failed to start`, then 8/10 succeed on retry after the daemon restarts.
+- `docker ps` shows `dagster-daemon` recently restarted (minutes-ago uptime).
+- Daemon container itself stays green on `docker stats` (~250 MB post-restart) — it's *child* subprocesses being killed, not the daemon.
+
+**Diagnosis**:
+
+```bash
+# OOM events in the daemon cgroup (note the task= value — "python" means a run-worker subprocess, not the daemon itself)
+ssh hetzner 'journalctl -k --since "1 hour ago" | grep -E "Memory cgroup out of memory" | tail -10'
+
+# Per-victim total-vm — expect ~2 GB VM, ~150 MB RSS per killed python child
+ssh hetzner 'journalctl -k --since "1 hour ago" | grep "Killed process .* (python)" | tail -10'
+
+# Confirm the daemon's cgroup is the one that OOM'd (match the container scope ID)
+ssh hetzner 'docker inspect equity-data-agent-dagster-daemon-1 --format "{{.Id}}"'
+```
+
+**Response**:
+
+1. No action needed on already-killed workers — [QNT-110](https://linear.app/noahwins/issue/QNT-110) run-retry relaunches them once the cgroup has headroom.
+2. Confirm the run_coordinator cap is in the live config (not shadowed by a stale named-volume — see the "dagster.yaml config change didn't activate" entry above):
+
+   ```bash
+   ssh hetzner 'docker exec equity-data-agent-dagster-daemon-1 cat /dagster_home/dagster.yaml | grep -A4 run_coordinator'
+   ```
+3. If `max_concurrent_runs` is missing or too high, fix `dagster.yaml` in-repo, ship through CD. Never SCP-patch prod (see [QNT-107](https://linear.app/noahwins/issue/QNT-107)).
+
+**Prevention**:
+
+- [QNT-113](https://linear.app/noahwins/issue/QNT-113) — `QueuedRunCoordinator(max_concurrent_runs=3)` in `dagster.yaml` serialises backfill fan-out so peak memory stays under the daemon's 2 GB cgroup.
+- **Memory math** (must stay consistent with `mem_limit` on dagster-daemon in `docker-compose.yml`):
+  - Daemon baseline: ~260 MB
+  - Sensor-tick subprocess headroom: ~400 MB
+  - N workers × ~150 MB RSS each
+  - With `mem_limit: 2g` and `max_concurrent_runs: 3`, peak ≈ 1.1 GB (leaves ~900 MB slack for materialization spikes)
+  - If the daemon's `mem_limit` is raised, `max_concurrent_runs` can rise proportionally: roughly `(mem_limit - 660MB) / 150MB`.
+- [QNT-110](https://linear.app/noahwins/issue/QNT-110) run-retry is complementary — it handles transient launch failures but won't rescue a cgroup under sustained fan-out pressure (retries re-launch into the same starved cgroup).
+
+**Last occurred**: 2026-04-20 13:22–13:28 UTC — manually launched 10-partition backfill on `fundamentals_weekly_job` via Dagster UI; 3 kernel OOM kills in the daemon cgroup, backfill `tevuzzoj` failed after 10:31, partition AMZN (`5138c8ee`) stuck at "Failed to start".

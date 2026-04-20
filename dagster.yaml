@@ -8,6 +8,20 @@ code_servers:
   local_startup_timeout: 180
   reload_timeout: 180
 
+# QNT-113: cap concurrent runs to protect the daemon cgroup from fan-out OOM.
+# Apr 20 incident: a 10-partition `fundamentals_weekly_job` backfill launched
+# all 10 subprocess workers at once (DefaultRunCoordinator fires immediately);
+# each worker loads the full repo (~150 MB RSS / ~2 GB VM), combined load blew
+# past the daemon's 2 GB cgroup and the kernel OOM-killed multiple workers.
+# max_concurrent_runs=3 keeps peak usage under ~1.1 GB within the 2 GB limit
+# (daemon baseline ~260 MB + sensor-tick headroom ~400 MB + 3 × 150 MB).
+# If `mem_limit` on dagster-daemon is raised, this can be raised in proportion.
+run_coordinator:
+  module: dagster.core.run_coordinator
+  class: QueuedRunCoordinator
+  config:
+    max_concurrent_runs: 3
+
 # QNT-110: re-launch failed runs on transient system/launch failures
 # (e.g. gRPC UNAVAILABLE when the code-server container is mid-restart during
 # deploy). Per-job opt-in via the `dagster/max_retries` tag — see
