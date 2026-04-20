@@ -67,7 +67,12 @@ services:
     volumes:
       - dagster_home:/dagster_home
     depends_on: [clickhouse]
-    mem_limit: 1g
+    # QNT-111: bumped 1g → 2g after Apr 20 02:00 UTC OOM cascade during
+    # weekly fundamentals schedule tick. The 1g cgroup limit (set by QNT-100)
+    # was blown out by concurrent partition-launcher subprocesses; kernel
+    # OOM-killed 4+ python processes in 2 min, killed 7 runs before launch.
+    # QNT-104 owns the comprehensive resource-limit audit + autoheal sidecar.
+    mem_limit: 2g
     mem_reservation: 256m
     cpus: 0.5
     logging: *default-logging
