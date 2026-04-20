@@ -188,7 +188,7 @@ Updated automatically by `/ship` and `/sync-docs`.
 ### Phase 4 — Narrative Data
 **Scope**: News ingestion, embedding, and semantic search via Qdrant.
 
-- [ ] Ingest news via **RSS + `feedparser`** — QNT-52
+- [x] Ingest news via **RSS + `feedparser`** — QNT-52
     - Per-ticker Yahoo Finance RSS (`https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US`), plus 1–2 broad market feeds (e.g., Reuters markets RSS)
     - No paid news API evaluation — RSS is free, unrate-limited, and deterministic enough for a 10-ticker scope. The news-API comparison rabbit hole is not the portfolio story; RSS + embeddings + semantic search is.
 - [ ] Implement `news_raw` Dagster asset (RSS feeds → `equity_raw.news_raw` in ClickHouse) — QNT-53
