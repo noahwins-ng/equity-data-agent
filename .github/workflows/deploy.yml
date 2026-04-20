@@ -9,6 +9,74 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Decrypt .env.sops and install on Hetzner
+        env:
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+          HETZNER_HOST: ${{ secrets.HETZNER_HOST }}
+          HETZNER_USER: ${{ secrets.HETZNER_USER }}
+          HETZNER_SSH_KEY: ${{ secrets.HETZNER_SSH_KEY }}
+        run: |
+          # QNT-102: decrypt .env.sops in CI (not on VPS) so the age private key
+          # never lands on prod disk. The plaintext .env file does still live on
+          # the VPS at rest — docker compose needs it to read env vars — but the
+          # authoritative source is the SOPS-encrypted ciphertext in git, and
+          # rotation is now a repo workflow instead of hand-editing prod.
+          set -euo pipefail
+
+          # Match the local sops version (visible as `sops_version=` in .env.sops
+          # metadata) so any format change between releases is a non-issue. Bump
+          # in lockstep with `brew upgrade sops` on dev machines.
+          SOPS_VERSION=3.12.2
+          curl -sSLo /tmp/sops.deb \
+            "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops_${SOPS_VERSION}_amd64.deb"
+          sudo dpkg -i /tmp/sops.deb
+          sops --version
+
+          mkdir -p ~/.config/sops/age
+          printf '%s\n' "$SOPS_AGE_KEY" > ~/.config/sops/age/keys.txt
+          chmod 600 ~/.config/sops/age/keys.txt
+
+          # --input-type/--output-type: `.env.sops` ends in `.sops` which sops
+          # doesn't recognise as dotenv; without explicit flags the decrypter
+          # defaults to JSON parsing and fails on the first `#` comment.
+          sops -d --input-type dotenv --output-type dotenv .env.sops > .env.decrypted
+          chmod 600 .env.decrypted
+          # Sanity: decrypted payload must look like a dotenv file. If the key
+          # rotated without re-encrypting .env.sops we'd see garbage or empty
+          # output — better to fail loud before shipping it to prod.
+          if ! grep -q '^[A-Z_][A-Z0-9_]*=' .env.decrypted; then
+            echo "::error::Decrypted .env does not look like a dotenv file (no KEY=value lines found)"
+            exit 1
+          fi
+
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HETZNER_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          # Don't swallow keyscan errors — if it fails (DNS, port 22 blocked),
+          # surface the cause here rather than as a cryptic "Host key
+          # verification failed" from scp two lines down.
+          if ! ssh-keyscan -H "$HETZNER_HOST" >> ~/.ssh/known_hosts; then
+            echo "::error::ssh-keyscan failed for $HETZNER_HOST — check DNS/firewall before retrying"
+            exit 1
+          fi
+
+          scp -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes \
+            .env.decrypted "$HETZNER_USER@$HETZNER_HOST:/opt/equity-data-agent/.env.decrypted"
+          ssh -i ~/.ssh/id_deploy "$HETZNER_USER@$HETZNER_HOST" '
+            set -euo pipefail
+            cd /opt/equity-data-agent
+            mv -f .env.decrypted .env
+            chmod 600 .env
+            chown root:root .env
+          '
+
+          # Runner is ephemeral but scrub anyway — defence in depth.
+          shred -u .env.decrypted ~/.config/sops/age/keys.txt ~/.ssh/id_deploy 2>/dev/null || \
+            rm -f .env.decrypted ~/.config/sops/age/keys.txt ~/.ssh/id_deploy
+
       - name: Deploy to Hetzner
         uses: appleboy/ssh-action@v1
         env:

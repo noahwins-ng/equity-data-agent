@@ -418,3 +418,66 @@ ssh hetzner 'docker inspect equity-data-agent-dagster-daemon-1 --format "{{.Id}}
 - [QNT-110](https://linear.app/noahwins/issue/QNT-110) run-retry is complementary — it handles transient launch failures but won't rescue a cgroup under sustained fan-out pressure (retries re-launch into the same starved cgroup).
 
 **Last occurred**: 2026-04-20 13:22–13:28 UTC — manually launched 10-partition backfill on `fundamentals_weekly_job` via Dagster UI; 3 kernel OOM kills in the daemon cgroup, backfill `tevuzzoj` failed after 10:31, partition AMZN (`5138c8ee`) stuck at "Failed to start".
+
+---
+
+### Credential compromise suspected
+
+**Symptoms**:
+
+- Unexpected API usage / billing spike on Anthropic, Ollama, Qdrant, or Langfuse dashboards.
+- Auth failures on legitimate calls (a rotation you didn't initiate happened upstream).
+- Unfamiliar entries in `/var/log/auth.log` on Hetzner (`last`, `lastb`) — successful SSH logins from unknown IPs, repeated failed-login bursts.
+- Out-of-band notification (provider abuse team, GitHub secret-scanning alert, Gitleaks CI failure).
+
+**Diagnosis**:
+
+```bash
+# Recent SSH logins on prod — flag anything outside expected IPs
+ssh hetzner 'last -n 20 -i'
+ssh hetzner 'grep sshd /var/log/auth.log | grep -E "Accepted|Failed" | tail -40'
+
+# Current .env on prod — timestamp should match the most recent CD run
+ssh hetzner 'stat /opt/equity-data-agent/.env'
+
+# Is the plaintext .env file-mode tight? (0600 root:root)
+ssh hetzner 'ls -la /opt/equity-data-agent/.env'
+
+# Has anyone pushed unauthorised commits? Check for edits to .env.sops or .sops.yaml
+git log --all --oneline -- .env.sops .sops.yaml | head -20
+
+# GitHub audit: recent secret access / PAT use / Actions runs
+gh api /repos/noahwins-ng/equity-data-agent/actions/runs --jq '.workflow_runs[0:5][] | {name, head_sha, actor: .actor.login, created_at}'
+```
+
+**Response**:
+
+1. **Rotate the upstream values first** — whatever credential is suspected leaked, invalidate it at the provider before anything else:
+   - Anthropic: API Keys dashboard → revoke → generate new.
+   - Ollama Cloud: account settings → revoke → generate new.
+   - Qdrant Cloud: cluster API keys → revoke → generate new.
+   - Langfuse: project settings → rotate public + secret keys.
+   - Any provider not on this list: check `.env.example` for the full set.
+2. **Update `.env.sops` with the new values** — `make sops-edit`, edit the affected keys, save, commit, push. CD will pick up the new values on the next deploy.
+3. **If the SOPS age key itself may be compromised** (e.g. laptop stolen, key pushed to a public repo, credentials leaked via a key-logger): follow `docs/guides/hetzner-bootstrap.md` §11.3 to rotate the age key. This re-encrypts `.env.sops` under a new recipient and updates the GH secret.
+4. **If the Hetzner SSH key may be compromised**:
+   ```bash
+   # Generate a new deploy key locally
+   ssh-keygen -t ed25519 -f ~/.ssh/hetzner_deploy_new -N ''
+   # Install the new public key on Hetzner (via the old key, or via Hetzner console if the old key is revoked)
+   ssh-copy-id -i ~/.ssh/hetzner_deploy_new.pub hetzner
+   # Remove the old public key from ~/.ssh/authorized_keys
+   ssh hetzner "grep -v 'OLD-KEY-COMMENT' ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.new && mv ~/.ssh/authorized_keys.new ~/.ssh/authorized_keys"
+   # Update the HETZNER_SSH_KEY GitHub secret to the new private key
+   ```
+5. **Verify the blast radius**: after rotation, re-check upstream dashboards for usage attributed to the old credentials. Billing anomalies that persist after rotation point to a deeper compromise (VPS container escape, supply-chain); escalate to `make check-prod` + full image rebuild if so.
+6. **Document the incident**: append a post-mortem note to this runbook entry's "Last occurred" line with date, attack vector (if known), and what was rotated. Feed findings back into `feedback_*` memory so future sessions benefit.
+
+**Prevention**:
+
+- [QNT-102](https://linear.app/noahwins/issue/QNT-102) — SOPS encryption at rest means the `.env.sops` in git is not a useful target on its own (ciphertext without the age key). The age key is split across the GH secret (for CD) and a password manager (for humans); compromising one doesn't compromise the other.
+- CD-managed `.env` on VPS (mode 0600, root:root, overwritten every deploy) limits the exposure window — any values manually pasted onto the VPS (or left behind from a prior rotation) are wiped by the next push to `main`.
+- No long-lived dev credentials: keep `ANTHROPIC_API_KEY` / provider keys scoped per-project when possible; rotate on team-membership changes.
+- `docs/guides/hetzner-bootstrap.md` §11.3 rotation workflow is non-trivial on purpose — rotating should be routine (quarterly or after any suspected exposure), not rare-and-scary.
+
+**Last occurred**: not yet occurred — preventative
