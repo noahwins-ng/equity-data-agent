@@ -191,11 +191,11 @@ Updated automatically by `/ship` and `/sync-docs`.
 - [x] Ingest news via **RSS + `feedparser`** — QNT-52
     - Per-ticker Yahoo Finance RSS (`https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US`), plus 1–2 broad market feeds (e.g., Reuters markets RSS)
     - No paid news API evaluation — RSS is free, unrate-limited, and deterministic enough for a 10-ticker scope. The news-API comparison rabbit hole is not the portfolio story; RSS + embeddings + semantic search is.
-- [ ] Implement `news_raw` Dagster asset (RSS feeds → `equity_raw.news_raw` in ClickHouse) — QNT-53
+- [x] Implement `news_raw` Dagster asset (RSS feeds → `equity_raw.news_raw` in ClickHouse) — QNT-53
     - Schedule: every 4 hours during market hours, `default_status=RUNNING` (Phase 2 lesson: QNT-92)
     - Dedup key: `id = hash(ticker + url)`
     - Stores: `headline`, `body`, `source`, `url`, `published_at` per ticker
-    - Downstream sensor (`news_raw` → `news_embeddings`) must batch all pending events per tick from day one (Phase 2 lesson: QNT-46 rewrite)
+    - Downstream sensor (`news_raw` → `news_embeddings`) must batch all pending events per tick from day one (Phase 2 lesson: QNT-46 rewrite) — **deferred to QNT-54** (target asset `news_embeddings` lives there; reuses the existing `_build_materialization_sensor` factory for batch semantics)
 - [ ] Create Qdrant `equity_news` collection (384-dim Float32, cosine distance) — auto-create in the Qdrant Dagster resource on first use, or via a setup script
 - [ ] Implement `news_embeddings` Dagster asset (`news_raw` → Qdrant Cloud) — QNT-54
     - Embeds `headline` text using `sentence-transformers/all-MiniLM-L6-v2` (384-dim)

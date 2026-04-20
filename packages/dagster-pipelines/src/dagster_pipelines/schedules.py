@@ -34,6 +34,12 @@ fundamentals_weekly_job = define_asset_job(
     tags=DEPLOY_WINDOW_RUN_RETRY_TAGS,
 )
 
+news_raw_job = define_asset_job(
+    name="news_raw_job",
+    selection=AssetSelection.assets("news_raw"),
+    tags=DEPLOY_WINDOW_RUN_RETRY_TAGS,
+)
+
 
 # ── Schedules ─────────────────────────────────────────────────
 
@@ -74,5 +80,32 @@ def fundamentals_weekly_schedule(context: ScheduleEvaluationContext):
     for ticker in TICKERS:
         yield RunRequest(
             run_key=f"fundamentals_{ticker}_{ts}",
+            partition_key=ticker,
+        )
+
+
+# QNT-53 concurrency pre-flight (docs/patterns.md §"Adding a Dagster Asset"):
+#   dagster-daemon mem_limit = 2g. safe_concurrent_runs = (2048 − 660) / 150 ≈ 9.
+#   max_concurrent_runs = 3 (dagster.yaml, QNT-113). 4-hour cron fans out 10 news
+#   partitions but the QueuedRunCoordinator serializes to 3 at a time. Overlap
+#   with ohlcv_daily_schedule (17:00 ET) and fundamentals_weekly_schedule
+#   (Sun 22:00 ET) stays within the cap — no mem_limit or max_concurrent_runs
+#   bump required.
+@schedule(
+    job=news_raw_job,
+    cron_schedule="0 */4 * * *",  # every 4 hours on the hour
+    execution_timezone="America/New_York",
+    default_status=DefaultScheduleStatus.RUNNING,
+)
+def news_raw_schedule(context: ScheduleEvaluationContext):
+    """News RSS refresh every 4 hours (per-ticker Yahoo Finance feeds).
+
+    Yahoo Finance RSS has no rate limit and no key — a 4-hour cadence gives
+    reasonable coverage without hammering the upstream.
+    """
+    ts = context.scheduled_execution_time.isoformat() if context.scheduled_execution_time else ""
+    for ticker in TICKERS:
+        yield RunRequest(
+            run_key=f"news_raw_{ticker}_{ts}",
             partition_key=ticker,
         )
