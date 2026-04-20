@@ -242,6 +242,56 @@ ssh hetzner 'docker exec equity-data-agent-dagster-daemon-1 \
 
 ---
 
+### `dagster.yaml` config change didn't activate (named-volume shadowing)
+
+**Symptoms**:
+
+- You edited `dagster.yaml` in the repo, merged, CD was green, all hard gates passed — but the runtime behavior you configured hasn't changed. Example: bumped `run_retries.max_retries` but `DagsterInstance.run_retries_max_retries` still reports the old value; tweaked `code_servers.local_startup_timeout` but cold starts still time out at the old limit.
+- `ssh hetzner 'cat /opt/equity-data-agent/dagster.yaml'` shows the new content.
+- `ssh hetzner 'docker exec equity-data-agent-dagster-daemon-1 cat /dagster_home/dagster.yaml'` shows **stale** content.
+
+**Diagnosis**:
+
+```bash
+# Compare repo file vs container file — they should be identical after QNT-112
+ssh hetzner 'diff /opt/equity-data-agent/dagster.yaml \
+    <(docker exec equity-data-agent-dagster-daemon-1 cat /dagster_home/dagster.yaml)'
+# No output = aligned. Any output = named volume is shadowing the repo file.
+
+# Confirm the bind mount is in place (QNT-112)
+ssh hetzner 'docker inspect equity-data-agent-dagster-daemon-1 \
+    --format "{{range .Mounts}}{{.Source}} -> {{.Destination}}{{println}}{{end}}"' | grep dagster.yaml
+# Expect: /opt/equity-data-agent/dagster.yaml -> /dagster_home/dagster.yaml
+
+# Query the running instance — the ultimate source of truth
+ssh hetzner 'docker exec equity-data-agent-dagster-daemon-1 python -c "
+from dagster import DagsterInstance
+i = DagsterInstance.get()
+print(\"run_retries:\", i.run_retries_enabled, i.run_retries_max_retries, i.run_retries_retry_on_asset_or_op_failure)
+"'
+```
+
+**Response**:
+
+1. **If QNT-112 bind mount is present but file still stale**: restart the daemon to pick up the new file — `ssh hetzner 'docker compose -f /opt/equity-data-agent/docker-compose.yml restart dagster-daemon dagster'`. The bind mount itself only delivers the file on container start, not live.
+2. **If bind mount is missing** (e.g. pre-QNT-112 deploy): workaround via `docker cp` + restart:
+   ```bash
+   ssh hetzner 'docker cp /opt/equity-data-agent/dagster.yaml equity-data-agent-dagster-daemon-1:/dagster_home/dagster.yaml && \
+                docker cp /opt/equity-data-agent/dagster.yaml equity-data-agent-dagster-1:/dagster_home/dagster.yaml && \
+                docker compose -f /opt/equity-data-agent/docker-compose.yml restart dagster-daemon dagster'
+   ```
+   Then file a ticket to re-apply the QNT-112 bind mount for the affected path.
+3. **Verify recovery**: re-run the `DagsterInstance.get()` attr check above. Values should match the repo's `dagster.yaml`.
+
+**Prevention**:
+
+- [QNT-112](https://linear.app/noahwins/issue/QNT-112) — bind-mounts `./dagster.yaml:/dagster_home/dagster.yaml:ro` so repo edits reach the container on every deploy. The named `dagster_home` volume continues to hold Dagster-managed state (history, storage, schedules) but no longer shadows config.
+- Memory: `feedback_named_volume_shadows_repo_config.md` — flag this as first hypothesis whenever "config in repo ≠ runtime behavior" appears. Named volumes shadow any path under their mountpoint.
+
+**Last occurred**: 2026-04-20 (QNT-110 ship session — `run_retries` config silently dropped; QNT-112 is the structural fix)
+
+---
+
 ### Deploy-noise alerts suppressed too long (stuck sentinel)
 
 **Symptoms**:
