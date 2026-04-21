@@ -43,6 +43,17 @@ fundamentals_downstream_job = define_asset_job(
     tags=DEPLOY_WINDOW_RUN_RETRY_TAGS,
 )
 
+# QNT-54: embedding happens server-side via Qdrant Cloud Inference (ADR-009),
+# so the run-worker is I/O-bound (one HTTP POST per batch) rather than memory-
+# bound. No tag_concurrency_limits rule is needed; this job fans out under
+# max_concurrent_runs: 3 alongside OHLCV / fundamentals.
+news_downstream_job = define_asset_job(
+    name="news_downstream_job",
+    selection=AssetSelection.assets("news_embeddings"),
+    op_retry_policy=DEPLOY_WINDOW_RETRY,
+    tags=DEPLOY_WINDOW_RUN_RETRY_TAGS,
+)
+
 
 # ── Sensors ───────────────────────────────────────────────────
 
@@ -100,4 +111,10 @@ fundamentals_sensor = _build_materialization_sensor(
     name="fundamentals_sensor",
     asset_key=AssetKey("fundamentals"),
     job=fundamentals_downstream_job,
+)
+
+news_raw_sensor = _build_materialization_sensor(
+    name="news_raw_sensor",
+    asset_key=AssetKey("news_raw"),
+    job=news_downstream_job,
 )

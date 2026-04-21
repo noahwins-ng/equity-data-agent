@@ -9,9 +9,11 @@ from dagster_pipelines.assets.indicators import (
     technical_indicators_monthly,
     technical_indicators_weekly,
 )
+from dagster_pipelines.assets.news_embeddings import news_embeddings
 from dagster_pipelines.assets.news_raw import news_raw
 from dagster_pipelines.assets.ohlcv_raw import ohlcv_raw
 from dagster_pipelines.resources.clickhouse import ClickHouseResource
+from dagster_pipelines.resources.qdrant import QdrantResource
 from dagster_pipelines.schedules import (
     fundamentals_weekly_job,
     fundamentals_weekly_schedule,
@@ -23,6 +25,8 @@ from dagster_pipelines.schedules import (
 from dagster_pipelines.sensors import (
     fundamentals_downstream_job,
     fundamentals_sensor,
+    news_downstream_job,
+    news_raw_sensor,
     ohlcv_downstream_job,
     ohlcv_raw_sensor,
 )
@@ -32,6 +36,7 @@ defs = Definitions(
         ohlcv_raw,
         fundamentals,
         news_raw,
+        news_embeddings,
         ohlcv_weekly,
         ohlcv_monthly,
         fundamental_summary,
@@ -46,10 +51,12 @@ defs = Definitions(
         news_raw_job,
         ohlcv_downstream_job,
         fundamentals_downstream_job,
+        news_downstream_job,
     ],
     schedules=[ohlcv_daily_schedule, fundamentals_weekly_schedule, news_raw_schedule],
-    sensors=[ohlcv_raw_sensor, fundamentals_sensor],
+    sensors=[ohlcv_raw_sensor, fundamentals_sensor, news_raw_sensor],
     resources={
         "clickhouse": ClickHouseResource(),
+        "qdrant": QdrantResource(),
     },
 )

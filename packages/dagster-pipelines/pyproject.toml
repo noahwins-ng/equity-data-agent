@@ -9,7 +9,7 @@ dependencies = [
     "clickhouse-connect>=0.8.0",
     "feedparser>=6.0.10",
     "pandas>=2.0.0",
-    "qdrant-client>=1.13.0",
+    "qdrant-client>=1.15.0",
     "yfinance>=0.2.50",
 ]
 
