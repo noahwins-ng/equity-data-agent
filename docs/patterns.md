@@ -156,10 +156,12 @@ Every partitioned asset fans out to N subprocess workers per trigger. The `Queue
 Before shipping a new scheduled/sensor asset, compute:
 
 ```
-safe_concurrent_runs = (mem_limit_on_dagster_daemon − 660 MB) / 150 MB
+safe_concurrent_runs = (mem_limit_on_dagster_daemon − 660 MB) / 360 MB
 ```
 
-Where `660 MB ≈ 260 MB daemon baseline + 400 MB sensor-tick headroom` and `150 MB` is the observed per-run-worker RSS.
+Where `660 MB ≈ 260 MB daemon baseline + 400 MB sensor-tick headroom` and `360 MB` is the observed per-run-worker peak RSS during `__ASSET_JOB` materialization (revised from 150 MB after Apr 21 2026 OOM; see QNT-115).
+
+At the current `mem_limit: 3g` (QNT-115) this gives `(3072 − 660) / 360 ≈ 6` theoretical concurrent ceiling. Practical cap stays at `max_concurrent_runs: 3` (QNT-113) — the ceiling is headroom, not a target.
 
 - If `max_concurrent_runs` in `dagster.yaml` is already less than `safe_concurrent_runs`, no change needed — your new asset will queue behind the existing jobs.
 - If the total fan-out across ALL scheduled/sensor jobs × their partition counts, triggered within a single cron firing window, would exceed `max_concurrent_runs`, either (a) raise `mem_limit` on `dagster-daemon` in `docker-compose.yml` AND scale `max_concurrent_runs` proportionally in the same PR, or (b) stagger the schedules so fan-out doesn't overlap.

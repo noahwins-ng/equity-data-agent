@@ -83,8 +83,13 @@ services:
     # QNT-113 then capped run concurrency in dagster.yaml so 2g is sufficient
     # even under a 10-partition backfill (without it, the Apr 20 13:22 UTC
     # backfill re-OOM'd the 2g cgroup by launching 10 workers at once).
+    # QNT-115: bumped 2g → 3g after Apr 21 12:22/12:48 UTC OOM-kills during
+    # a 3-partition __ASSET_JOB backfill. The QNT-113 sizing math assumed
+    # 150 MB/worker but observed per-worker peak is ~360 MB, so real peak
+    # 660 + 3*360 = 1740 MB was at 87% of the 2 GiB limit with no headroom.
+    # 3g leaves ~1.3 GiB headroom at max_concurrent_runs=3 (still unchanged).
     # QNT-104 owns the comprehensive resource-limit audit + autoheal sidecar.
-    mem_limit: 2g
+    mem_limit: 3g
     mem_reservation: 256m
     cpus: 0.5
     logging: *default-logging

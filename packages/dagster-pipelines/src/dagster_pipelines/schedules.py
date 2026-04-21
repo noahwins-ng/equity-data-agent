@@ -85,12 +85,12 @@ def fundamentals_weekly_schedule(context: ScheduleEvaluationContext):
 
 
 # QNT-53 concurrency pre-flight (docs/patterns.md §"Adding a Dagster Asset"):
-#   dagster-daemon mem_limit = 2g. safe_concurrent_runs = (2048 − 660) / 150 ≈ 9.
-#   max_concurrent_runs = 3 (dagster.yaml, QNT-113). 4-hour cron fans out 10 news
-#   partitions but the QueuedRunCoordinator serializes to 3 at a time. Overlap
-#   with ohlcv_daily_schedule (17:00 ET) and fundamentals_weekly_schedule
-#   (Sun 22:00 ET) stays within the cap — no mem_limit or max_concurrent_runs
-#   bump required.
+#   dagster-daemon mem_limit = 3g (QNT-115). safe_concurrent_runs =
+#   (3072 − 660) / 360 ≈ 6. max_concurrent_runs = 3 (dagster.yaml, QNT-113).
+#   4-hour cron fans out 10 news partitions but the QueuedRunCoordinator
+#   serializes to 3 at a time. Overlap with ohlcv_daily_schedule (17:00 ET) and
+#   fundamentals_weekly_schedule (Sun 22:00 ET) stays within the cap — no
+#   mem_limit or max_concurrent_runs bump required.
 @schedule(
     job=news_raw_job,
     cron_schedule="0 */4 * * *",  # every 4 hours on the hour

@@ -11,10 +11,13 @@ code_servers:
 # QNT-113: cap concurrent runs to protect the daemon cgroup from fan-out OOM.
 # Apr 20 incident: a 10-partition `fundamentals_weekly_job` backfill launched
 # all 10 subprocess workers at once (DefaultRunCoordinator fires immediately);
-# each worker loads the full repo (~150 MB RSS / ~2 GB VM), combined load blew
-# past the daemon's 2 GB cgroup and the kernel OOM-killed multiple workers.
-# max_concurrent_runs=3 keeps peak usage under ~1.1 GB within the 2 GB limit
-# (daemon baseline ~260 MB + sensor-tick headroom ~400 MB + 3 × 150 MB).
+# each worker loads the full repo + does asset materialization (peak ~360 MB
+# RSS per worker during __ASSET_JOB, revised up from the original 150 MB
+# estimate after the Apr 21 OOM — see QNT-115), and the combined load blew
+# past the daemon's cgroup so the kernel OOM-killed multiple workers.
+# max_concurrent_runs=3 keeps peak usage at ~1.74 GB (daemon baseline ~260 MB
+# + sensor-tick headroom ~400 MB + 3 × 360 MB) under the 3 GB cgroup set in
+# docker-compose.yml (QNT-115 raised 2g → 3g for headroom).
 # If `mem_limit` on dagster-daemon is raised, this can be raised in proportion.
 #
 # QNT-114: reserve a non-backfill slot so sensors (ohlcv, fundamentals, news)
