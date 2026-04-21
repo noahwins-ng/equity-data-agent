@@ -38,6 +38,26 @@ run_coordinator:
 # them against max_concurrent_runs, and the backfill daemon keeps relaunching
 # the same partition, producing additional ghost slots.
 #
+# IMPORTANT — recovery mechanism depends on the run launcher:
+#
+#   * Container-aware launchers (DockerRunLauncher, K8sRunLauncher, …) set
+#     `supports_check_run_worker_health = True`. For those, run_monitoring
+#     polls worker liveness every `poll_interval_seconds` and fails orphans
+#     immediately on the first miss.
+#   * DefaultRunLauncher (our current setup — run-workers are subprocesses of
+#     the daemon container) returns `supports_check_run_worker_health = False`.
+#     The worker-health branch is SKIPPED; only `max_runtime_seconds` fires.
+#     So for us, run_monitoring is purely a timeout-based fallback until we
+#     migrate to DockerRunLauncher (tracked separately). A real orphan sits
+#     STARTED until it crosses `max_runtime_seconds`, then gets failed.
+#
+# max_runtime_seconds: 1800 (30 min) — our realistic run-time ceiling. Sensor
+# jobs take <1 min, scheduled jobs <5 min, a 10-partition backfill fans out to
+# ~10 min with max_concurrent_runs=3. Anything past 30 min is almost certainly
+# stuck. This matches the Apr 21 AMZN ghost duration (queue wedged ~30 min
+# before the daemon was restarted). Per-job tighter timeouts can be set via
+# the `dagster/max_runtime_seconds` tag.
+#
 # max_resume_run_attempts: 0 means Dagster fails orphans instead of resuming
 # them — we want loud failures, not silent auto-retry of already-OOM'd work.
 # Per-job retry is opt-in via QNT-110's `dagster/max_retries` tag.
@@ -46,6 +66,7 @@ run_monitoring:
   poll_interval_seconds: 120
   start_timeout_seconds: 180
   cancel_timeout_seconds: 180
+  max_runtime_seconds: 1800
   max_resume_run_attempts: 0
   free_slots_after_run_end_seconds: 0
 

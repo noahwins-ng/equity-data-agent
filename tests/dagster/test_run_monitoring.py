@@ -30,11 +30,16 @@ def parsed_config() -> dict[str, Any]:
 def test_run_monitoring_enabled_with_expected_timeouts(parsed_config: dict[str, Any]) -> None:
     rm = parsed_config["run_monitoring"]
     assert rm["enabled"] is True
-    # These numbers shape the runbook's stated recovery budget (~5 min).
-    # If they change, the runbook entry must change too.
+    # These numbers shape the runbook's stated recovery window. If they change,
+    # the runbook entry under "CANCELING ghost after run-worker OOM" must change
+    # too. max_runtime_seconds is the timeout fallback — on DefaultRunLauncher
+    # it's the only real orphan-detection signal (the per-worker health check
+    # path is not supported for our launcher). See dagster.yaml for the full
+    # rationale and the launcher-switch follow-up.
     assert rm["poll_interval_seconds"] == 120
     assert rm["start_timeout_seconds"] == 180
     assert rm["cancel_timeout_seconds"] == 180
+    assert rm["max_runtime_seconds"] == 1800
 
 
 def test_run_monitoring_fails_orphans_instead_of_resuming(
