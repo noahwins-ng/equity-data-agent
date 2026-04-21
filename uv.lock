@@ -589,7 +589,7 @@ requires-dist = [
     { name = "dagster-webserver", specifier = ">=1.9.0" },
     { name = "feedparser", specifier = ">=6.0.10" },
     { name = "pandas", specifier = ">=2.0.0" },
-    { name = "qdrant-client", specifier = ">=1.13.0" },
+    { name = "qdrant-client", specifier = ">=1.15.0" },
     { name = "shared", editable = "packages/shared" },
     { name = "yfinance", specifier = ">=0.2.50" },
 ]

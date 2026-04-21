@@ -200,8 +200,8 @@ Updated automatically by `/ship` and `/sync-docs`.
     - Dedup key: `id = hash(ticker + url)`
     - Stores: `headline`, `body`, `source`, `url`, `published_at` per ticker
     - Downstream sensor (`news_raw` → `news_embeddings`) must batch all pending events per tick from day one (Phase 2 lesson: QNT-46 rewrite) — **deferred to QNT-54** (target asset `news_embeddings` lives there; reuses the existing `_build_materialization_sensor` factory for batch semantics)
-- [ ] Create Qdrant `equity_news` collection (384-dim Float32, cosine distance) — auto-create in the Qdrant Dagster resource on first use, or via a setup script
-- [ ] Implement `news_embeddings` Dagster asset (`news_raw` → Qdrant Cloud) — QNT-54
+- [x] Create Qdrant `equity_news` collection (384-dim Float32, cosine distance) — auto-create in the Qdrant Dagster resource on first use, or via a setup script (shipped as part of QNT-54 — `QdrantResource.ensure_collection` runs at asset-start)
+- [x] Implement `news_embeddings` Dagster asset (`news_raw` → Qdrant Cloud) — QNT-54
     - Embeds `headline` text using `sentence-transformers/all-MiniLM-L6-v2` (384-dim)
     - Sensor-triggered when `news_raw` materializes new rows
     - Stores vector + full payload (headline, source, url, published_at, ticker) in Qdrant
