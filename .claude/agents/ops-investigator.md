@@ -22,7 +22,7 @@ Your first responsibility is matching the symptom against `docs/guides/ops-runbo
 | Named-volume shadowing | `dagster.yaml` config change "didn't activate" despite CD green — stale copy in named volume vs repo bind-mount |
 | Deploy-window alert suppression stuck | `/opt/equity-data-agent/.deploy-in-progress` sentinel exists >10min after CD completed |
 | Container wedged but up | `docker ps` says Up, healthcheck reports unhealthy, process is alive but stuck (deadlock, blocked I/O) |
-| Dagster backfill OOM (run fan-out) | `[OOM KILL] dagster-daemon` Discord alert, kernel `Memory cgroup out of memory` for `python` processes ~140-150MB RSS / ~2GB VM inside the dagster-daemon cgroup, partitions stuck at "Failed to start" |
+| Dagster backfill OOM (run fan-out) | `[OOM KILL] dagster-daemon` Discord alert, kernel `Memory cgroup out of memory` for `python` processes inside the dagster-daemon cgroup (per-worker RSS ~150 MB during repo-load fan-out, ~360 MB during `__ASSET_JOB` materialization — see QNT-115); partitions stuck at "Failed to start" |
 
 If the symptom doesn't match any class, say "new class — proposed addition" and describe the pattern observed.
 

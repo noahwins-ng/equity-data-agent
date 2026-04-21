@@ -389,7 +389,8 @@ ssh hetzner 'docker stats --no-stream equity-data-agent-api-1'
 # OOM events in the daemon cgroup (note the task= value — "python" means a run-worker subprocess, not the daemon itself)
 ssh hetzner 'journalctl -k --since "1 hour ago" | grep -E "Memory cgroup out of memory" | tail -10'
 
-# Per-victim total-vm — expect ~2 GB VM, ~150 MB RSS per killed python child
+# Per-victim total-vm — expect ~2 GB VM, ~360 MB RSS per killed python child
+# (per-worker peak revised up from 150 MB after Apr 21 __ASSET_JOB OOM — QNT-115)
 ssh hetzner 'journalctl -k --since "1 hour ago" | grep "Killed process .* (python)" | tail -10'
 
 # Confirm the daemon's cgroup is the one that OOM'd (match the container scope ID)
@@ -408,17 +409,20 @@ ssh hetzner 'docker inspect equity-data-agent-dagster-daemon-1 --format "{{.Id}}
 
 **Prevention**:
 
-- [QNT-113](https://linear.app/noahwins/issue/QNT-113) — `QueuedRunCoordinator(max_concurrent_runs=3)` in `dagster.yaml` serialises backfill fan-out so peak memory stays under the daemon's 2 GB cgroup.
+- [QNT-113](https://linear.app/noahwins/issue/QNT-113) — `QueuedRunCoordinator(max_concurrent_runs=3)` in `dagster.yaml` serialises backfill fan-out so peak memory stays under the daemon's cgroup.
+- [QNT-115](https://linear.app/noahwins/issue/QNT-115) — raised dagster-daemon `mem_limit` 2g → 3g after the QNT-113 sizing math under-estimated the real per-worker peak (150 MB → 360 MB observed during `__ASSET_JOB` materialization).
 - **Memory math** (must stay consistent with `mem_limit` on dagster-daemon in `docker-compose.yml`):
   - Daemon baseline: ~260 MB
   - Sensor-tick subprocess headroom: ~400 MB
-  - N workers × ~150 MB RSS each
-  - With `mem_limit: 2g` and `max_concurrent_runs: 3`, peak ≈ 1.1 GB (leaves ~900 MB slack for materialization spikes)
-  - If the daemon's `mem_limit` is raised, `max_concurrent_runs` can rise proportionally: roughly `(mem_limit - 660MB) / 150MB`.
+  - N workers × ~360 MB RSS each (peak during `__ASSET_JOB` materialization; revised from 150 MB — QNT-115)
+  - With `mem_limit: 3g` and `max_concurrent_runs: 3`, peak ≈ 1.74 GB (leaves ~1.3 GB slack for materialization spikes)
+  - If the daemon's `mem_limit` is raised, `max_concurrent_runs` can rise proportionally: roughly `(mem_limit - 660MB) / 360MB`. At 3g that is a theoretical ceiling of ~6; practical cap stays at 3.
 - [QNT-110](https://linear.app/noahwins/issue/QNT-110) run-retry is complementary — it handles transient launch failures but won't rescue a cgroup under sustained fan-out pressure (retries re-launch into the same starved cgroup).
 - [QNT-114](https://linear.app/noahwins/issue/QNT-114) `run_monitoring` auto-fails STARTED/CANCELING runs whose worker was OOM-killed before emitting `RUN_FAILURE` — see "CANCELING ghost after run-worker OOM" below. Without this, a kernel-killed worker leaves a ghost slot that silently holds one of three `max_concurrent_runs` slots until the daemon is restarted.
 
-**Last occurred**: 2026-04-20 13:22–13:28 UTC — manually launched 10-partition backfill on `fundamentals_weekly_job` via Dagster UI; 3 kernel OOM kills in the daemon cgroup, backfill `tevuzzoj` failed after 10:31, partition AMZN (`5138c8ee`) stuck at "Failed to start".
+**Last occurred**: 2026-04-21 12:22 / 12:48 UTC — manual 3-partition `__ASSET_JOB` backfill (MSFT/GOOGL/AMZN); two kernel OOM-kills of `python` run-worker subprocesses in the daemon cgroup at the 2 GB limit. Observed daemon peak 1.74 GiB (87% of limit). Root cause: QNT-113 sizing math assumed 150 MB/worker but real peak during `__ASSET_JOB` materialization is ~360 MB. Follow-up: QNT-115 bumped `mem_limit` 2g → 3g.
+
+Prior: 2026-04-20 13:22–13:28 UTC — manually launched 10-partition backfill on `fundamentals_weekly_job` via Dagster UI; 3 kernel OOM kills in the daemon cgroup, backfill `tevuzzoj` failed after 10:31, partition AMZN (`5138c8ee`) stuck at "Failed to start".
 
 ---
 
