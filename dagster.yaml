@@ -38,25 +38,29 @@ run_coordinator:
 # them against max_concurrent_runs, and the backfill daemon keeps relaunching
 # the same partition, producing additional ghost slots.
 #
-# IMPORTANT — recovery mechanism depends on the run launcher:
+# Three orphan classes are covered by three different code paths (see
+# docs/guides/ops-runbook.md → "CANCELING ghost after run-worker OOM" for the
+# full table):
 #
-#   * Container-aware launchers (DockerRunLauncher, K8sRunLauncher, …) set
-#     `supports_check_run_worker_health = True`. For those, run_monitoring
-#     polls worker liveness every `poll_interval_seconds` and fails orphans
-#     immediately on the first miss.
-#   * DefaultRunLauncher (our current setup — run-workers are subprocesses of
-#     the daemon container) returns `supports_check_run_worker_health = False`.
-#     The worker-health branch is SKIPPED; only `max_runtime_seconds` fires.
-#     So for us, run_monitoring is purely a timeout-based fallback until we
-#     migrate to DockerRunLauncher (tracked separately). A real orphan sits
-#     STARTED until it crosses `max_runtime_seconds`, then gets failed.
+#   * STARTING never-launched → monitor_starting_run, ~3 min via
+#     start_timeout_seconds. Launcher-independent.
+#   * CANCELING stuck (operator Terminate, worker dead so no ack comes back —
+#     this was the Apr 21 AMZN incident) → monitor_canceling_run, ~3 min via
+#     cancel_timeout_seconds. Launcher-independent.
+#   * STARTED worker died, no Terminate (separate class) → monitor_started_run.
+#     Container-aware launchers (DockerRunLauncher, K8sRunLauncher) get per-
+#     worker health checks (~2 min). DefaultRunLauncher returns
+#     supports_check_run_worker_health = False, so the health branch is
+#     SKIPPED and only max_runtime_seconds fires (~30 min).
 #
-# max_runtime_seconds: 1800 (30 min) — our realistic run-time ceiling. Sensor
-# jobs take <1 min, scheduled jobs <5 min, a 10-partition backfill fans out to
-# ~10 min with max_concurrent_runs=3. Anything past 30 min is almost certainly
-# stuck. This matches the Apr 21 AMZN ghost duration (queue wedged ~30 min
-# before the daemon was restarted). Per-job tighter timeouts can be set via
-# the `dagster/max_runtime_seconds` tag.
+# On our current DefaultRunLauncher, the 3-min paths already cover the Apr 21
+# CANCELING class — the max_runtime_seconds: 1800 knob is specifically for the
+# STARTED-no-Terminate class so it can't silently hold a concurrency slot.
+# 30 min matches our realistic workload ceiling: sensor jobs <1 min, scheduled
+# <5 min, a 10-partition backfill with max_concurrent_runs=3 is ~10 min.
+# Per-job tighter timeouts can be set via the `dagster/max_runtime_seconds`
+# tag. Migrating to DockerRunLauncher (follow-up ticket) collapses the
+# STARTED recovery to ~2 min.
 #
 # max_resume_run_attempts: 0 means Dagster fails orphans instead of resuming
 # them — we want loud failures, not silent auto-retry of already-OOM'd work.
