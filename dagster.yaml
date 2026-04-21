@@ -16,11 +16,38 @@ code_servers:
 # max_concurrent_runs=3 keeps peak usage under ~1.1 GB within the 2 GB limit
 # (daemon baseline ~260 MB + sensor-tick headroom ~400 MB + 3 × 150 MB).
 # If `mem_limit` on dagster-daemon is raised, this can be raised in proportion.
+#
+# QNT-114: reserve a non-backfill slot so sensors (ohlcv, fundamentals, news)
+# can't be starved by a 3-partition backfill. With max_concurrent_runs=3 and a
+# backfill limit of 2, at most 2 backfill runs dequeue at once, leaving >=1
+# slot free for sensor-triggered work. `dagster/backfill` is a system tag set
+# by the backfill daemon on every backfill-launched run.
 run_coordinator:
-  module: dagster.core.run_coordinator
+  module: dagster._core.run_coordinator
   class: QueuedRunCoordinator
   config:
     max_concurrent_runs: 3
+    tag_concurrency_limits:
+      - key: "dagster/backfill"
+        limit: 2
+
+# QNT-114: auto-reconcile orphaned STARTED/CANCELING runs after a run-worker
+# dies without emitting RUN_FAILURE (kernel OOM-kill of a subprocess is the
+# canonical case — Apr 21 AMZN backfill incident). Without run_monitoring,
+# these runs stay in STARTED forever, the queue-coordinator keeps counting
+# them against max_concurrent_runs, and the backfill daemon keeps relaunching
+# the same partition, producing additional ghost slots.
+#
+# max_resume_run_attempts: 0 means Dagster fails orphans instead of resuming
+# them — we want loud failures, not silent auto-retry of already-OOM'd work.
+# Per-job retry is opt-in via QNT-110's `dagster/max_retries` tag.
+run_monitoring:
+  enabled: true
+  poll_interval_seconds: 120
+  start_timeout_seconds: 180
+  cancel_timeout_seconds: 180
+  max_resume_run_attempts: 0
+  free_slots_after_run_end_seconds: 0
 
 # QNT-110: re-launch failed runs on transient system/launch failures
 # (e.g. gRPC UNAVAILABLE when the code-server container is mid-restart during
