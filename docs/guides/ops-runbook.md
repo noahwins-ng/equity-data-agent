@@ -416,8 +416,55 @@ ssh hetzner 'docker inspect equity-data-agent-dagster-daemon-1 --format "{{.Id}}
   - With `mem_limit: 2g` and `max_concurrent_runs: 3`, peak ≈ 1.1 GB (leaves ~900 MB slack for materialization spikes)
   - If the daemon's `mem_limit` is raised, `max_concurrent_runs` can rise proportionally: roughly `(mem_limit - 660MB) / 150MB`.
 - [QNT-110](https://linear.app/noahwins/issue/QNT-110) run-retry is complementary — it handles transient launch failures but won't rescue a cgroup under sustained fan-out pressure (retries re-launch into the same starved cgroup).
+- [QNT-114](https://linear.app/noahwins/issue/QNT-114) `run_monitoring` auto-fails STARTED/CANCELING runs whose worker was OOM-killed before emitting `RUN_FAILURE` — see "CANCELING ghost after run-worker OOM" below. Without this, a kernel-killed worker leaves a ghost slot that silently holds one of three `max_concurrent_runs` slots until the daemon is restarted.
 
 **Last occurred**: 2026-04-20 13:22–13:28 UTC — manually launched 10-partition backfill on `fundamentals_weekly_job` via Dagster UI; 3 kernel OOM kills in the daemon cgroup, backfill `tevuzzoj` failed after 10:31, partition AMZN (`5138c8ee`) stuck at "Failed to start".
+
+---
+
+### CANCELING ghost after run-worker OOM (orphaned STARTED run wedges queue)
+
+**Symptoms**:
+
+- Dagster run history shows a run stuck in **STARTED** or **CANCELING** long after its expected completion (minutes, not seconds).
+- Clicking "Terminate" in the UI flips the row to CANCELING but it never progresses to FAILURE — CANCELING requires the run-worker to ack, and the worker is already dead.
+- One of `max_concurrent_runs` slots is held by the ghost row, so new runs (sensor ticks, backfill partitions) queue indefinitely.
+- Backfill daemon keeps auto-relaunching the same partition, producing additional ghost rows — every retry just adds another stuck STARTED row.
+- `docker logs equity-data-agent-dagster-daemon-1` does NOT show a `RUN_FAILURE` event for the ghost; the worker died before it could emit one. Typically follows a `[OOM KILL]` Discord alert on the daemon container.
+
+**Diagnosis**:
+
+```bash
+# Find ghost runs: STARTED/STARTING/CANCELING for >> expected runtime
+ssh hetzner 'docker exec equity-data-agent-dagster-daemon-1 dagster run list --status STARTED --limit 20'
+ssh hetzner 'docker exec equity-data-agent-dagster-daemon-1 dagster run list --status CANCELING --limit 20'
+
+# Cross-check against kernel OOM kills — ghost runs almost always correlate 1:1
+# with a "Killed process ... (python)" kernel log within the last hour.
+ssh hetzner 'journalctl -k --since "1 hour ago" | grep "Killed process .* (python)" | tail -10'
+
+# Confirm run_monitoring is actually enabled in the live config
+ssh hetzner 'docker exec equity-data-agent-dagster-daemon-1 cat /dagster_home/dagster.yaml | grep -A6 run_monitoring'
+```
+
+**Response**:
+
+1. If `run_monitoring.enabled: true` is in the live config, **wait** `poll_interval_seconds + start_timeout_seconds` (~5 min) — the daemon will auto-fail the orphan and free its slot. Confirm with `dagster run list --status FAILURE | head`. Note: this also retroactively cleans up any pre-existing STARTED ghosts (they get picked up on the next poll after the daemon comes back with monitoring enabled), so deploying this config is self-healing for the Apr 21 AMZN-class incident.
+2. If `run_monitoring` is disabled or missing, restart the daemon to release the in-memory slot counter. This does **not** reconcile the ghost rows — they stay STARTED in the run-storage DB — but the restart lets new runs dequeue:
+   ```bash
+   ssh hetzner 'docker compose --profile prod restart dagster-daemon'
+   ```
+   Then fix `dagster.yaml` in-repo, ship through CD. Never SCP-patch prod (see [QNT-107](https://linear.app/noahwins/issue/QNT-107)). Once monitoring is live, the stale STARTED rows auto-reconcile per step 1.
+3. Only as last resort, if you can't wait for the next poll: mark ghost runs failed manually via Dagster UI "Mark as failure" action. This releases the slot but does not emit the normal run-failure events (no Sentry hook, no QNT-110 retry). Prefer step 1 unless the queue pressure is actively blocking a time-sensitive run.
+
+**Prevention**:
+
+- [QNT-114](https://linear.app/noahwins/issue/QNT-114) — `run_monitoring` in `dagster.yaml` polls STARTED/STARTING/CANCELING runs every `poll_interval_seconds` and auto-fails any whose run-worker has disappeared. Max time to recover a ghost ≈ `poll_interval_seconds + start_timeout_seconds` (180 + 180 = ~5 min).
+  - `max_resume_run_attempts: 0` means Dagster **fails** orphans instead of resuming them — resumption would just re-OOM the same worker in the same cgroup.
+  - Complementary to [QNT-110](https://linear.app/noahwins/issue/QNT-110) (launch-time retry) and [QNT-113](https://linear.app/noahwins/issue/QNT-113) (fan-out cap): QNT-113 limits new fan-out, QNT-114 cleans up after OOMs when they still happen.
+- [QNT-114](https://linear.app/noahwins/issue/QNT-114) — `tag_concurrency_limits` reserves ≥1 of 3 slots for non-backfill work (`dagster/backfill` capped at 2), so a 3-partition backfill can't starve sensors even before any runs go ghost.
+
+**Last occurred**: 2026-04-21 — post-incident backfill of `__ASSET_JOB` (MSFT/GOOGL/AMZN); AMZN worker kernel-OOM'd before emitting RUN_FAILURE; operator Terminate → CANCELING → stuck; backfill daemon relaunched AMZN, producing more ghosts; queue wedged ~30 min until daemon restart.
 
 ---
 
