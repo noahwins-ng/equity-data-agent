@@ -449,7 +449,10 @@ ssh hetzner 'docker exec equity-data-agent-dagster-daemon-1 cat /dagster_home/da
 
 **Response**:
 
-1. If `run_monitoring.enabled: true` is in the live config, **wait** `poll_interval_seconds + start_timeout_seconds` (~5 min) — the daemon will auto-fail the orphan and free its slot. Confirm with `dagster run list --status FAILURE | head`. Note: this also retroactively cleans up any pre-existing STARTED ghosts (they get picked up on the next poll after the daemon comes back with monitoring enabled), so deploying this config is self-healing for the Apr 21 AMZN-class incident.
+1. If `run_monitoring.enabled: true` is in the live config, check how long the ghost has been STARTED:
+   - **Under `max_runtime_seconds` (30 min on our current `DefaultRunLauncher`)**: you have to wait it out. The monitor ticks every `poll_interval_seconds` (2 min) but does nothing until the run's age crosses `max_runtime_seconds` because our launcher doesn't support per-worker health checks. If the queue is actively blocked, proceed to step 2.
+   - **Over `max_runtime_seconds`**: the next monitor tick will fail the run. Confirm with `dagster run list --status FAILURE | head`.
+   - Once we switch to `DockerRunLauncher` (follow-up ticket), per-worker health checks fire within one poll interval (~2 min) and this wait goes away. Until then, run_monitoring is a 30-min timeout fallback, not a fast recovery mechanism.
 2. If `run_monitoring` is disabled or missing, restart the daemon to release the in-memory slot counter. This does **not** reconcile the ghost rows — they stay STARTED in the run-storage DB — but the restart lets new runs dequeue:
    ```bash
    ssh hetzner 'docker compose --profile prod restart dagster-daemon'
@@ -459,7 +462,9 @@ ssh hetzner 'docker exec equity-data-agent-dagster-daemon-1 cat /dagster_home/da
 
 **Prevention**:
 
-- [QNT-114](https://linear.app/noahwins/issue/QNT-114) — `run_monitoring` in `dagster.yaml` polls STARTED/STARTING/CANCELING runs every `poll_interval_seconds` and auto-fails any whose run-worker has disappeared. Max time to recover a ghost ≈ `poll_interval_seconds + start_timeout_seconds` (180 + 180 = ~5 min).
+- [QNT-114](https://linear.app/noahwins/issue/QNT-114) — `run_monitoring` in `dagster.yaml` polls STARTED/STARTING/CANCELING runs every `poll_interval_seconds` and fails stale ones. **Recovery mechanism depends on the run launcher**:
+  - Container-aware launchers (`DockerRunLauncher`, `K8sRunLauncher`) advertise `supports_check_run_worker_health = True`, and `monitor_started_run` fails orphans within one poll interval (~2 min) by pinging the worker container.
+  - Our `DefaultRunLauncher` returns `supports_check_run_worker_health = False` — the worker-health branch is skipped entirely. Recovery is timeout-based only: `max_runtime_seconds: 1800` means any STARTED run older than 30 min gets failed. This catches the Apr 21 AMZN class (that ghost was stuck ~30 min before manual restart). Faster per-worker detection is blocked on a launcher switch — tracked in the follow-up ticket for `DockerRunLauncher`.
   - `max_resume_run_attempts: 0` means Dagster **fails** orphans instead of resuming them — resumption would just re-OOM the same worker in the same cgroup.
   - Complementary to [QNT-110](https://linear.app/noahwins/issue/QNT-110) (launch-time retry) and [QNT-113](https://linear.app/noahwins/issue/QNT-113) (fan-out cap): QNT-113 limits new fan-out, QNT-114 cleans up after OOMs when they still happen.
 - [QNT-114](https://linear.app/noahwins/issue/QNT-114) — `tag_concurrency_limits` reserves ≥1 of 3 slots for non-backfill work (`dagster/backfill` capped at 2), so a 3-partition backfill can't starve sensors even before any runs go ghost.
