@@ -42,7 +42,7 @@ NEWS_COLLECTION_SPEC = QdrantCollectionSpec(
 # ~4h RSS cadence so a missed tick doesn't leave gaps, and narrow enough
 # that the per-partition upsert stays bounded.
 _FRESH_WINDOW_SQL = """
-SELECT id, ticker, headline, url, published_at
+SELECT id, ticker, headline, url, source, published_at
 FROM equity_raw.news_raw FINAL
 WHERE ticker = %(ticker)s
   AND fetched_at >= now() - INTERVAL 7 DAY
@@ -108,6 +108,7 @@ def news_embeddings(
                     "published_at": int(published_at.timestamp()),
                     "url": str(record["url"]),
                     "headline": str(record["headline"]),
+                    "source": str(record["source"]),
                 },
             )
         )

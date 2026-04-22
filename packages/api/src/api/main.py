@@ -26,7 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from shared.config import settings
 
 from api.clickhouse import get_client
-from api.routers import data_router, reports_router, tickers_router
+from api.routers import data_router, reports_router, search_router, tickers_router
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +138,7 @@ app.add_middleware(
 
 app.include_router(reports_router)
 app.include_router(data_router)
+app.include_router(search_router)
 app.include_router(tickers_router)
 
 

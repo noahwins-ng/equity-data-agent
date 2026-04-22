@@ -208,7 +208,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - Sensor-triggered when `news_raw` materializes new rows
     - Stores vector + full payload (headline, source, url, published_at, ticker) in Qdrant
     - **Tests use a fake Qdrant client** (analogous to the `_FakeClient` for ClickHouse in `packages/api/tests/test_data.py`) so CI is deterministic with no Qdrant Cloud connection — Phase 3 lesson
-- [ ] `GET /api/v1/search/news?ticker=NVDA&query=earnings` — QNT-55
+- [x] `GET /api/v1/search/news?ticker=NVDA&query=earnings` — QNT-55
     - Returns `[{headline, source, url, published_at, score}]` — top-N results ranked by cosine similarity
     - Both `ticker` and `query` are required. Returns `[]` if Qdrant is unreachable or no news data exists.
     - **Tests use a fake Qdrant client** (same `_FakeClient` pattern) covering ranking, payload shape, and the empty-results/unreachable fallback — Phase 3 lesson
