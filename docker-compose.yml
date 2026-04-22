@@ -1,3 +1,15 @@
+# QNT-116: pin the compose project name. Compose's auto-inferred project name
+# is the working-directory basename, which means renaming the repo checkout
+# (or `docker compose -p <other>`, or `COMPOSE_PROJECT_NAME=<other>`) silently
+# changes the generated network + volume names (`<project>_default`,
+# `<project>_dagster_home`). `dagster.yaml`'s `run_launcher.config.network`
+# and `container_kwargs.volumes` hardcode the `equity-data-agent_*` prefix
+# so DockerRunLauncher can address the right network/volume when spawning
+# run-worker containers. Pinning the project name here makes that invariant
+# declarative rather than a convention; mismatched names fail loudly at
+# compose-parse time, not silently at run-launch time.
+name: equity-data-agent
+
 # Shared logging config — compose-level (per-container) json-file rotation.
 # Applied on next container recreation via normal CD; no dockerd restart needed.
 x-logging: &default-logging
@@ -29,12 +41,60 @@ services:
     profiles: [dev, prod]
 
   # ── Prod-only services ───────────────────────────────────────────────────────
+  # QNT-116: split into three services per Dagster's canonical production
+  # topology (https://docs.dagster.io/deployment/oss/deployment-options/docker).
+  #   * dagster-code-server: loads user code, serves gRPC on :4000
+  #   * dagster (webserver): UI on :3000, talks to code-server via gRPC
+  #   * dagster-daemon: scheduler/sensor/backfill/run-launcher, also via gRPC
+  # All three share the same image so `docker build` runs once. The explicit
+  # `image:` name is required so DAGSTER_CURRENT_IMAGE below matches what
+  # DockerRunLauncher (Phase 2) will hand to ephemeral run-worker containers.
+  dagster-code-server:
+    build:
+      context: .
+      target: dagster
+    image: equity-data-agent-dagster:latest
+    restart: unless-stopped
+    command: /app/.venv/bin/dagster code-server start -h 0.0.0.0 -p 4000 -m dagster_pipelines.definitions
+    env_file: .env
+    environment:
+      - DAGSTER_HOME=/dagster_home
+      # Consumed by DockerRunLauncher (Phase 2) — the code server registers
+      # this image name with Dagster at startup, and the daemon's run launcher
+      # uses it when spawning ephemeral run-worker containers.
+      - DAGSTER_CURRENT_IMAGE=equity-data-agent-dagster:latest
+    volumes:
+      - dagster_home:/dagster_home
+      - ./dagster.yaml:/dagster_home/dagster.yaml:ro
+    depends_on: [clickhouse]
+    # Isolated from the daemon cgroup — user-code imports (pandas, yfinance,
+    # sentence-transformers via qdrant-client, etc.) peaked at ~360 MB RSS
+    # in QNT-115. 2g gives ~5x headroom for concurrent schedule/sensor
+    # in-process evaluation that previously ran in the daemon cgroup.
+    mem_limit: 2g
+    mem_reservation: 256m
+    cpus: 1.0
+    logging: *default-logging
+    healthcheck:
+      # Canonical Dagster gRPC health-probe (from Dagster's docker-compose
+      # reference). Returns 0 once the code location has loaded and is ready
+      # to serve definitions over gRPC.
+      test: ["CMD-SHELL", "/app/.venv/bin/dagster api grpc-health-check -p 4000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s  # user-code load can take ~30-60s (pandas, yfinance, etc.)
+    profiles: [prod]
+
   dagster:
     build:
       context: .
       target: dagster
+    image: equity-data-agent-dagster:latest
     restart: unless-stopped
-    command: /app/.venv/bin/dagster-webserver -m dagster_pipelines.definitions -h 0.0.0.0 -p 3000
+    # QNT-116: drop -m (no longer loads user code in-process); read the
+    # workspace file to reach the code server via gRPC.
+    command: /app/.venv/bin/dagster-webserver -w /app/workspace.yaml -h 0.0.0.0 -p 3000
     env_file: .env
     environment:
       - DAGSTER_HOME=/dagster_home
@@ -45,11 +105,29 @@ services:
       # holds Dagster-managed *state* (history, schedules, storage) that must
       # persist; dagster.yaml is *config* and belongs in the repo.
       - ./dagster.yaml:/dagster_home/dagster.yaml:ro
+      # QNT-116: workspace.yaml lives at /app (image WORKDIR), NOT under
+      # /dagster_home. Bind-mounting a file into a path that's also backed
+      # by a shared named volume (dagster_home) produces a Docker mountpoint
+      # race when multiple services use the same volume: the second service
+      # fails with "make mountpoint: file exists". /app is not a named volume
+      # so each service gets an independent bind-mount.
+      - ./workspace.yaml:/app/workspace.yaml:ro
     ports:
       - "127.0.0.1:3000:3000"  # bound to loopback only; reach via SSH tunnel
-    depends_on: [clickhouse]
-    mem_limit: 2g
-    mem_reservation: 512m
+    depends_on:
+      clickhouse:
+        condition: service_started
+      # Wait for code-server HEALTHY (not just started) so that the code-server
+      # has completed SQLite schedule-storage alembic init before the webserver
+      # touches the shared dagster_home volume. On a fresh volume, simultaneous
+      # first-boot of three services produces an "alembic_version has more than
+      # one head" error; staggering via service_healthy avoids it.
+      dagster-code-server:
+        condition: service_healthy
+    # QNT-116: 2g → 1g. Webserver no longer imports user code (QNT-115's
+    # ~360 MB peak moved to dagster-code-server).
+    mem_limit: 1g
+    mem_reservation: 256m
     cpus: 1.0
     logging: *default-logging
     healthcheck:
@@ -64,8 +142,10 @@ services:
     build:
       context: .
       target: dagster
+    image: equity-data-agent-dagster:latest
     restart: unless-stopped
-    command: /app/.venv/bin/dagster-daemon run -m dagster_pipelines.definitions
+    # QNT-116: drop -m; read workspace.yaml to reach code-server over gRPC.
+    command: /app/.venv/bin/dagster-daemon run -w /app/workspace.yaml
     env_file: .env
     environment:
       - DAGSTER_HOME=/dagster_home
@@ -75,22 +155,26 @@ services:
       # reason as dagster service — config edits in repo must reach both
       # the webserver and the daemon since both read DAGSTER_HOME/dagster.yaml).
       - ./dagster.yaml:/dagster_home/dagster.yaml:ro
-    depends_on: [clickhouse]
-    # QNT-111: bumped 1g → 2g after Apr 20 02:00 UTC OOM cascade during
-    # weekly fundamentals schedule tick. The 1g cgroup limit (set by QNT-100)
-    # was blown out by concurrent partition-launcher subprocesses; kernel
-    # OOM-killed 4+ python processes in 2 min, killed 7 runs before launch.
-    # QNT-113 then capped run concurrency in dagster.yaml so 2g is sufficient
-    # even under a 10-partition backfill (without it, the Apr 20 13:22 UTC
-    # backfill re-OOM'd the 2g cgroup by launching 10 workers at once).
-    # QNT-115: bumped 2g → 3g after Apr 21 12:22/12:48 UTC OOM-kills during
-    # a 3-partition __ASSET_JOB backfill. The QNT-113 sizing math assumed
-    # 150 MB/worker but observed per-worker peak is ~360 MB, so real peak
-    # 660 + 3*360 = 1740 MB was at 87% of the 2 GiB limit with no headroom.
-    # 3g leaves ~1.3 GiB headroom at max_concurrent_runs=3 (still unchanged).
-    # QNT-104 owns the comprehensive resource-limit audit + autoheal sidecar.
-    mem_limit: 3g
-    mem_reservation: 256m
+      - ./workspace.yaml:/app/workspace.yaml:ro
+      # QNT-116 Phase 2: DockerRunLauncher spawns ephemeral run-worker
+      # containers via the Docker API. Trust boundary: the daemon gets full
+      # Docker control on the host — see docs/guides/ops-runbook.md security
+      # section. Mitigation: daemon image is ours, not third-party.
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      clickhouse:
+        condition: service_started
+      dagster-code-server:
+        condition: service_healthy
+    # QNT-116: 3g → 512m. The daemon process alone is ~100-200 MiB (cron-like
+    # scheduler + sensor tick loop + queue coordinator). User code is now
+    # isolated in dagster-code-server (2g) and ephemeral run-worker containers
+    # (launched via DockerRunLauncher, not counted against this cgroup).
+    # Historical trail retained for incident archaeology:
+    #   QNT-100: 1g initial; QNT-111: 1g→2g (Apr 20 OOM); QNT-115: 2g→3g (Apr 21 OOM);
+    #   QNT-116: 3g→512m (topology split — daemon no longer spawns user-code subprocesses).
+    mem_limit: 512m
+    mem_reservation: 128m
     cpus: 0.5
     logging: *default-logging
     # Process-check — slim images have no pgrep/ps, so read /proc/1/cmdline directly.

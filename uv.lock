@@ -552,6 +552,20 @@ wheels = [
 ]
 
 [[package]]
+name = "dagster-docker"
+version = "0.29.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "dagster" },
+    { name = "docker" },
+    { name = "docker-image-py" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/09/da/56e579e8c2d69ed0456d1274d3988093ad3f4c99c0700ea4d6cb1e29ffc3/dagster_docker-0.29.0.tar.gz", hash = "sha256:792dc0fbd3fc282aa8f37fab82a94407ee16b063aa6cc5452238277f0922123f", size = 23555, upload-time = "2026-04-09T18:18:19.656Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/19/24/18b2ee6b565eff890490b5cc02aa486f9cd28c068cc2f0c62a54ba808abf/dagster_docker-0.29.0-py3-none-any.whl", hash = "sha256:1989465a891888d1d6be9284afa5167603936c82b5aa45df7cc07a80b20aa79e", size = 19318, upload-time = "2026-04-09T18:18:18.578Z" },
+]
+
+[[package]]
 name = "dagster-graphql"
 version = "1.13.0"
 source = { registry = "https://pypi.org/simple" }
@@ -574,6 +588,7 @@ source = { editable = "packages/dagster-pipelines" }
 dependencies = [
     { name = "clickhouse-connect" },
     { name = "dagster" },
+    { name = "dagster-docker" },
     { name = "dagster-webserver" },
     { name = "feedparser" },
     { name = "pandas" },
@@ -586,6 +601,7 @@ dependencies = [
 requires-dist = [
     { name = "clickhouse-connect", specifier = ">=0.8.0" },
     { name = "dagster", specifier = ">=1.9.0" },
+    { name = "dagster-docker", specifier = ">=0.25.0" },
     { name = "dagster-webserver", specifier = ">=1.9.0" },
     { name = "feedparser", specifier = ">=6.0.10" },
     { name = "pandas", specifier = ">=2.0.0" },
@@ -643,6 +659,32 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/fc/f8/98eea607f65de6527f8a2e8885fc8015d3e6f5775df186e443e0964a11c3/distro-1.9.0.tar.gz", hash = "sha256:2fa77c6fd8940f116ee1d6b94a2f90b13b5ea8d019b98bc8bafdcabcdd9bdbed", size = 60722, upload-time = "2023-12-24T09:54:32.31Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/12/b3/231ffd4ab1fc9d679809f356cebee130ac7daa00d6d6f3206dd4fd137e9e/distro-1.9.0-py3-none-any.whl", hash = "sha256:7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2", size = 20277, upload-time = "2023-12-24T09:54:30.421Z" },
+]
+
+[[package]]
+name = "docker"
+version = "7.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
+    { name = "requests" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/91/9b/4a2ea29aeba62471211598dac5d96825bb49348fa07e906ea930394a83ce/docker-7.1.0.tar.gz", hash = "sha256:ad8c70e6e3f8926cb8a92619b832b4ea5299e2831c14284663184e200546fa6c", size = 117834, upload-time = "2024-05-23T11:13:57.216Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e3/26/57c6fb270950d476074c087527a558ccb6f4436657314bfb6cdf484114c4/docker-7.1.0-py3-none-any.whl", hash = "sha256:c96b93b7f0a746f9e77d325bcfb87422a3d8bd4f03136ae8a85b37f1898d5fc0", size = 147774, upload-time = "2024-05-23T11:13:55.01Z" },
+]
+
+[[package]]
+name = "docker-image-py"
+version = "0.1.13"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "regex" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2f/10/28dad68f4693a5131ff859ac9dc8eda7967fd922509c1e667e143b0760b8/docker_image_py-0.1.13.tar.gz", hash = "sha256:de2755de0a09c99ae3b4cf42cc470a83b35bfdc4bf8ad66a3d7550d622a8915a", size = 11211, upload-time = "2024-07-17T05:36:04.298Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/39/06/c8d170aeb3e9eb3d951dd37acf1b6bad2b9401d0bee3346e40295c9e15a2/docker_image_py-0.1.13-py3-none-any.whl", hash = "sha256:c217fc72e8cdf2aa2caa718c758cec1ad41c09972ec1c94e85a4bf79a8f81061", size = 8894, upload-time = "2024-07-17T05:36:02.563Z" },
 ]
 
 [[package]]

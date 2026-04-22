@@ -5,6 +5,7 @@ requires-python = ">=3.12"
 dependencies = [
     "shared",
     "dagster>=1.9.0",
+    "dagster-docker>=0.25.0",  # QNT-116: DockerRunLauncher for ephemeral run workers
     "dagster-webserver>=1.9.0",
     "clickhouse-connect>=0.8.0",
     "feedparser>=6.0.10",
