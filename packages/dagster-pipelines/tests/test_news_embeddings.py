@@ -90,6 +90,7 @@ def _sample_df() -> pd.DataFrame:
                 "ticker": "NVDA",
                 "headline": "NVDA beats earnings, stock jumps 10%",
                 "url": "https://finance.example.com/a",
+                "source": "yahoo_finance",
                 "published_at": datetime(2026, 4, 21, 14, 30, 0),
             },
             {
@@ -97,6 +98,7 @@ def _sample_df() -> pd.DataFrame:
                 "ticker": "NVDA",
                 "headline": "Chip demand outlook mixed for Q2",
                 "url": "https://finance.example.com/b",
+                "source": "yahoo_finance",
                 "published_at": datetime(2026, 4, 22, 9, 0, 0),
             },
         ]
@@ -156,6 +158,7 @@ def test_builds_document_points_and_upserts(qdrant_recorder: _Recorder) -> None:
         "published_at": int(expected_ts),
         "url": "https://finance.example.com/a",
         "headline": "NVDA beats earnings, stock jumps 10%",
+        "source": "yahoo_finance",
     }
     assert {p.payload["ticker"] for p in call.points} == {"NVDA"}
 
@@ -184,7 +187,7 @@ def test_empty_partition_skips_qdrant_write(qdrant_recorder: _Recorder) -> None:
     """If the 7-day window has no news for the ticker (common on quiet days or
     first-run tickers), the asset must not call upsert at all."""
     clickhouse = _FakeClickHouse(
-        pd.DataFrame(columns=["id", "ticker", "headline", "url", "published_at"])
+        pd.DataFrame(columns=["id", "ticker", "headline", "url", "source", "published_at"])
     )
     ctx = build_asset_context(partition_key="NVDA")
 
