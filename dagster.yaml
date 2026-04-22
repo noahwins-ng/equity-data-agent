@@ -8,6 +8,67 @@ code_servers:
   local_startup_timeout: 180
   reload_timeout: 180
 
+# QNT-116: run ephemeral containers instead of spawning subprocesses inside the
+# daemon cgroup. Image is inferred from DAGSTER_CURRENT_IMAGE on the code-server
+# service (equity-data-agent-dagster:latest) — no explicit `image:` needed here.
+#
+# Why this replaces DefaultRunLauncher:
+#   * DefaultRunLauncher spawns a Python subprocess inside the daemon cgroup,
+#     importing the full repo per run. With N fan-out, cgroup pressure scales
+#     with N — the QNT-111/113/115 mem_limit-bump cycle.
+#   * DefaultRunLauncher also returns supports_check_run_worker_health = False,
+#     so run_monitoring's STARTED-orphan branch (monitor_started_run) is a
+#     no-op. QNT-114's chaos test proved this: STARTED recovery falls back to
+#     max_runtime_seconds: 1800 (~30 min) rather than the per-worker health
+#     check (~2 min).
+#   * DockerRunLauncher gets both: each run is a separate container (own cgroup,
+#     OOM kill is local), AND it supports per-worker health checks so the
+#     STARTED-orphan path actually fires in ~2 min.
+#
+# Env-var passthrough is explicit — every key here must exist in
+# packages/shared/src/shared/config.py::Settings. Keep in sync when adding
+# new settings that a run-worker needs (audit: this list currently matches the
+# Settings fields as of 2026-04-22).
+run_launcher:
+  module: dagster_docker
+  class: DockerRunLauncher
+  config:
+    network: equity-data-agent_default
+    env_vars:
+      - ENV
+      - DAGSTER_HOME
+      - CLICKHOUSE_HOST
+      - CLICKHOUSE_PORT
+      - QDRANT_URL
+      - QDRANT_API_KEY
+      - LITELLM_BASE_URL
+      - OLLAMA_API_KEY
+      - ANTHROPIC_API_KEY
+      - LANGFUSE_PUBLIC_KEY
+      - LANGFUSE_SECRET_KEY
+      - LANGFUSE_HOST
+      - SENTRY_DSN
+    # Run-worker containers must see the SAME SQLite-backed run storage the
+    # daemon wrote to, or `dagster api execute_run` errors with
+    # `Run with id '<x>' not found for run execution` (observed on dev smoke
+    # before this mount was added). The shared dagster_home named volume is
+    # mounted on top of the worker's /dagster_home; worker reads the same
+    # SQLite run-storage DB + event log as the daemon.
+    #
+    # The volume name is HOST-KNOWN because the daemon calls Docker's API on
+    # the host socket — run-worker containers are sibling containers of the
+    # daemon, not children. `equity-data-agent_dagster_home` is the
+    # compose-generated name (project prefix + volume key); if the compose
+    # project name changes, this must change with it.
+    #
+    # Workers don't need dagster.yaml — they execute a specific run, not the
+    # run-launcher or run-monitoring daemons. Dagster's default instance
+    # config (sqlite at DAGSTER_HOME) matches what this file configures for
+    # storage, so the worker's view of storage is consistent with the daemon's.
+    container_kwargs:
+      volumes:
+        - equity-data-agent_dagster_home:/dagster_home
+
 # QNT-113: cap concurrent runs to protect the daemon cgroup from fan-out OOM.
 # Apr 20 incident: a 10-partition `fundamentals_weekly_job` backfill launched
 # all 10 subprocess workers at once (DefaultRunCoordinator fires immediately);
@@ -56,14 +117,14 @@ run_coordinator:
 #     supports_check_run_worker_health = False, so the health branch is
 #     SKIPPED and only max_runtime_seconds fires (~30 min).
 #
-# On our current DefaultRunLauncher, the 3-min paths already cover the Apr 21
-# CANCELING class — the max_runtime_seconds: 1800 knob is specifically for the
-# STARTED-no-Terminate class so it can't silently hold a concurrency slot.
-# 30 min matches our realistic workload ceiling: sensor jobs <1 min, scheduled
-# <5 min, a 10-partition backfill with max_concurrent_runs=3 is ~10 min.
+# QNT-116: we're now on DockerRunLauncher (run_launcher block above), so the
+# per-worker health branch of monitor_started_run is active — STARTED-orphan
+# recovery collapses from ~30 min (max_runtime_seconds fallback) to ~2 min
+# (container health check on poll_interval_seconds). The 1800s
+# max_runtime_seconds timeout stays as a floor for legitimately long-running
+# ops, not as the primary recovery path.
 # Per-job tighter timeouts can be set via the `dagster/max_runtime_seconds`
-# tag. Migrating to DockerRunLauncher (follow-up ticket) collapses the
-# STARTED recovery to ~2 min.
+# tag.
 #
 # max_resume_run_attempts: 0 means Dagster fails orphans instead of resuming
 # them — we want loud failures, not silent auto-retry of already-OOM'd work.

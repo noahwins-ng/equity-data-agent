@@ -409,16 +409,16 @@ ssh hetzner 'docker inspect equity-data-agent-dagster-daemon-1 --format "{{.Id}}
 
 **Prevention**:
 
-- [QNT-113](https://linear.app/noahwins/issue/QNT-113) — `QueuedRunCoordinator(max_concurrent_runs=3)` in `dagster.yaml` serialises backfill fan-out so peak memory stays under the daemon's cgroup.
-- [QNT-115](https://linear.app/noahwins/issue/QNT-115) — raised dagster-daemon `mem_limit` 2g → 3g after the QNT-113 sizing math under-estimated the real per-worker peak (150 MB → 360 MB observed during `__ASSET_JOB` materialization).
-- **Memory math** (must stay consistent with `mem_limit` on dagster-daemon in `docker-compose.yml`):
+- [QNT-116](https://linear.app/noahwins/issue/QNT-116) — **structural fix.** Production-topology migration: user code moved out of the daemon cgroup into a dedicated `dagster-code-server` container, and runs launch in ephemeral Docker containers via `DockerRunLauncher` instead of subprocesses inside the daemon cgroup. Per-run OOM is now isolated to a single ephemeral container rather than killing siblings or blowing the daemon's cgroup. Daemon `mem_limit: 3g → 512m` post-migration. The QNT-111/113/115 "bump mem_limit again" cycle is retired.
+- [QNT-113](https://linear.app/noahwins/issue/QNT-113) — `QueuedRunCoordinator(max_concurrent_runs=3)` in `dagster.yaml` serialises backfill fan-out; still active post-QNT-116 because it's enforced at the run-coordinator layer (fan-out control), not via the launcher.
+- **Memory math** (historical, pre-QNT-116 — retained for archaeology; post-QNT-116 the daemon cgroup is no longer the binding constraint):
   - Daemon baseline: ~260 MB
   - Sensor-tick subprocess headroom: ~400 MB
   - N workers × ~360 MB RSS each (peak during `__ASSET_JOB` materialization; revised from 150 MB — QNT-115)
-  - With `mem_limit: 3g` and `max_concurrent_runs: 3`, peak ≈ 1.74 GB (leaves ~1.3 GB slack for materialization spikes)
-  - If the daemon's `mem_limit` is raised, `max_concurrent_runs` can rise proportionally: roughly `(mem_limit - 660MB) / 360MB`. At 3g that is a theoretical ceiling of ~6; practical cap stays at 3.
-- [QNT-110](https://linear.app/noahwins/issue/QNT-110) run-retry is complementary — it handles transient launch failures but won't rescue a cgroup under sustained fan-out pressure (retries re-launch into the same starved cgroup).
-- [QNT-114](https://linear.app/noahwins/issue/QNT-114) `run_monitoring` auto-fails STARTED/CANCELING runs whose worker was OOM-killed before emitting `RUN_FAILURE` — see "CANCELING ghost after run-worker OOM" below. Without this, a kernel-killed worker leaves a ghost slot that silently holds one of three `max_concurrent_runs` slots until the daemon is restarted.
+  - With pre-QNT-116 `mem_limit: 3g` and `max_concurrent_runs: 3`, peak ≈ 1.74 GB (leaves ~1.3 GB slack for materialization spikes).
+  - Post-QNT-116, each run gets its own container with its own cgroup — run-worker memory no longer accumulates under a single cgroup, so the formula becomes per-run rather than N-aggregate.
+- [QNT-110](https://linear.app/noahwins/issue/QNT-110) run-retry is complementary — handles transient launch failures (gRPC UNAVAILABLE, etc.).
+- [QNT-114](https://linear.app/noahwins/issue/QNT-114) `run_monitoring` auto-fails STARTED/CANCELING runs whose worker was OOM-killed before emitting `RUN_FAILURE` — see "CANCELING ghost after run-worker OOM" below. Post-QNT-116 the STARTED branch also fires (DockerRunLauncher supports per-worker health check), recovery ~2 min instead of ~30.
 
 **Last occurred**: 2026-04-21 12:22 / 12:48 UTC — manual 3-partition `__ASSET_JOB` backfill (MSFT/GOOGL/AMZN); two kernel OOM-kills of `python` run-worker subprocesses in the daemon cgroup at the 2 GB limit. Observed daemon peak 1.74 GiB (87% of limit). Root cause: QNT-113 sizing math assumed 150 MB/worker but real peak during `__ASSET_JOB` materialization is ~360 MB. Follow-up: QNT-115 bumped `mem_limit` 2g → 3g.
 
@@ -475,13 +475,13 @@ ssh hetzner 'docker exec equity-data-agent-dagster-daemon-1 dagster run list --s
 |---|---|---|---|---|
 | STARTING never completes launch | `monitor_starting_run` | `start_timeout_seconds: 180` | ~3 min | No |
 | CANCELING stuck after Terminate | `monitor_canceling_run` | `cancel_timeout_seconds: 180` | ~3 min | No |
-| STARTED worker died, no Terminate | `monitor_started_run` → `check_run_timeout` | `max_runtime_seconds: 1800` | ~30 min | **Yes** — only the timeout fallback fires on `DefaultRunLauncher`; container-aware launchers would fire worker-health check in ~2 min instead. |
+| STARTED worker died, no Terminate | `monitor_started_run` → per-worker health check | `poll_interval_seconds: 120` | ~2 min | No — post-QNT-116 we're on `DockerRunLauncher`, which returns `supports_check_run_worker_health = True`. `max_runtime_seconds: 1800` stays as a floor for legitimately long-running ops, not as the primary recovery path. |
 
 Notes:
 
 - `max_resume_run_attempts: 0` means Dagster **fails** orphans instead of resuming them — resumption would just re-OOM the same worker in the same cgroup.
-- The Apr 21 AMZN incident was the **CANCELING class** (operator hit Terminate). PR #94 enables `run_monitoring` → that incident recovers in ~3 min via `monitor_canceling_run` even without the hotfix's `max_runtime_seconds`. The hotfix PR #95 closes the separate STARTED-no-Terminate class which PR #94 didn't cover because `DefaultRunLauncher` can't health-check workers.
-- Switching to `DockerRunLauncher` (follow-up ticket) would collapse the STARTED recovery from 30 min → ~2 min by enabling the per-worker health path.
+- The Apr 21 AMZN incident was the **CANCELING class** (operator hit Terminate). PR #94 enables `run_monitoring` → that incident recovers in ~3 min via `monitor_canceling_run` even without the hotfix's `max_runtime_seconds`. The hotfix PR #95 closes the separate STARTED-no-Terminate class which PR #94 didn't cover because `DefaultRunLauncher` couldn't health-check workers.
+- [QNT-116](https://linear.app/noahwins/issue/QNT-116) migrated to `DockerRunLauncher`, collapsing STARTED-orphan recovery from ~30 min to ~2 min by activating the per-worker health path.
 - Complementary to [QNT-110](https://linear.app/noahwins/issue/QNT-110) (launch-time retry) and [QNT-113](https://linear.app/noahwins/issue/QNT-113) (fan-out cap): QNT-113 limits new fan-out, QNT-114 cleans up after OOMs when they still happen.
 - [QNT-114](https://linear.app/noahwins/issue/QNT-114)'s `tag_concurrency_limits` reserves ≥1 of 3 slots for non-backfill work (`dagster/backfill` capped at 2), so a 3-partition backfill can't starve sensors even before any runs go ghost.
 
@@ -549,3 +549,21 @@ gh api /repos/noahwins-ng/equity-data-agent/actions/runs --jq '.workflow_runs[0:
 - `docs/guides/hetzner-bootstrap.md` §11.3 rotation workflow is non-trivial on purpose — rotating should be routine (quarterly or after any suspected exposure), not rare-and-scary.
 
 **Last occurred**: not yet occurred — preventative
+
+---
+
+## Security notes
+
+### Docker socket bind-mount on `dagster-daemon` (QNT-116)
+
+**Context**: `DockerRunLauncher` requires the daemon to call the Docker API to start ephemeral run-worker containers. The daemon therefore has `/var/run/docker.sock` bind-mounted read-write.
+
+**Trust boundary**: anyone who can execute code inside `dagster-daemon` can create/delete/inspect any container on the host, read all container filesystems, and escalate to host root via a privileged container. This is the standard Docker-socket caveat; it is not unique to Dagster.
+
+**Mitigations in place**:
+- The daemon image is built from the same repo Dockerfile as the rest of the stack — no third-party code runs in the daemon's main process. User code runs in `dagster-code-server` (separate service, no docker socket) and in ephemeral run workers (launched via DockerRunLauncher, no docker socket inside the run worker).
+- The daemon's `command:` is pinned to `dagster-daemon run -w /app/workspace.yaml` — not a shell. Remote code execution would require exploiting a bug in `dagster-daemon` itself or in a dep it imports at startup.
+- Host firewall (Hetzner `ufw`) restricts inbound ports to 22 + 80 + 443 + 8000 (API); the daemon is not directly reachable from the internet.
+- `.env` is mode 0600, root:root on the host; even via the docker socket, extracting secrets requires privileged container access.
+
+**Do not**: bind-mount `/var/run/docker.sock` into `dagster-code-server` or into ephemeral run workers. Only the daemon needs it.

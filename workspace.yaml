@@ -1,0 +1,12 @@
+# QNT-116: production topology — webserver + daemon reach user code via gRPC
+# rather than loading it in-process. The `dagster-code-server` service in
+# docker-compose.yml owns the equity_pipelines code location; this workspace
+# file points webserver and daemon at it.
+#
+# Service-name host resolution works out of the box because all three Dagster
+# services share the default compose network (equity-data-agent_default).
+load_from:
+  - grpc_server:
+      host: dagster-code-server
+      port: 4000
+      location_name: equity_pipelines
