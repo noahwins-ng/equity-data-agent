@@ -9,6 +9,7 @@ Embedding happens server-side on Qdrant Cloud (``cloud_inference=True``),
 so the run-worker here is I/O-bound rather than memory-bound.
 """
 
+import hashlib
 import logging
 
 from dagster import (
@@ -50,6 +51,27 @@ ORDER BY published_at DESC
 """
 
 
+def point_id(ticker: str, url_id: int) -> int:
+    """Derive a Qdrant UInt64 point ID from ``(ticker, url_id)``.
+
+    ClickHouse keys ``news_raw`` on ``(ticker, published_at, id)`` — one row per
+    ``(ticker, url)`` pair — so a URL cross-mentioned across N tickers produces
+    N rows. Qdrant needs a matching key, otherwise the last ticker's upsert
+    wins and cross-mentioned URLs silently disappear from per-ticker ticker-
+    filtered search (QNT-120).
+
+    Namespacing by ticker preserves:
+      * Same-ticker idempotency (same URL under same ticker → same point ID →
+        upsert dedups on the server, matching news_raw ReplacingMergeTree).
+      * Cross-ticker cardinality (same URL under two tickers → two distinct
+        points, each reachable via its own payload ticker filter).
+    """
+    return int(
+        hashlib.blake2b(f"{ticker}:{url_id}".encode(), digest_size=8).hexdigest(),
+        16,
+    )
+
+
 @asset(
     partitions_def=news_embeddings_partitions,
     retry_policy=RetryPolicy(max_retries=3, delay=30, backoff=Backoff.EXPONENTIAL),
@@ -68,9 +90,11 @@ def news_embeddings(
     late-discovered old article enters the window when first ingested and
     gets embedded, which is what we want.
 
-    Point ID = the existing ``id`` column (blake2b(url) UInt64), so Qdrant
-    dedup matches ClickHouse ReplacingMergeTree dedup — single source of
-    truth for "is this URL already in the system". Re-runs are idempotent.
+    Point ID = ``blake2b(f"{ticker}:{url_id}")`` — see ``point_id`` helper.
+    Qdrant dedup matches ClickHouse ReplacingMergeTree's ``(ticker, url)``
+    composite key, so a URL cross-mentioned across tickers lands as one
+    point per ticker and surfaces under each ticker's payload filter
+    (fixes the QNT-120 silent overwrite). Re-runs are idempotent.
     """
     from qdrant_client.models import Document, PointStruct
 
@@ -97,7 +121,7 @@ def news_embeddings(
         )
         points.append(
             PointStruct(
-                id=int(record["id"]),
+                id=point_id(str(record["ticker"]), int(record["id"])),
                 # Document is embedded server-side by Qdrant using the named
                 # model; no local inference, no model weights, no CPU/memory
                 # cost on the dagster run-worker beyond the HTTP round-trip.
