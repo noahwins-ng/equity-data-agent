@@ -88,10 +88,10 @@ Expected in Discord within 30 s — a pair of messages (kill signal, then the
 actual process exit):
 
 ```
-[KILL] `equity-data-agent-litellm-1` exit=n/a image=`litellm/litellm:v1.56.5` host=`<hostname>`
+[KILL] `equity-data-agent-litellm-1` exit=n/a image=`litellm/litellm:v1.81.14-stable` host=`<hostname>`
 ```
 ```
-[DIE]  `equity-data-agent-litellm-1` exit=137 image=`litellm/litellm:v1.56.5` host=`<hostname>`
+[DIE]  `equity-data-agent-litellm-1` exit=137 image=`litellm/litellm:v1.81.14-stable` host=`<hostname>`
 ```
 
 (`kill` events don't carry an exitCode — that's why they show `n/a`; the `die`

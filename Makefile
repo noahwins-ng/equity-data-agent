@@ -1,4 +1,4 @@
-.PHONY: setup dev-dagster dev-api dev-frontend test test-integration lint format migrate seed tunnel issue pr build check-prod rollback monitor-install monitor-log events-notify-install events-notify-status events-notify-test sops-edit sops-encrypt sops-decrypt sops-rotate-keys help
+.PHONY: setup dev-dagster dev-api dev-frontend dev-litellm test test-integration lint format migrate seed tunnel issue pr build check-prod rollback monitor-install monitor-log events-notify-install events-notify-status events-notify-test sops-edit sops-encrypt sops-decrypt sops-rotate-keys help
 
 # ─── Setup ────────────────────────────────────────────────────
 
@@ -21,6 +21,14 @@ dev-api: ## Start FastAPI on localhost:8000
 
 dev-frontend: ## Start Next.js on localhost:3001
 	cd frontend && npm run dev -- --port 3001
+
+dev-litellm: ## Start LiteLLM proxy on localhost:4000 (reads GROQ_API_KEY / GEMINI_API_KEY from .env)
+	# --platform linux/amd64: LiteLLM stable images are amd64-only; runs via Rosetta/QEMU
+	# on Apple Silicon (dev-only; prod Hetzner CX41 is native amd64).
+	docker run --rm --name equity-litellm-dev --platform linux/amd64 \
+		-p 4000:4000 --env-file .env \
+		-v $(CURDIR)/litellm_config.yaml:/app/config.yaml \
+		litellm/litellm:v1.81.14-stable --config /app/config.yaml --port 4000
 
 tunnel: ## Open SSH tunnel to Hetzner: ClickHouse (8123) + prod Dagster UI on :3100
 	@echo "Opening SSH tunnel:"
