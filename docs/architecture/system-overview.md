@@ -59,19 +59,19 @@ News API ──→ Dagster ──→ ClickHouse (equity_raw.news_raw)
 - `technical_indicators_monthly` — same indicators computed on monthly bars
 - `fundamental_summary` — 15 derived ratios (P/E, EV/EBITDA, margins, YoY growth, etc.) from fundamentals + ohlcv_raw. Quarterly P/E uses TTM (trailing-four-quarter) net_income; P/E is nulled out (N/M convention) when `|EPS| < $0.10`.
 
-**Data quality**: 17 Dagster `@asset_check`s registered across 6 assets (QNT-68) — row counts, null/bound checks, RSI 0-100, MACD/signal coherence, P/E and margin domain bounds. Checks run inline with the asset and surface in the Dagster UI.
+**Data quality**: 25 Dagster `@asset_check`s registered across 10 assets (QNT-68 + QNT-93) — row counts, null/bound checks, RSI 0-100, MACD/signal coherence, P/E and margin domain bounds, news headline/URL integrity, Qdrant vector count/dimension/orphan checks. Checks run inline with the asset and surface in the Dagster UI. Asset checks earned their keep in Phase 4: `news_embeddings_vector_count_matches_source` caught QNT-120 (cross-ticker Qdrant ID collision) within 24h of shipping.
 
 All tables use `ReplacingMergeTree` for idempotency. FastAPI queries **must** use `SELECT ... FROM table FINAL` for consistent reads (see ADR-001).
 
 **Qdrant Cloud** (managed, free tier):
-- `equity_news` collection — news embeddings (all-MiniLM-L6-v2, 384-dim Float32, runs as Python library in Dagster — not Ollama) with ticker/date/headline payload
+- `equity_news` collection — news embeddings via **Qdrant Cloud Inference** (ADR-009: model `sentence-transformers/all-minilm-l6-v2`, 384-dim, embedded server-side so the Dagster run-worker stays I/O-bound). Point ID = `blake2b(f"{ticker}:{url_id}", digest_size=8)` — namespaced by ticker (QNT-120) to match ClickHouse's `(ticker, url)` composite key so cross-mentioned URLs land as one point per ticker. Payload: `{ticker, published_at, url, headline, source}`; indexed on `ticker` (keyword) and `published_at` (integer). Re-embed window: trailing 7 days of `fetched_at` per ticker on every tick.
 
 ## API Endpoint Categories
 
 **Report endpoints** (text strings, consumed by LangGraph agent):
 - `GET /api/v1/reports/technical/{ticker}` — human-readable technical analysis
 - `GET /api/v1/reports/fundamental/{ticker}` — human-readable fundamental summary
-- `GET /api/v1/reports/news/{ticker}` — recent news summary with sentiment (top-N headlines + narrative; depends on Phase 4 data)
+- `GET /api/v1/reports/news/{ticker}` — recent news summary (top-N headlines + narrative)
 - `GET /api/v1/reports/summary/{ticker}` — combined text overview for agent "at a glance" tool
 
 **Data endpoints** (JSON, consumed by Next.js frontend):
@@ -81,7 +81,7 @@ All tables use `ReplacingMergeTree` for idempotency. FastAPI queries **must** us
 - `GET /api/v1/dashboard/summary` — `[{ticker, price, daily_change_pct, rsi_14, rsi_signal, trend_status}]` all tickers in one call. `price` = latest available close (not adj_close). `rsi_signal`: overbought/neutral/oversold. `trend_status`: bullish/bearish/neutral (close vs SMA-50).
 
 **Search endpoints** (JSON, consumed by frontend and agent):
-- `GET /api/v1/search/news?ticker=NVDA&query=earnings` — Qdrant semantic search over news embeddings. Returns top-N relevant headlines with scores. Depends on Phase 4 data; returns empty results if Qdrant is unreachable.
+- `GET /api/v1/search/news?ticker=NVDA&query=earnings` — Qdrant semantic search over news embeddings. Returns top-N `{headline, source, date, score, url}` ranked by cosine similarity. Query string is embedded server-side via Qdrant Cloud Inference using the same model as `news_embeddings` so query-time and embed-time vectors share one vector space. Returns `[]` (HTTP 200) if Qdrant is unreachable or no matches — frontend renders "no news" the same way as "service down".
 
 **Utility endpoints**:
 - `GET /api/v1/tickers` — list of active tickers from `shared.tickers.TICKERS`
