@@ -61,18 +61,25 @@ def news_embeddings_vector_count_matches_source(
     clickhouse: ClickHouseResource,
     qdrant: QdrantResource,
 ) -> AssetCheckResult:
-    """Warn if per-ticker Qdrant point count diverges from news_raw row count.
+    """Warn if per-ticker Qdrant point count diverges from news_raw's distinct
+    ``id`` count.
 
-    The embedding asset upserts one vector per news_raw row, so the two counts
-    should track each other. A per-ticker gap larger than the in-flight
-    tolerance indicates the asset skipped some rows (transient Qdrant failure
-    that exceeded the retry budget) or the feed produced many new rows since
-    the last tick.
+    The asset keys Qdrant points by ``point_id(ticker, url_id)`` (QNT-120), so
+    two news_raw rows with the same ``(ticker, id)`` but different
+    ``published_at`` values — e.g. a feed republishing an article with a bumped
+    timestamp — collapse into one Qdrant point on upsert. Comparing against
+    ``count()`` would count those RMT rows twice and flag a legitimate
+    semantic match as drift; ``uniqExact(id)`` mirrors the per-ticker dedup
+    the asset actually performs.
+
+    A per-ticker gap larger than the in-flight tolerance indicates the asset
+    skipped some distinct URLs (transient Qdrant failure that exceeded the
+    retry budget) or the feed produced many new rows since the last tick.
     """
     from shared.tickers import TICKERS
 
     ch_counts_df = clickhouse.query_df(
-        f"SELECT ticker, count() AS n FROM {_NEWS_TABLE} FINAL GROUP BY ticker"
+        f"SELECT ticker, uniqExact(id) AS n FROM {_NEWS_TABLE} FINAL GROUP BY ticker"
     )
     ch_counts = {
         str(t): int(n) for t, n in zip(ch_counts_df["ticker"], ch_counts_df["n"], strict=False)
