@@ -69,8 +69,8 @@ Values you'll encrypt into `.env.sops`:
 | `LITELLM_BASE_URL` | `http://litellm:4000` (Docker service name — not localhost) |
 | `QDRANT_URL` | Your Qdrant Cloud cluster URL |
 | `QDRANT_API_KEY` | From Qdrant Cloud dashboard |
-| `OLLAMA_API_KEY` | From [ollama.com](https://ollama.com) account |
-| `ANTHROPIC_API_KEY` | Optional — Claude API override |
+| `GROQ_API_KEY` | From [console.groq.com](https://console.groq.com) — default LLM provider, see ADR-011 |
+| `GEMINI_API_KEY` | Optional — Gemini 2.5 Pro quality override (free tier, see ADR-011) |
 | `LANGFUSE_PUBLIC_KEY` | From Langfuse dashboard |
 | `LANGFUSE_SECRET_KEY` | From Langfuse dashboard |
 | `LANGFUSE_HOST` | `https://cloud.langfuse.com` |

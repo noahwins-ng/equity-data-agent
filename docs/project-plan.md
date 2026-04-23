@@ -236,7 +236,7 @@ Updated automatically by `/ship` and `/sync-docs`.
 
 - [ ] Configure LiteLLM proxy via `litellm_config.yaml` — QNT-59
     - **Default**: routes to Groq (`https://api.groq.com/openai/v1`, llama-3.3-70b-versatile) via `GROQ_API_KEY`. Email-only free tier (30 RPM / 6K TPM / up to 14.4K RPD) covers Phase 5 dev + steady-state portfolio demos. ~500 tok/s inference keeps prompt-iteration fast.
-    - **Override**: routes to Claude Sonnet 4.6 via `ANTHROPIC_API_KEY` — quality tier for the hero demo thesis (QNT-94) and the README screenshot (QNT-66). Eval harness (QNT-67) logs a per-provider column so Groq↔Claude becomes a deliberate eval axis.
+    - **Override**: routes to Google AI Studio Gemini 2.5 Pro via `GEMINI_API_KEY` — free-tier quality override (5 RPM / 100 RPD, no credit card) for the hero demo thesis (QNT-94) and the README screenshot (QNT-66). Eval harness (QNT-67) logs a per-provider column so Groq↔Gemini becomes a deliberate eval axis.
     - Model alias: `equity-agent/default` — zero agent code changes to switch backends.
     - See ADR-011 for provider selection rationale (why Groq over Ollama Cloud / Gemini / OpenAI / self-hosted).
 - [ ] Integrate Langfuse tracing — QNT-61 **[day-one of Phase 5, moved from Phase 7]**
