@@ -20,14 +20,17 @@ from dagster_pipelines.resources.clickhouse import ClickHouseResource
 _TABLE = "equity_derived.fundamental_summary"
 
 # Plausibility bands — loose enough to allow real extremes, tight enough to
-# catch arithmetic corruption.
-_PE_MIN, _PE_MAX = -1000.0, 10_000.0
+# catch arithmetic corruption. P/E is symmetric: the N/M floor
+# (_EPS_NM_THRESHOLD in fundamental_summary.py) permits |P/E| up to ~10k
+# on both signs, so an asymmetric lower bound would flag legitimate
+# negative-earnings years (e.g. AMZN 2022 = latest_close × 2022 loss).
+_PE_MIN, _PE_MAX = -10_000.0, 10_000.0
 _NET_MARGIN_MIN, _NET_MARGIN_MAX = -100.0, 100.0  # percent
 
 
 @asset_check(asset=fundamental_summary)
 def fundamental_summary_pe_in_band(clickhouse: ClickHouseResource) -> AssetCheckResult:
-    """Warn if any P/E ratio is outside [-1000, 10000]."""
+    """Warn if any P/E ratio is outside [-10000, 10000]."""
     result = clickhouse.execute(
         f"SELECT count() FROM {_TABLE} FINAL "
         f"WHERE pe_ratio IS NOT NULL "
