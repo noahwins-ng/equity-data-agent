@@ -128,3 +128,58 @@ class QdrantResource(ConfigurableResource):
             exact=True,
         )
         return res.count
+
+    def collection_dimension(self, collection: str) -> int:
+        """Return the configured vector size for ``collection``.
+
+        Qdrant enforces vector size at collection creation and rejects any upsert
+        with a different size, so this value is a storage-side guarantee for every
+        point in the collection — the 384-dim asset check (QNT-93) reads it here.
+        """
+        info = self._client().get_collection(collection_name=collection)
+        vectors_config = info.config.params.vectors
+        # Single-vector collections expose ``.size`` directly; named-vector
+        # collections return a dict. QNT-93 only uses single-vector collections.
+        size = getattr(vectors_config, "size", None)
+        if size is None:
+            raise RuntimeError(
+                f"Qdrant collection {collection!r} has no single-vector size "
+                f"(named-vector collections are not supported by this helper)"
+            )
+        return int(size)
+
+    def scroll_ids(
+        self,
+        collection: str,
+        query_filter: Any | None = None,
+        page_size: int = 10_000,
+        max_pages: int = 100,
+    ) -> list[int]:
+        """Return all point IDs from ``collection`` matching ``query_filter``.
+
+        Paginates through the collection via Qdrant's ``next_page_offset`` so
+        callers get a complete list rather than silently-truncated page 1.
+        ``max_pages`` is a safety cap — hitting it raises ``RuntimeError`` so a
+        runaway collection surfaces as a failed asset check with a stack trace,
+        rather than passing on partial data.
+        """
+        client = self._client()
+        all_ids: list[int] = []
+        offset: Any = None
+        for _ in range(max_pages):
+            records, next_offset = client.scroll(
+                collection_name=collection,
+                scroll_filter=query_filter,
+                limit=page_size,
+                with_payload=False,
+                with_vectors=False,
+                offset=offset,
+            )
+            all_ids.extend(int(r.id) for r in records)
+            if next_offset is None:
+                return all_ids
+            offset = next_offset
+        raise RuntimeError(
+            f"scroll_ids hit safety cap of {max_pages} pages × {page_size} for "
+            f"{collection!r}; collection is larger than the current check assumes"
+        )

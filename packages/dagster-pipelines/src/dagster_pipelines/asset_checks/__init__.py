@@ -8,6 +8,18 @@ from dagster_pipelines.asset_checks.fundamentals_checks import (
     fundamentals_period_type_valid,
     fundamentals_revenue_and_net_income_populated,
 )
+from dagster_pipelines.asset_checks.news_embeddings_checks import (
+    news_embeddings_embedding_dimension,
+    news_embeddings_no_orphaned_vectors,
+    news_embeddings_vector_count_matches_source,
+)
+from dagster_pipelines.asset_checks.news_raw_checks import (
+    news_raw_has_rows,
+    news_raw_no_empty_headlines,
+    news_raw_no_future_published_at,
+    news_raw_recent_ingestion,
+    news_raw_valid_urls,
+)
 from dagster_pipelines.asset_checks.ohlcv_raw_checks import (
     ohlcv_raw_dates_fresh,
     ohlcv_raw_has_rows,
@@ -46,6 +58,16 @@ ALL_ASSET_CHECKS = [
     fundamental_summary_pe_in_band,
     fundamental_summary_net_margin_in_band,
     fundamental_summary_no_infinities,
+    # news_raw
+    news_raw_has_rows,
+    news_raw_no_empty_headlines,
+    news_raw_valid_urls,
+    news_raw_no_future_published_at,
+    news_raw_recent_ingestion,
+    # news_embeddings
+    news_embeddings_vector_count_matches_source,
+    news_embeddings_no_orphaned_vectors,
+    news_embeddings_embedding_dimension,
 ]
 
 __all__ = [
@@ -60,6 +82,14 @@ __all__ = [
     "fundamentals_period_type_valid",
     "fundamentals_revenue_and_net_income_populated",
     "monthly_rsi_in_range",
+    "news_embeddings_embedding_dimension",
+    "news_embeddings_no_orphaned_vectors",
+    "news_embeddings_vector_count_matches_source",
+    "news_raw_has_rows",
+    "news_raw_no_empty_headlines",
+    "news_raw_no_future_published_at",
+    "news_raw_recent_ingestion",
+    "news_raw_valid_urls",
     "ohlcv_raw_dates_fresh",
     "ohlcv_raw_has_rows",
     "ohlcv_raw_no_future_dates",

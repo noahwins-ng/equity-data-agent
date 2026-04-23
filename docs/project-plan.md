@@ -212,7 +212,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - Returns `[{headline, source, url, published_at, score}]` — top-N results ranked by cosine similarity
     - Both `ticker` and `query` are required. Returns `[]` if Qdrant is unreachable or no news data exists.
     - **Tests use a fake Qdrant client** (same `_FakeClient` pattern) covering ranking, payload shape, and the empty-results/unreachable fallback — Phase 3 lesson
-- [ ] Add Dagster asset checks for `news_raw` and `news_embeddings` data quality — QNT-93
+- [x] Add Dagster asset checks for `news_raw` and `news_embeddings` data quality — QNT-93
     - `news_raw`: no empty headlines, valid URLs, no future `published_at` dates, row count per ticker
     - `news_embeddings`: vector count matches source row count, no orphaned vectors
     - Phase 2 lesson: QNT-68 asset checks caught 2 real formula bugs — apply same pattern to news assets
