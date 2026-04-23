@@ -1,8 +1,9 @@
 """Data quality checks for Qdrant ``equity_news`` vs equity_raw.news_raw (QNT-93).
 
-The news_embeddings asset upserts one point per news_raw row, keyed by the
-same UInt64 blake2b(url) hash. These checks verify the two stores stay in
-sync — the pairs of things that can go wrong:
+The news_embeddings asset upserts one point per news_raw row, keyed by
+``blake2b(f"{ticker}:{url_id}")`` (QNT-120 — namespaced so cross-mentioned URLs
+don't overwrite each other across tickers). These checks verify the two stores
+stay in sync — the pairs of things that can go wrong:
 
 1. Drift in count (embedding asset failing silently for some ticker)
 2. Orphaned vectors (news_raw row deleted but Qdrant kept the point)
@@ -26,6 +27,7 @@ from dagster_pipelines.assets.news_embeddings import (
     COLLECTION,
     VECTOR_SIZE,
     news_embeddings,
+    point_id,
 )
 from dagster_pipelines.resources.clickhouse import ClickHouseResource
 from dagster_pipelines.resources.qdrant import QdrantResource
@@ -111,11 +113,16 @@ def news_embeddings_no_orphaned_vectors(
 ) -> AssetCheckResult:
     """Warn if any Qdrant point ID is missing from news_raw.
 
-    ``id`` is shared between the two stores (blake2b(url) UInt64), so a Qdrant
-    point whose ID is absent from news_raw is an orphan — the news_raw row
-    was deleted (manual fix, TTL policy) but Qdrant retained the vector.
-    Orphans contaminate semantic search with results that no longer have a
-    source row to display.
+    Since QNT-120 the two stores key on a composite: Qdrant point ID =
+    ``point_id(ticker, news_raw.id)``. An orphan is a Qdrant point whose
+    namespaced ID has no matching row in news_raw under the same ticker —
+    the news_raw row was deleted (manual fix, TTL policy) but Qdrant retained
+    the vector. Orphans contaminate semantic search with results that no
+    longer have a source row to display.
+
+    Expected IDs are computed from news_raw in Python (rather than pushed down
+    to SQL) because the namespacing is a Python-side helper; per-ticker row
+    counts are bounded by the 7-day RSS volume, so the in-memory set is tiny.
     """
     from shared.tickers import TICKERS
 
@@ -129,15 +136,12 @@ def news_embeddings_no_orphaned_vectors(
             continue
         total_scanned += len(qd_ids)
 
-        # Inline the IDs — IDs are int-cast UInt64 digits only (see
-        # QdrantResource.scroll_ids), so the f-string is injection-safe. IN-list
-        # of up to ~10k integers is well within ClickHouse's parser limits.
-        id_list = ",".join(str(i) for i in qd_ids)
-        matches_row = clickhouse.execute(
-            f"SELECT count() FROM {_NEWS_TABLE} FINAL WHERE id IN ({id_list})"
-        ).result_rows[0]
-        matches = int(matches_row[0])
-        missing = len(qd_ids) - matches
+        ch_ids_df = clickhouse.query_df(
+            f"SELECT id FROM {_NEWS_TABLE} FINAL WHERE ticker = %(ticker)s",
+            parameters={"ticker": ticker},
+        )
+        expected_ids = {point_id(ticker, int(i)) for i in ch_ids_df["id"]}
+        missing = sum(1 for qid in qd_ids if qid not in expected_ids)
         if missing > 0:
             orphan_counts[ticker] = missing
 

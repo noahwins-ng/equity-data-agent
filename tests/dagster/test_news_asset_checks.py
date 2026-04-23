@@ -26,7 +26,7 @@ from dagster_pipelines.asset_checks.news_raw_checks import (
     news_raw_recent_ingestion,
     news_raw_valid_urls,
 )
-from dagster_pipelines.assets.news_embeddings import VECTOR_SIZE, news_embeddings
+from dagster_pipelines.assets.news_embeddings import VECTOR_SIZE, news_embeddings, point_id
 from dagster_pipelines.assets.news_raw import news_raw
 
 # ── Fakes ─────────────────────────────────────────────────────────────────────
@@ -293,12 +293,23 @@ def test_news_embeddings_vector_count_flags_large_divergence() -> None:
 
 
 def test_news_embeddings_no_orphaned_vectors_passes_when_all_ids_in_clickhouse() -> None:
+    """Expected IDs are computed per-ticker as ``point_id(ticker, news_raw.id)``
+    (QNT-120). If every Qdrant point's namespaced ID derives from a row in
+    news_raw under the same ticker, no orphans."""
     from shared.tickers import TICKERS
 
+    url_ids = [1, 2, 3, 4, 5]
     ch = _FakeClickHouse(
-        execute_responses=[("WHERE id IN", [[5]])],  # ClickHouse found all 5 sent per ticker
+        # One DF stub serves every per-ticker query; the check namespaces the
+        # raw url_ids with ticker before comparing, so the expected set is
+        # naturally distinct per ticker.
+        query_df_responses=[
+            ("SELECT id FROM equity_raw.news_raw", pd.DataFrame({"id": url_ids})),
+        ],
     )
-    qdrant = _FakeQdrant(ids_by_ticker={t: [1, 2, 3, 4, 5] for t in TICKERS})
+    qdrant = _FakeQdrant(
+        ids_by_ticker={t: [point_id(t, i) for i in url_ids] for t in TICKERS},
+    )
     e = _run_check(
         news_embeddings_no_orphaned_vectors,
         asset=news_embeddings,
@@ -309,13 +320,23 @@ def test_news_embeddings_no_orphaned_vectors_passes_when_all_ids_in_clickhouse()
 
 
 def test_news_embeddings_no_orphaned_vectors_flags_missing_ids() -> None:
+    """Each ticker has 5 Qdrant points but only 3 of their url_ids map to
+    news_raw rows → 2 orphans per ticker. Simulates news_raw rows deleted
+    (manual fix, TTL) while Qdrant retained the vectors."""
     from shared.tickers import TICKERS
 
+    url_ids_in_clickhouse = [1, 2, 3]  # 4 and 5 were deleted
     ch = _FakeClickHouse(
-        # ClickHouse only matched 3 of 5 sent IDs per ticker → 2 orphans each.
-        execute_responses=[("WHERE id IN", [[3]])],
+        query_df_responses=[
+            (
+                "SELECT id FROM equity_raw.news_raw",
+                pd.DataFrame({"id": url_ids_in_clickhouse}),
+            ),
+        ],
     )
-    qdrant = _FakeQdrant(ids_by_ticker={t: [1, 2, 3, 4, 5] for t in TICKERS})
+    qdrant = _FakeQdrant(
+        ids_by_ticker={t: [point_id(t, i) for i in [1, 2, 3, 4, 5]] for t in TICKERS},
+    )
     e = _run_check(
         news_embeddings_no_orphaned_vectors,
         asset=news_embeddings,
@@ -323,6 +344,35 @@ def test_news_embeddings_no_orphaned_vectors_flags_missing_ids() -> None:
     )
     assert not e.passed
     assert e.metadata["total_orphans"].value == 2 * len(TICKERS)
+
+
+def test_news_embeddings_no_orphaned_vectors_ignores_cross_ticker_ids() -> None:
+    """Regression test for QNT-120: a Qdrant point derived from ticker A's
+    url_id must NOT pass orphan validation under ticker B — even though the
+    underlying url_id exists in news_raw under A. Without per-ticker
+    namespacing this would spuriously pass because both stores share the
+    raw hash."""
+    from shared.tickers import TICKERS
+
+    shared_url_id = 7777
+    ch = _FakeClickHouse(
+        query_df_responses=[
+            ("SELECT id FROM equity_raw.news_raw", pd.DataFrame({"id": [shared_url_id]})),
+        ],
+    )
+    # MSFT has the cross-ticker-ID orphan (TSLA's namespaced ID appears under
+    # MSFT's filter); other tickers are clean.
+    ids_by_ticker = {t: [point_id(t, shared_url_id)] for t in TICKERS}
+    ids_by_ticker["MSFT"] = [point_id("TSLA", shared_url_id)]
+    qdrant = _FakeQdrant(ids_by_ticker=ids_by_ticker)
+
+    e = _run_check(
+        news_embeddings_no_orphaned_vectors,
+        asset=news_embeddings,
+        resources={"clickhouse": ch, "qdrant": qdrant},
+    )
+    assert not e.passed
+    assert e.metadata["orphans_per_ticker"].value == {"MSFT": 1}
 
 
 def test_news_embeddings_embedding_dimension_passes_at_384() -> None:

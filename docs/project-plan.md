@@ -216,6 +216,11 @@ Updated automatically by `/ship` and `/sync-docs`.
     - `news_raw`: no empty headlines, valid URLs, no future `published_at` dates, row count per ticker
     - `news_embeddings`: vector count matches source row count, no orphaned vectors
     - Phase 2 lesson: QNT-68 asset checks caught 2 real formula bugs — apply same pattern to news assets
+- [x] Namespace Qdrant point IDs by ticker — QNT-120
+    - **Triggered by**: QNT-93 `news_embeddings_vector_count_matches_source` flagged every ticker's `|qdrant − clickhouse| > tolerance` on 2026-04-23. Root cause: `news_embeddings` keyed Qdrant points by `blake2b(url)`, but `news_raw` keys rows by `(ticker, url)` — so cross-mentioned URLs had the last ticker's upsert win and silently disappeared from per-ticker search.
+    - Fix: `point_id(ticker, url_id) = blake2b(f"{ticker}:{url_id}")` restores 1:1 mapping to ClickHouse's composite key. Orphan asset check updated to compute expected namespaced IDs in Python.
+    - Migration: drop `equity_news` collection post-deploy (not backwards-compatible); next sensor tick re-embeds from the 7-day window. Script: `scripts/drop_qdrant_news_collection.py --yes`.
+    - Reinforces `feedback_asset_checks_catch_real_bugs.md` + `feedback_dont_explain_away_first_warn.md` — investigated the first prod WARN rather than writing it off as backlog.
 - [ ] Verify: Search for recent news about a ticker, confirm relevance ranking
 
 ---

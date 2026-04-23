@@ -25,6 +25,7 @@ from dagster_pipelines.assets.news_embeddings import (
     EMBED_MODEL,
     VECTOR_SIZE,
     news_embeddings,
+    point_id,
 )
 from dagster_pipelines.resources.qdrant import QdrantCollectionSpec, QdrantResource
 from qdrant_client.models import Document
@@ -111,8 +112,8 @@ def _sample_df() -> pd.DataFrame:
 def test_builds_document_points_and_upserts(qdrant_recorder: _Recorder) -> None:
     """Happy path: ClickHouse returns rows → each headline becomes a Qdrant
     point whose vector is a Document(text, model) for server-side embedding.
-    Point ID reuses the news_raw hash so Qdrant and ClickHouse dedup on the
-    same key."""
+    Point ID is ``point_id(ticker, news_raw.id)`` so cross-mentioned URLs
+    land as distinct points per ticker (QNT-120)."""
     clickhouse = _FakeClickHouse(_sample_df())
     ctx = build_asset_context(partition_key="NVDA")
 
@@ -131,17 +132,17 @@ def test_builds_document_points_and_upserts(qdrant_recorder: _Recorder) -> None:
     assert spec.distance == "Cosine"
     assert spec.payload_indexes == {"ticker": "keyword", "published_at": "integer"}
 
-    # One upsert of two points; IDs preserved; vectors are Document objects
-    # (Qdrant embeds them server-side); payload has filterable ticker +
-    # published_at and round-trippable url + headline.
+    # One upsert of two points; IDs namespaced by ticker; vectors are Document
+    # objects (Qdrant embeds them server-side); payload has filterable ticker
+    # + published_at and round-trippable url + headline.
     assert len(qdrant_recorder.upserts) == 1
     call = qdrant_recorder.upserts[0]
     assert call.collection == COLLECTION
     assert len(call.points) == 2
 
     first, second = call.points
-    assert first.id == 111111111111111111
-    assert second.id == 222222222222222222
+    assert first.id == point_id("NVDA", 111111111111111111)
+    assert second.id == point_id("NVDA", 222222222222222222)
 
     assert isinstance(first.vector, Document)
     assert first.vector.text == "NVDA beats earnings, stock jumps 10%"
@@ -204,3 +205,63 @@ def test_cloud_inference_enabled_by_default() -> None:
     """Production QdrantResource should ship with cloud_inference=True so the
     asset can pass Document points and have Qdrant embed server-side (ADR-009)."""
     assert QdrantResource().cloud_inference is True
+
+
+# ── point_id helper (QNT-120) ─────────────────────────────────────────────────
+
+
+def test_point_id_cross_ticker_same_url_differs() -> None:
+    """Same URL under different tickers → distinct Qdrant IDs. This is the core
+    QNT-120 invariant — without it, the last ticker's upsert overwrites the
+    others and cross-mentioned articles silently disappear from per-ticker
+    ticker-filtered search."""
+    url_id = 123456789
+    assert point_id("MSFT", url_id) != point_id("TSLA", url_id)
+
+
+def test_point_id_same_ticker_same_url_idempotent() -> None:
+    """Same ``(ticker, url_id)`` → same point ID across calls. Required so that
+    Qdrant upsert dedups the same row on re-embed (matching ClickHouse's
+    ReplacingMergeTree dedup on ``(ticker, published_at, id)``)."""
+    assert point_id("NVDA", 42) == point_id("NVDA", 42)
+
+
+def test_point_id_fits_uint64() -> None:
+    """Qdrant accepts 64-bit unsigned integer IDs; the blake2b digest_size=8
+    output must fit. Guards against an accidental bump to digest_size=16
+    that would silently overflow Qdrant's ID validator."""
+    pid = point_id("AAPL", 2**63 - 1)
+    assert 0 <= pid < 2**64
+
+
+def test_cross_ticker_dataframe_produces_distinct_ids(qdrant_recorder: _Recorder) -> None:
+    """Two rows for the SAME url_id but different tickers (the cross-mention
+    case) must produce two distinct Qdrant points — one per ticker. The asset
+    runs per-partition so we simulate MSFT's partition with its slice of the
+    cross-mentioned row, and verify the ID matches what TSLA's partition would
+    NOT collide with."""
+    shared_url_id = 3849346792762833023
+    msft_df = pd.DataFrame(
+        [
+            {
+                "id": shared_url_id,
+                "ticker": "MSFT",
+                "headline": "Tesla Q1 earnings review",
+                "url": "https://example.com/shared-article",
+                "source": "yahoo_finance",
+                "published_at": datetime(2026, 4, 21, 14, 30, 0),
+            }
+        ]
+    )
+    ctx = build_asset_context(partition_key="MSFT")
+    news_embeddings(
+        context=ctx,
+        clickhouse=_FakeClickHouse(msft_df),  # type: ignore[arg-type]
+        qdrant=QdrantResource(),
+    )
+
+    assert len(qdrant_recorder.upserts) == 1
+    point = qdrant_recorder.upserts[0].points[0]
+    assert point.id == point_id("MSFT", shared_url_id)
+    assert point.id != point_id("TSLA", shared_url_id)
+    assert point.payload["ticker"] == "MSFT"
