@@ -27,6 +27,9 @@ Architecture Decision Records (ADRs). Read these to understand **why** we chose 
 - [006-multi-timeframe-via-aggregation.md](decisions/006-multi-timeframe-via-aggregation.md)
 - [007-minimal-agent-graph-first.md](decisions/007-minimal-agent-graph-first.md)
 - [008-no-vercel-ai-sdk.md](decisions/008-no-vercel-ai-sdk.md)
+- [009-embedding-via-qdrant-cloud-inference.md](decisions/009-embedding-via-qdrant-cloud-inference.md)
+- [010-dagster-production-topology.md](decisions/010-dagster-production-topology.md)
+- [011-llm-routing-groq-default-claude-override.md](decisions/011-llm-routing-groq-default-claude-override.md)
 
 ### [guides/](guides/)
 How to do common tasks. Operational runbooks.
