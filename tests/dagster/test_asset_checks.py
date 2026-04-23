@@ -54,3 +54,5 @@ def test_expected_asset_check_count() -> None:
     assert "technical_indicators_weekly" in asset_keys_with_checks
     assert "technical_indicators_monthly" in asset_keys_with_checks
     assert "fundamental_summary" in asset_keys_with_checks
+    assert "news_raw" in asset_keys_with_checks
+    assert "news_embeddings" in asset_keys_with_checks
