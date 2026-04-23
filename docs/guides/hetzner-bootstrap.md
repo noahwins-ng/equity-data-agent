@@ -70,7 +70,7 @@ Values you'll encrypt into `.env.sops`:
 | `QDRANT_URL` | Your Qdrant Cloud cluster URL |
 | `QDRANT_API_KEY` | From Qdrant Cloud dashboard |
 | `GROQ_API_KEY` | From [console.groq.com](https://console.groq.com) — default LLM provider, see ADR-011 |
-| `GEMINI_API_KEY` | Optional — Gemini 2.5 Pro quality override (free tier, see ADR-011) |
+| `GEMINI_API_KEY` | Optional — Gemini 2.5 Flash quality override (free tier, see ADR-011 + QNT-123) |
 | `LANGFUSE_PUBLIC_KEY` | From Langfuse dashboard |
 | `LANGFUSE_SECRET_KEY` | From Langfuse dashboard |
 | `LANGFUSE_HOST` | `https://cloud.langfuse.com` |

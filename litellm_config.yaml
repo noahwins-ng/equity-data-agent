@@ -1,4 +1,4 @@
-# QNT-59 / ADR-011: Groq (default) + Gemini 2.5 Pro (quality override).
+# QNT-59 + QNT-123 / ADR-011: Groq (default) + Gemini 2.5 Flash (quality override).
 #
 # Agent code calls `equity-agent/default`. Setting EQUITY_AGENT_PROVIDER=gemini
 # in the runtime env points get_llm() at `equity-agent/gemini` instead — config
@@ -13,7 +13,11 @@ model_list:
 
   - model_name: equity-agent/gemini
     litellm_params:
-      model: gemini/gemini-2.5-pro
+      # QNT-123: Pro returns `limit: 0` on Google AI Studio free tier as of
+      # 2026-04-23. Flash (15 RPM / 1500 RPD) is free-tier-reachable and
+      # preserves the "free to clone" invariant from ADR-011. Pro remains a
+      # one-line YAML edit away if a paid Gemini plan is added.
+      model: gemini/gemini-2.5-flash
       api_key: os.environ/GEMINI_API_KEY
 
 litellm_settings:

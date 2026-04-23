@@ -128,7 +128,7 @@ graph TD
     subgraph Reasoning Layer
         LG[LangGraph Agent]
         LIT[LiteLLM Proxy]
-        OLL[Groq / Gemini 2.5 Pro]
+        OLL[Groq / Gemini 2.5 Flash]
     end
 
     subgraph Presentation Layer
@@ -179,7 +179,7 @@ When the agent needs to assess NVDA:
 | **LangGraph** | Agent framework | Stateful graphs, tool integration, controllable execution flow |
 | **ClickHouse** | Structured storage | Columnar, blazing fast aggregations, `ReplacingMergeTree` for idempotency |
 | **Qdrant Cloud** | Vector storage | Managed free tier, native Python SDK, filtering support |
-| **LiteLLM Proxy** | LLM routing | Switch between Groq (default) and Gemini 2.5 Pro (override) without code changes. See ADR-011. **Pin version in pyproject.toml** (supply chain incident March 2026 — do not float) |
+| **LiteLLM Proxy** | LLM routing | Switch between Groq (default) and Gemini 2.5 Flash (override) without code changes. See ADR-011 + QNT-123 (Pro → Flash swap after Pro fell off the free tier). **Pin version in pyproject.toml** (supply chain incident March 2026 — do not float) |
 | **Groq** | Managed inference (default) | `https://api.groq.com/openai/v1` (OpenAI-compatible), llama-3.3-70b-versatile at ~500 tok/s. Free tier (30 RPM / 6K TPM / up to 14.4K RPD) covers Phase 5 dev + portfolio demos. No local model container on Hetzner. |
 | **Langfuse** | Observability | Trace agent thoughts, tool calls, and latency |
 | **Next.js 15** | Frontend | App Router, SSR/SSG, React 19, Turbopack stable, Vercel-native deployment |
@@ -195,7 +195,7 @@ When the agent needs to assess NVDA:
 | Service | Max Memory | Notes |
 |---|---|---|
 | ClickHouse | 4 GB | `max_memory_usage` setting |
-| Dagster + FastAPI + Caddy + LiteLLM + OS | 12 GB | Inference via Groq / Gemini 2.5 Pro (see ADR-011) — no local model container. LiteLLM proxy ~300MB. 6GB freed vs self-hosted Ollama. |
+| Dagster + FastAPI + Caddy + LiteLLM + OS | 12 GB | Inference via Groq / Gemini 2.5 Flash (see ADR-011) — no local model container. LiteLLM proxy ~300MB. 6GB freed vs self-hosted Ollama. |
 
 ---
 
@@ -209,7 +209,7 @@ equity-data-agent/
 ├── uv.lock
 ├── Dockerfile                      # Multi-stage build: `base` (uv + deps) → `dagster` target → `api` target
 ├── Caddyfile                       # Caddy reverse proxy config (prod HTTPS termination)
-├── litellm_config.yaml             # LiteLLM model routing: dev/prod → Groq (default); override → Gemini 2.5 Pro. See ADR-011.
+├── litellm_config.yaml             # LiteLLM model routing: dev/prod → Groq (default); override → Gemini 2.5 Flash. See ADR-011 + QNT-123.
 ├── docker-compose.yml              # Profiles: dev, prod
 ├── docs/
 │   ├── project-requirement.md      # This document
@@ -660,7 +660,7 @@ class Settings(BaseSettings):
     qdrant_api_key: str = ""
     litellm_base_url: str = "http://localhost:4000"   # dev: localhost (native). prod: set LITELLM_BASE_URL=http://litellm:4000 in .env (Docker service name)
     groq_api_key: str = ""                 # Groq API key (https://console.groq.com — default LLM provider, see ADR-011)
-    gemini_api_key: str = ""               # Google AI Studio Gemini key — override: when set, LiteLLM can route to Gemini 2.5 Pro instead of Groq (see ADR-011)
+    gemini_api_key: str = ""               # Google AI Studio Gemini key — override: when set, LiteLLM can route to Gemini 2.5 Flash instead of Groq (see ADR-011 + QNT-123)
     sentry_dsn: str = ""                     # FastAPI error tracking (Phase 7)
     langfuse_public_key: str = ""            # Agent tracing (Phase 7)
     langfuse_secret_key: str = ""
@@ -683,7 +683,7 @@ model_list:
   # Quality override — set EQUITY_AGENT_PROVIDER=gemini to route here:
   # - model_name: equity-agent/default
   #   litellm_params:
-  #     model: gemini/gemini-2.5-pro
+  #     model: gemini/gemini-2.5-flash
   #     api_key: os.environ/GEMINI_API_KEY
 ```
 
@@ -783,7 +783,7 @@ One-time setup for a fresh Hetzner CX41. After this, the CI/CD pipeline in Secti
    - `CLICKHOUSE_HOST=clickhouse`
    - `LITELLM_BASE_URL=http://litellm:4000` (Docker service name — not localhost)
    - `GROQ_API_KEY=<from https://console.groq.com — default LLM provider, see ADR-011>`
-   - `GEMINI_API_KEY=<optional, for Gemini 2.5 Pro override — free tier, see ADR-011>`
+   - `GEMINI_API_KEY=<optional, for Gemini 2.5 Flash override — free tier, see ADR-011 + QNT-123>`
    - `QDRANT_URL=<Qdrant Cloud cluster URL>`
    - `QDRANT_API_KEY=<from Qdrant Cloud dashboard>`
    - `SENTRY_DSN=<from Sentry project settings>`
@@ -810,7 +810,7 @@ One-time setup for a fresh Hetzner CX41. After this, the CI/CD pipeline in Secti
 | Failure | Impact | Handling |
 |---|---|---|
 | **yfinance 429/timeout** | OHLCV/fundamentals data stale | Dagster retry policy: 3 attempts with exponential backoff. Data stays stale until next successful run. No user-visible error — dashboard shows last-known-good data. |
-| **Groq down / rate-limited** | Agent can't generate thesis | `POST /agent/chat` returns HTTP 503. Frontend shows "Agent temporarily unavailable." If `GEMINI_API_KEY` is set, flip `EQUITY_AGENT_PROVIDER=gemini` to route to Gemini 2.5 Pro via the same alias (config-only fallback, see ADR-011). |
+| **Groq down / rate-limited** | Agent can't generate thesis | `POST /agent/chat` returns HTTP 503. Frontend shows "Agent temporarily unavailable." If `GEMINI_API_KEY` is set, flip `EQUITY_AGENT_PROVIDER=gemini` to route to Gemini 2.5 Flash via the same alias (config-only fallback, see ADR-011 + QNT-123). |
 | **Qdrant Cloud unreachable** | News search unavailable | `GET /search/news` returns HTTP 503. `GET /reports/news/{ticker}` returns 200 with partial report (headlines from ClickHouse, no semantic search). Agent `search_news` tool returns empty results. |
 | **ClickHouse unreachable** | All data API endpoints fail | `GET /health` returns HTTP 503. All data/report endpoints return 503. Frontend shows offline banner. |
 | **News API rate-limited** | News ingestion stale | Dagster retry + stale data is acceptable — news is not real-time. |

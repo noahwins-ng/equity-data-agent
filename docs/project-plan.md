@@ -236,9 +236,11 @@ Updated automatically by `/ship` and `/sync-docs`.
 
 - [x] Configure LiteLLM proxy via `litellm_config.yaml` — QNT-59
     - **Default**: routes to Groq (`https://api.groq.com/openai/v1`, llama-3.3-70b-versatile) via `GROQ_API_KEY`. Email-only free tier (30 RPM / 6K TPM / up to 14.4K RPD) covers Phase 5 dev + steady-state portfolio demos. ~500 tok/s inference keeps prompt-iteration fast.
-    - **Override**: routes to Google AI Studio Gemini 2.5 Pro via `GEMINI_API_KEY` — free-tier quality override (5 RPM / 100 RPD, no credit card) for the hero demo thesis (QNT-94) and the README screenshot (QNT-66). Eval harness (QNT-67) logs a per-provider column so Groq↔Gemini becomes a deliberate eval axis.
+    - **Override**: routes to Google AI Studio Gemini 2.5 Flash via `GEMINI_API_KEY` — free-tier quality override (15 RPM / 1500 RPD, no credit card) for the hero demo thesis (QNT-94), README screenshot (QNT-66), and as the per-provider axis in the QNT-67 eval harness.
     - Model alias: `equity-agent/default` — zero agent code changes to switch backends.
     - See ADR-011 for provider selection rationale (why Groq over Ollama Cloud / Gemini / OpenAI / self-hosted).
+- [x] Demote Gemini override from Pro to Flash — QNT-123
+    - Shipped right after QNT-59. First live test of the `equity-agent/gemini` alias returned HTTP 429 with `limit: 0` — Gemini 2.5 Pro is no longer on Google AI Studio's free tier. Swapped to Gemini 2.5 Flash (free-tier-reachable) to preserve ADR-011's "free to clone" invariant. Pro stays available via one-line YAML edit if a paid plan is ever added. See ADR-011 §Revision history (2026-04-23 Pro → Flash entry) for the full story.
 - [ ] Integrate Langfuse tracing — QNT-61 **[day-one of Phase 5, moved from Phase 7]**
     - `LangfuseResource` in the agent package; `@observe` decorator on every tool and graph node from the first commit of agent code — traces are needed *while* iterating on the prompt, not bolted on after shipping.
     - Portfolio artifact: one Langfuse trace screenshot is embedded in the README (QNT-66).

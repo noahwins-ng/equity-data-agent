@@ -108,3 +108,17 @@ Reopen this ADR if any of these fire:
 ## Revision history
 
 **2026-04-23 (initial, same-day revision):** First draft placed Claude Sonnet 4.6 in the override slot. Revised before shipping because the project's portfolio-not-product framing calls for $0 marginal cost — a visitor cloning the repo in 6 months should be able to run the full stack without a paid API relationship. Swapped override to Gemini 2.5 Pro (free tier, 5 RPM / 100 RPD, no credit card). Claude/Opus/GPT-5 remain on the shortlist as layerable additions if the project ever acquires a budget.
+
+**2026-04-23 (Pro → Flash, post-QNT-59):** First live end-to-end test of the override path (prod, hours after QNT-59 shipped) returned:
+
+```
+HTTP 429: Quota exceeded for metric:
+  generativelanguage.googleapis.com/generate_content_free_tier_requests,
+  limit: 0
+```
+
+`limit: 0` is not a rate-window that clears on wait — it's Google AI Studio cutting off Gemini 2.5 Pro from the free tier entirely. That breaks this ADR's core "free to clone" invariant: a visitor cloning the repo with only a free Gemini key can't exercise the override at all. The quoted "5 RPM / 100 RPD" free-tier numbers for Pro (sourced from docs when this ADR was drafted same-day) are no longer reality for new keys.
+
+Demoted the override to **Gemini 2.5 Flash** (15 RPM / 1500 RPD, confirmed free-tier-reachable). Flash is a capable 2025-era model — the per-provider axis Groq-Llama vs Google-Gemini remains meaningful, and Flash's higher RPD ceiling actually makes QNT-67's eval harness more comfortable than Pro would have been even if Pro were still free. Pro stays available as a one-line YAML edit in `litellm_config.yaml` if a paid Gemini plan is ever added — no ADR amendment needed for that flip.
+
+Tracked under QNT-123. This is exactly the `feedback_vendor_prod_docs.md` lesson firing: vendor tier assumptions must be re-verified at ship time, not trusted from docs copied into an ADR the same day the docs were read.
