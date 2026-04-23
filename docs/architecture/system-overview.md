@@ -123,14 +123,14 @@ All per-ticker Dagster assets use `StaticPartitionsDefinition` over the 10 ticke
 
 LiteLLM proxy (v1.56.0, pinned) routes model requests (see ADR-011):
 - **Default**: Groq (`https://api.groq.com/openai/v1`, llama-3.3-70b-versatile) via `GROQ_API_KEY` — email-only free tier covers Phase 5 dev + steady-state portfolio demos, ~500 tok/s inference. No local model container on Hetzner.
-- **Override**: Claude Sonnet 4.6 via `ANTHROPIC_API_KEY` — quality tier for the hero demo thesis and README screenshot. Eval harness (QNT-67) logs a per-provider column so Groq↔Claude becomes a deliberate eval axis.
+- **Override**: Google AI Studio Gemini 2.5 Pro via `GEMINI_API_KEY` — free-tier quality override (5 RPM / 100 RPD, no credit card) for the hero demo thesis and README screenshot. Eval harness (QNT-67) logs a per-provider column so Groq↔Gemini becomes a deliberate eval axis.
 - Config: `litellm_config.yaml` at repo root, model alias `equity-agent/default`
 - Agent code references only the alias — never a provider-specific model name or URL
 
 ## Infrastructure
 
 - **Dev**: MacBook M4 → SSH tunnel → Hetzner ClickHouse (port 8123); LiteLLM on localhost:4000 (from Phase 5); Next.js on localhost:3001
-- **Prod Backend**: Hetzner CX41 (16GB) → Docker Compose (ClickHouse 4GB + Dagster/FastAPI/Caddy/LiteLLM 12GB — no local model inference; LLM calls go to Groq / Claude via LiteLLM)
+- **Prod Backend**: Hetzner CX41 (16GB) → Docker Compose (ClickHouse 4GB + Dagster/FastAPI/Caddy/LiteLLM 12GB — no local model inference; LLM calls go to Groq / Gemini via LiteLLM)
 - **Prod Frontend**: Vercel (Next.js 15, free tier) → calls FastAPI over HTTPS
 - **HTTPS**: Caddy service in Docker Compose handles TLS termination (auto HTTPS via Let's Encrypt)
 - **CI/CD**: GitHub Actions → backend: SSH → git pull → `make migrate` → docker compose up, then two hard gates (QNT-88/89): assert `git rev-parse HEAD` equals the merged commit SHA and assert the Dagster definitions module loads with the expected asset/check/schedule counts. Frontend: Vercel auto-deploy on push to main.
