@@ -1,15 +1,20 @@
+# QNT-59 / ADR-011: Groq (default) + Gemini 2.5 Pro (quality override).
+#
+# Agent code calls `equity-agent/default`. Setting EQUITY_AGENT_PROVIDER=gemini
+# in the runtime env points get_llm() at `equity-agent/gemini` instead — config
+# switch, no code change. Keys are resolved from env at proxy startup; the
+# client (agent) does not need to know them.
+
 model_list:
-  - model_name: llama3.2
+  - model_name: equity-agent/default
     litellm_params:
-      model: ollama_chat/llama3.2
-      api_base: https://ollama.com/v1
-      api_key: os.environ/OLLAMA_API_KEY
+      model: groq/llama-3.3-70b-versatile
+      api_key: os.environ/GROQ_API_KEY
 
-  - model_name: claude-sonnet
+  - model_name: equity-agent/gemini
     litellm_params:
-      model: anthropic/claude-sonnet-4-6
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: gemini/gemini-2.5-pro
+      api_key: os.environ/GEMINI_API_KEY
 
-general_settings:
-  # Default model when none specified
-  default_model: llama3.2
+litellm_settings:
+  drop_params: true

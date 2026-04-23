@@ -18,10 +18,11 @@ class Settings(BaseSettings):
     QDRANT_URL: str = ""
     QDRANT_API_KEY: str = ""
 
-    # LiteLLM proxy
+    # LiteLLM proxy (see ADR-011 — Groq default, Gemini 2.5 Pro override)
     LITELLM_BASE_URL: str = "http://localhost:4000"
-    OLLAMA_API_KEY: str = ""
-    ANTHROPIC_API_KEY: str = ""
+    GROQ_API_KEY: str = ""
+    GEMINI_API_KEY: str = ""
+    EQUITY_AGENT_PROVIDER: str = "groq"  # "groq" | "gemini"
 
     # Langfuse
     LANGFUSE_PUBLIC_KEY: str = ""

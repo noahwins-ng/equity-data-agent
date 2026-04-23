@@ -587,7 +587,7 @@ services:
     # ...
 
   litellm:
-    image: ghcr.io/berriai/litellm:v1.56.0   # pin — do NOT use :main-latest (supply chain incident)
+    image: litellm/litellm:v1.81.14-stable   # pin — do NOT use :main-latest (March 2026 supply-chain incident)
     command: --config /app/config.yaml --port 4000
     env_file: .env                    # passes GROQ_API_KEY, GEMINI_API_KEY to container
     volumes:

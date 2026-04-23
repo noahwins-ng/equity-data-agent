@@ -121,7 +121,7 @@ All per-ticker Dagster assets use `StaticPartitionsDefinition` over the 10 ticke
 
 ## LLM Routing
 
-LiteLLM proxy (v1.56.0, pinned) routes model requests (see ADR-011):
+LiteLLM proxy (v1.81.14-stable, pinned) routes model requests (see ADR-011):
 - **Default**: Groq (`https://api.groq.com/openai/v1`, llama-3.3-70b-versatile) via `GROQ_API_KEY` — email-only free tier covers Phase 5 dev + steady-state portfolio demos, ~500 tok/s inference. No local model container on Hetzner.
 - **Override**: Google AI Studio Gemini 2.5 Pro via `GEMINI_API_KEY` — free-tier quality override (5 RPM / 100 RPD, no credit card) for the hero demo thesis and README screenshot. Eval harness (QNT-67) logs a per-provider column so Groq↔Gemini becomes a deliberate eval axis.
 - Config: `litellm_config.yaml` at repo root, model alias `equity-agent/default`

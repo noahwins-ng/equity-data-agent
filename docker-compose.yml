@@ -214,7 +214,7 @@ services:
     profiles: [prod]
 
   litellm:
-    image: litellm/litellm:v1.56.5
+    image: litellm/litellm:v1.81.14-stable
     restart: unless-stopped
     command: --config /app/config.yaml --port 4000
     env_file: .env
