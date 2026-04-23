@@ -235,9 +235,10 @@ Updated automatically by `/ship` and `/sync-docs`.
 **Scope**: LangGraph agent with tools that call FastAPI endpoints.
 
 - [ ] Configure LiteLLM proxy via `litellm_config.yaml` — QNT-59
-    - **Default**: routes to Ollama Cloud (`https://ollama.com/v1`) via `OLLAMA_API_KEY`
-    - **Override**: routes to Claude API via `ANTHROPIC_API_KEY`
-    - Model alias: `equity-agent/default` — zero agent code changes to switch backends
+    - **Default**: routes to Groq (`https://api.groq.com/openai/v1`, llama-3.3-70b-versatile) via `GROQ_API_KEY`. Email-only free tier (30 RPM / 6K TPM / up to 14.4K RPD) covers Phase 5 dev + steady-state portfolio demos. ~500 tok/s inference keeps prompt-iteration fast.
+    - **Override**: routes to Claude Sonnet 4.6 via `ANTHROPIC_API_KEY` — quality tier for the hero demo thesis (QNT-94) and the README screenshot (QNT-66). Eval harness (QNT-67) logs a per-provider column so Groq↔Claude becomes a deliberate eval axis.
+    - Model alias: `equity-agent/default` — zero agent code changes to switch backends.
+    - See ADR-011 for provider selection rationale (why Groq over Ollama Cloud / Gemini / OpenAI / self-hosted).
 - [ ] Integrate Langfuse tracing — QNT-61 **[day-one of Phase 5, moved from Phase 7]**
     - `LangfuseResource` in the agent package; `@observe` decorator on every tool and graph node from the first commit of agent code — traces are needed *while* iterating on the prompt, not bolted on after shipping.
     - Portfolio artifact: one Langfuse trace screenshot is embedded in the README (QNT-66).
@@ -287,10 +288,10 @@ Updated automatically by `/ship` and `/sync-docs`.
 **Scope**: Next.js dashboard, ticker detail with TradingView charts, and agent chat interface. Deployed on Vercel.
 **Dependencies**: Requires Phase 3. Requires Phase 5 for agent chat page. News sidebar gracefully degrades if Phase 4 is not yet complete.
 
-- [ ] ADR-011: Next.js rendering mode per page (SSG / SSR / CSR) + cache strategy — QNT-121 **[written BEFORE any page code]**
+- [ ] ADR-012: Next.js rendering mode per page (SSG / SSR / CSR) + cache strategy — QNT-121 **[written BEFORE any page code]**
     - Phase 4 retro carry-over: the Dagster quickstart-topology arc (QNT-100 → QNT-116, 17h across 4 incidents) and Qdrant point-ID arc (QNT-54 → QNT-120) both burned hours because the prod-vs-tutorial gap surfaced at deploy, not design. Next.js app-router has the same shape — SSR-by-default + RSC boundaries + SSE streaming don't all compose.
     - Each page names: rendering mode, data-fetch location (RSC vs client vs API route), cache / revalidate strategy, and failure-mode rendering. Dashboard probably ISR; ticker detail SSR + client-side toggle; chat CSR + `fetch`/`ReadableStream`.
-    - Output: `docs/decisions/011-nextjs-rendering-mode-per-page.md` — every subsequent Phase 6 ticket references it by section.
+    - Output: `docs/decisions/012-nextjs-rendering-mode-per-page.md` — every subsequent Phase 6 ticket references it by section.
 - [ ] Initialize Next.js app in `frontend/` with Tailwind CSS
 - [ ] Dashboard page (`/`) — ticker cards showing price, daily change, RSI signal, trend status
     - Calls `GET /api/v1/dashboard/summary` (single request for all tickers — no N+1)

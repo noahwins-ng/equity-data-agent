@@ -128,7 +128,7 @@ graph TD
     subgraph Reasoning Layer
         LG[LangGraph Agent]
         LIT[LiteLLM Proxy]
-        OLL[Ollama Cloud / Claude API]
+        OLL[Groq / Claude API]
     end
 
     subgraph Presentation Layer
@@ -179,8 +179,8 @@ When the agent needs to assess NVDA:
 | **LangGraph** | Agent framework | Stateful graphs, tool integration, controllable execution flow |
 | **ClickHouse** | Structured storage | Columnar, blazing fast aggregations, `ReplacingMergeTree` for idempotency |
 | **Qdrant Cloud** | Vector storage | Managed free tier, native Python SDK, filtering support |
-| **LiteLLM Proxy** | LLM routing | Switch between Ollama Cloud and Claude API without code changes. **Pin version in pyproject.toml** (supply chain incident March 2026 — do not float) |
-| **Ollama Cloud** | Managed inference | Hosted Ollama API at `https://ollama.com/v1` (OpenAI-compatible). Eliminates local GPU/CPU requirement on Hetzner — no Ollama container in prod, saving 6GB RAM. |
+| **LiteLLM Proxy** | LLM routing | Switch between Groq (default) and Claude API (override) without code changes. See ADR-011. **Pin version in pyproject.toml** (supply chain incident March 2026 — do not float) |
+| **Groq** | Managed inference (default) | `https://api.groq.com/openai/v1` (OpenAI-compatible), llama-3.3-70b-versatile at ~500 tok/s. Free tier (30 RPM / 6K TPM / up to 14.4K RPD) covers Phase 5 dev + portfolio demos. No local model container on Hetzner. |
 | **Langfuse** | Observability | Trace agent thoughts, tool calls, and latency |
 | **Next.js 15** | Frontend | App Router, SSR/SSG, React 19, Turbopack stable, Vercel-native deployment |
 | **TradingView Lightweight Charts v5** | Financial charting | Free (Apache 2.0), candlestick, volume, indicator overlays, native multi-pane support |
@@ -195,7 +195,7 @@ When the agent needs to assess NVDA:
 | Service | Max Memory | Notes |
 |---|---|---|
 | ClickHouse | 4 GB | `max_memory_usage` setting |
-| Dagster + FastAPI + Caddy + LiteLLM + OS | 12 GB | Inference via Ollama Cloud — no local model container. LiteLLM proxy ~300MB. 6GB freed vs self-hosted Ollama. |
+| Dagster + FastAPI + Caddy + LiteLLM + OS | 12 GB | Inference via Groq / Claude (see ADR-011) — no local model container. LiteLLM proxy ~300MB. 6GB freed vs self-hosted Ollama. |
 
 ---
 
@@ -209,7 +209,7 @@ equity-data-agent/
 ├── uv.lock
 ├── Dockerfile                      # Multi-stage build: `base` (uv + deps) → `dagster` target → `api` target
 ├── Caddyfile                       # Caddy reverse proxy config (prod HTTPS termination)
-├── litellm_config.yaml             # LiteLLM model routing: dev/prod → Ollama Cloud; override → Claude API
+├── litellm_config.yaml             # LiteLLM model routing: dev/prod → Groq (default); override → Claude API. See ADR-011.
 ├── docker-compose.yml              # Profiles: dev, prod
 ├── docs/
 │   ├── project-requirement.md      # This document
@@ -536,14 +536,14 @@ MacBook M4 ──SSH Tunnel──▶ Hetzner ClickHouse (port 8123)
 ```
 
 - Dagster, FastAPI, LiteLLM, and Next.js run natively on macOS for instant hot-reloads
-- **LiteLLM** (needed from Phase 5): `litellm --config litellm_config.yaml --port 4000` — routes to Ollama Cloud by default. Not needed for Phases 0-4.
+- **LiteLLM** (needed from Phase 5): `litellm --config litellm_config.yaml --port 4000` — routes to Groq by default (see ADR-011). Not needed for Phases 0-4.
 - Next.js calls FastAPI at `localhost:8000` during dev (configured via `NEXT_PUBLIC_API_URL`)
 - ClickHouse accessed via SSH tunnel: `ssh -L 8123:localhost:8123 hetzner`
 - Environment variable: `CLICKHOUSE_HOST=localhost` when `ENV=dev`
 
 ### 7.2 Production (Hetzner CX41 + Vercel)
 
-**Backend** (Hetzner): Dagster, FastAPI, ClickHouse, LiteLLM — Docker Compose (no local Ollama — inference via Ollama Cloud)
+**Backend** (Hetzner): Dagster, FastAPI, ClickHouse, LiteLLM — Docker Compose (no local model inference — LLM calls go to Groq / Claude via LiteLLM, see ADR-011)
 **Frontend** (Vercel): Next.js — auto-deployed on push to `main`, preview deploys on PR
 
 ```yaml
@@ -589,11 +589,11 @@ services:
   litellm:
     image: ghcr.io/berriai/litellm:v1.56.0   # pin — do NOT use :main-latest (supply chain incident)
     command: --config /app/config.yaml --port 4000
-    env_file: .env                    # passes OLLAMA_API_KEY, ANTHROPIC_API_KEY to container
+    env_file: .env                    # passes GROQ_API_KEY, ANTHROPIC_API_KEY to container
     volumes:
       - ./litellm_config.yaml:/app/config.yaml
     # Port 4000 on Docker network only — NOT exposed externally
-    # Routes to Ollama Cloud (https://ollama.com/v1) by default
+    # Routes to Groq (https://api.groq.com/openai/v1) by default — see ADR-011
     # ...
 
   caddy:
@@ -659,8 +659,8 @@ class Settings(BaseSettings):
     qdrant_url: str = ""
     qdrant_api_key: str = ""
     litellm_base_url: str = "http://localhost:4000"   # dev: localhost (native). prod: set LITELLM_BASE_URL=http://litellm:4000 in .env (Docker service name)
-    ollama_api_key: str = ""               # Ollama Cloud API key (https://ollama.com — required for cloud inference)
-    anthropic_api_key: str = ""            # Claude API key — when set, LiteLLM can route to Claude instead of Ollama Cloud
+    groq_api_key: str = ""                 # Groq API key (https://console.groq.com — default LLM provider, see ADR-011)
+    anthropic_api_key: str = ""            # Claude API key — override: when set, LiteLLM can route to Claude instead of Groq (see ADR-011)
     sentry_dsn: str = ""                     # FastAPI error tracking (Phase 7)
     langfuse_public_key: str = ""            # Agent tracing (Phase 7)
     langfuse_secret_key: str = ""
@@ -669,23 +669,25 @@ class Settings(BaseSettings):
 
 ### 7.5 LiteLLM Model Routing
 
+See [ADR-011](decisions/011-llm-routing-groq-default-claude-override.md) for the selection rationale (why Groq over Ollama Cloud / Gemini / OpenAI / self-hosted).
+
 ```yaml
 # litellm_config.yaml — at repo root, mounted into LiteLLM container
 model_list:
   - model_name: equity-agent/default       # alias used by agent code
     litellm_params:
-      model: openai/llama3.1:8b            # Ollama Cloud model via OpenAI-compat API
-      api_base: https://ollama.com/v1
-      api_key: os.environ/OLLAMA_API_KEY   # reads from environment variable
+      model: openai/llama-3.3-70b-versatile   # Groq via OpenAI-compat API
+      api_base: https://api.groq.com/openai/v1
+      api_key: os.environ/GROQ_API_KEY      # reads from environment variable
 
-  # Uncomment to override with Claude API (higher quality, paid):
+  # Quality override — set EQUITY_AGENT_PROVIDER=claude to route here:
   # - model_name: equity-agent/default
   #   litellm_params:
-  #     model: anthropic/claude-sonnet-4-20250514
+  #     model: anthropic/claude-sonnet-4-6
   #     api_key: os.environ/ANTHROPIC_API_KEY
 ```
 
-The agent graph references only the alias `equity-agent/default` — never a provider-specific model name. Switching from Ollama Cloud to Claude API is a config-only change (edit YAML, restart LiteLLM).
+The agent graph references only the alias `equity-agent/default` — never a provider-specific model name. Switching from Groq to Claude API is a config-only change (edit YAML, restart LiteLLM). QNT-67 eval harness logs a per-provider column so the split is a measurable eval axis, not an invisible default.
 
 ---
 
@@ -780,7 +782,7 @@ One-time setup for a fresh Hetzner CX41. After this, the CI/CD pipeline in Secti
    - `ENV=prod`
    - `CLICKHOUSE_HOST=clickhouse`
    - `LITELLM_BASE_URL=http://litellm:4000` (Docker service name — not localhost)
-   - `OLLAMA_API_KEY=<from https://ollama.com account>`
+   - `GROQ_API_KEY=<from https://console.groq.com — default LLM provider, see ADR-011>`
    - `ANTHROPIC_API_KEY=<optional, for Claude API override>`
    - `QDRANT_URL=<Qdrant Cloud cluster URL>`
    - `QDRANT_API_KEY=<from Qdrant Cloud dashboard>`
@@ -808,7 +810,7 @@ One-time setup for a fresh Hetzner CX41. After this, the CI/CD pipeline in Secti
 | Failure | Impact | Handling |
 |---|---|---|
 | **yfinance 429/timeout** | OHLCV/fundamentals data stale | Dagster retry policy: 3 attempts with exponential backoff. Data stays stale until next successful run. No user-visible error — dashboard shows last-known-good data. |
-| **Ollama Cloud down** | Agent can't generate thesis | `POST /agent/chat` returns HTTP 503. Frontend shows "Agent temporarily unavailable." If `ANTHROPIC_API_KEY` is set, reconfigure `litellm_config.yaml` to route to Claude. |
+| **Groq down / rate-limited** | Agent can't generate thesis | `POST /agent/chat` returns HTTP 503. Frontend shows "Agent temporarily unavailable." If `ANTHROPIC_API_KEY` is set, flip `EQUITY_AGENT_PROVIDER=claude` to route to Claude via the same alias (config-only fallback, see ADR-011). |
 | **Qdrant Cloud unreachable** | News search unavailable | `GET /search/news` returns HTTP 503. `GET /reports/news/{ticker}` returns 200 with partial report (headlines from ClickHouse, no semantic search). Agent `search_news` tool returns empty results. |
 | **ClickHouse unreachable** | All data API endpoints fail | `GET /health` returns HTTP 503. All data/report endpoints return 503. Frontend shows offline banner. |
 | **News API rate-limited** | News ingestion stale | Dagster retry + stale data is acceptable — news is not real-time. |
