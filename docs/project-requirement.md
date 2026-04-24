@@ -664,7 +664,7 @@ class Settings(BaseSettings):
     sentry_dsn: str = ""                     # FastAPI error tracking (Phase 7)
     langfuse_public_key: str = ""            # Agent tracing (Phase 7)
     langfuse_secret_key: str = ""
-    langfuse_host: str = "https://cloud.langfuse.com"
+    langfuse_base_url: str = "https://us.cloud.langfuse.com"  # match the region where the Langfuse project was created; wrong region silently drops traces (QNT-61 finding)
 ```
 
 ### 7.5 LiteLLM Model Routing

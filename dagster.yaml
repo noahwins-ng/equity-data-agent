@@ -49,7 +49,7 @@ run_launcher:
       - LITELLM_BASE_URL
       - LANGFUSE_PUBLIC_KEY
       - LANGFUSE_SECRET_KEY
-      - LANGFUSE_HOST
+      - LANGFUSE_BASE_URL
       - SENTRY_DSN
     # Run-worker containers must see the SAME SQLite-backed run storage the
     # daemon wrote to, or `dagster api execute_run` errors with

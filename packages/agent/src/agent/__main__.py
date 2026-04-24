@@ -1,6 +1,7 @@
 """Minimal CLI proof-of-life for QNT-59. QNT-60 replaces this with the full
 LangGraph plan → gather → synthesize flow; until then `analyze <TICKER>`
-exercises the LiteLLM routing (Groq default, Gemini override via env)."""
+exercises the LiteLLM routing (Groq default, Gemini override via env) and
+the QNT-61 Langfuse tracing wiring."""
 
 import argparse
 import sys
@@ -8,8 +9,10 @@ import sys
 from shared.tickers import TICKERS
 
 from agent.llm import get_llm
+from agent.tracing import langfuse, observe
 
 
+@observe()
 def analyze(ticker: str) -> int:
     ticker = ticker.upper()
     if ticker not in TICKERS:
@@ -20,9 +23,11 @@ def analyze(ticker: str) -> int:
         return 2
 
     llm = get_llm()
-    response = llm.invoke(
+    response = langfuse.traced_invoke(
+        llm,
         f"Write a one-paragraph investment hypothesis for {ticker}. "
-        "Do not fabricate numbers - speak in qualitative terms only."
+        "Do not fabricate numbers - speak in qualitative terms only.",
+        name="synthesize",
     )
     print(response.content)
     return 0
@@ -34,9 +39,12 @@ def main(argv: list[str] | None = None) -> int:
     p_analyze = sub.add_parser("analyze", help="Analyze a single ticker")
     p_analyze.add_argument("ticker")
     args = parser.parse_args(argv)
-    if args.cmd == "analyze":
-        return analyze(args.ticker)
-    return 1
+    try:
+        if args.cmd == "analyze":
+            return analyze(args.ticker)
+        return 1
+    finally:
+        langfuse.flush()
 
 
 if __name__ == "__main__":

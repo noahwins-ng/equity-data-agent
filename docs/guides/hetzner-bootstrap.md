@@ -73,7 +73,7 @@ Values you'll encrypt into `.env.sops`:
 | `GEMINI_API_KEY` | Optional — Gemini 2.5 Flash quality override (free tier, see ADR-011 + QNT-123) |
 | `LANGFUSE_PUBLIC_KEY` | From Langfuse dashboard |
 | `LANGFUSE_SECRET_KEY` | From Langfuse dashboard |
-| `LANGFUSE_HOST` | `https://cloud.langfuse.com` |
+| `LANGFUSE_BASE_URL` | `https://cloud.langfuse.com` (EU) or `https://us.cloud.langfuse.com` (US) — must match the region where the project was created |
 | `SENTRY_DSN` | From Sentry project settings |
 | `NEXT_PUBLIC_API_URL` | `https://your-domain.com` |
 

@@ -276,6 +276,41 @@ Run-level retry is **activated globally** by `run_retries.enabled: true` in `dag
 
 ---
 
+## Tracing a LangGraph Node or Tool (Langfuse)
+
+**Location**: anything in `packages/agent/src/agent/` that calls the LLM or is a graph node / tool.
+
+ADR-007 pins the graph at `plan → gather → synthesize`; QNT-61 wires Langfuse so every one of those nodes, plus every tool, shows up in a single trace with prompt / output / tokens / latency captured.
+
+```python
+from agent.llm import get_llm
+from agent.tracing import langfuse, observe
+
+@observe()  # graph node — one span per node, auto-nested under the run's trace
+def synthesize(state: State) -> State:
+    llm = get_llm()
+    response = langfuse.traced_invoke(
+        llm,
+        build_prompt(state),
+        name="synthesize",  # shows up as the generation span name in the UI
+    )
+    return {"thesis": response.content}
+
+@observe()  # tool — same pattern, different `as_type` default
+def get_technical_report(ticker: str) -> str:
+    return httpx.get(f"{api_url}/api/v1/reports/technical/{ticker}").text
+```
+
+**Two non-negotiables**:
+1. Every LLM call goes through `langfuse.traced_invoke(...)`. `tests/test_tracing.py::test_no_raw_llm_invoke_in_agent_package` fails CI if a raw `llm.invoke(...)` sneaks into the agent package.
+2. Every graph node and every tool carries `@observe()`. Without it, the Langfuse trace tree collapses and you lose the `plan → gather → synthesize` boundaries in the UI.
+
+**Config**: `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_BASE_URL` in `.env`. Unset keys → tracing auto-disables, `traced_invoke` becomes a pass-through, nothing blows up in tests or offline dev. Region matters: the US project and EU project live on different hosts (`us.cloud.langfuse.com` vs `cloud.langfuse.com`) — a trace sent to the wrong region is silently dropped with no auth error.
+
+**Short-lived processes** (CLI, scripts): call `langfuse.flush()` before exit — otherwise the last span never reaches the server. `agent.__main__.main()` already does this in a `finally` block; copy the pattern for any new entry point.
+
+---
+
 ## Adding a Ticker
 
 **Location**: `packages/shared/src/shared/tickers.py`
