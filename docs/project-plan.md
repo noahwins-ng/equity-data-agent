@@ -8,14 +8,14 @@ Updated automatically by `/ship` and `/sync-docs`.
 ### Phase 0 — Foundation
 **Scope**: Repo scaffolding, infrastructure, and CI/CD.
 
-- [x] Initialize monorepo with uv workspaces (4 packages)
+- [x] Initialize monorepo with uv workspaces (4 packages) — QNT-34
 - [x] Set up root `pyproject.toml` with shared dev dependencies (ruff, pyright, pytest)
-- [x] Create `shared` package with `Settings`, ticker registry (`TICKERS` list + `TICKER_METADATA` dict with sector/industry per ticker), and base Pydantic schemas
-- [x] Write `docker-compose.yml` with dev/prod profiles
+- [x] Create `shared` package with `Settings`, ticker registry (`TICKERS` list + `TICKER_METADATA` dict with sector/industry per ticker), and base Pydantic schemas — QNT-35
+- [x] Write `docker-compose.yml` with dev/prod profiles — QNT-36
 - [x] Write `Dockerfile` (multi-stage: base with uv deps → dagster target, api target) — shared by dagster, dagster-daemon, and api services
-- [x] Set up ClickHouse with DDL migration scripts (raw + derived databases)
-- [x] Configure GitHub Actions for CI (lint + test) and CD (SSH deploy)
-- [x] Create `.env.example` with all required environment variables
+- [x] Set up ClickHouse with DDL migration scripts (raw + derived databases) — QNT-37
+- [x] Configure GitHub Actions for CI (lint + test) and CD (SSH deploy) — QNT-38
+- [x] Create `.env.example` with all required environment variables — QNT-39
 - [x] Bootstrap Hetzner CX41 production server: provision VPS, install Docker, configure GitHub deploy secrets, first manual deploy — QNT-83
 - [x] Integration test infrastructure + prod health visibility — QNT-85
     - `/health` endpoint with ClickHouse connectivity check (200 ok / 503 degraded)
@@ -79,6 +79,10 @@ Updated automatically by `/ship` and `/sync-docs`.
     - **Triggered by**: Phase 4 retro (2026-04-23) — QNT-120 surfaced that QNT-93's `news_embeddings_vector_count_matches_source` compared Qdrant per-ticker point count against `count() FROM news_raw`, but the asset keys Qdrant on `(ticker, url_id)` so the correct aggregation was `uniqExact(id)`. The check was silently off-by-dedup for a week until QNT-120 exposed it (9/10 tickers showed false drift from re-published articles). `feedback_fix_pattern_not_example.md` says sweep for every instance; this ticket is that sweep across indicator / fundamental / news asset checks. Output: audit note per check in `docs/retros/phase-4-asset-check-audit.md`, follow-up fix tickets for any mismatches found.
 - [x] Migrate Dagster to production topology: code-server split + DockerRunLauncher — QNT-116
     - **Triggered by**: Apr 21 2026 21:13–21:26 UTC gRPC-UNAVAILABLE cascade (QNT-115 window) — code-loading subprocess OOM'd inside the `dagster-daemon` cgroup at the 3g ceiling (had just been raised 2g → 3g hours earlier), the code server was unavailable for 180s, and 8 `ohlcv_downstream_job` runs transitioned to FAILURE without launching a step, 5 in lockstep at 21:26 as submission-path retries timed out simultaneously. The incident hit the ceiling of the QNT-100/111/113/115 `mem_limit`-bump ratchet: 3g was already saturated under fan-out so the next bump wasn't going to hold. Root cause: the daemon container was doing jobs Dagster's production deployment docs explicitly carve out into separate services. Shipped Dagster's canonical Docker Compose topology in one PR: (1) split user code into `dagster-code-server` (own `mem_limit: 2g`, gRPC on :4000, healthcheck via `dagster api grpc-health-check`); webserver and daemon reach it via `workspace.yaml`; (2) replaced `DefaultRunLauncher` with `DockerRunLauncher` so each run is an ephemeral container with its own cgroup (per-run OOM no longer touches siblings). Daemon `mem_limit: 3g → 512m`, webserver `2g → 1g`. The DockerRunLauncher also flips `supports_check_run_worker_health = True`, closing QNT-114's chaos-test finding that `monitor_started_run`'s health branch was a no-op on `DefaultRunLauncher`: STARTED-orphan recovery drops from ~30 min (`max_runtime_seconds` fallback) to ~2 min (verified in dev smoke: `docker kill` → FAILURE in 30s via Docker-API `ExitCode: 137` detection — 60× improvement). Three first-boot issues caught + fixed during dev smoke that would have broken prod: workspace.yaml bind-mount path conflict with shared named volume, concurrent-init alembic race (fixed via `depends_on: service_healthy`), run-worker containers couldn't reach SQLite run storage (fixed via `container_kwargs.volumes`). Compose project name pinned to `equity-data-agent` at top-level so DockerRunLauncher network/volume references (which hardcode the prefix) fail loudly at parse time rather than silently at run-launch time if anyone renames the repo dir. ADR-010 captures the decision + alternatives + revisit triggers (SQLite `database is locked`, outgrowing single-VPS, second code-location). Retires the `mem_limit`-bump cycle; QNT-118 (lazy-import sweep) compounds this work but ships independently.
+- [ ] Lazy-import heavy deps in asset modules to shrink per-subprocess RSS — QNT-118
+    - **Triggered by**: QNT-116 follow-up (2026-04-22) — every Dagster subprocess (code server, run workers, sensor/schedule evaluators) pays top-level `import pandas / numpy / qdrant-client / yfinance / clickhouse-connect` at startup, even when the subprocess never touches the library. QNT-115's revised per-subprocess peak was ~360 MB; hypothesis is the majority is heavy library imports, and deferring them into function bodies should drop per-subprocess RSS to ~120–150 MB. Scope: `from __future__ import annotations` + function-local imports across every module in `packages/dagster-pipelines/src/dagster_pipelines/`; `TYPE_CHECKING` guards for any Pydantic resource fields that annotate heavy external types. Compounds QNT-116's topology gains (more subprocesses to amortize across) but ships independently so rollback is orthogonal. Measurement AC compares pre/post `docker stats` on `dagster-code-server` under a sensor-tick storm.
+- [ ] CD: restart services whose bind-mounted config changed — QNT-124
+    - **Triggered by**: QNT-123 post-deploy verification (2026-04-23) — first POST to `equity-agent/gemini` after the Pro → Flash config change still routed to Pro and returned HTTP 429. Prod SHA matched the merge commit, hard gates green, but `docker compose ps` showed `litellm` Up 21 min — predating the deploy. Root cause: `docker compose up -d` only recreates a container when the *compose service definition* changes (image, command, env_file, environment), NOT when a bind-mounted file changes on disk; `litellm_config.yaml` is bind-mounted and read once at startup with no hot-reload, so the file on disk was new but the running process was stale. Same class as the Apr 16 SHA-drift outage and QNT-112 named-volume-shadow — aggregate-green signals hiding a runtime invariant. Fix: post-`docker compose up -d` step in `.github/workflows/deploy.yml` detects changed bind-mounted config files (`litellm_config.yaml`, `dagster.yaml`, `workspace.yaml`, `Caddyfile`) in the merged diff and `docker compose restart`s affected services before QNT-89's Dagster-graph hard gate runs, so the gate exercises the reloaded config.
 
 ---
 
@@ -294,22 +298,22 @@ Updated automatically by `/ship` and `/sync-docs`.
     - Phase 4 retro carry-over: the Dagster quickstart-topology arc (QNT-100 → QNT-116, 17h across 4 incidents) and Qdrant point-ID arc (QNT-54 → QNT-120) both burned hours because the prod-vs-tutorial gap surfaced at deploy, not design. Next.js app-router has the same shape — SSR-by-default + RSC boundaries + SSE streaming don't all compose.
     - Each page names: rendering mode, data-fetch location (RSC vs client vs API route), cache / revalidate strategy, and failure-mode rendering. Dashboard probably ISR; ticker detail SSR + client-side toggle; chat CSR + `fetch`/`ReadableStream`.
     - Output: `docs/decisions/012-nextjs-rendering-mode-per-page.md` — every subsequent Phase 6 ticket references it by section.
-- [ ] Initialize Next.js app in `frontend/` with Tailwind CSS
-- [ ] Dashboard page (`/`) — ticker cards showing price, daily change, RSI signal, trend status
+- [ ] Initialize Next.js app in `frontend/` with Tailwind CSS — QNT-71
+- [ ] Dashboard page (`/`) — ticker cards showing price, daily change, RSI signal, trend status — QNT-72
     - Calls `GET /api/v1/dashboard/summary` (single request for all tickers — no N+1)
-- [ ] Ticker detail page (`/ticker/[symbol]`) — full analysis view
+- [ ] Ticker detail page (`/ticker/[symbol]`) — full analysis view — QNT-73
     - TradingView Lightweight Charts: candlestick + volume (`GET /api/v1/ohlcv/{ticker}`). **Chart renders `adj_close` as the candlestick close value** to avoid split discontinuities
     - Timeframe toggle: daily / weekly / monthly (swaps chart + indicator data)
     - Technical indicator overlays: SMA, EMA, Bollinger Bands on chart; RSI, MACD as separate panes
     - Fundamental ratios table: 15 ratios in 5 categories (`GET /api/v1/fundamentals/{ticker}`)
     - Recent news sidebar (`GET /api/v1/search/news?ticker={ticker}`) — gracefully degrades if Phase 4 not deployed
-- [ ] Agent chat page (`/chat`) — conversational interface
+- [ ] Agent chat page (`/chat`) — conversational interface — QNT-74
     - Calls `POST /api/v1/agent/chat` with SSE streaming
     - **No Vercel AI SDK** — use native `fetch` + `ReadableStream`. Optionally add `eventsource-parser` (~2KB) for SSE line parsing.
     - Displays agent thesis with markdown rendering
     - Shows which tools the agent called (transparency)
 - [ ] Generate TypeScript types from FastAPI's `/openapi.json` via `openapi-typescript` (`make types`) — do not handwrite types in `lib/api.ts`
-- [ ] Deploy to Vercel, set `NEXT_PUBLIC_API_URL` in Vercel dashboard
+- [ ] Deploy to Vercel, set `NEXT_PUBLIC_API_URL` in Vercel dashboard — QNT-75
 - [ ] **Cross-cutting**: Ticker list is sourced from `GET /api/v1/tickers` across every page (dashboard cards, detail-page switcher, chat-page selector) — never hardcoded. Inherits QNT-78's ⏳ PENDING AC; hardcoding the list anywhere defeats the endpoint's purpose. Phase 3 lesson.
 - [ ] Verify: Dashboard loads all 10 tickers, chart renders with timeframe toggle, agent chat streams a thesis
 
