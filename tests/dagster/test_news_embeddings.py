@@ -3,7 +3,7 @@
 Qdrant Cloud Inference (ADR-009) handles embedding server-side — the asset
 just sends ``Document(text, model)`` points. Tests monkeypatch
 ``QdrantResource`` so ``uv run pytest`` passes offline without a Qdrant Cloud
-account. Pattern mirrors ``_FakeClient`` in packages/api/tests/test_data.py
+account. Pattern mirrors ``_FakeClient`` in tests/api/test_data.py
 (Phase 3 retro lesson).
 
 Why monkeypatch instead of subclassing: Dagster rebuilds
