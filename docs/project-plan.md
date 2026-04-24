@@ -252,7 +252,7 @@ Updated automatically by `/ship` and `/sync-docs`.
 - [x] Integrate Langfuse tracing — QNT-61 **[day-one of Phase 5, moved from Phase 7]**
     - `LangfuseResource` in the agent package; `@observe` decorator on every tool and graph node from the first commit of agent code — traces are needed *while* iterating on the prompt, not bolted on after shipping.
     - Portfolio artifact: one Langfuse trace screenshot is embedded in the README (QNT-66).
-- [ ] Define LangGraph state schema (ticker under analysis, gathered reports, thesis draft) — QNT-56
+- [x] Define LangGraph state schema (ticker under analysis, gathered reports, thesis draft) — QNT-56
 - [ ] Implement tools — QNT-57
     - `get_summary_report` → calls `/reports/summary/{ticker}` (agent calls this first)
     - `get_technical_report` → calls `/reports/technical/{ticker}`
@@ -265,7 +265,7 @@ Updated automatically by `/ship` and `/sync-docs`.
         - **Upstream**: exact FastAPI method + path (`GET /api/v1/reports/technical/{ticker}`)
         - **Return**: concrete shape (e.g., "plain-text report — numbers appear verbatim; consumed by LLM as-is") and the degraded-case return (`""`, `"No news data available."`, etc.)
       Forces the API-response ↔ graph-state identity to surface at design time. Phase 4 retro lesson: QNT-54 shipped a Qdrant point-ID scheme that silently collided with ClickHouse's composite key because the cross-store identity was never written down (cost: QNT-120 fix + follow-up). Apply the same identity-first discipline to agent tools. Reinforces ADR-003 by naming *where* every number in the thesis originates.
-- [ ] Build agent graph — **3 nodes: plan → gather → synthesize** (per ADR-007) — QNT-56
+- [x] Build agent graph — **3 nodes: plan → gather → synthesize** (per ADR-007) — QNT-56
     - No critique / reflect / retry loop until the baseline has failed in specific, observed ways. Adding loops prematurely is indistinguishable from the baseline working.
 - [ ] System prompt enforcing the "interpret, don't calculate" mandate — QNT-58
 - [ ] Agent CLI: `python -m agent analyze NVDA` — run single-ticker analysis from terminal — QNT-60
