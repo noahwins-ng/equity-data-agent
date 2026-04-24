@@ -26,9 +26,14 @@ code_servers:
 #     STARTED-orphan path actually fires in ~2 min.
 #
 # Env-var passthrough is explicit — every key here must exist in
-# packages/shared/src/shared/config.py::Settings. Keep in sync when adding
-# new settings that a run-worker needs (audit: this list currently matches the
-# Settings fields as of 2026-04-22).
+# packages/shared/src/shared/config.py::Settings, OR be on the Dagster-infra
+# allowlist (currently just DAGSTER_HOME). QNT-125 added a CI guard that
+# enforces this invariant: see
+# tests/dagster/test_run_launcher_env_vars.py. Do NOT
+# rely on an inline "audited as of <date>" comment — those drift silently.
+# Incident that motivated the guard: QNT-59 (Phase 5) removed OLLAMA_API_KEY
+# and ANTHROPIC_API_KEY from Settings but left both here; DockerRunLauncher
+# then dropped every queued run at launch time for ~20h before detection.
 run_launcher:
   module: dagster_docker
   class: DockerRunLauncher
@@ -42,8 +47,6 @@ run_launcher:
       - QDRANT_URL
       - QDRANT_API_KEY
       - LITELLM_BASE_URL
-      - OLLAMA_API_KEY
-      - ANTHROPIC_API_KEY
       - LANGFUSE_PUBLIC_KEY
       - LANGFUSE_SECRET_KEY
       - LANGFUSE_HOST
