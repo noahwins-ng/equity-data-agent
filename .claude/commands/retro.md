@@ -23,17 +23,35 @@ The argument is: $ARGUMENTS
    - Commits that suggest debugging or rework
 4. **Blockers** — anything that stalled progress (external APIs, tooling issues, etc.)
 
-### Step 3: Capture Lessons
+### Step 3: Invariant & Guard Audit
+For every incident, outage, or surprise surfaced this period, ask: *"what invariant did this violate, and is it now enforced by CI or a `/ship` hard gate?"*
+
+1. **List the incidents** — any Ops & Reliability ticket closed in this window (e.g., QNT-125, QNT-127, QNT-124) plus any surprise from Step 2. Incidents outside the retro's milestone count if they surfaced during it — Ops & Reliability is perpetual and catches cross-cutting drift.
+2. **For each, write one line**:
+   ```
+   QNT-XX: <one-sentence invariant> — guard: <file path | "NONE — propose QNT-YY">
+   ```
+   An *invariant* is a one-sentence claim you assumed was true that turned out to drift (e.g., "env_vars in dagster.yaml ⊆ `Settings.model_fields` ∪ allowlist", "no `test_*.py` under `packages/*/tests/**`", "prod SHA == merged commit").
+3. **If no guard exists**, the invariant is still on vibes. Either:
+   - Draft a new Ops & Reliability ticket now (project "Equity Data Agent", status Todo, label `infra`), **or**
+   - Explicitly mark "accepted risk — <one-line reason>".
+
+   Never leave an invariant without a disposition.
+4. **Same-shape clustering** — if two incidents violated invariants of the same *shape* (e.g., "file on disk vs. running process" covers both QNT-124 and the Apr 16 SHA drift), flag it. One deeper trap may replace two narrow ones, or reveal a missing cross-cutting guard.
+
+Output carries into Step 10's report under "Invariant guards".
+
+### Step 4: Capture Lessons
 For each non-obvious lesson learned:
 - Save it to memory (feedback or project type, whichever fits best) so future sessions benefit from it
 - Focus on: what to repeat, what to avoid, what surprised us
 
-### Step 4: Prep Next Phase
+### Step 5: Prep Next Phase
 1. Show the next milestone and its issues
 2. Flag any issues that might be risky or underspecified based on lessons learned
 3. Suggest which issues to pull into the next cycle — order by priority (Urgent > High > Medium > Low), capped at the average velocity from this milestone (issues closed per cycle)
 
-### Step 5: Phase Review
+### Step 6: Phase Review
 Feed retro insights forward into upcoming phases. Each completed phase teaches us things that may invalidate, refine, or expose gaps in future plans.
 
 1. **Read upcoming phases** — read `docs/project-requirement.md` and `docs/project-plan.md` for all phases after the one just completed
@@ -55,7 +73,7 @@ Feed retro insights forward into upcoming phases. Each completed phase teaches u
 
 If no changes are warranted, say so and move on. Not every retro will produce scope changes — that's fine.
 
-### Step 6: Update System Overview
+### Step 7: Update System Overview
 Review `docs/architecture/system-overview.md` against what was actually shipped in this milestone:
 - New DB tables, columns, or changed schemas → update Databases section
 - New or changed API endpoints → update API Endpoint Categories section
@@ -64,10 +82,10 @@ Review `docs/architecture/system-overview.md` against what was actually shipped 
 
 Update any sections that no longer reflect reality. If nothing changed, skip.
 
-### Step 7: Cleanup
+### Step 8: Cleanup
 Invoke `/sync-docs` via the Skill tool to reconcile `docs/project-plan.md` with Linear. Do NOT re-implement its logic here.
 
-### Step 8: Post Linear Project Status Update
+### Step 9: Post Linear Project Status Update
 Post a status update on the Equity Data Agent project using `save_status_update`:
 - `type`: `project`
 - `project`: `Equity Data Agent`
@@ -87,7 +105,7 @@ Post a status update on the Equity Data Agent project using `save_status_update`
   **Up next:** Phase Y — <brief description>
   ```
 
-### Step 9: Report
+### Step 10: Report
 Format as:
 
 ```
@@ -107,11 +125,16 @@ What was harder than expected:
 Lessons saved to memory:
   - ...
 
+Invariant guards:
+  - QNT-XX: <invariant> → <file path> (added this period)
+  - QNT-YY: <invariant> → NONE — proposed QNT-ZZ
+  - ...
+
 Phase review:
   - <change-scope actions taken, or "no changes warranted">
 
 Next up: Phase Y — Title (Z issues)
 ```
 
-### Step 10: Save Retro Report
-Write the final report (formatted per Step 9) to `docs/retros/phase-X-name.md` (e.g., `docs/retros/phase-1-data-ingestion.md`). Commit: `docs: add retro for Phase X — Name`.
+### Step 11: Save Retro Report
+Write the final report (formatted per Step 10) to `docs/retros/phase-X-name.md` (e.g., `docs/retros/phase-1-data-ingestion.md`). Commit: `docs: add retro for Phase X — Name`.
