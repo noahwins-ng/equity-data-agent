@@ -247,7 +247,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - See ADR-011 for provider selection rationale (why Groq over Ollama Cloud / Gemini / OpenAI / self-hosted).
 - [x] Demote Gemini override from Pro to Flash — QNT-123
     - Shipped right after QNT-59. First live test of the `equity-agent/gemini` alias returned HTTP 429 with `limit: 0` — Gemini 2.5 Pro is no longer on Google AI Studio's free tier. Swapped to Gemini 2.5 Flash (free-tier-reachable) to preserve ADR-011's "free to clone" invariant. Pro stays available via one-line YAML edit if a paid plan is ever added. See ADR-011 §Revision history (2026-04-23 Pro → Flash entry) for the full story.
-- [ ] Integrate Langfuse tracing — QNT-61 **[day-one of Phase 5, moved from Phase 7]**
+- [x] Integrate Langfuse tracing — QNT-61 **[day-one of Phase 5, moved from Phase 7]**
     - `LangfuseResource` in the agent package; `@observe` decorator on every tool and graph node from the first commit of agent code — traces are needed *while* iterating on the prompt, not bolted on after shipping.
     - Portfolio artifact: one Langfuse trace screenshot is embedded in the README (QNT-66).
 - [ ] Define LangGraph state schema (ticker under analysis, gathered reports, thesis draft) — QNT-56
