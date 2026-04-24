@@ -253,7 +253,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - `LangfuseResource` in the agent package; `@observe` decorator on every tool and graph node from the first commit of agent code — traces are needed *while* iterating on the prompt, not bolted on after shipping.
     - Portfolio artifact: one Langfuse trace screenshot is embedded in the README (QNT-66).
 - [x] Define LangGraph state schema (ticker under analysis, gathered reports, thesis draft) — QNT-56
-- [ ] Implement tools — QNT-57
+- [x] Implement tools — QNT-57
     - `get_summary_report` → calls `/reports/summary/{ticker}` (agent calls this first)
     - `get_technical_report` → calls `/reports/technical/{ticker}`
     - `get_fundamental_report` → calls `/reports/fundamental/{ticker}`

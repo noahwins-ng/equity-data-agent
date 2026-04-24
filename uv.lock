@@ -27,6 +27,7 @@ name = "agent"
 version = "0.1.0"
 source = { editable = "packages/agent" }
 dependencies = [
+    { name = "httpx" },
     { name = "langchain-core" },
     { name = "langchain-openai" },
     { name = "langfuse" },
@@ -36,6 +37,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx", specifier = ">=0.27.0" },
     { name = "langchain-core", specifier = ">=0.3.0" },
     { name = "langchain-openai", specifier = ">=0.2.0" },
     { name = "langfuse", specifier = ">=2.0.0" },
