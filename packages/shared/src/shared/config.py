@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     QDRANT_URL: str = ""
     QDRANT_API_KEY: str = ""
 
+    # Agent → FastAPI (QNT-57 tool wrappers). Dev: localhost:8000; when the
+    # agent is containerized in Phase 5, override with http://api:8000.
+    API_BASE_URL: str = "http://localhost:8000"
+
     # LiteLLM proxy (see ADR-011 — Groq default, Gemini 2.5 Flash override)
     LITELLM_BASE_URL: str = "http://localhost:4000"
     GROQ_API_KEY: str = ""
