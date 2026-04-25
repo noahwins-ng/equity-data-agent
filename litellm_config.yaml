@@ -1,4 +1,5 @@
 # QNT-59 + QNT-123 + QNT-128 / ADR-011: Groq (default) + Gemini 2.5 Flash (manual override).
+# QNT-124 verification (2026-04-26): trivial bind-mount-touch to exercise the post-deploy restart step. No functional change.
 #
 # Agent code calls `equity-agent/default`. Setting EQUITY_AGENT_PROVIDER=gemini
 # in the runtime env points get_llm() at `equity-agent/gemini` instead — config
