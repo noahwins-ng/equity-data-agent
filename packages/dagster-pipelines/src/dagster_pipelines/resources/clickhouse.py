@@ -7,6 +7,7 @@ from typing import Any
 import clickhouse_connect
 import pandas as pd
 from clickhouse_connect.driver.client import Client
+from clickhouse_connect.driver.exceptions import OperationalError
 from dagster import ConfigurableResource
 from pydantic import Field
 from shared.config import settings
@@ -15,6 +16,11 @@ logger = logging.getLogger(__name__)
 
 _MAX_RETRIES = 3
 _RETRY_DELAY = 2.0  # seconds
+
+# QNT-117: retry only on `OperationalError` — clickhouse_connect raises this for
+# transient transport/timeout failures (httpclient.py wraps retried HTTP errors
+# in OperationalError). Programming errors, schema mismatches, and auth failures
+# surface as `DatabaseError` / `ProgrammingError` and should fail loud immediately.
 
 
 class ClickHouseResource(ConfigurableResource):
@@ -43,7 +49,7 @@ class ClickHouseResource(ConfigurableResource):
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
                 return self._client().query(query, parameters=parameters)
-            except Exception as exc:
+            except OperationalError as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
                     logger.warning(
@@ -62,7 +68,7 @@ class ClickHouseResource(ConfigurableResource):
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
                 return self._client().query_df(query, parameters=parameters)
-            except Exception as exc:
+            except OperationalError as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
                     logger.warning(
@@ -89,7 +95,7 @@ class ClickHouseResource(ConfigurableResource):
             try:
                 self._client().insert_df(table, df)
                 return
-            except Exception as exc:
+            except OperationalError as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
                     logger.warning(

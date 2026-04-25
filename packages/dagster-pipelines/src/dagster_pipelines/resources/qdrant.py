@@ -18,6 +18,33 @@ _MAX_RETRIES = 3
 _RETRY_DELAY = 2.0  # seconds
 
 
+def _is_transient_qdrant_error(exc: BaseException) -> bool:
+    """QNT-117: classify a Qdrant exception as transient (worth retrying).
+
+    Retry on:
+      * ``ResourceExhaustedResponse`` — 429 with Retry-After (server-imposed rate-limit).
+      * ``ResponseHandlingException`` wrapping an ``httpx.TransportError`` —
+        qdrant_client's HTTP layer (``api_client.send_inner``) catches every
+        request-level exception and re-raises as ``ResponseHandlingException``,
+        so this is the path raw transport failures take in practice.
+      * ``UnexpectedResponse`` with a 5xx status — server-side error.
+
+    Everything else (auth 401/403, other 4xx, validation errors wrapped in
+    ``ResponseHandlingException``) fails loud on first attempt.
+    """
+    import httpx
+    from qdrant_client.common.client_exceptions import ResourceExhaustedResponse
+    from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
+
+    if isinstance(exc, ResourceExhaustedResponse):
+        return True
+    if isinstance(exc, ResponseHandlingException):
+        return isinstance(exc.source, httpx.TransportError)
+    if isinstance(exc, UnexpectedResponse):
+        return exc.status_code is not None and 500 <= exc.status_code < 600
+    return False
+
+
 class QdrantCollectionSpec(ConfigurableResource):
     """Static description of a Qdrant collection. Kept next to the resource so
     callers pass a single object to ``ensure_collection`` instead of loose args."""
@@ -105,6 +132,8 @@ class QdrantResource(ConfigurableResource):
                 self._client().upsert(collection_name=collection, points=points, wait=True)
                 return
             except Exception as exc:
+                if not _is_transient_qdrant_error(exc):
+                    raise
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
                     logger.warning(
