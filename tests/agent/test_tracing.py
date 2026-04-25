@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from agent import tracing
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 
 @pytest.fixture
@@ -106,6 +106,51 @@ def test_traced_invoke_creates_generation_span(
         model="equity-agent/default",
         usage_details={"input": 42, "output": 17, "total": 59},
     )
+
+
+def test_traced_invoke_passes_messages_list_to_span(
+    enabled_resource: tracing.LangfuseResource,
+) -> None:
+    """QNT-58 review fix: synthesize node now passes ``[SystemMessage, HumanMessage]``
+    rather than a flat string. The enabled path must hand the list to
+    ``llm.invoke`` unchanged AND record it as ``input`` on the Langfuse span
+    so the dashboard shows system + user turns separately. Regression guard
+    for a latent serialization bug — a future Langfuse SDK that rejects
+    pydantic models from ``input=`` would silently drop trace fidelity."""
+    llm = MagicMock()
+    llm.invoke.return_value = _ai_message("thesis text")
+    messages = [
+        SystemMessage(content="rules"),
+        HumanMessage(content="task"),
+    ]
+
+    enabled_resource.traced_invoke(llm, messages, name="synthesize")
+
+    llm.invoke.assert_called_once_with(messages)
+    client = cast(MagicMock, enabled_resource._client)
+    client.start_as_current_observation.assert_called_once_with(
+        as_type="generation",
+        name="synthesize",
+        input=messages,
+    )
+
+
+def test_traced_invoke_passthrough_accepts_messages_list_when_disabled() -> None:
+    """Companion to the enabled-path test: the disabled (no-Langfuse) path
+    must also accept the messages list unchanged."""
+    resource = tracing.LangfuseResource.__new__(tracing.LangfuseResource)
+    resource.enabled = False
+    resource._client = None
+
+    llm = MagicMock()
+    expected = _ai_message("hi")
+    llm.invoke.return_value = expected
+    messages = [SystemMessage(content="rules"), HumanMessage(content="task")]
+
+    result = resource.traced_invoke(llm, messages, name="synthesize")
+
+    assert result is expected
+    llm.invoke.assert_called_once_with(messages)
 
 
 def test_traced_invoke_tags_span_and_reraises_on_error(

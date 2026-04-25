@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, NotRequired, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from agent.llm import get_llm
+from agent.prompts import REPORT_TOOLS, build_synthesis_prompt
 from agent.tracing import langfuse, observe
 
 if TYPE_CHECKING:
@@ -27,10 +28,11 @@ logger = logging.getLogger(__name__)
 
 ToolFn = Callable[[str], str]
 
-# Tools we know how to dispatch. `summary` intentionally omitted: plan/gather
-# select from the trio the thesis actually composes over; adding summary is a
-# QNT-60 call if the eval harness shows it improves grounding.
-REPORT_TOOLS: tuple[str, ...] = ("technical", "fundamental", "news")
+# Tool registry is canonical in ``agent.prompts.system`` so the citation list
+# in SYSTEM_PROMPT and the dispatch list here can't drift. ``summary`` is
+# intentionally omitted from the trio: plan/gather select from what the thesis
+# composes over; adding summary is a QNT-60 call if the eval shows it improves
+# grounding.
 
 # News is optional — Qdrant or the news ingest can be down without invalidating
 # the thesis. Technical & fundamental are load-bearing.
@@ -77,21 +79,6 @@ def _parse_plan(raw: str, available: list[str]) -> list[str]:
     tokens = {t.strip().lower() for t in raw.replace("\n", ",").split(",") if t.strip()}
     chosen = [t for t in available if t in tokens]
     return chosen or list(available)
-
-
-def _build_synthesis_prompt(ticker: str, question: str, reports: dict[str, str]) -> str:
-    sections = "\n\n".join(f"## {name.title()} Report\n{body}" for name, body in reports.items())
-    if not sections:
-        sections = "(no reports available)"
-    return (
-        f"You are writing a concise investment thesis for {ticker}.\n"
-        f"Question: {question or 'Provide a balanced investment thesis.'}\n\n"
-        "Ground every numeric claim in the reports below. Do not introduce numbers that are not "
-        "present verbatim in these reports. If a report is missing, note the gap rather than "
-        "filling it in.\n\n"
-        f"{sections}\n\n"
-        "Write a 3-5 sentence thesis."
-    )
 
 
 def _confidence_from_reports(reports: dict[str, str], plan: list[str]) -> float:
@@ -194,7 +181,7 @@ def build_graph(tools: dict[str, ToolFn]) -> CompiledStateGraph:
         question = state.get("question", "")
         reports = state.get("reports", {})
         plan = state.get("plan", [])
-        prompt = _build_synthesis_prompt(ticker, question, reports)
+        prompt = build_synthesis_prompt(ticker, question, reports)
         response = langfuse.traced_invoke(get_llm(), prompt, name="synthesize")
         # Guard against a provider returning ``content=None`` — surfaces as an
         # explicit error to the caller instead of a literal "None" thesis.

@@ -87,7 +87,7 @@ class LangfuseResource:
     def traced_invoke(
         self,
         llm: Any,
-        prompt: str,
+        prompt: str | list[BaseMessage],
         *,
         name: str = "llm-call",
     ) -> BaseMessage:
@@ -97,6 +97,11 @@ class LangfuseResource:
         captured automatically by the span's start/end times. If tracing is
         disabled, invokes the LLM unchanged.
 
+        ``prompt`` accepts either a plain string (used by the plan node, which
+        emits a one-shot user instruction) or a list of ``BaseMessage`` (used
+        by the synthesize node since QNT-58, which delivers ``SYSTEM_PROMPT``
+        in the system turn rather than flattened into the user message).
+
         QNT-60 follow-up: add an async ``traced_ainvoke`` wrapping
         ``llm.ainvoke`` for SSE streaming — the AST contract test already
         covers ``ainvoke`` so adding the wrapper first keeps CI green.
@@ -104,6 +109,10 @@ class LangfuseResource:
         if not self.enabled or self._client is None:
             return llm.invoke(prompt)
 
+        # Langfuse's `input` field expects something serialisable to JSON; a
+        # ``list[BaseMessage]`` round-trips fine because BaseMessage subclasses
+        # are pydantic models. We pass it through unchanged so the dashboard
+        # shows the system + user turns separately.
         with self._client.start_as_current_observation(
             as_type="generation",
             name=name,
