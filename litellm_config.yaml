@@ -1,14 +1,32 @@
-# QNT-59 + QNT-123 / ADR-011: Groq (default) + Gemini 2.5 Flash (quality override).
+# QNT-59 + QNT-123 + QNT-128 / ADR-011: Groq (default) + Gemini 2.5 Flash (manual override).
 #
 # Agent code calls `equity-agent/default`. Setting EQUITY_AGENT_PROVIDER=gemini
 # in the runtime env points get_llm() at `equity-agent/gemini` instead — config
 # switch, no code change. Keys are resolved from env at proxy startup; the
 # client (agent) does not need to know them.
+#
+# QNT-128: default stays Llama-3.3-70B (Groq free-tier TPD 100K) with Qwen3-32B
+# as auto-fallback (TPD 500K). One eval sweep is ~50–70K tokens, so the 100K
+# Llama bucket is enough for ~2 sweeps/day; the Qwen fallback adds 5× more
+# headroom for heavy iteration days without permanently swapping in a model
+# that produces worse output for our task.
+#
+# Why not Qwen-default: a full QNT-128 sweep on Qwen3-32B (run 20260425T102210Z)
+# regressed from 15/16 to 11/16 hallucination_ok — Qwen rounds numbers and
+# leaks <think> reasoning blocks into the thesis content. Llama-3.3-70B has
+# materially stronger instruction-following on "don't invent numbers" for
+# this 5-section structured-thesis task. Qwen as fallback is acceptable
+# because the alternative (no fallback) is a hard 429 with no answer at all.
 
 model_list:
   - model_name: equity-agent/default
     litellm_params:
       model: groq/llama-3.3-70b-versatile
+      api_key: os.environ/GROQ_API_KEY
+
+  - model_name: equity-agent/fallback-qwen3
+    litellm_params:
+      model: groq/qwen/qwen3-32b
       api_key: os.environ/GROQ_API_KEY
 
   - model_name: equity-agent/gemini
@@ -22,3 +40,10 @@ model_list:
 
 litellm_settings:
   drop_params: true
+  # Auto-failover on 429 (rate limit) — when Llama exhausts its 100K TPD,
+  # requests transparently switch to Qwen3-32B (500K TPD) without the agent
+  # or eval needing to know. Only `equity-agent/default` falls back;
+  # `equity-agent/gemini` stays manual so opting into Gemini is an explicit
+  # user choice.
+  fallbacks:
+    - equity-agent/default: ["equity-agent/fallback-qwen3"]

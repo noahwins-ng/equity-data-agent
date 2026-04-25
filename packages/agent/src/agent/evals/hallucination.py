@@ -13,6 +13,18 @@ Verbatim vs. value-equivalent:
     that writes ``12.30`` against a report that wrote ``12.3`` IS flagged,
     because changing precision is rounding and rounding is arithmetic.
 
+Sign-magnitude support (QNT-128):
+    Reports format YoY changes with explicit signs (``Free cash flow:
+    -16.09% YoY``). The model naturally moves the sign into English verbs
+    (``free cash flow declined 16.09%``) and writes the unsigned magnitude —
+    that is idiom, not arithmetic. ``check`` treats a thesis number ``X`` as
+    supported if either ``X`` or its sign-flipped form appears in any
+    report. Trade-off: this makes us blind to the rare "model inverted the
+    sign" failure (report ``+5%``, thesis ``-5%``); we accept that
+    false-negative because it's far less common than the false-positive it
+    fixed (and the LLM-as-judge / per-section structure already catch
+    sign-direction errors at a higher level).
+
 Numbers we deliberately ignore:
     * Section/list scaffolding emitted by the model — Markdown-heading
       numerals (``## 1.``, ``1.``, ``2)``) — see ``_strip_scaffold``.
@@ -117,17 +129,30 @@ def extract_numbers(text: str) -> frozenset[str]:
     return frozenset(_canonicalise(m) for m in _NUMBER_RE.findall(stripped))
 
 
+def _magnitude(token: str) -> str:
+    """Drop a leading sign so ``-16.09`` and ``16.09`` compare equal.
+
+    Used only for support comparisons in ``check`` — the canonical form
+    returned by ``extract_numbers`` keeps the sign so callers (``--explain``,
+    tests, future scorers) can still see exactly what was written. See the
+    module docstring's "Sign-magnitude support" note for the trade-off.
+    """
+    return token[1:] if token.startswith(("-", "+")) else token
+
+
 def check(thesis: str, reports: Iterable[str]) -> HallucinationResult:
     """Return a ``HallucinationResult`` for one (thesis, reports) pair.
 
     The reports iterable is consumed once into a single corpus before
     extraction so a number that appears in any report (regardless of which)
-    is considered supported.
+    is considered supported. Support is compared at the magnitude level
+    (sign stripped) — see the module docstring for why.
     """
     thesis_nums = extract_numbers(thesis)
     corpus = "\n".join(reports)
     report_nums = extract_numbers(corpus)
-    unsupported = tuple(sorted(thesis_nums - report_nums))
+    report_magnitudes = frozenset(_magnitude(n) for n in report_nums)
+    unsupported = tuple(sorted(n for n in thesis_nums if _magnitude(n) not in report_magnitudes))
     return HallucinationResult(
         ok=not unsupported,
         unsupported=unsupported,
