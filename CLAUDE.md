@@ -131,6 +131,11 @@ make issue QNT=34                   # Checkout branch for Linear issue
 make pr QNT=34 TITLE="description"  # Push + create PR
 ```
 
+### MCP servers (configured in `.mcp.json`)
+
+- `clickhouse` — query the warehouse directly (read-only). Requires `make tunnel` running and `CLICKHOUSE_USER`/`CLICKHOUSE_PASSWORD` set in `.env`.
+- `github` — read PRs/issues/Actions runs without prompts; write actions (create PR, comment, merge) prompt for approval. Requires `GITHUB_PERSONAL_ACCESS_TOKEN` in `.env` (run `gh auth token` to fetch).
+
 ### Workflow Commands (Claude Code slash commands)
 
 #### Session & Cycle
