@@ -1,0 +1,217 @@
+# Golden-set questions for agent evaluation (QNT-67, eval type (b)).
+#
+# 16 records spanning every ticker in shared.tickers.TICKERS — coverage is
+# enforced by tests/agent/evals/test_questions_yaml.py. The mix favours
+# thin/quiet tickers (UNH, V, JPM) over the obvious heavyweights (NVDA, AAPL)
+# so prompt regressions on the long tail don't hide behind tech-mega-cap
+# successes (Phase 2 retro lesson — feedback_sample_ac_broadly.md).
+#
+# Record shape:
+#   - id: short-slug                     # stable identifier; appears in history.csv
+#     ticker: NVDA                        # must be in shared.tickers.TICKERS
+#     question: "…"                       # what the user would ask the agent
+#     expected_tools:                     # subset of REPORT_TOOLS the question
+#       - technical                       # MUST trigger; over-fetching is OK by design
+#     reference_thesis: |                 # what a "good" thesis looks like — used
+#       …                                 # by LLM-as-judge for rubric comparison
+#                                         # and by the cosine signal as the target
+#                                         # text. Don't pin specific numbers — the
+#                                         # judge compares structure and coverage.
+
+questions:
+  - id: nvda-technical
+    ticker: NVDA
+    question: "Is NVDA overbought right now? Walk me through the technical setup."
+    expected_tools:
+      - technical
+    reference_thesis: |
+      A useful answer leads with the trend direction (uptrend, downtrend,
+      consolidating) drawn from moving-average alignment, names the current
+      RSI bucket (overbought / neutral / oversold) and the MACD posture, and
+      explicitly cites the technical report. It avoids manufacturing target
+      prices the report does not provide and ends with a confidence line tied
+      to whether the technical signals agreed or diverged.
+
+  - id: nvda-fundamental
+    ticker: NVDA
+    question: "What does NVDA's most recent fundamental picture look like?"
+    expected_tools:
+      - fundamental
+    reference_thesis: |
+      A useful answer summarises the latest reported earnings, revenue, and
+      P/E from the fundamental report, calls out any earnings surprise and
+      its direction, and abstains from forward-looking projections that the
+      report does not contain. Cites (source: fundamental) on every numeric
+      claim and ends with a confidence line that depends on report coverage.
+
+  - id: aapl-fundamental
+    ticker: AAPL
+    question: "How is AAPL valued relative to its earnings?"
+    expected_tools:
+      - fundamental
+    reference_thesis: |
+      A useful answer reports AAPL's latest P/E ratio and EPS verbatim from
+      the fundamental report, places the multiple in context using only
+      qualitative language (rich, in-line, compressed) since the report does
+      not supply peer comparables, and refuses to compute YoY growth that
+      isn't already stated. Cites the fundamental report and ends with a
+      data-completeness-anchored confidence line.
+
+  - id: aapl-technical
+    ticker: AAPL
+    question: "Where is AAPL on the price chart — is the trend intact?"
+    expected_tools:
+      - technical
+    reference_thesis: |
+      A useful answer reads the trend label and SMA stack from the technical
+      report, names the RSI bucket and MACD posture, and avoids reading
+      support / resistance levels that aren't explicitly tabulated. Cites
+      (source: technical) and ends with a confidence line keyed to whether
+      the technical indicators were internally consistent.
+
+  - id: msft-news
+    ticker: MSFT
+    question: "What's the recent news sentiment around MSFT?"
+    expected_tools:
+      - news
+    reference_thesis: |
+      A useful answer summarises tone (constructive, mixed, cautious) drawn
+      strictly from the news report, paraphrases at most two notable
+      headlines without inventing details, and tags the news report as the
+      sole source. If the news report is unavailable it states so plainly
+      and lowers the confidence line accordingly.
+
+  - id: googl-technical
+    ticker: GOOGL
+    question: "How is GOOGL trending technically over the recent window?"
+    expected_tools:
+      - technical
+    reference_thesis: |
+      A useful answer states the trend label, RSI bucket, and MACD posture
+      from the technical report, calls out moving-average alignment if the
+      report flags it, and avoids inventing target levels. Cites (source:
+      technical) per the system prompt and ends with a confidence line.
+
+  - id: googl-combined
+    ticker: GOOGL
+    question: "Give me a balanced thesis on GOOGL — fundamentals plus technicals."
+    expected_tools:
+      - technical
+      - fundamental
+    reference_thesis: |
+      A useful answer integrates the technical posture (trend, RSI, MACD)
+      and the fundamental snapshot (latest EPS, P/E, earnings surprise)
+      without doing arithmetic across them. Cites both source reports
+      explicitly on the numeric claims and resolves a final disposition
+      (constructive / neutral / cautious). The confidence line is graded
+      down if either report was missing.
+
+  - id: amzn-fundamental
+    ticker: AMZN
+    question: "What's the fundamental case for AMZN at the moment?"
+    expected_tools:
+      - fundamental
+    reference_thesis: |
+      A useful answer reports AMZN's latest revenue, EPS, and P/E verbatim
+      from the fundamental report, notes the direction of the most recent
+      earnings surprise without inventing magnitudes, and refuses to project
+      growth rates the report does not state. Cites (source: fundamental).
+
+  - id: meta-combined
+    ticker: META
+    question: "Should I be cautious about META based on the latest data?"
+    expected_tools:
+      - technical
+      - fundamental
+      - news
+    reference_thesis: |
+      A useful answer triangulates technical posture, fundamental health,
+      and news sentiment from the three reports, names disagreements between
+      them rather than averaging away, and reaches a clear cautious /
+      neutral / constructive disposition. Cites every numeric claim against
+      its source report; the confidence line tracks how many of the three
+      reports were actually supplied.
+
+  - id: meta-news
+    ticker: META
+    question: "What's driving recent META headlines?"
+    expected_tools:
+      - news
+    reference_thesis: |
+      A useful answer summarises the tone of META coverage (constructive,
+      mixed, cautious) and surfaces at most two concrete headlines from the
+      news report without paraphrasing them into facts the report does not
+      state. Cites (source: news) and ends with a confidence line that
+      reflects whether the news report was supplied.
+
+  - id: tsla-technical
+    ticker: TSLA
+    question: "Is TSLA breaking out or breaking down on the charts?"
+    expected_tools:
+      - technical
+    reference_thesis: |
+      A useful answer leads with the trend label and momentum readings from
+      the technical report (RSI bucket, MACD posture, SMA alignment) and
+      avoids inventing breakout / breakdown levels that the report does not
+      supply. Cites (source: technical) and ends with a confidence line.
+
+  - id: tsla-news
+    ticker: TSLA
+    question: "What's the recent news flow around TSLA?"
+    expected_tools:
+      - news
+    reference_thesis: |
+      A useful answer summarises news tone, surfaces at most two headlines
+      verbatim or near-verbatim from the news report, and cites (source:
+      news). It does not invent quotes or attribute events the news report
+      did not include.
+
+  - id: jpm-fundamental
+    ticker: JPM
+    question: "How is JPM valued versus its latest earnings?"
+    expected_tools:
+      - fundamental
+    reference_thesis: |
+      A useful answer states JPM's latest EPS and P/E ratio verbatim from
+      the fundamental report, comments qualitatively on the multiple
+      (premium / in-line / discounted) without inventing peer comparables,
+      and notes the direction of the most recent earnings surprise. Cites
+      (source: fundamental).
+
+  - id: v-combined
+    ticker: V
+    question: "Give me a balanced thesis on V right now."
+    expected_tools:
+      - technical
+      - fundamental
+    reference_thesis: |
+      A useful answer combines the technical posture (trend, momentum) and
+      the fundamental snapshot (latest EPS, P/E, earnings surprise) into a
+      single disposition. Numeric claims are cited against their source
+      report; the answer refuses to compute composite scores the reports
+      don't provide. Confidence is anchored to how complete the supplied
+      reports were.
+
+  - id: unh-fundamental
+    ticker: UNH
+    question: "What is UNH's current fundamental health?"
+    expected_tools:
+      - fundamental
+    reference_thesis: |
+      A useful answer reports UNH's latest revenue, EPS, and P/E verbatim
+      from the fundamental report, names the direction of the latest
+      earnings surprise, and abstains from projecting forward earnings the
+      report does not contain. Cites (source: fundamental) and ends with a
+      data-completeness-keyed confidence line.
+
+  - id: unh-news
+    ticker: UNH
+    question: "Are there any concerning news items on UNH lately?"
+    expected_tools:
+      - news
+    reference_thesis: |
+      A useful answer reads tone and notable headlines straight from the
+      news report, escalates only what the report itself flags as material
+      (regulatory, litigation, M&A) without manufacturing a narrative, and
+      tags (source: news). If no news report is available it says so and
+      lowers the confidence line accordingly.
