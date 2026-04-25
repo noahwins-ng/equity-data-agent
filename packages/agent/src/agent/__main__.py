@@ -1,35 +1,66 @@
-"""Minimal CLI proof-of-life for QNT-59. QNT-60 replaces this with the full
-LangGraph plan → gather → synthesize flow; until then `analyze <TICKER>`
-exercises the LiteLLM routing (Groq default, Gemini override via env) and
-the QNT-61 Langfuse tracing wiring."""
+"""Agent CLI: drive the LangGraph plan -> gather -> synthesize flow against
+a single ticker and print the resulting thesis.
+
+    uv run python -m agent analyze NVDA
+    uv run python -m agent analyze NVDA --output thesis.md
+
+Replaces the QNT-59 proof-of-life stub. Exit codes:
+    0  thesis produced
+    1  unknown ticker, graph short-circuit (no reports gathered), or unhandled error
+"""
+
+from __future__ import annotations
 
 import argparse
+import logging
 import sys
+from pathlib import Path
 
 from shared.tickers import TICKERS
 
-from agent.llm import get_llm
+from agent.graph import build_graph
+from agent.tools import default_report_tools
 from agent.tracing import langfuse, observe
+
+logger = logging.getLogger(__name__)
 
 
 @observe()
-def analyze(ticker: str) -> int:
+def analyze(ticker: str, output: Path | None = None) -> int:
     ticker = ticker.upper()
     if ticker not in TICKERS:
         print(
             f"Unknown ticker: {ticker}. Known: {', '.join(sorted(TICKERS))}",
             file=sys.stderr,
         )
-        return 2
+        return 1
 
-    llm = get_llm()
-    response = langfuse.traced_invoke(
-        llm,
-        f"Write a one-paragraph investment hypothesis for {ticker}. "
-        "Do not fabricate numbers - speak in qualitative terms only.",
-        name="synthesize",
-    )
-    print(response.content)
+    graph = build_graph(default_report_tools())
+    final_state = graph.invoke({"ticker": ticker})
+
+    thesis = str(final_state.get("thesis") or "").strip()
+    confidence = final_state.get("confidence", 0.0)
+    errors = final_state.get("errors") or {}
+
+    if errors:
+        for name, err in errors.items():
+            print(f"[warn] {name}: {err}", file=sys.stderr)
+
+    if not thesis:
+        print(f"No thesis produced for {ticker} (no reports gathered).", file=sys.stderr)
+        return 1
+
+    print(thesis)
+    print(f"\n[confidence={confidence}]", file=sys.stderr)
+
+    if output is not None:
+        try:
+            output.write_text(thesis + "\n")
+        except OSError as exc:
+            print(f"[error] cannot write {output}: {exc}", file=sys.stderr)
+            return 1
+        print(f"Wrote thesis to {output}", file=sys.stderr)
+
     return 0
 
 
@@ -38,10 +69,20 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
     p_analyze = sub.add_parser("analyze", help="Analyze a single ticker")
     p_analyze.add_argument("ticker")
+    p_analyze.add_argument(
+        "--output",
+        "-o",
+        type=Path,
+        default=None,
+        help="Write the thesis to this file in addition to stdout.",
+    )
     args = parser.parse_args(argv)
     try:
         if args.cmd == "analyze":
-            return analyze(args.ticker)
+            return analyze(args.ticker, output=args.output)
+        return 1
+    except Exception:
+        logger.exception("agent analyze failed")
         return 1
     finally:
         langfuse.flush()
