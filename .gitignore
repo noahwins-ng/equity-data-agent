@@ -34,3 +34,4 @@ htmlcov/
 # Type checking
 .pyright/
 .mypy_cache/
+.claude/scheduled_tasks.lock

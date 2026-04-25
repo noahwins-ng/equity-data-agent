@@ -1,0 +1,23 @@
+run_id,git_sha,prompt_version,ticker,question_id,question,judge_score,cosine,tool_call_ok,hallucination_ok,elapsed_ms
+20260425T091954Z-0d7c4e,03049cd,1318d12a6d,NVDA,nvda-technical,Is NVDA overbought right now? Walk me through the technical setup.,8,0.5816,1,1,3288
+20260425T091954Z-0d7c4e,03049cd,1318d12a6d,NVDA,nvda-fundamental,What does NVDA's most recent fundamental picture look like?,8,0.4701,1,1,2788
+20260425T092008Z-813879,03049cd,1318d12a6d,NVDA,nvda-technical,Is NVDA overbought right now? Walk me through the technical setup.,8,0.5629,1,1,2746
+20260425T092008Z-813879,03049cd,1318d12a6d,NVDA,nvda-fundamental,What does NVDA's most recent fundamental picture look like?,8,0.5066,1,1,2453
+20260425T092008Z-813879,03049cd,1318d12a6d,AAPL,aapl-fundamental,How is AAPL valued relative to its earnings?,7,0.5351,1,1,2344
+20260425T092008Z-813879,03049cd,1318d12a6d,AAPL,aapl-technical,Where is AAPL on the price chart — is the trend intact?,8,0.5992,1,1,2226
+20260425T092008Z-813879,03049cd,1318d12a6d,MSFT,msft-news,What's the recent news sentiment around MSFT?,8,0.6097,1,1,2431
+20260425T092008Z-813879,03049cd,1318d12a6d,GOOGL,googl-technical,How is GOOGL trending technically over the recent window?,8,0.6135,1,1,2082
+20260425T092008Z-813879,03049cd,1318d12a6d,GOOGL,googl-combined,Give me a balanced thesis on GOOGL — fundamentals plus technicals.,8,0.5689,1,1,9276
+20260425T092008Z-813879,03049cd,1318d12a6d,AMZN,amzn-fundamental,What's the fundamental case for AMZN at the moment?,5,0.6132,1,0,8864
+20260425T092008Z-813879,03049cd,1318d12a6d,META,meta-combined,Should I be cautious about META based on the latest data?,8,0.5534,1,1,8827
+20260425T092008Z-813879,03049cd,1318d12a6d,META,meta-news,What's driving recent META headlines?,8,0.637,1,1,8031
+20260425T092008Z-813879,03049cd,1318d12a6d,TSLA,tsla-technical,Is TSLA breaking out or breaking down on the charts?,8,0.5629,1,1,7700
+20260425T092008Z-813879,03049cd,1318d12a6d,TSLA,tsla-news,What's the recent news flow around TSLA?,8,0.4407,1,1,7986
+20260425T092008Z-813879,03049cd,1318d12a6d,JPM,jpm-fundamental,How is JPM valued versus its latest earnings?,4,0.5422,1,1,8748
+20260425T092008Z-813879,03049cd,1318d12a6d,V,v-combined,Give me a balanced thesis on V right now.,8,0.5798,1,1,7734
+20260425T092008Z-813879,03049cd,1318d12a6d,UNH,unh-fundamental,What is UNH's current fundamental health?,6,0.6137,1,0,8700
+20260425T092008Z-813879,03049cd,1318d12a6d,UNH,unh-news,Are there any concerning news items on UNH lately?,8,0.5704,1,0,6207
+20260425T092244Z-cb2183,03049cd,1318d12a6d,NVDA,nvda-technical,Is NVDA overbought right now? Walk me through the technical setup.,8,0.5617,1,1,3058
+20260425T092244Z-cb2183,03049cd,1318d12a6d,NVDA,nvda-fundamental,What does NVDA's most recent fundamental picture look like?,8,0.4838,1,1,2765
+20260425T093017Z-b2d7e4,fdcc4f4,1318d12a6d,NVDA,nvda-technical,Is NVDA overbought right now? Walk me through the technical setup.,8,0.6138,1,1,3043
+20260425T093017Z-b2d7e4,fdcc4f4,1318d12a6d,NVDA,nvda-fundamental,What does NVDA's most recent fundamental picture look like?,8,0.4973,1,1,2625
