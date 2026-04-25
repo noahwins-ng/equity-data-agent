@@ -99,6 +99,13 @@ jobs:
             # If this fails, fix it manually — do NOT mask drift behind a passing deploy.
             # Note: .deploy-in-progress is a deploy-side artifact, so exclude it from the check.
             git diff --quiet -- ':!.deploy-in-progress' && git diff --cached --quiet -- ':!.deploy-in-progress' || { echo "::error::Prod working tree has uncommitted changes; aborting deploy."; git status; exit 1; }
+            # QNT-124: capture the pre-pull SHA so the post-`up -d` restart step
+            # can compute the correct diff window even when multiple commits
+            # land in one pull (e.g., back-to-back merges to main while a deploy
+            # is in flight). HEAD~1..HEAD would silently skip the older commits'
+            # config changes — the same class of latent stale-deploy bug this
+            # ticket exists to close.
+            git rev-parse HEAD > /tmp/equity-data-agent-prev-sha
             git pull origin main
             # GIT_SHA is read by the api service in docker-compose.yml and surfaced
             # on /health so external monitoring can distinguish "up" from "up and
@@ -106,6 +113,53 @@ jobs:
             # the CD SHA gate in QNT-88).
             export GIT_SHA
             docker compose --profile prod up -d --build
+
+      - name: Restart services with changed bind-mounted configs
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HETZNER_HOST }}
+          username: ${{ secrets.HETZNER_USER }}
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/equity-data-agent
+
+            # QNT-124: docker compose up -d only recreates a container when its
+            # *compose service definition* changes (image, command, env_file,
+            # environment) — NOT when a bind-mounted file on disk changes. The
+            # services below read their config at startup with no hot-reload, so
+            # `git pull` updates the file but the running process keeps the old
+            # one (see QNT-123 incident: stale Pro-model 429s after a Pro→Flash
+            # config change).
+            #
+            # PREV_SHA is captured in the Deploy step BEFORE `git pull origin
+            # main` (see /tmp/equity-data-agent-prev-sha) so the diff window is
+            # correct even if the pull brought in multiple commits at once
+            # (back-to-back merges with deploys queued). HEAD~1..HEAD would only
+            # see the most recent commit and silently miss the rest.
+            PREV_SHA=$(cat /tmp/equity-data-agent-prev-sha)
+            rm -f /tmp/equity-data-agent-prev-sha
+            CHANGED=$(git diff --name-only "$PREV_SHA" HEAD)
+
+            restarted_any=0
+            restart_if_changed() {
+              local file="$1"; shift
+              local -a services=("$@")
+              if printf '%s\n' "$CHANGED" | grep -qx "$file"; then
+                echo "[QNT-124] $file changed — docker compose restart ${services[*]}"
+                docker compose --profile prod restart "${services[@]}"
+                restarted_any=1
+              fi
+            }
+
+            restart_if_changed "litellm_config.yaml" litellm
+            restart_if_changed "dagster.yaml" dagster dagster-code-server dagster-daemon
+            restart_if_changed "workspace.yaml" dagster dagster-daemon
+            restart_if_changed "Caddyfile" caddy
+
+            if [ "$restarted_any" = 0 ]; then
+              echo "[QNT-124] no bind-mounted config files changed — no restarts needed"
+            fi
 
       - name: Verify prod SHA matches merged commit
         uses: appleboy/ssh-action@v1
