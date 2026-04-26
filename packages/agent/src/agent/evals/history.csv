@@ -75,3 +75,19 @@ run_id,git_sha,prompt_version,ticker,question_id,question,judge_score,cosine,too
 20260425T142759Z-f1aa25,5858672,1318d12a6d,V,v-combined,Give me a balanced thesis on V right now.,9,0.6,1,1,8383
 20260425T142759Z-f1aa25,5858672,1318d12a6d,UNH,unh-fundamental,What is UNH's current fundamental health?,0,0.5179,1,1,7803
 20260425T142759Z-f1aa25,5858672,1318d12a6d,UNH,unh-news,Are there any concerning news items on UNH lately?,10,0.5824,1,1,46173
+20260426T091357Z-625e57,9148052,a2ff656d69,NVDA,nvda-technical,Is NVDA overbought right now? Walk me through the technical setup.,5,0.4034,1,1,8386
+20260426T091357Z-625e57,9148052,a2ff656d69,NVDA,nvda-fundamental,What does NVDA's most recent fundamental picture look like?,1,0.4122,1,1,16342
+20260426T091357Z-625e57,9148052,a2ff656d69,AAPL,aapl-fundamental,How is AAPL valued relative to its earnings?,7,0.3315,1,1,17402
+20260426T091357Z-625e57,9148052,a2ff656d69,AAPL,aapl-technical,Where is AAPL on the price chart — is the trend intact?,7,0.3593,1,1,36242
+20260426T091357Z-625e57,9148052,a2ff656d69,MSFT,msft-news,What's the recent news sentiment around MSFT?,6,0.4467,1,1,43819
+20260426T091357Z-625e57,9148052,a2ff656d69,GOOGL,googl-technical,How is GOOGL trending technically over the recent window?,0,0.4269,1,1,25453
+20260426T091357Z-625e57,9148052,a2ff656d69,GOOGL,googl-combined,Give me a balanced thesis on GOOGL — fundamentals plus technicals.,0,0.2277,1,0,63931
+20260426T091357Z-625e57,9148052,a2ff656d69,AMZN,amzn-fundamental,What's the fundamental case for AMZN at the moment?,6,0.3966,1,1,25025
+20260426T091357Z-625e57,9148052,a2ff656d69,META,meta-combined,Should I be cautious about META based on the latest data?,9,0.2855,1,1,66938
+20260426T091357Z-625e57,9148052,a2ff656d69,META,meta-news,What's driving recent META headlines?,3,0.5088,1,1,25284
+20260426T091357Z-625e57,9148052,a2ff656d69,TSLA,tsla-technical,Is TSLA breaking out or breaking down on the charts?,6,0.3033,1,1,66881
+20260426T091357Z-625e57,9148052,a2ff656d69,TSLA,tsla-news,What's the recent news flow around TSLA?,3,0.2965,1,1,14005
+20260426T091357Z-625e57,9148052,a2ff656d69,JPM,jpm-fundamental,How is JPM valued versus its latest earnings?,0,0.4326,1,0,66677
+20260426T091357Z-625e57,9148052,a2ff656d69,V,v-combined,Give me a balanced thesis on V right now.,7,0.2603,1,1,16854
+20260426T091357Z-625e57,9148052,a2ff656d69,UNH,unh-fundamental,What is UNH's current fundamental health?,2,0.3567,1,0,68582
+20260426T091357Z-625e57,9148052,a2ff656d69,UNH,unh-news,Are there any concerning news items on UNH lately?,2,0.3204,1,0,13015

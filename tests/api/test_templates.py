@@ -110,8 +110,9 @@ def test_technical_bullish_overbought_rendering(monkeypatch: pytest.MonkeyPatch)
 
     assert "# TECHNICAL REPORT — NVDA" in report
     assert "As of 2026-04-16" in report
-    # Comparative RSI context
-    assert "72.5 — overbought (above 70 threshold)" in report
+    # Comparative RSI context — bucket label + canonical thresholds (QNT-136
+    # appended the cross-bucket threshold for in-corpus quoting).
+    assert "72.5 — overbought (above 70 threshold" in report
     assert "prior session 69.0, up 3.5" in report
     # MACD with explicit signal-cross wording
     assert "above signal" in report
@@ -131,11 +132,59 @@ def test_technical_null_indicators_render_as_nm(monkeypatch: pytest.MonkeyPatch)
     ]
     _install_fake(monkeypatch, {"technical_indicators_daily": _tech_result(rows)})
     report = build_technical_report("NVDA")
-    assert "RSI-14: N/M (insufficient history)" in report
+    # RSI N/M still flags insufficient history; thresholds are tacked on so the
+    # agent has them in-corpus even on the empty-history branch (QNT-136).
+    assert "RSI-14: N/M (insufficient history" in report
     assert "MACD(12/26/9): N/M" in report
     assert "Bollinger(20,2): N/M" in report
     # Signal must not fabricate a verdict with no data
     assert "N/M (insufficient history across all indicators)" in report
+
+
+@pytest.mark.parametrize(
+    ("rsi_value", "must_contain"),
+    [
+        # Every bucket must carry both 70 and 30 thresholds so the agent's
+        # synthesize step can quote them verbatim instead of leaking them
+        # as TA prior knowledge (QNT-136 finding: RSI 69 reports without
+        # the 70 threshold caused 'unsupported: 70' hallucination flags).
+        (75.0, ["75.0", "above 70 threshold", "oversold ≤ 30"]),
+        (68.0, ["68.0", "approaching overbought", "70 threshold", "oversold ≤ 30"]),
+        (50.0, ["50.0", "neutral", "overbought ≥ 70", "oversold ≤ 30"]),
+        (32.0, ["32.0", "approaching oversold", "30 threshold", "overbought ≥ 70"]),
+        (25.0, ["25.0", "below 30 threshold", "overbought ≥ 70"]),
+    ],
+)
+def test_technical_rsi_label_always_cites_canonical_thresholds(
+    monkeypatch: pytest.MonkeyPatch,
+    rsi_value: float,
+    must_contain: list[str],
+) -> None:
+    """QNT-136 regression guard: every non-N/M RSI bucket must print both the
+    70 (overbought) and 30 (oversold) thresholds in the report body. Without
+    this, the agent leaks those numbers from TA prior knowledge whenever
+    the bucket the report names doesn't already contain them — and the
+    QNT-67 hallucination scorer flags them as unsupported."""
+    rows = [
+        (
+            date(2026, 4, 16),
+            rsi_value,
+            3.9,
+            0.9,
+            3.0,
+            180.0,
+            175.0,
+            200.0,
+            180.0,
+            160.0,
+            198.0,
+            1000,
+        ),
+    ]
+    _install_fake(monkeypatch, {"technical_indicators_daily": _tech_result(rows)})
+    report = build_technical_report("NVDA")
+    for needle in must_contain:
+        assert needle in report, f"RSI={rsi_value} report missing {needle!r}"
 
 
 # ---------- fundamental ----------

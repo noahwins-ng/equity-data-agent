@@ -36,6 +36,33 @@ def _full_thesis() -> Thesis:
 # ───────────────────────── Schema shape ──────────────────────────────────────
 
 
+def test_field_descriptions_contain_no_multi_digit_literals() -> None:
+    """QNT-136 regression guard, schema side: ``with_structured_output``
+    injects every field's ``description`` into the JSON schema the LLM sees
+    when producing structured output. A literal multi-digit number in a
+    description bleeds into the model's output the same way the SYSTEM_PROMPT
+    body would. The original QNT-133 ``verdict_action`` description carried
+    "RSI > 75" as an example and the model parroted "75" into 3/16 theses
+    where the technical report did not contain 75.
+
+    Pin all five field descriptions; a future "concrete example" edit has
+    to use words or report-relative phrases ("overbought RSI threshold"),
+    not literal digits."""
+    import re
+
+    offenders: list[tuple[str, list[str]]] = []
+    for name, info in Thesis.model_fields.items():
+        desc = info.description or ""
+        multi = re.findall(r"(?<!\w)\d{2,}(?!\w)", desc)
+        if multi:
+            offenders.append((name, multi))
+    assert offenders == [], (
+        "Thesis field descriptions contain literal multi-digit numbers that "
+        "will bleed into structured-output theses and trip the hallucination "
+        f"check: {offenders}. Use words or report-relative phrases instead."
+    )
+
+
 def test_thesis_has_four_sections() -> None:
     """Schema-level guard: the QNT-133 Thesis model exposes Setup / Bull /
     Bear / Verdict-stance / Verdict-action — and no extra freeform fields

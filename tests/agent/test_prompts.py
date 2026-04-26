@@ -78,7 +78,37 @@ def test_system_prompt_grounds_action_levels_in_real_data() -> None:
     # Cite the canonical example so a future "tone down the example" edit
     # has to actively remove the recipe rather than just paraphrase it away.
     assert "verbatim" in text
-    assert "do not invent price targets" in text
+    # The prompt's regression-fix language: action levels must echo only
+    # report numbers, never numbers from the prompt itself.
+    assert "every digit in your action line" in text
+
+
+def test_system_prompt_contains_no_multi_digit_literals() -> None:
+    """QNT-136 regression guard: multi-digit numbers in the prompt body get
+    parroted into theses (the QNT-67 hallucination check then flags them as
+    unsupported, since the report bodies don't contain those digits). The
+    initial QNT-133 prompt bled "75" from a `RSI > 75` example into 3/16
+    golden records — measured against `20260426T081639Z-d136eb` baseline
+    before this guard was added.
+
+    The prompt is allowed to reference single digits (rule numbers `1.`–`5.`,
+    sentence-count constraint `2-4`, schema-source label `(source: …)`) but
+    must not embed any multi-digit numeric literal a model could lift as a
+    "real" thesis number. Run-of-digits ≥ 2 is the simplest invariant the
+    hallucination regex actually consumes.
+    """
+    import re
+
+    # Allowlist: scaffolding ranges like "2-4 sentences" or "0-10" use a single
+    # digit on each side, never a multi-digit token. So the pattern looks for
+    # any standalone run of 2+ digits — that's what the hallucination regex
+    # picks up as a numeric claim.
+    multi_digit = re.findall(r"(?<!\w)\d{2,}(?!\w)", SYSTEM_PROMPT)
+    assert multi_digit == [], (
+        f"SYSTEM_PROMPT contains literal multi-digit numbers that will bleed "
+        f"into theses and trip the hallucination check: {multi_digit}. "
+        f"Use words ('overbought RSI threshold') or single digits in ranges instead."
+    )
 
 
 def test_system_prompt_anchors_confidence_to_data_completeness() -> None:
