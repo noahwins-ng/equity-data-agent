@@ -296,7 +296,10 @@ Updated automatically by `/ship` and `/sync-docs`.
     - **Built after the CLI + evals** — same graph, different transport. The CLI shakes out prompt regressions before they reach the UI.
     - **Request**: `{"ticker": "NVDA", "message": "Analyze this stock"}` — stateless, single-analysis
     - **SSE events**: `tool_call` → `thinking` → `thesis` → `done`
-- [ ] Portfolio README — QNT-66 **[moved from Phase 7 — front-page recruiter artifact]**
+- [x] Portfolio README — QNT-66 **[moved from Phase 7 — front-page recruiter artifact]**
+    - Three portfolio screenshots deferred to QNT-139 (same milestone, same cycle) — README ships scaffold + capture recipe (`docs/screenshots/README.md`) and references QNT-139 inline so the deferral is visible.
+    - QNT-94 demo embedded as a visible link above the fold; activates once QNT-94 commits `docs/demo.mp4`.
+    - Caught + fixed mid-smoke-test: `make setup` ran plain `uv sync` (skipped workspace members) → bumped to `uv sync --all-packages`. README's first-touch path is now end-to-end-verified.
     - Architecture diagram (mermaid, reused from `project-requirement.md` §3.1)
     - One Langfuse trace screenshot (a full `plan → gather → synthesize` run)
     - One Dagster lineage screenshot (the `ohlcv_raw → indicators → fundamental_summary` graph)
