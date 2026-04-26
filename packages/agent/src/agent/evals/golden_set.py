@@ -275,11 +275,17 @@ def run_all(
     history_path: Path = HISTORY_PATH,
     only: str | None = None,
     llm_for_judge: Any | None = None,
+    run_id_suffix: str | None = None,
 ) -> tuple[str, list[EvalOutcome]]:
     """Run every record in the golden set and return ``(run_id, outcomes)``.
 
     ``only`` filters to a single ticker (case-insensitive) — useful for
     iterating on one report's prompt without paying for the full sweep.
+
+    ``run_id_suffix`` appends a tag to the generated run_id (QNT-129 bench
+    harness uses the model alias suffix so per-model aggregates over
+    history.csv can ``startswith`` / ``endswith`` filter without a schema
+    column).
     """
     records = load_goldens()
     if only is not None:
@@ -290,6 +296,8 @@ def run_all(
 
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     rid = f"{timestamp}-{uuid.uuid4().hex[:6]}"
+    if run_id_suffix:
+        rid = f"{rid}-{run_id_suffix}"
     outcomes = [run_record(rec, llm_for_judge=llm_for_judge) for rec in records]
     append_history(outcomes, run_id=rid, history_path=history_path)
     return rid, outcomes

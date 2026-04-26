@@ -1,23 +1,42 @@
-# QNT-59 + QNT-123 + QNT-128 / ADR-011: Groq (default) + Gemini 2.5 Flash (manual override).
-# QNT-124 verification (2026-04-26): trivial bind-mount-touch to exercise the post-deploy restart step. No functional change.
+# QNT-59 + QNT-123 + QNT-128 + QNT-129 / ADR-011: Groq (default) + Gemini 2.5 Flash (manual override).
 #
 # Agent code calls `equity-agent/default`. Setting EQUITY_AGENT_PROVIDER=gemini
 # in the runtime env points get_llm() at `equity-agent/gemini` instead — config
 # switch, no code change. Keys are resolved from env at proxy startup; the
 # client (agent) does not need to know them.
 #
-# QNT-128: default stays Llama-3.3-70B (Groq free-tier TPD 100K) with Qwen3-32B
-# as auto-fallback (TPD 500K). One eval sweep is ~50–70K tokens, so the 100K
-# Llama bucket is enough for ~2 sweeps/day; the Qwen fallback adds 5× more
-# headroom for heavy iteration days without permanently swapping in a model
-# that produces worse output for our task.
+# QNT-128/QNT-129: default stays Llama-3.3-70B (Groq free-tier TPD 100K) with
+# Llama-4-Scout-17B as auto-fallback (TPD 500K). One eval sweep is ~50–70K
+# tokens, so the 100K Llama bucket is enough for ~2 sweeps/day; the Scout
+# fallback adds 5× more headroom for heavy iteration days while staying
+# strictly better on every quality measure than the Qwen3-32B fallback it
+# replaced.
 #
-# Why not Qwen-default: a full QNT-128 sweep on Qwen3-32B (run 20260425T102210Z)
-# regressed from 15/16 to 11/16 hallucination_ok — Qwen rounds numbers and
-# leaks <think> reasoning blocks into the thesis content. Llama-3.3-70B has
-# materially stronger instruction-following on "don't invent numbers" for
-# this 5-section structured-thesis task. Qwen as fallback is acceptable
-# because the alternative (no fallback) is a hard 429 with no answer at all.
+# Why Scout over Qwen: the QNT-129 free-tier bench
+# (docs/model-bench-2026-04.md) ran 16-record golden sweeps on every
+# plausible Groq + Google AI Studio free-tier model. Qwen3-32B produced
+# 12/16 hallucination_ok (4 records with invented magnitudes — AAPL P/E,
+# JPM EPS, UNH headlines) plus a Groq tool-use failure on the META
+# synthesize call. Scout produced 16/16 on every measure (judge 4.94 vs
+# 1.44, cosine 0.342 vs 0.296, p50 elapsed 836ms vs 25 635ms — 30× faster
+# wall time). Same provider, same key, same retry path, no new failure
+# mode added.
+#
+# Why not Scout-default-too: bench is 16 records on one prompt revision.
+# Llama-3.3-70B has months of production track record; Scout has zero.
+# Holding Scout in the fallback slot lets us collect production telemetry
+# before promoting; re-evaluate at the next bench run (target +2 weeks
+# from QNT-129 ship).
+#
+# QNT-129: bench-* aliases below are dedicated harness slots used by
+# `python -m agent.evals --model equity-agent/bench-<name>` to compare
+# free-tier candidates against the QNT-67 goldens. Per-alias rpm/tpm are
+# set at ~80% of each provider's published free-tier caps so the proxy
+# queues over-cap requests instead of returning 429 — the eval sweep sees
+# latency, not failures. Bench aliases intentionally have NO fallbacks
+# so each record's score reflects the model under test, not a silent
+# fall-through. See docs/model-bench-2026-04.md for the bench output and
+# the revisit cadence.
 
 model_list:
   - model_name: equity-agent/default
@@ -25,9 +44,13 @@ model_list:
       model: groq/llama-3.3-70b-versatile
       api_key: os.environ/GROQ_API_KEY
 
-  - model_name: equity-agent/fallback-qwen3
+  - model_name: equity-agent/fallback-llama4scout
+    # QNT-129: replaces the previous `equity-agent/fallback-qwen3`. Same
+    # provider (Groq), same TPD ceiling (500K — 5× the default), strictly
+    # better on every measured signal vs Qwen3-32B. See
+    # docs/model-bench-2026-04.md for the rationale.
     litellm_params:
-      model: groq/qwen/qwen3-32b
+      model: groq/meta-llama/llama-4-scout-17b-16e-instruct
       api_key: os.environ/GROQ_API_KEY
 
   - model_name: equity-agent/gemini
@@ -39,12 +62,77 @@ model_list:
       model: gemini/gemini-2.5-flash
       api_key: os.environ/GEMINI_API_KEY
 
+  # ─── QNT-129 bench aliases ──────────────────────────────────
+  # Caps below are 80% of published free-tier limits. Format:
+  # rpm = published_rpm × 0.8, tpm = published_tpm × 0.8 (or omitted
+  # when the provider publishes "unlimited TPM").
+
+  - model_name: equity-agent/bench-gptoss120b
+    litellm_params:
+      model: groq/openai/gpt-oss-120b
+      api_key: os.environ/GROQ_API_KEY
+      rpm: 25       # ~80% of Groq published 30 RPM (rounded to nearest 5)
+      tpm: 6500     # ~80% of Groq published 8K TPM (rounded to nearest 500)
+
+  - model_name: equity-agent/bench-gptoss20b
+    litellm_params:
+      model: groq/openai/gpt-oss-20b
+      api_key: os.environ/GROQ_API_KEY
+      rpm: 25
+      tpm: 6500
+
+  - model_name: equity-agent/bench-llama4scout
+    litellm_params:
+      model: groq/meta-llama/llama-4-scout-17b-16e-instruct
+      api_key: os.environ/GROQ_API_KEY
+      rpm: 25
+      tpm: 24000    # Groq published 30K TPM — wide TPM is the headroom here
+
+  - model_name: equity-agent/bench-qwen3-32b
+    litellm_params:
+      model: groq/qwen/qwen3-32b
+      api_key: os.environ/GROQ_API_KEY
+      rpm: 50       # Groq published 60 RPM
+      tpm: 5000     # Groq published 6K TPM — TPM is the binding constraint
+
+  - model_name: equity-agent/bench-gemma4-31b
+    litellm_params:
+      model: gemini/gemma-4-31b-it
+      api_key: os.environ/GEMINI_API_KEY
+      rpm: 12       # Google published 15 RPM; TPM unlimited so omitted
+
+  - model_name: equity-agent/bench-gemma3-27b
+    litellm_params:
+      model: gemini/gemma-3-27b-it
+      api_key: os.environ/GEMINI_API_KEY
+      rpm: 25       # Google published 30 RPM
+      tpm: 12000    # Google published 15K TPM
+
+  - model_name: equity-agent/bench-gemini31flashlite
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite-preview
+      api_key: os.environ/GEMINI_API_KEY
+      rpm: 12       # Google published 15 RPM
+      tpm: 200000   # Google published 250K TPM
+
+  - model_name: equity-agent/bench-llama3-70b
+    # Calibration line — same model as `equity-agent/default` but no fallback
+    # so the bench measures Llama-3.3-70B's own quality on the current
+    # prompt_version. The QNT-128 reference run was on an older prompt
+    # (1318d12a6d); without this alias the comparison would be unfair to
+    # every other candidate on the post-QNT-133/QNT-136/QNT-137 prompt.
+    litellm_params:
+      model: groq/llama-3.3-70b-versatile
+      api_key: os.environ/GROQ_API_KEY
+      rpm: 25       # ~80% of Groq published 30 RPM on 70B (rounded to nearest 5)
+      tpm: 5000     # ~80% of Groq published 6K TPM on 70B free tier (rounded to nearest 500)
+
 litellm_settings:
   drop_params: true
-  # Auto-failover on 429 (rate limit) — when Llama exhausts its 100K TPD,
-  # requests transparently switch to Qwen3-32B (500K TPD) without the agent
-  # or eval needing to know. Only `equity-agent/default` falls back;
-  # `equity-agent/gemini` stays manual so opting into Gemini is an explicit
-  # user choice.
+  # Auto-failover on 429 (rate limit) — when Llama-3.3-70B exhausts its
+  # 100K TPD, requests transparently switch to Llama-4-Scout (500K TPD)
+  # without the agent or eval needing to know. Only `equity-agent/default`
+  # falls back; `equity-agent/gemini` and the bench aliases stay direct so
+  # opting in is always an explicit choice.
   fallbacks:
-    - equity-agent/default: ["equity-agent/fallback-qwen3"]
+    - equity-agent/default: ["equity-agent/fallback-llama4scout"]

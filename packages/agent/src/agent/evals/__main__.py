@@ -26,6 +26,7 @@ from agent.evals.golden_set import (
     run_all,
     summarise,
 )
+from agent.llm import set_model_override
 from agent.tracing import langfuse
 
 logger = logging.getLogger(__name__)
@@ -43,12 +44,31 @@ def main(argv: list[str] | None = None) -> int:
         default=HISTORY_PATH,
         help=f"Where to append history rows (default: {HISTORY_PATH})",
     )
+    parser.add_argument(
+        "--model",
+        help=(
+            "LiteLLM alias to route every plan / synthesize / judge call through "
+            "(e.g. 'equity-agent/bench-gptoss120b'). Bypasses EQUITY_AGENT_PROVIDER "
+            "and tags the run_id with the alias suffix so history.csv filters per "
+            "model. QNT-129."
+        ),
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
 
+    run_id_suffix: str | None = None
+    if args.model:
+        set_model_override(args.model)
+        # 'equity-agent/bench-gptoss120b' → 'bench-gptoss120b'
+        run_id_suffix = args.model.split("/", 1)[-1]
+
     try:
-        run_id, outcomes = run_all(history_path=args.history_path, only=args.only)
+        run_id, outcomes = run_all(
+            history_path=args.history_path,
+            only=args.only,
+            run_id_suffix=run_id_suffix,
+        )
     except Exception:
         logger.exception("eval run failed")
         return 1

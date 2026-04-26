@@ -1,5 +1,18 @@
 import pytest
-from agent.llm import _ALIAS_BY_PROVIDER, get_llm
+from agent.llm import _ALIAS_BY_PROVIDER, get_llm, set_model_override
+
+
+@pytest.fixture(autouse=True)
+def _reset_override():
+    """Ensure no test leaks the QNT-129 model override into the next test.
+
+    Resets both before AND after each test so the first test in this module
+    is also protected if a future session-scoped fixture sets the override
+    at module-import time.
+    """
+    set_model_override(None)
+    yield
+    set_model_override(None)
 
 
 def test_alias_map_covers_both_providers():
@@ -38,5 +51,25 @@ def test_provider_case_insensitive(monkeypatch):
     from shared import config as cfg
 
     monkeypatch.setattr(cfg.settings, "EQUITY_AGENT_PROVIDER", "GEMINI")
+    llm = get_llm()
+    assert llm.model_name == "equity-agent/gemini"
+
+
+def test_model_override_bypasses_provider_lookup(monkeypatch):
+    """QNT-129: --model flag short-circuits the provider env var entirely."""
+    from shared import config as cfg
+
+    monkeypatch.setattr(cfg.settings, "EQUITY_AGENT_PROVIDER", "groq")
+    set_model_override("equity-agent/bench-gptoss120b")
+    llm = get_llm()
+    assert llm.model_name == "equity-agent/bench-gptoss120b"
+
+
+def test_model_override_unset_falls_back_to_provider(monkeypatch):
+    from shared import config as cfg
+
+    monkeypatch.setattr(cfg.settings, "EQUITY_AGENT_PROVIDER", "gemini")
+    set_model_override("equity-agent/bench-anything")
+    set_model_override(None)
     llm = get_llm()
     assert llm.model_name == "equity-agent/gemini"
