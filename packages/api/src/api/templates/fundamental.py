@@ -8,6 +8,7 @@ snapshot.
 
 from __future__ import annotations
 
+import math
 from datetime import date
 from typing import Any
 
@@ -16,6 +17,16 @@ from shared.tickers import TICKER_METADATA, TICKERS
 
 from api.clickhouse import get_client
 from api.formatters import format_pct, format_ratio, format_signed_pct, pe_na_reason
+
+# Canonical valuation/quality reference rates used by ``_signal_verdict``.
+# Surfaced verbatim in the report body (ADR-012) so the agent quotes them from
+# the corpus instead of reaching for them as fundamental prior knowledge — the
+# same fix QNT-136 applied to RSI 70/30 in the technical template.
+_PE_THRESHOLDS = "rich ≥ 40, cheap ≤ 20"
+_GROWTH_REFERENCE = "Reference rates: ≥ 10% strong, ≤ 0% contraction"
+_PROFITABILITY_REFERENCE = (
+    "Reference rates: net margin ≥ 15% strong / ≤ 0 loss-making; ROE ≥ 15% strong / ≤ 0 negative"
+)
 
 _RATIO_COLUMNS = (
     "period_end",
@@ -36,6 +47,22 @@ _RATIO_COLUMNS = (
     "debt_to_equity",
     "current_ratio",
 )
+
+
+def _pe_label(pe: float | None, eps: float | None) -> str:
+    """Format a P/E ratio with the canonical rich/cheap thresholds always cited.
+
+    Mirrors ``_rsi_label`` in ``technical.py``: the canonical valuation
+    thresholds (rich ≥ 40, cheap ≤ 20) are surfaced in every record so the
+    agent's synthesize step quotes them from the report instead of reaching
+    for them as fundamental prior knowledge. Fundamental sweeps
+    (``20260426T085600Z-9433e1``) showed ``40`` and ``20`` leaking onto
+    P/E action lines whenever the report omitted the digits — same root
+    cause as the QNT-136 RSI 70/30 leak. See ADR-012.
+    """
+    if pe is None or not math.isfinite(pe):
+        return f"N/M ({pe_na_reason(eps)}; {_PE_THRESHOLDS})"
+    return f"{format_ratio(pe)} ({_PE_THRESHOLDS})"
 
 
 def _growth_label(current: float | None, prior: float | None, metric: str) -> str:
@@ -115,7 +142,7 @@ def build_fundamental_report(ticker: str) -> str:
         f"{meta.get('industry', 'Unknown industry')}",
         "",
         "## VALUATION",
-        f"P/E: {format_ratio(latest['pe_ratio'], na_reason=pe_na_reason(latest['eps']))}",
+        f"P/E: {_pe_label(latest['pe_ratio'], latest['eps'])}",
         f"EV/EBITDA: {format_ratio(latest['ev_ebitda'])}",
         f"Price/Book: {format_ratio(latest['price_to_book'])}",
         f"Price/Sales: {format_ratio(latest['price_to_sales'])}",
@@ -137,12 +164,14 @@ def build_fundamental_report(ticker: str) -> str:
             prior["fcf_yoy_pct"] if prior else None,
             "Free cash flow",
         ),
+        _GROWTH_REFERENCE,
         "",
         "## PROFITABILITY",
         f"Gross margin: {format_pct(latest['gross_margin_pct'])}",
         f"Net margin: {format_pct(latest['net_margin_pct'])}",
         f"ROE: {format_pct(latest['roe'])}",
         f"ROA: {format_pct(latest['roa'])}",
+        _PROFITABILITY_REFERENCE,
         "",
         "## CASH & LEVERAGE",
         f"FCF yield: {format_pct(latest['fcf_yield'])}",

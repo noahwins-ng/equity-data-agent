@@ -238,11 +238,13 @@ def _fund_row(**overrides: Any) -> tuple[Any, ...]:
 def test_fundamental_pe_nulled_with_low_eps_renders_near_zero_earnings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # QNT-87 end-to-end: pe_ratio=None + eps=0.01 → "N/M (near-zero earnings)".
+    # QNT-87 end-to-end: pe_ratio=None + eps=0.01 → "N/M (near-zero earnings…".
+    # QNT-137 appends the rich/cheap threshold note to every P/E line, so the
+    # near-zero-earnings reason now lives inside a longer N/M parenthetical.
     rows = [_fund_row(pe_ratio=None, eps=0.01)]
     _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, rows)})
     report = build_fundamental_report("UNH")
-    assert "P/E: N/M (near-zero earnings)" in report
+    assert "P/E: N/M (near-zero earnings" in report
 
 
 def test_fundamental_prior_period_trend_label(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -265,6 +267,80 @@ def test_fundamental_unknown_ticker_404() -> None:
     with pytest.raises(HTTPException) as exc:
         build_fundamental_report("BOGUS")
     assert exc.value.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("pe", "eps", "must_contain"),
+    [
+        # Every P/E line — including the N/M branches — must carry the
+        # canonical rich/cheap thresholds so the agent quotes them from
+        # the report instead of leaking ``40`` / ``20`` from valuation
+        # prior knowledge (QNT-137 / ADR-012, mirrors QNT-136 RSI 70/30).
+        (15.0, 2.5, ["P/E: 15.00", "rich ≥ 40", "cheap ≤ 20"]),
+        (45.0, 2.5, ["P/E: 45.00", "rich ≥ 40", "cheap ≤ 20"]),
+        (None, 0.01, ["P/E: N/M", "near-zero earnings", "rich ≥ 40", "cheap ≤ 20"]),
+        (None, None, ["P/E: N/M", "EPS unavailable", "rich ≥ 40", "cheap ≤ 20"]),
+    ],
+)
+def test_fundamental_pe_label_always_cites_canonical_thresholds(
+    monkeypatch: pytest.MonkeyPatch,
+    pe: float | None,
+    eps: float | None,
+    must_contain: list[str],
+) -> None:
+    """QNT-137 regression guard: every P/E line carries rich/cheap thresholds.
+
+    Sweep ``20260426T085600Z-9433e1`` showed the model leaking ``40`` and
+    ``20`` (and similar fundamental thresholds) into action lines whenever
+    the report omitted them. ADR-012's chosen fix is to surface the
+    convention in the report layer, not loosen the prompt or scorer.
+    """
+    rows = [_fund_row(pe_ratio=pe, eps=eps)]
+    _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, rows)})
+    report = build_fundamental_report("NVDA")
+    for needle in must_contain:
+        assert needle in report, f"P/E={pe} eps={eps} report missing {needle!r}"
+
+
+@pytest.mark.parametrize(
+    ("section_header", "must_contain"),
+    [
+        # GROWTH section footer cites the ≥ 10% strong / ≤ 0% contraction
+        # thresholds used in ``_signal_verdict`` for revenue YoY.
+        (
+            "## GROWTH (YoY)",
+            ["Reference rates: ≥ 10% strong, ≤ 0% contraction"],
+        ),
+        # PROFITABILITY footer cites the 15% strong / 0 loss-making
+        # thresholds used in ``_signal_verdict`` for net margin and ROE.
+        (
+            "## PROFITABILITY",
+            [
+                "Reference rates",
+                "net margin ≥ 15% strong",
+                "≤ 0 loss-making",
+                "ROE ≥ 15% strong",
+                "≤ 0 negative",
+            ],
+        ),
+    ],
+)
+def test_fundamental_sections_cite_canonical_reference_rates(
+    monkeypatch: pytest.MonkeyPatch,
+    section_header: str,
+    must_contain: list[str],
+) -> None:
+    """QNT-137 regression guard: GROWTH and PROFITABILITY sections always
+    print a 'Reference rates' footer naming the thresholds ``_signal_verdict``
+    votes against. Without it the agent leaks ``10``, ``15`` etc. from
+    fundamental prior knowledge — same root cause as the QNT-136 RSI fix
+    (ADR-012)."""
+    rows = [_fund_row()]
+    _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, rows)})
+    report = build_fundamental_report("NVDA")
+    assert section_header in report
+    for needle in must_contain:
+        assert needle in report, f"{section_header} missing {needle!r}"
 
 
 # ---------- news ----------
