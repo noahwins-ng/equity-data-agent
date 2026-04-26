@@ -4,7 +4,7 @@
 
 setup: ## First-time repo setup: hooks, deps, env
 	git config core.hooksPath .githooks
-	uv sync
+	uv sync --all-packages
 	@if [ ! -f .env ]; then \
 		cp .env.example .env; \
 		echo "Created .env from .env.example — edit it with your values"; \
