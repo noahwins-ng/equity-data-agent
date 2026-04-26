@@ -1,8 +1,13 @@
-"""Tests for agent.graph (QNT-56).
+"""Tests for agent.graph (QNT-56, QNT-133).
 
 Covers the plan -> gather -> synthesize LangGraph state machine, tool
 injection, retry + optional-tool skip, the short-circuit conditional edge,
 and the LLM-injection contract (get_llm()).
+
+QNT-133: synthesize now uses ``with_structured_output(Thesis)``. The stub
+LLM handles both the plan call (which returns an ``AIMessage`` with a
+comma-separated tool list) and the synthesize call (which goes through a
+structured-output runnable returning a ``Thesis``).
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ from agent.graph import (
     _parse_plan,
     build_graph,
 )
+from agent.thesis import Thesis
 from langchain_core.messages import AIMessage
 
 
@@ -32,19 +38,48 @@ def _mock_tool(text: str) -> ToolFn:
     return tool
 
 
+def _stub_thesis(setup: str = "NVDA thesis body.") -> Thesis:
+    """Minimal Thesis for graph tests — fields chosen so the markdown render
+    contains the seed text (so tests can grep for it)."""
+    return Thesis(
+        setup=setup,
+        bull_case=["bull (source: technical)"],
+        bear_case=["bear (source: fundamental)"],
+        verdict_stance="mixed",
+        verdict_action="Hold pending QNT-67 eval.",
+    )
+
+
+class _StructuredLLM:
+    """Stub that mimics a ChatOpenAI with ``with_structured_output``.
+
+    Two-channel responses: ``invoke()`` returns an ``AIMessage`` for the plan
+    call, while ``with_structured_output(schema).invoke()`` returns whatever
+    ``structured_responses`` queue holds — typically a ``Thesis`` instance.
+    Tests configure both channels via class attributes set on the stub.
+    """
+
+    def __init__(self) -> None:
+        self.invoke = MagicMock()
+        self.invoke.return_value = AIMessage(content="technical, fundamental, news")
+        self._structured_runnable = MagicMock()
+        self._structured_runnable.invoke = MagicMock(return_value=_stub_thesis())
+
+    def with_structured_output(self, schema: object) -> MagicMock:  # noqa: ARG002
+        return self._structured_runnable
+
+    @property
+    def structured_invoke(self) -> MagicMock:
+        return self._structured_runnable.invoke
+
+
 @pytest.fixture
-def stub_llm(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
-    """Replace ``agent.graph.get_llm`` with a stub whose ``invoke`` returns
-    a predictable AIMessage. The plan call uses temperature=0.0 and the
-    synthesize call uses the default — the stub handles both.
-
-    Also stubs the tracing helper to a pass-through so tests don't depend on
-    Langfuse being enabled."""
-    llm = MagicMock()
-    llm.invoke.return_value = AIMessage(content="technical, fundamental, news")
-
-    factory = MagicMock(return_value=llm)
-    monkeypatch.setattr(graph_module, "get_llm", factory)
+def stub_llm(monkeypatch: pytest.MonkeyPatch) -> _StructuredLLM:
+    """Replace ``agent.graph.get_llm`` with a stub that supports both the
+    plan call (raw ``invoke``) and the synthesize call
+    (``with_structured_output(Thesis).invoke``)."""
+    llm = _StructuredLLM()
+    monkeypatch.setattr(graph_module, "get_llm", MagicMock(return_value=llm))
     monkeypatch.setattr(
         graph_module.langfuse,
         "traced_invoke",
@@ -77,28 +112,26 @@ def test_graph_is_visualizable_via_mermaid() -> None:
     assert "synthesize" in mermaid
 
 
-def test_full_flow_produces_thesis_and_confidence(stub_llm: MagicMock) -> None:
-    stub_llm.invoke.side_effect = [
-        AIMessage(content="technical, fundamental, news"),  # plan
-        AIMessage(content="NVDA thesis body."),  # synthesize
-    ]
+def test_full_flow_produces_thesis_and_confidence(stub_llm: _StructuredLLM) -> None:
+    """End-to-end: plan picks all three tools, synthesize returns a structured
+    ``Thesis`` (QNT-133), confidence reflects full report coverage."""
+    stub_llm.invoke.return_value = AIMessage(content="technical, fundamental, news")
+    expected = _stub_thesis("NVDA thesis body.")
+    stub_llm.structured_invoke.return_value = expected
     graph = build_graph({name: _mock_tool(name) for name in REPORT_TOOLS})
 
     result = _run(graph)
 
-    assert result["thesis"] == "NVDA thesis body."
+    assert result["thesis"] is expected
     assert result["confidence"] == 1.0
     assert set(result["reports"]) == {"technical", "fundamental", "news"}
     assert result["errors"] == {}
 
 
-def test_missing_news_tool_is_silently_skipped(stub_llm: MagicMock) -> None:
+def test_missing_news_tool_is_silently_skipped(stub_llm: _StructuredLLM) -> None:
     """Optional tools (news) absent from the tool mapping must not surface
     in ``errors`` — a missing news feed is routine, not an error."""
-    stub_llm.invoke.side_effect = [
-        AIMessage(content="technical, fundamental, news"),
-        AIMessage(content="thesis"),
-    ]
+    stub_llm.invoke.return_value = AIMessage(content="technical, fundamental, news")
     tools = {"technical": _mock_tool("tech"), "fundamental": _mock_tool("fund")}
     graph = build_graph(tools)
 
@@ -107,7 +140,7 @@ def test_missing_news_tool_is_silently_skipped(stub_llm: MagicMock) -> None:
     assert result["reports"].keys() == {"technical", "fundamental"}
     # 'news' is in OPTIONAL_TOOLS, so its absence is not an error.
     assert "news" not in result["errors"]
-    assert result["thesis"] == "thesis"
+    assert isinstance(result["thesis"], Thesis)
 
 
 def test_gather_reports_optional_tool_missing_from_map_is_dropped_silently() -> None:
@@ -133,30 +166,61 @@ def test_gather_reports_required_tool_missing_from_map_records_error() -> None:
     assert errors["technical"] == "tool-not-registered"
 
 
-def test_synthesize_handles_none_content(stub_llm: MagicMock) -> None:
-    """If the provider returns an object whose ``content`` is ``None`` (some
-    model error paths), we surface an empty thesis rather than the literal
-    "None". Pydantic blocks AIMessage(content=None) so we use a stand-in
-    response object with the same surface."""
-    none_response = MagicMock()
-    none_response.content = None
-    stub_llm.invoke.side_effect = [
-        AIMessage(content="technical"),
-        none_response,
-    ]
+def test_synthesize_returns_none_when_structured_output_fails(
+    stub_llm: _StructuredLLM,
+) -> None:
+    """QNT-133: ``with_structured_output`` can raise on a malformed provider
+    response (Gemini occasionally returns invalid tool-call JSON). The
+    synthesize node must surface that as ``thesis=None`` rather than crash
+    the whole run — confidence is unaffected because reports were gathered."""
+    stub_llm.invoke.return_value = AIMessage(content="technical")
+    stub_llm.structured_invoke.side_effect = RuntimeError("schema-validation")
     graph = build_graph({"technical": _mock_tool("tech")})
 
     result = _run(graph)
 
-    assert result["thesis"] == ""
+    assert result["thesis"] is None
     assert result["confidence"] == 1.0
 
 
-def test_required_tool_failure_records_error(stub_llm: MagicMock) -> None:
-    stub_llm.invoke.side_effect = [
-        AIMessage(content="technical, fundamental, news"),
-        AIMessage(content="thesis"),
-    ]
+def test_synthesize_returns_none_when_response_is_not_a_thesis(
+    stub_llm: _StructuredLLM,
+) -> None:
+    """Defensive: if the structured runnable hands back something that isn't
+    a ``Thesis`` (e.g. an ``include_raw=True`` shape with parsing_error), we
+    coerce to ``None`` rather than leak the wrong type into state."""
+    stub_llm.invoke.return_value = AIMessage(content="technical")
+    stub_llm.structured_invoke.return_value = {"parsed": None, "parsing_error": "x"}
+    graph = build_graph({"technical": _mock_tool("tech")})
+
+    result = _run(graph)
+
+    assert result["thesis"] is None
+
+
+def test_synthesize_extracts_thesis_from_include_raw_dict(
+    stub_llm: _StructuredLLM,
+) -> None:
+    """Happy path for the ``with_structured_output(..., include_raw=True)``
+    response shape: a dict with a ``parsed`` key holding a ``Thesis``. The
+    graph's ``_coerce_thesis`` must pull it out so future code that opts
+    into raw-message logging keeps producing structured state."""
+    stub_llm.invoke.return_value = AIMessage(content="technical")
+    expected = _stub_thesis("Extracted from include_raw dict.")
+    stub_llm.structured_invoke.return_value = {
+        "parsed": expected,
+        "raw": AIMessage(content="..."),
+        "parsing_error": None,
+    }
+    graph = build_graph({"technical": _mock_tool("tech")})
+
+    result = _run(graph)
+
+    assert result["thesis"] is expected
+
+
+def test_required_tool_failure_records_error(stub_llm: _StructuredLLM) -> None:
+    stub_llm.invoke.return_value = AIMessage(content="technical, fundamental, news")
 
     def flaky(_: str) -> str:
         raise RuntimeError("boom")
@@ -177,12 +241,9 @@ def test_required_tool_failure_records_error(stub_llm: MagicMock) -> None:
     assert result["confidence"] == 0.67
 
 
-def test_retry_on_transient_failure(stub_llm: MagicMock) -> None:
+def test_retry_on_transient_failure(stub_llm: _StructuredLLM) -> None:
     """A tool that fails once then succeeds should land in reports, not errors."""
-    stub_llm.invoke.side_effect = [
-        AIMessage(content="technical"),
-        AIMessage(content="thesis"),
-    ]
+    stub_llm.invoke.return_value = AIMessage(content="technical")
     attempts = {"n": 0}
 
     def flaky(ticker: str) -> str:
@@ -199,7 +260,7 @@ def test_retry_on_transient_failure(stub_llm: MagicMock) -> None:
     assert attempts["n"] == 2  # first failed, second succeeded
 
 
-def test_short_circuits_when_gather_produces_nothing(stub_llm: MagicMock) -> None:
+def test_short_circuits_when_gather_produces_nothing(stub_llm: _StructuredLLM) -> None:
     """Conditional edge routes gather -> END when no reports were gathered,
     so synthesize isn't called with an empty prompt."""
     stub_llm.invoke.return_value = AIMessage(content="technical")
@@ -214,6 +275,8 @@ def test_short_circuits_when_gather_produces_nothing(stub_llm: MagicMock) -> Non
     assert result["errors"]["technical"].startswith("RuntimeError")
     # Synthesize was never called — only the plan LLM call should have fired.
     assert stub_llm.invoke.call_count == 1
+    # And the structured runnable was never invoked either.
+    assert stub_llm.structured_invoke.call_count == 0
 
 
 def test_llm_is_injected_via_get_llm_factory(
@@ -221,11 +284,8 @@ def test_llm_is_injected_via_get_llm_factory(
 ) -> None:
     """AC: ``LLM provider is injected via get_llm(), not hardcoded``. Patch
     ``agent.graph.get_llm`` and assert the graph routes through it."""
-    llm = MagicMock()
-    llm.invoke.side_effect = [
-        AIMessage(content="technical"),
-        AIMessage(content="thesis"),
-    ]
+    llm = _StructuredLLM()
+    llm.invoke.return_value = AIMessage(content="technical")
     factory = MagicMock(return_value=llm)
     monkeypatch.setattr(graph_module, "get_llm", factory)
     monkeypatch.setattr(
@@ -246,12 +306,9 @@ def test_llm_calls_go_through_traced_invoke(
     """Every LLM call in the graph must route through ``langfuse.traced_invoke``
     (the contract enforced by test_tracing.py's AST scanner at package level;
     this test adds a runtime assertion)."""
-    llm = MagicMock()
-    llm.invoke.side_effect = [
-        AIMessage(content="technical"),
-        AIMessage(content="thesis"),
-    ]
-    monkeypatch.setattr(graph_module, "get_llm", lambda *a, **kw: llm)
+    llm = _StructuredLLM()
+    llm.invoke.return_value = AIMessage(content="technical")
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
 
     calls: list[str] = []
 
@@ -267,7 +324,7 @@ def test_llm_calls_go_through_traced_invoke(
     assert calls == ["plan", "synthesize"]
 
 
-def test_no_tools_registered_yields_empty_plan(stub_llm: MagicMock) -> None:
+def test_no_tools_registered_yields_empty_plan(stub_llm: _StructuredLLM) -> None:  # noqa: ARG001
     graph = build_graph({})
     result = _run(graph)
     assert result.get("plan") == []
@@ -313,12 +370,9 @@ def test_confidence_empty_plan_returns_zero() -> None:
 
 
 def test_state_transitions_are_logged(
-    stub_llm: MagicMock, caplog: pytest.LogCaptureFixture
+    stub_llm: _StructuredLLM, caplog: pytest.LogCaptureFixture
 ) -> None:
-    stub_llm.invoke.side_effect = [
-        AIMessage(content="technical"),
-        AIMessage(content="thesis"),
-    ]
+    stub_llm.invoke.return_value = AIMessage(content="technical")
     graph = build_graph({"technical": _mock_tool("tech")})
 
     with caplog.at_level(logging.INFO, logger="agent.graph"):

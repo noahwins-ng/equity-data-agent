@@ -1,9 +1,12 @@
-"""Tests for agent.prompts (QNT-58).
+"""Tests for agent.prompts (QNT-58, QNT-133).
 
 The prompt is the architectural boundary that enforces ADR-003 — the LLM
-sees these rules on every synthesize call. These tests freeze the four
-non-negotiables (no arithmetic, citations, structured sections, confidence
-from data completeness) so a casual prompt edit can't silently drop one.
+sees these rules on every synthesize call. These tests freeze:
+
+* The four non-negotiables (no arithmetic, citations, no-prior-knowledge,
+  treat-reports-as-data) — a casual prompt edit can't silently drop one.
+* The QNT-133 four-section contract (Setup / Bull Case / Bear Case /
+  Verdict) plus the asymmetry-allowed and grounded-action rules.
 
 Whether the model actually obeys the rules in production is the QNT-67
 hallucination eval's job; here we verify the contract is on the wire AND
@@ -24,6 +27,7 @@ from agent.prompts import (
     build_synthesis_prompt,
 )
 from agent.prompts.system import _sanitize_report_body
+from agent.thesis import Thesis
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 
@@ -47,20 +51,41 @@ def test_system_prompt_requires_citations() -> None:
 
 
 def test_system_prompt_specifies_thesis_structure() -> None:
-    """Rule 3: structured output. All five sections from the issue body
-    must appear as literal headings, in order."""
+    """Rule 3 (QNT-133): four-section structure. All sections must appear
+    as literal headings, in order."""
     for section in THESIS_SECTIONS:
         assert f"## {section}" in SYSTEM_PROMPT, f"missing section heading: {section}"
     indices = [SYSTEM_PROMPT.index(f"## {s}") for s in THESIS_SECTIONS]
     assert indices == sorted(indices), f"section order drifted: {indices}"
 
 
-def test_system_prompt_anchors_confidence_to_data_completeness() -> None:
-    """Rule 4: confidence reflects data completeness, not narrative strength.
-    Pair-checks the prompt with ``_confidence_from_reports`` in graph.py
-    which computes the numeric heuristic — both must agree on the rule."""
+def test_system_prompt_allows_asymmetry() -> None:
+    """QNT-133 guardrail: the model must not invent a bull or bear case to
+    match a template. The prompt must explicitly permit empty sections."""
     text = SYSTEM_PROMPT.lower()
-    assert "confidence:" in text
+    assert "asymmetry" in text
+    assert "empty" in text
+    # Must call out both sides — a one-sided asymmetry rule would still let
+    # the model invent the missing side.
+    assert "bull case" in text and "bear case" in text
+
+
+def test_system_prompt_grounds_action_levels_in_real_data() -> None:
+    """QNT-133 guardrail: verdict action levels must reference numbers that
+    appear in the supplied reports — no hallucinated price targets."""
+    text = SYSTEM_PROMPT.lower()
+    assert "action level" in text
+    # Cite the canonical example so a future "tone down the example" edit
+    # has to actively remove the recipe rather than just paraphrase it away.
+    assert "verbatim" in text
+    assert "do not invent price targets" in text
+
+
+def test_system_prompt_anchors_confidence_to_data_completeness() -> None:
+    """Confidence reflects data completeness, not narrative strength. The
+    graph computes the numeric value via ``_confidence_from_reports``; the
+    prompt only needs to carry the framing if it mentions confidence at all."""
+    text = SYSTEM_PROMPT.lower()
     assert "data completeness" in text
     assert "low" in text and "medium" in text and "high" in text
 
@@ -143,7 +168,7 @@ def test_build_synthesis_prompt_uses_default_question() -> None:
 def test_build_synthesis_prompt_uses_fenced_delimiters_not_h2() -> None:
     """Reports must be fenced with ``=== <name> report ===`` rather than
     ``## ...`` so the input report names can't be confused with the model's
-    five output section headings (Overview / Technical outlook / etc.)."""
+    output section headings (Setup / Bull Case / Bear Case / Verdict)."""
     messages = build_synthesis_prompt("NVDA", "", {"technical": "body"})
     user_content = str(messages[1].content)
     assert "## Technical Report" not in user_content
@@ -206,19 +231,30 @@ def test_synthesize_node_invokes_llm_with_system_message(
     SystemMessage whose content is SYSTEM_PROMPT. Catches both the rule-
     on-the-wire regression AND a regression where someone re-flattens the
     prompt back into a string."""
+    plan_response = AIMessage(content="technical, fundamental, news")
+    structured_response = Thesis(
+        setup="Setup paragraph (source: technical).",
+        bull_case=["bull (source: technical)"],
+        bear_case=[],
+        verdict_stance="constructive",
+        verdict_action="Trim above SMA50 (source: technical).",
+    )
+    structured_runnable = MagicMock()
+    structured_runnable.invoke = MagicMock(return_value=structured_response)
+
     llm = MagicMock()
-    llm.invoke.side_effect = [
-        AIMessage(content="technical, fundamental, news"),  # plan
-        AIMessage(content="thesis body"),  # synthesize
-    ]
+    llm.invoke = MagicMock(return_value=plan_response)
+    llm.with_structured_output = MagicMock(return_value=structured_runnable)
+
     captured: list[object] = []
 
     def traced(llm_: object, prompt: object, *, name: str) -> object:
         if name == "synthesize":
             captured.append(prompt)
+            return structured_runnable.invoke(prompt)
         return llm.invoke(prompt)
 
-    monkeypatch.setattr(graph_module, "get_llm", lambda *a, **kw: llm)
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
     monkeypatch.setattr(graph_module.langfuse, "traced_invoke", traced)
 
     def tool(t: str) -> str:
@@ -237,17 +273,20 @@ def test_synthesize_node_invokes_llm_with_system_message(
     assert isinstance(synthesize_prompt[0], SystemMessage)
     assert synthesize_prompt[0].content == SYSTEM_PROMPT
     assert isinstance(synthesize_prompt[1], HumanMessage)
+    # The structured-output runnable was constructed from the Thesis schema.
+    llm.with_structured_output.assert_called_once()
+    schema_arg = llm.with_structured_output.call_args.args[0]
+    assert schema_arg is Thesis
 
 
 def test_thesis_sections_match_issue_body() -> None:
-    """Freeze the section list against the issue body so a future prompt edit
-    can't quietly drop or rename one of the five required sections."""
+    """Freeze the QNT-133 section list so a future prompt edit can't quietly
+    drop or rename one of the four sections."""
     assert THESIS_SECTIONS == (
-        "Overview",
-        "Technical outlook",
-        "Fundamental assessment",
-        "News sentiment",
-        "Conclusion",
+        "Setup",
+        "Bull Case",
+        "Bear Case",
+        "Verdict",
     )
 
 

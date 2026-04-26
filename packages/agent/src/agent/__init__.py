@@ -1,6 +1,7 @@
 from agent.graph import AgentState, ToolFn, build_graph
 from agent.llm import get_llm
 from agent.prompts import SYSTEM_PROMPT, build_synthesis_prompt
+from agent.thesis import Thesis, VerdictStance
 from agent.tools import (
     default_report_tools,
     get_fundamental_report,
@@ -13,7 +14,9 @@ from agent.tools import (
 __all__ = [
     "SYSTEM_PROMPT",
     "AgentState",
+    "Thesis",
     "ToolFn",
+    "VerdictStance",
     "build_graph",
     "build_synthesis_prompt",
     "default_report_tools",
