@@ -298,31 +298,47 @@ Updated automatically by `/ship` and `/sync-docs`.
 ---
 
 ### Phase 6 — Frontend
-**Scope**: Next.js dashboard, ticker detail with TradingView charts, and agent chat interface. Deployed on Vercel.
-**Dependencies**: Requires Phase 3. Requires Phase 5 for agent chat page. News sidebar gracefully degrades if Phase 4 is not yet complete.
+**Scope**: Next.js terminal-style dashboard (TERMINAL/NINE design v2), ticker detail with TradingView charts, persistent agent chat panel. Deployed on Vercel.
+**Dependencies**: Requires Phase 3. Requires Phase 5 for agent chat panel (depends on QNT-133 structured thesis output). News card gracefully degrades if Phase 4 not complete.
+**Design reference**: `docs/design-frontend-plan.md` is the canonical UI spec — locks the three-pane layout (watchlist / detail / analyst), the elements each pane owns, the EOD framing (no live-tick chrome), and the field substitutions (EBITDA margin for op margin, ROE/ROA for ROIC, Quarterly/Annual/TTM tabs, no FWD).
 
 - [ ] ADR-012: Next.js rendering mode per page (SSG / SSR / CSR) + cache strategy — QNT-121 **[written BEFORE any page code]**
     - Phase 4 retro carry-over: the Dagster quickstart-topology arc (QNT-100 → QNT-116, 17h across 4 incidents) and Qdrant point-ID arc (QNT-54 → QNT-120) both burned hours because the prod-vs-tutorial gap surfaced at deploy, not design. Next.js app-router has the same shape — SSR-by-default + RSC boundaries + SSE streaming don't all compose.
-    - Each page names: rendering mode, data-fetch location (RSC vs client vs API route), cache / revalidate strategy, and failure-mode rendering. Dashboard probably ISR; ticker detail SSR + client-side toggle; chat CSR + `fetch`/`ReadableStream`.
+    - Each page/panel names: rendering mode, data-fetch location (RSC vs client vs API route), cache / revalidate strategy, and failure-mode rendering. Watchlist sidebar likely RSC + ISR; ticker detail middle pane SSR with client-side toggles; chat panel CSR + `fetch`/`ReadableStream`. **Also decides**: persistent right-pane chat (per design v2) vs `/chat` route — recommend persistent panel.
     - Output: `docs/decisions/012-nextjs-rendering-mode-per-page.md` — every subsequent Phase 6 ticket references it by section.
 - [ ] Initialize Next.js app in `frontend/` with Tailwind CSS — QNT-71
-- [ ] Dashboard page (`/`) — ticker cards showing price, daily change, RSI signal, trend status — QNT-72
-    - Calls `GET /api/v1/dashboard/summary` (single request for all tickers — no N+1)
-- [ ] Ticker detail page (`/ticker/[symbol]`) — full analysis view — QNT-73
-    - TradingView Lightweight Charts: candlestick + volume (`GET /api/v1/ohlcv/{ticker}`). **Chart renders `adj_close` as the candlestick close value** to avoid split discontinuities
-    - Timeframe toggle: daily / weekly / monthly (swaps chart + indicator data)
-    - Technical indicator overlays: SMA, EMA, Bollinger Bands on chart; RSI, MACD as separate panes
-    - Fundamental ratios table: 15 ratios in 5 categories (`GET /api/v1/fundamentals/{ticker}`)
-    - Recent news sidebar (`GET /api/v1/search/news?ticker={ticker}`) — gracefully degrades if Phase 4 not deployed
-- [ ] Agent chat page (`/chat`) — conversational interface — QNT-74
-    - Calls `POST /api/v1/agent/chat` with SSE streaming
-    - **No Vercel AI SDK** — use native `fetch` + `ReadableStream`. Optionally add `eventsource-parser` (~2KB) for SSE line parsing.
-    - Displays agent thesis with markdown rendering
-    - Shows which tools the agent called (transparency)
+- [ ] **Phase 6 backend support: indicators + fundamentals + sparkline + SPY** — QNT-134 **[gates QNT-72 + QNT-73]**
+    - New indicators: SMA200, ADX(14), ATR(14), OBV, Bollinger %B, MACD bullish-cross flag.
+    - Fundamental additions: EBITDA margin (substitutes op margin), gross/net margin bps deltas, TTM rollup asset (rolling-4Q sums of revenue / net income / FCF / EPS).
+    - Sparkline field on `GET /api/v1/dashboard/summary` (60 daily closes per ticker — server-side, no N+1 client calls).
+    - SPY benchmark ingest as a `BENCHMARK_TICKERS` constant — OHLCV-only, skipped from fundamentals/news/sentiment assets.
+- [ ] **Watchlist (left pane) + landing page** (`/`) — QNT-72
+    - Persistent left-rail watchlist in `app/layout.tsx` (always visible, not a card grid).
+    - 10 portfolio tickers + SPY benchmark; per-row: symbol · name · price · % change · 60-day inline-SVG sparkline.
+    - Bottom-left status: `EOD · 02:00 ET` (sourced from QNT-132 `/health` provenance once available).
+    - Calls `GET /api/v1/dashboard/summary` (single request returns all 11 tickers including sparkline arrays — no N+1).
+- [ ] **Ticker detail (middle pane)** (`/ticker/[symbol]`) — QNT-73
+    - **Quote header**: price + change + OPEN / DAY RANGE / VOL / MKT CAP / P/E TTM (no FWD).
+    - **Chart**: TradingView Lightweight Charts, candlestick + volume. **Renders `adj_close` as candlestick close** to avoid split discontinuities. Date-range toggle 1M / 3M / 6M / YTD / 1Y / 5Y / MAX (no 1D/5D — EOD only). Indicator overlay chips: SMA / BB / RSI / ATR / OBV (no VWAP). SPY benchmark overlay (default off).
+    - **Technicals card**: Daily / Weekly / Monthly aggregation tabs; RSI / MACD / ADX / ATR / SMA 20/50/200 / Bollinger %B / OBV trend rows with signal-threshold decorations.
+    - **Fundamentals card**: Quarterly / Annual / TTM tabs; Revenue (YoY %) / Gross margin (bps Δ) / EBITDA margin (bps Δ) / Net income / EPS / FCF / Cash·debt / ROE / ROA. ROE/ROA show `N/A · point-in-time` on Q tab, value · trailing 4Q on TTM tab.
+    - **News card**: per-card publisher pill + sentiment chip (POS / NEU / NEG / `pend` placeholder via QNT-131); gracefully degrades if Phase 4 not deployed.
+    - **Provenance strip**: SOURCES / JOBS / SENTIMENT / AGENT — values read from `/health` (QNT-132), not hardcoded.
+- [ ] **Analyst chat (right pane)** — QNT-74
+    - Persistent right-rail panel that follows the active `/ticker/[symbol]` route (per ADR-012 decision).
+    - `POST /api/v1/agent/chat` SSE endpoint streams `tool_call` / `tool_result` / `prose_chunk` / `thesis` / `done` events. **No Vercel AI SDK** — native `fetch` + `ReadableStream` + optional `eventsource-parser` (~2KB).
+    - Tool-call rows show human labels + real args + result counts + latencies (e.g. `Reading price history · NVDA · 60d daily   60 bars · 38ms ✓`).
+    - Inline data chips in agent prose (`+2.45% · close 4/24` style).
+    - Structured thesis card per QNT-133: Setup / Bull Case / Bear Case / Verdict with stance + confidence bar. Asymmetric (empty bull or bear) renders gracefully.
+    - Composer: `@<TICKER>` auto-set, tools-on toggle, cite-sources toggle. Source list in placeholder reads from `/health` (QNT-132).
+- [ ] **Backend support tickets that gate the design rendering**:
+    - QNT-131 — `pending` sentiment state (gates `pend` chip on news cards) — *blocked on news-source decision*
+    - QNT-132 — `/api/v1/health` provenance block (gates the bottom strip + composer source list)
+    - QNT-133 — agent thesis output restructured to Setup / Bull Case / Bear Case / Verdict (gates the thesis card render in QNT-74) — *Phase 5 milestone*
 - [ ] Generate TypeScript types from FastAPI's `/openapi.json` via `openapi-typescript` (`make types`) — do not handwrite types in `lib/api.ts`
 - [ ] Deploy to Vercel, set `NEXT_PUBLIC_API_URL` in Vercel dashboard — QNT-75
-- [ ] **Cross-cutting**: Ticker list is sourced from `GET /api/v1/tickers` across every page (dashboard cards, detail-page switcher, chat-page selector) — never hardcoded. Inherits QNT-78's ⏳ PENDING AC; hardcoding the list anywhere defeats the endpoint's purpose. Phase 3 lesson.
-- [ ] Verify: Dashboard loads all 10 tickers, chart renders with timeframe toggle, agent chat streams a thesis
+- [ ] **Cross-cutting**: Ticker list is sourced from `GET /api/v1/tickers` across every page (watchlist, detail-page switcher, chat-panel selector) — never hardcoded. Inherits QNT-78's ⏳ PENDING AC; hardcoding the list anywhere defeats the endpoint's purpose. Phase 3 lesson.
+- [ ] Verify: Watchlist renders 10 tickers + SPY with sparklines; ticker detail shows quote header / chart / technicals / fundamentals / news / provenance strip with all data; chat panel streams tool calls in real time and renders structured thesis; provenance strip values flip when a config value changes (QNT-132 verification).
 
 ---
 
