@@ -7,6 +7,12 @@ arithmetic or touches the database.
 Tools are injected at build time via a ``{name: callable}`` mapping. Tests
 pass mock callables; production wiring (QNT-60) passes real HTTP tools.
 Keeping tools outside the module makes the graph unit-testable offline.
+
+Synthesize output (QNT-133): the LLM is forced through
+:class:`agent.thesis.Thesis` via ``with_structured_output`` so the four
+sections (Setup / Bull / Bear / Verdict) reach state as a typed Pydantic
+model. Consumers that want a flat string (CLI, evals) call
+``thesis.to_markdown()``; the API streams the model directly.
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ from langgraph.graph import END, START, StateGraph
 
 from agent.llm import get_llm
 from agent.prompts import REPORT_TOOLS, build_synthesis_prompt
+from agent.thesis import Thesis
 from agent.tracing import langfuse, observe
 
 if TYPE_CHECKING:
@@ -48,7 +55,8 @@ class AgentState(TypedDict):
     nodes as the graph runs. ``reports`` holds raw report strings keyed by
     tool name; ``errors`` records tool-name -> error-message for any tool
     that failed after retries. ``thesis`` and ``confidence`` are populated
-    by the synthesize node.
+    by the synthesize node — ``thesis`` is a structured :class:`Thesis`
+    (QNT-133); call ``.to_markdown()`` to get the legacy flat-string form.
     """
 
     ticker: str
@@ -56,7 +64,7 @@ class AgentState(TypedDict):
     plan: NotRequired[list[str]]
     reports: NotRequired[dict[str, str]]
     errors: NotRequired[dict[str, str]]
-    thesis: NotRequired[str]
+    thesis: NotRequired[Thesis | None]
     confidence: NotRequired[float]
 
 
@@ -138,6 +146,24 @@ def _gather_reports(
     return reports, errors
 
 
+def _coerce_thesis(response: object) -> Thesis | None:
+    """Normalise whatever ``traced_invoke`` hands back into a ``Thesis``.
+
+    Structured-output runnables can return a ``Thesis`` directly, an
+    ``include_raw=True`` dict, or — on a parsing failure with some providers
+    — an AIMessage whose ``.content`` is JSON. We accept all three so a
+    LiteLLM provider quirk doesn't leak into the synthesize node.
+    """
+    if isinstance(response, Thesis):
+        return response
+    if isinstance(response, dict):
+        # ``with_structured_output(..., include_raw=True)`` shape.
+        parsed = response.get("parsed")
+        if isinstance(parsed, Thesis):
+            return parsed
+    return None
+
+
 def build_graph(tools: dict[str, ToolFn]) -> CompiledStateGraph:
     """Compile the plan -> gather -> synthesize graph with the given tools.
 
@@ -182,19 +208,28 @@ def build_graph(tools: dict[str, ToolFn]) -> CompiledStateGraph:
         reports = state.get("reports", {})
         plan = state.get("plan", [])
         prompt = build_synthesis_prompt(ticker, question, reports)
-        response = langfuse.traced_invoke(get_llm(), prompt, name="synthesize")
-        # Guard against a provider returning ``content=None`` — surfaces as an
-        # explicit error to the caller instead of a literal "None" thesis.
-        content = response.content if hasattr(response, "content") else response
-        thesis = str(content) if content is not None else ""
+        # ``with_structured_output(Thesis)`` forces the LLM into the four-section
+        # schema. Errors from a misbehaving provider (Gemini occasionally
+        # returns malformed tool-call JSON) surface as a None thesis rather
+        # than crashing the whole run; the CLI / API treat that the same as
+        # the "no reports gathered" short-circuit.
+        structured_llm = get_llm().with_structured_output(Thesis)
+        try:
+            response = langfuse.traced_invoke(structured_llm, prompt, name="synthesize")
+        except Exception as exc:  # noqa: BLE001 — surface as empty thesis, log, continue
+            logger.warning("synthesize %s: structured output failed: %s", ticker, exc)
+            response = None
+        thesis = _coerce_thesis(response)
         confidence = _confidence_from_reports(reports, plan)
-        logger.info("synthesize %s: confidence=%s", ticker, confidence)
+        logger.info(
+            "synthesize %s: confidence=%s thesis=%s", ticker, confidence, thesis is not None
+        )
         return {"thesis": thesis, "confidence": confidence}
 
     def _after_gather(state: AgentState) -> str:
         # Short-circuit to END when gather produced nothing — calling the LLM
         # with an empty prompt would just hallucinate a thesis out of the
-        # system prompt. Caller sees empty thesis + confidence 0.0.
+        # system prompt. Caller sees no thesis + confidence 0.0.
         return "synthesize" if state.get("reports") else END
 
     builder: StateGraph = StateGraph(AgentState)
@@ -212,6 +247,7 @@ __all__ = [
     "OPTIONAL_TOOLS",
     "REPORT_TOOLS",
     "AgentState",
+    "Thesis",
     "ToolFn",
     "build_graph",
 ]

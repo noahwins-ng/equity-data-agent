@@ -26,6 +26,7 @@ from agent.evals.golden_set import (
     run_record,
     summarise,
 )
+from agent.thesis import Thesis
 
 
 def _record(rid: str = "test-1", ticker: str = "NVDA") -> GoldenRecord:
@@ -38,6 +39,17 @@ def _record(rid: str = "test-1", ticker: str = "NVDA") -> GoldenRecord:
     )
 
 
+def _thesis(setup: str, bull: list[str] | None = None) -> Thesis:
+    """Build a minimal Thesis whose markdown render contains the seed text."""
+    return Thesis(
+        setup=setup,
+        bull_case=bull or [],
+        bear_case=[],
+        verdict_stance="constructive",
+        verdict_action="Hold pending eval.",
+    )
+
+
 @pytest.fixture
 def stub_graph(monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str, Any]], None]:
     """Replace the real graph with a configurable mock.
@@ -47,7 +59,9 @@ def stub_graph(monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str, Any]], No
     fixture.
     """
     state: dict[str, Any] = {
-        "thesis": "RSI is 72.5 (source: technical). P/E 25 (source: fundamental).",
+        "thesis": _thesis(
+            "RSI is 72.5 (source: technical). P/E 25 (source: fundamental).",
+        ),
         "reports": {
             "technical": "RSI is 72.5 today",
             "fundamental": "P/E is 25, latest EPS 0.81",
@@ -108,7 +122,7 @@ class TestRunRecord:
     ) -> None:
         stub_graph(
             {
-                "thesis": "P/E is 999 (source: fundamental).",
+                "thesis": _thesis("P/E is 999 (source: fundamental)."),
                 "reports": {"fundamental": "P/E is 25"},
                 "errors": {},
             }

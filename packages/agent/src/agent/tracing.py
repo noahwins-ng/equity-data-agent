@@ -24,12 +24,13 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage
 from langfuse import Langfuse, observe
+from pydantic import BaseModel
 from shared.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-def _usage_from_response(response: BaseMessage) -> dict[str, int] | None:
+def _usage_from_response(response: object) -> dict[str, int] | None:
     """langchain-openai surfaces token counts on ``AIMessage.usage_metadata``
     for OpenAI-compatible providers — LiteLLM passes them through from
     Groq / Gemini. Returns None if unavailable so Langfuse falls back to its
@@ -46,7 +47,7 @@ def _usage_from_response(response: BaseMessage) -> dict[str, int] | None:
     }
 
 
-def _model_from_response(response: BaseMessage) -> str | None:
+def _model_from_response(response: object) -> str | None:
     if not isinstance(response, AIMessage):
         return None
     meta = getattr(response, "response_metadata", None) or {}
@@ -90,7 +91,7 @@ class LangfuseResource:
         prompt: str | list[BaseMessage],
         *,
         name: str = "llm-call",
-    ) -> BaseMessage:
+    ) -> Any:
         """Invoke ``llm`` inside a Langfuse generation span.
 
         Captures prompt, output, model name, and token usage. Latency is
@@ -125,7 +126,21 @@ class LangfuseResource:
                 # hanging as empty generations, then let the caller see the error.
                 gen.update(level="ERROR", status_message=f"{type(exc).__name__}: {exc}")
                 raise
-            output = response.content if hasattr(response, "content") else str(response)
+            # AIMessage (langchain BaseMessage) carries .content — keep that
+            # path first because BaseMessage IS a pydantic BaseModel, so the
+            # naive isinstance(response, BaseModel) check would match and we'd
+            # dump the full AIMessage JSON instead of just the content string.
+            # ``with_structured_output(...)`` returns a non-Message BaseModel
+            # (the schema instance, e.g. ``Thesis``) — JSON-dump those so the
+            # dashboard shows the parsed sections instead of a Python repr.
+            if isinstance(response, BaseMessage):
+                output: object = response.content
+            elif isinstance(response, BaseModel):
+                output = response.model_dump_json()
+            elif hasattr(response, "content"):
+                output = response.content
+            else:
+                output = str(response)
             gen.update(
                 output=output,
                 model=_model_from_response(response),

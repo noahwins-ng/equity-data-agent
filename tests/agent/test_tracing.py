@@ -108,6 +108,43 @@ def test_traced_invoke_creates_generation_span(
     )
 
 
+def test_traced_invoke_records_pydantic_response_as_json(
+    enabled_resource: tracing.LangfuseResource,
+) -> None:
+    """QNT-133: ``with_structured_output(Thesis)`` returns a pydantic model
+    (not an ``AIMessage``). The traced output field must be the JSON dump,
+    not ``str(thesis)`` which is a Python ``repr`` and useless in the UI."""
+    from agent.thesis import Thesis
+
+    thesis = Thesis(
+        setup="setup",
+        bull_case=["b1"],
+        bear_case=[],
+        verdict_stance="constructive",
+        verdict_action="hold",
+    )
+    llm = MagicMock()
+    llm.invoke.return_value = thesis
+
+    enabled_resource.traced_invoke(llm, "prompt", name="synthesize")
+
+    client = cast(MagicMock, enabled_resource._client)
+    cm = client.start_as_current_observation.return_value
+    generation = cm.__enter__.return_value
+    # Output must be a JSON string the dashboard can render — verify by
+    # checking the call carried the canonical setup/stance fields.
+    call_kwargs = generation.update.call_args.kwargs
+    output = call_kwargs["output"]
+    assert isinstance(output, str)
+    assert '"setup":"setup"' in output
+    assert '"verdict_stance":"constructive"' in output
+    # Token / model metadata is unavailable for a structured response — must
+    # surface as None rather than a stale value pulled from a non-existent
+    # AIMessage.
+    assert call_kwargs["model"] is None
+    assert call_kwargs["usage_details"] is None
+
+
 def test_traced_invoke_passes_messages_list_to_span(
     enabled_resource: tracing.LangfuseResource,
 ) -> None:
@@ -198,24 +235,38 @@ def _is_get_llm_call(node: ast.AST) -> bool:
     )
 
 
+def _contains_get_llm_call(node: ast.AST) -> bool:
+    """Return True if ``node`` is — or transitively contains — a ``get_llm()``
+    call. Catches chained-call forms like ``get_llm().with_structured_output(
+    Thesis)`` (QNT-133): the resulting runnable is still tied to ``get_llm()``,
+    so its ``.invoke()`` must route through ``traced_invoke``. A bare
+    ``_is_get_llm_call`` check only matches the top-level node, which is why
+    structured-output bindings used to slip past CI before this generalisation.
+    """
+    return any(_is_get_llm_call(child) for child in ast.walk(node))
+
+
 def _find_raw_llm_invokes(source: str) -> list[int]:
     """Return line numbers of raw ``.invoke()`` / ``.ainvoke()`` calls in
-    ``source`` whose receiver is (a) a name bound to ``get_llm()`` or
-    (b) the ``get_llm()`` call itself."""
+    ``source`` whose receiver is (a) a name bound to an expression containing
+    ``get_llm()`` (e.g. ``llm = get_llm()`` or
+    ``structured = get_llm().with_structured_output(...)``) or
+    (b) an inline expression that itself contains ``get_llm()``."""
     tree = ast.parse(source)
 
-    # Collect names bound to get_llm() — both `x = get_llm()` (ast.Assign) and
-    # `x: ChatOpenAI = get_llm()` (ast.AnnAssign).
+    # Collect names bound to any expression containing ``get_llm()`` —
+    # ``x = get_llm()`` (ast.Assign), ``x: ChatOpenAI = get_llm()`` (ast.AnnAssign),
+    # AND ``x = get_llm().with_structured_output(...)`` (chained, QNT-133).
     llm_names: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and _is_get_llm_call(node.value):
+        if isinstance(node, ast.Assign) and _contains_get_llm_call(node.value):
             for target in node.targets:
                 if isinstance(target, ast.Name):
                     llm_names.add(target.id)
         elif (
             isinstance(node, ast.AnnAssign)
             and node.value is not None
-            and _is_get_llm_call(node.value)
+            and _contains_get_llm_call(node.value)
             and isinstance(node.target, ast.Name)
         ):
             llm_names.add(node.target.id)
@@ -230,7 +281,7 @@ def _find_raw_llm_invokes(source: str) -> list[int]:
             continue
         receiver = node.func.value
         is_bound_name = isinstance(receiver, ast.Name) and receiver.id in llm_names
-        is_inline_get_llm = _is_get_llm_call(receiver)
+        is_inline_get_llm = _contains_get_llm_call(receiver)
         if is_bound_name or is_inline_get_llm:
             offenders.append(node.lineno)
     return offenders
@@ -271,6 +322,33 @@ def test_ast_scanner_catches_chained_call() -> None:
     """`get_llm().invoke(...)` one-liner has no assignment target — regression
     guard for the chained-call gap flagged in review."""
     source = "from agent.llm import get_llm\nresult = get_llm().invoke('hi')\n"
+    assert _find_raw_llm_invokes(source) == [2]
+
+
+def test_ast_scanner_catches_chained_with_structured_output_assignment() -> None:
+    """QNT-133 regression guard: ``x = get_llm().with_structured_output(Thesis)``
+    binds ``x`` to a runnable that still invokes the LLM. ``x.invoke(...)``
+    outside ``traced_invoke`` must be flagged just like ``llm.invoke(...)``.
+
+    Before this fixture the scanner only walked the top-level RHS for
+    ``get_llm()``, so a chained call slipped past CI."""
+    source = (
+        "from agent.llm import get_llm\n"
+        "def run():\n"
+        "    structured = get_llm().with_structured_output(object)\n"
+        "    return structured.invoke('hi')\n"
+    )
+    assert _find_raw_llm_invokes(source) == [4]
+
+
+def test_ast_scanner_catches_chained_with_structured_output_inline() -> None:
+    """Inline form: ``get_llm().with_structured_output(...).invoke(...)`` has no
+    intermediate binding; the receiver is a Call whose RHS contains ``get_llm()``.
+    The scanner must still flag it."""
+    source = (
+        "from agent.llm import get_llm\n"
+        "result = get_llm().with_structured_output(object).invoke('hi')\n"
+    )
     assert _find_raw_llm_invokes(source) == [2]
 
 

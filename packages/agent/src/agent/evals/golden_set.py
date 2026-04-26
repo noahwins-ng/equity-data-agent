@@ -44,6 +44,7 @@ from agent.evals.similarity import cosine
 from agent.evals.tool_calls import check as check_tool_calls
 from agent.evals.tool_calls import wrap_with_recorder
 from agent.graph import build_graph
+from agent.thesis import Thesis
 from agent.tools import default_report_tools
 
 logger = logging.getLogger(__name__)
@@ -193,7 +194,12 @@ def run_record(record: GoldenRecord, *, llm_for_judge: Any | None = None) -> Eva
         )
     elapsed_ms = int((time.perf_counter() - started) * 1000)
 
-    thesis = str(state.get("thesis") or "")
+    # QNT-133: state["thesis"] is now a structured ``Thesis`` model. The eval
+    # scorers (hallucination / judge / cosine) all want a flat string, so
+    # render through ``to_markdown`` here rather than push the per-section
+    # contract into each scorer.
+    thesis_obj = state.get("thesis")
+    thesis = thesis_obj.to_markdown() if isinstance(thesis_obj, Thesis) else ""
     reports = dict(state.get("reports") or {})
 
     hresult = check_hallucination(thesis, reports.values())

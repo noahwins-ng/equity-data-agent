@@ -1,7 +1,13 @@
-"""Tests for the agent CLI entry point (QNT-60).
+"""Tests for the agent CLI entry point (QNT-60, QNT-133).
 
 Mocks ``build_graph`` so the CLI is tested in isolation from the API layer.
 The graph itself is covered by tests/agent/test_graph.py.
+
+QNT-133 changed the contract: the graph state holds a structured ``Thesis``
+rather than a flat string. The CLI is responsible for re-rendering it to
+markdown for stdout / ``--output``, so the tests stub ``state["thesis"]``
+with real ``Thesis`` instances and assert the rendered markdown surfaces
+in the expected places.
 """
 
 from __future__ import annotations
@@ -11,13 +17,25 @@ from unittest.mock import MagicMock
 
 import pytest
 from agent import __main__ as cli
+from agent.thesis import Thesis
+
+
+def _stub_thesis(setup: str = "NVDA looks attractive on momentum.") -> Thesis:
+    """Minimal Thesis for CLI tests — only ``setup`` text is asserted on."""
+    return Thesis(
+        setup=setup,
+        bull_case=["RSI 62 (source: technical)"],
+        bear_case=[],
+        verdict_stance="constructive",
+        verdict_action="Trim above SMA50 (source: technical).",
+    )
 
 
 @pytest.fixture
 def stub_graph(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     graph = MagicMock()
     graph.invoke.return_value = {
-        "thesis": "NVDA looks attractive on momentum.",
+        "thesis": _stub_thesis(),
         "confidence": 0.67,
         "errors": {},
     }
@@ -37,15 +55,32 @@ def test_analyze_success_prints_thesis_and_exits_0(
 ) -> None:
     assert cli.main(["analyze", "NVDA"]) == 0
     out = capsys.readouterr()
+    # CLI re-renders the structured Thesis to markdown — assert all four
+    # section headings + the seed text from the stub appear on stdout.
+    assert "## Setup" in out.out
     assert "NVDA looks attractive on momentum." in out.out
+    assert "## Bull Case" in out.out
+    assert "## Bear Case" in out.out
+    assert "## Verdict" in out.out
     assert "confidence=0.67" in out.err
     stub_graph.invoke.assert_called_once_with({"ticker": "NVDA"})
 
 
-def test_analyze_empty_thesis_exits_1(
+def test_analyze_missing_thesis_exits_1(
     stub_graph: MagicMock, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    stub_graph.invoke.return_value = {"thesis": "", "confidence": 0.0, "errors": {}}
+    """Short-circuit case: gather produced nothing, no Thesis in state."""
+    stub_graph.invoke.return_value = {"confidence": 0.0, "errors": {}}
+    assert cli.main(["analyze", "NVDA"]) == 1
+    assert "No thesis produced" in capsys.readouterr().err
+
+
+def test_analyze_none_thesis_exits_1(
+    stub_graph: MagicMock, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Defensive: a structured-output failure surfaces as ``thesis=None``;
+    CLI must treat that the same as the missing-key case."""
+    stub_graph.invoke.return_value = {"thesis": None, "confidence": 0.0, "errors": {}}
     assert cli.main(["analyze", "NVDA"]) == 1
     assert "No thesis produced" in capsys.readouterr().err
 
@@ -54,14 +89,18 @@ def test_analyze_empty_thesis_exits_1(
 def test_analyze_writes_output_file(tmp_path: Path) -> None:
     out_file = tmp_path / "thesis.md"
     assert cli.main(["analyze", "NVDA", "--output", str(out_file)]) == 0
-    assert out_file.read_text().strip() == "NVDA looks attractive on momentum."
+    written = out_file.read_text()
+    # The file holds the same markdown the CLI prints — section headings + body.
+    assert "## Setup" in written
+    assert "NVDA looks attractive on momentum." in written
+    assert "## Verdict" in written
 
 
 def test_analyze_surfaces_tool_errors_to_stderr(
     stub_graph: MagicMock, capsys: pytest.CaptureFixture[str]
 ) -> None:
     stub_graph.invoke.return_value = {
-        "thesis": "Partial thesis.",
+        "thesis": _stub_thesis("Partial framing."),
         "confidence": 0.33,
         "errors": {"technical": "tool-not-registered"},
     }

@@ -8,7 +8,7 @@ results) and the happy-path wiring through ``shared.settings.API_BASE_URL``.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -340,18 +340,39 @@ def test_default_report_tools_compose_with_build_graph(
     """End-to-end: build_graph(default_report_tools()) compiles and the
     gather node calls each tool with the run's ticker."""
 
-    class _StubLLM:
-        """Feed the plan + synthesize calls a predictable AIMessage each."""
+    from agent.thesis import Thesis
 
-        def __init__(self, responses: Iterable[str]) -> None:
+    expected_thesis = Thesis(
+        setup="Setup (source: technical).",
+        bull_case=["bull"],
+        bear_case=[],
+        verdict_stance="constructive",
+        verdict_action="Hold.",
+    )
+
+    class _StubLLM:
+        """Two channels: ``invoke`` for plan, ``with_structured_output`` for
+        the synthesize call (QNT-133)."""
+
+        def __init__(self, plan_response: str, thesis: Thesis) -> None:
             from langchain_core.messages import AIMessage
 
-            self._responses = iter(AIMessage(content=c) for c in responses)
+            self._plan_response = AIMessage(content=plan_response)
+            self._thesis = thesis
 
         def invoke(self, _prompt: str) -> Any:
-            return next(self._responses)
+            return self._plan_response
 
-    stub = _StubLLM(["technical, fundamental, news", "thesis body"])
+        def with_structured_output(self, _schema: object) -> Any:
+            outer = self
+
+            class _StructuredRunnable:
+                def invoke(self, _prompt: object) -> Any:
+                    return outer._thesis
+
+            return _StructuredRunnable()
+
+    stub = _StubLLM("technical, fundamental, news", expected_thesis)
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: stub)
     monkeypatch.setattr(
         graph_module.langfuse,
@@ -367,5 +388,5 @@ def test_default_report_tools_compose_with_build_graph(
     # Each gather call hit the API_BASE_URL + /api/v1/reports/<kind>/NVDA path.
     for kind, body in result["reports"].items():
         assert body.endswith(f"/api/v1/reports/{kind}/NVDA")
-    assert result["thesis"] == "thesis body"
+    assert result["thesis"] is expected_thesis
     assert result["confidence"] == 1.0
