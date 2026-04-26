@@ -47,17 +47,29 @@ _INDICATOR_COLUMNS = (
 
 
 def _rsi_label(rsi: float | None) -> str:
+    """Format an RSI-14 reading with bucket context.
+
+    Always prints the canonical 70 (overbought) and 30 (oversold) thresholds
+    in every non-N/M branch so the agent's synthesize step can quote them
+    verbatim instead of reaching for them as TA prior knowledge. The
+    QNT-136 sweep showed the model leaking ``70`` / ``80`` into theses
+    when the report omitted the threshold (e.g. RSI 69 → "approaching
+    overbought" with no number) — the hallucination scorer flagged the
+    leaked digits even though the convention itself is correct. Putting
+    both thresholds in the corpus on every reading closes that surface
+    without loosening rule 1 (no LLM arithmetic, numbers come from reports).
+    """
     if rsi is None:
-        return "N/M (insufficient history)"
+        return "N/M (insufficient history; overbought ≥ 70, oversold ≤ 30)"
     if rsi >= 70:
-        return f"{rsi:.1f} — overbought (above 70 threshold)"
+        return f"{rsi:.1f} — overbought (above 70 threshold; oversold ≤ 30)"
     if rsi >= 65:
-        return f"{rsi:.1f} — approaching overbought"
+        return f"{rsi:.1f} — approaching overbought (70 threshold; oversold ≤ 30)"
     if rsi <= 30:
-        return f"{rsi:.1f} — oversold (below 30 threshold)"
+        return f"{rsi:.1f} — oversold (below 30 threshold; overbought ≥ 70)"
     if rsi <= 35:
-        return f"{rsi:.1f} — approaching oversold"
-    return f"{rsi:.1f} — neutral (30-70 range)"
+        return f"{rsi:.1f} — approaching oversold (30 threshold; overbought ≥ 70)"
+    return f"{rsi:.1f} — neutral (overbought ≥ 70, oversold ≤ 30)"
 
 
 def _macd_label(macd: float | None, signal: float | None, hist: float | None) -> str:

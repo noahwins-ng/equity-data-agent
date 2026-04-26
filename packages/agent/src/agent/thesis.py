@@ -77,10 +77,13 @@ class Thesis(BaseModel):
     verdict_action: str = Field(
         description=(
             "Concrete actionable guidance for an investor. Action levels MUST "
-            "reference values that appear verbatim in the supplied reports "
-            "(e.g. 'trim above SMA50 + RSI > 75' works because both numbers "
-            "exist in the technical report). Do not invent price targets, "
-            "stop-loss levels, or any number that is not in the reports."
+            "reference values that appear verbatim in the supplied reports — "
+            "for example, the moving-average level the technical report "
+            "prints, or the overbought RSI threshold it cites. Every digit "
+            "in this field must be a re-quote from the report bodies. Do "
+            "not write any literal number that is not already in the "
+            "reports, and do not echo numbers from the schema description "
+            "itself."
         ),
     )
 

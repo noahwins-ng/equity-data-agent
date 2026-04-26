@@ -123,9 +123,12 @@ Two parts:
 'cautious' when bear edges bull, 'mixed' when both sides have weight.
 * **Action** — concrete actionable guidance grounded in real upstream \
 numbers. Action levels MUST reference values that appear verbatim in the \
-reports (e.g. "trim above SMA50 + RSI > 75" works because both numbers \
-exist in the technical report). Do not invent price targets, stop-loss \
-levels, or analyst-expectation thresholds. If no actionable level is \
+reports — for example, the moving-average level the technical report \
+prints, or the overbought RSI threshold it cites. Do not write any \
+literal number that is not already in the reports (no fabricated price \
+targets, stop-losses, or analyst-expectation thresholds), and do not \
+echo any number from this prompt — every digit in your action line must \
+be a re-quote from the supplied report bodies. If no actionable level is \
 present in the reports, write "no action level supported by current data" \
 instead of fabricating one.
 
