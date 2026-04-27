@@ -318,7 +318,10 @@ Updated automatically by `/ship` and `/sync-docs`.
 
 - [x] Phase 6 frontend design assessment + canonical mocks — QNT-135 **[lands BEFORE any architecture or page work]**
     - **Triggered by**: Phase 5 → Phase 6 hand-off — design intent was scattered across `project-requirement.md`, ad-hoc mocks, and Slack-style notes; without a single canonical artifact every Phase 6 ticket would have re-litigated the layout. Shipped `docs/design-frontend-plan.md` as the locked spec (three-pane layout: watchlist / detail / analyst, EOD framing, field substitutions: EBITDA margin for op margin, ROE/ROA for ROIC, Quarterly/Annual/TTM tabs, no FWD) plus the canonical mock set. Every subsequent Phase 6 ticket references this doc by section instead of re-deriving the design; QNT-121's rendering-mode ADR, QNT-72's watchlist, QNT-73's detail page, and QNT-74's chat panel all consume it as input.
-- [ ] ADR-012: Next.js rendering mode per page (SSG / SSR / CSR) + cache strategy — QNT-121 **[written BEFORE any page code]**
+- [ ] ADR-014: Next.js rendering mode per page (SSG / SSR / CSR) + cache strategy — QNT-121 **[written BEFORE any page code]**
+    - **Slot drift fixed 2026-04-27 (Phase 5 retro)**: original ticket title was ADR-012, but ADR-012 went to QNT-136/137 (domain conventions in reports) and ADR-013 to QNT-104 (no Coolify); next free slot is ADR-014.
+- [ ] ADR-015: News-source + sentiment topology — QNT-140 **[written BEFORE QNT-72/73 consumer pages; gates QNT-131 / QNT-132]**
+    - **Triggered by**: Phase 5 retro Phase 6 review — QNT-131 (`pending` sentiment state) and QNT-132 (subsystem provenance via `/health`) both carry "blocked on news-source decision" disclaimers. Decision is binary on two axes (news source: Finnhub vs AV `NEWS_SENTIMENT` vs current RSS; sentiment topology: async downstream asset vs in-line dep vs ships-with-news payload). Land before any consumer page so the provenance strip + news cards are wired against the real shape, not an assumed one.
     - Phase 4 retro carry-over: the Dagster quickstart-topology arc (QNT-100 → QNT-116, 17h across 4 incidents) and Qdrant point-ID arc (QNT-54 → QNT-120) both burned hours because the prod-vs-tutorial gap surfaced at deploy, not design. Next.js app-router has the same shape — SSR-by-default + RSC boundaries + SSE streaming don't all compose.
     - Each page/panel names: rendering mode, data-fetch location (RSC vs client vs API route), cache / revalidate strategy, and failure-mode rendering. Watchlist sidebar likely RSC + ISR; ticker detail middle pane SSR with client-side toggles; chat panel CSR + `fetch`/`ReadableStream`. **Also decides**: persistent right-pane chat (per design v2) vs `/chat` route — recommend persistent panel.
     - Output: `docs/decisions/012-nextjs-rendering-mode-per-page.md` — every subsequent Phase 6 ticket references it by section.
@@ -348,8 +351,9 @@ Updated automatically by `/ship` and `/sync-docs`.
     - Structured thesis card per QNT-133: Setup / Bull Case / Bear Case / Verdict with stance + confidence bar. Asymmetric (empty bull or bear) renders gracefully.
     - Composer: `@<TICKER>` auto-set, tools-on toggle, cite-sources toggle. Source list in placeholder reads from `/health` (QNT-132).
 - [ ] **Backend support tickets that gate the design rendering**:
-    - QNT-131 — `pending` sentiment state (gates `pend` chip on news cards) — *blocked on news-source decision*
-    - QNT-132 — `/api/v1/health` provenance block (gates the bottom strip + composer source list)
+    - QNT-140 — News-source + sentiment topology ADR (ADR-015) — *gates QNT-131 + QNT-132; lands before consumer pages*
+    - QNT-131 — `pending` sentiment state (gates `pend` chip on news cards) — *unblocked once QNT-140 picks a topology; may be closed if QNT-140 picks the no-async-window option*
+    - QNT-132 — `/api/v1/health` provenance block (gates the bottom strip + composer source list) — *sentiment provenance value populated once QNT-140 names the classifier*
     - QNT-133 — agent thesis output restructured to Setup / Bull Case / Bear Case / Verdict (gates the thesis card render in QNT-74) — *Phase 5 milestone*
 - [ ] Generate TypeScript types from FastAPI's `/openapi.json` via `openapi-typescript` (`make types`) — do not handwrite types in `lib/api.ts`
 - [ ] Deploy to Vercel, set `NEXT_PUBLIC_API_URL` in Vercel dashboard — QNT-75
