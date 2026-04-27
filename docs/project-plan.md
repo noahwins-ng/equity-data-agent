@@ -113,7 +113,6 @@ Updated automatically by `/ship` and `/sync-docs`.
     - Fetches all available quarterly + annual data each run
 - [x] Add Dagster schedules: daily for OHLCV (~5-6 PM ET), weekly for fundamentals — QNT-43
 - [x] Implement Dagster resource for ClickHouse client (shared across assets) — QNT-40
-- ~Implement `make seed`~ — cancelled: dev tunnels to prod ClickHouse, no local seed needed — QNT-82
 - [x] Verify: Run backfill for all 10 tickers, confirm data in ClickHouse, check Dagster lineage graph — verified 2026-04-19 in prod: `ohlcv_raw` has 504 rows/ticker (2024-04-15 → 2026-04-17) for all 10 tickers; `fundamentals` has 9-11 quarters/ticker; derived tables populated (weekly=1040, monthly=240, tech_daily=5040, fund_summary=101); Dagster asset graph loads 8 assets + 17 checks + 2 schedules + 2 sensors
 
 ---
@@ -298,6 +297,9 @@ Updated automatically by `/ship` and `/sync-docs`.
     - **SSE events**: `tool_call` → `thinking` → `thesis` → `done`
 - [x] Portfolio README — QNT-66 **[moved from Phase 7 — front-page recruiter artifact]**
     - Three portfolio screenshots deferred to QNT-139 (same milestone, same cycle) — README ships scaffold + capture recipe (`docs/screenshots/README.md`) and references QNT-139 inline so the deferral is visible.
+- [x] Portfolio screenshots committed + recruiter-framing of README + docs/ sync — QNT-139
+    - **Triggered by**: QNT-66's deferred screenshots loop. Captured `cli-thesis.png` / `langfuse-trace.png` / `dagster-lineage.svg` (Dagster's native SVG export, dimension-agnostic) under `docs/screenshots/`, plus `cli-thesis.txt` for repeatable regen. Original >=1600 px AC relaxed during sanity-check (cli-thesis 1341 px, langfuse-trace 1016 px) — shipping the README integration end-to-end matters more than re-shoot polish; resolution polish tracked under the ticket's Follow-ups.
+    - **Bundled scope (folded into the same PR)**: README rewritten for recruiter-first reading — hero screenshot above the fold, broken `linear.app/noahwins/issue/QNT-XX` hyperlinks dropped (they 404 outside the workspace), dev workflow + ADR links retained. `docs/INDEX.md` backfilled with 6 missing retros + `design/` + `screenshots/` + `design-frontend-plan.md` + `model-bench-2026-04.md`. `docs/project-plan.md` cancelled QNT-82 line removed (sync-docs reconciliation).
     - Caught + fixed mid-smoke-test: `make setup` ran plain `uv sync` (skipped workspace members) → bumped to `uv sync --all-packages`. README's first-touch path is now end-to-end-verified.
     - Architecture diagram (mermaid, reused from `project-requirement.md` §3.1)
     - One Langfuse trace screenshot (a full `plan → gather → synthesize` run)

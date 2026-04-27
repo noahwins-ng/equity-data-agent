@@ -7,6 +7,8 @@ Living documentation for the equity-data-agent codebase. This is the shared cont
 - [project-plan.md](project-plan.md) — Phase-by-phase delivery checklists, synced with Linear via `/ship` and `/sync-docs`
 - [patterns.md](patterns.md) — Established code recipes — read before implementing
 - [AC-templates.md](AC-templates.md) — Default acceptance criteria for common PR classes (infra/CI, etc.)
+- [design-frontend-plan.md](design-frontend-plan.md) — Phase 6 frontend feasibility assessment + scope cuts against the canonical mock
+- [model-bench-2026-04.md](model-bench-2026-04.md) — Free-tier LLM bench results: Llama-3.3-70B default, Llama-4-Scout fallback
 
 ## Structure
 
@@ -46,6 +48,22 @@ How to do common tasks. Operational runbooks.
 End-of-phase retrospectives. What shipped, what was hard, lessons learned.
 
 - [phase-0-foundation.md](retros/phase-0-foundation.md) — Foundation: monorepo, shared package, Docker, migrations, CI/CD, Hetzner bootstrap
+- [phase-1-data-ingestion.md](retros/phase-1-data-ingestion.md) — Data ingestion: yfinance assets, ClickHouse loaders, sensors, schedules
+- [phase-2-calculation-layer.md](retros/phase-2-calculation-layer.md) — Calculation layer: technical indicators, fundamental ratios, multi-timeframe aggregation
+- [phase-2-ac-audit.md](retros/phase-2-ac-audit.md) — Mid-phase AC audit after the Apr 16 deploy-green-but-prod-stale outage
+- [phase-3-api-layer.md](retros/phase-3-api-layer.md) — API layer: report and data endpoints, asset checks, OpenAPI contract
+- [phase-4-narrative-data.md](retros/phase-4-narrative-data.md) — Narrative data: news ingestion, embeddings, Qdrant, semantic search
+- [phase-4-asset-check-audit.md](retros/phase-4-asset-check-audit.md) — Asset-check composite-key aggregation audit (QNT-122 follow-up)
+
+### [design/](design/)
+Canonical visual references for the Phase 6 frontend (TERMINAL/NINE mock + iteration history).
+
+- [design/README.md](design/README.md) — v1 vs v2 mock provenance + source-of-truth links
+
+### [screenshots/](screenshots/)
+Portfolio screenshots embedded in the top-level README.
+
+- [screenshots/README.md](screenshots/README.md) — Capture recipe + re-shoot cadence for the three artifacts
 
 ### [api/](api/)
 HTTP request files for testing FastAPI endpoints. Open with VS Code REST Client extension.

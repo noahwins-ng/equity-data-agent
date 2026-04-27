@@ -19,7 +19,7 @@ Open the run in Langfuse: https://us.cloud.langfuse.com → your project → Tra
 
 Resolution target: 1600 px wide minimum so the timeline is readable on desktop GitHub.
 
-## 2. `dagster-lineage.png`
+## 2. `dagster-lineage.svg`
 
 The `ohlcv_raw → ohlcv_weekly / technical_indicators / fundamental_summary` lineage graph with up-to-date materialization decorations.
 
@@ -27,9 +27,9 @@ The `ohlcv_raw → ohlcv_weekly / technical_indicators / fundamental_summary` li
 make dev-dagster   # http://localhost:3000
 ```
 
-Navigate: top nav → **Assets** → **Asset graph** → toggle the `equity_pipelines` location on. Frame the screenshot so you can see (a) the `ohlcv_raw` source partitioned-by-ticker, (b) the `weekly` / `monthly` aggregation fan-out, (c) `technical_indicators_daily/weekly/monthly`, and (d) `fundamental_summary`. Save as `docs/screenshots/dagster-lineage.png`.
+Navigate: top nav → **Assets** → **Asset graph** → toggle the `equity_pipelines` location on. Frame the view so you can see (a) the `ohlcv_raw` source partitioned-by-ticker, (b) the `weekly` / `monthly` aggregation fan-out, (c) `technical_indicators_daily/weekly/monthly`, and (d) `fundamental_summary`. Export as SVG (Dagster UI: top-right of the asset graph) and save as `docs/screenshots/dagster-lineage.svg`.
 
-Resolution target: 1600 px wide minimum. Crop tightly — the graph is wide.
+SVG keeps the graph crisp at any width and renders inline on GitHub. If you fall back to PNG, target 1600 px wide minimum and crop tightly — the graph is wide.
 
 ## 3. `cli-thesis.png`
 
