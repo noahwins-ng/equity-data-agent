@@ -222,9 +222,3 @@ The repo's "shared brain" is under [`docs/`](docs/INDEX.md):
 - [`docs/patterns.md`](docs/patterns.md) — established code recipes
 - [`docs/guides/`](docs/guides/) — operational runbooks
 - [`docs/retros/`](docs/retros/) — end-of-phase retrospectives
-
----
-
-## License
-
-This is a portfolio project — code is shared for inspection, not redistribution. If you'd like to use any of it, reach out.
