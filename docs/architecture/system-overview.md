@@ -122,8 +122,12 @@ All per-ticker Dagster assets use `StaticPartitionsDefinition` over the 10 ticke
 ## LLM Routing
 
 LiteLLM proxy (v1.81.14-stable, pinned) routes model requests (see ADR-011):
-- **Default**: Groq (`https://api.groq.com/openai/v1`, llama-3.3-70b-versatile) via `GROQ_API_KEY` — email-only free tier covers Phase 5 dev + steady-state portfolio demos, ~500 tok/s inference. No local model container on Hetzner.
-- **Override**: Google AI Studio Gemini 2.5 Flash via `GEMINI_API_KEY` — free-tier quality override (15 RPM / 1500 RPD, no credit card) for the hero demo thesis and README screenshot. Eval harness (QNT-67) logs a per-provider column so Groq↔Gemini becomes a deliberate eval axis. (Pro was the original pick in ADR-011 but returned `limit: 0` on free tier at first live test — see QNT-123 and ADR-011 §Revision history.)
+- **Default**: Groq (`https://api.groq.com/openai/v1`, `llama-3.3-70b-versatile`) via `GROQ_API_KEY`. Picked over Llama-4-Scout after QNT-138's clean-window bench (cosine 0.364 vs Scout's 0.342, both 16/16 hallucination_ok). ~500 tok/s inference, email-only free tier.
+- **Auto-fallback**: Llama-4-Scout-17B (`equity-agent/fallback-llama4scout`) — same Groq provider/key, 5× the default's daily TPD. Selected on a quality-then-capacity basis after QNT-129's bench rejected Qwen3-32B (regressed 15/16 → 11/16 hallucination_ok despite the TPD headroom).
+- **Override**: Google AI Studio Gemini 2.5 Flash via `GEMINI_API_KEY` — free-tier quality override (15 RPM / 1500 RPD) for the hero demo thesis. (Pro was the original pick in ADR-011 but returned `limit: 0` on free tier at first live test — see QNT-123 and ADR-011 §Revision history.)
+- **Eval harness**: `python -m agent.evals` runs a 16-question golden set across all 10 portfolio tickers; results persist to `packages/agent/src/agent/evals/history.csv`. Hallucination check enforces ADR-003 (every numeric literal must trace to a tool-output report, with sign-magnitude equivalence per QNT-128). See `docs/model-bench-2026-04.md` for cross-model results.
+- **Tracing**: Langfuse (`us.cloud.langfuse.com`) captures every plan → gather → synthesize span per run.
+- **Domain thresholds in reports, not prompts** (ADR-012): canonical RSI 70/30 and P/E rich/cheap bands live in the FastAPI report templates so the agent can quote them without leaking pretraining knowledge.
 - Config: `litellm_config.yaml` at repo root, model alias `equity-agent/default`
 - Agent code references only the alias — never a provider-specific model name or URL
 
