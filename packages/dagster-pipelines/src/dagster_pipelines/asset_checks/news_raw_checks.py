@@ -72,9 +72,10 @@ def news_raw_has_rows(clickhouse: ClickHouseResource) -> AssetCheckResult:
 def news_raw_no_empty_headlines(clickhouse: ClickHouseResource) -> AssetCheckResult:
     """Warn if any row has a blank or whitespace-only headline.
 
-    news_raw._entry_to_row already strips and skips blank headlines at ingest
-    time, so this check guards against that filter regressing — e.g. if the
-    feedparser entry shape changes and `.strip()` runs on a non-string.
+    news_raw._article_to_row already strips and skips blank headlines at
+    ingest time (post-QNT-141 / Finnhub migration; was _entry_to_row pre-RSS
+    cutover). This check guards against that filter regressing — e.g. if
+    Finnhub renames `headline` and `.strip()` runs on a None.
     """
     result = clickhouse.execute(f"SELECT count() FROM {_TABLE} FINAL WHERE empty(trim(headline))")
     bad = int(result.result_rows[0][0])

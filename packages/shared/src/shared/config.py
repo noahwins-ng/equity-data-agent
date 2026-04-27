@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     # Sentry
     SENTRY_DSN: str = ""
 
+    # Finnhub /company-news (ADR-015): per-ticker headlines + publisher + image.
+    # Free tier — register at https://finnhub.io/register. Empty in dev when news
+    # ingest is offline; news_raw asset surfaces a clear error on first call.
+    FINNHUB_API_KEY: str = ""
+
     @property
     def is_prod(self) -> bool:
         return self.ENV == "prod"

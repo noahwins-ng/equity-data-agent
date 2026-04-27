@@ -331,7 +331,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - Fundamental additions: EBITDA margin (substitutes op margin), gross/net margin bps deltas, TTM rollup asset (rolling-4Q sums of revenue / net income / FCF / EPS).
     - Sparkline field on `GET /api/v1/dashboard/summary` (60 daily closes per ticker — server-side, no N+1 client calls).
     - SPY benchmark ingest as a `BENCHMARK_TICKERS` constant — OHLCV-only, skipped from fundamentals/news/sentiment assets.
-- [ ] **News ingest migration: Yahoo RSS → Finnhub `/company-news`** — QNT-141 **[gates QNT-72 + QNT-73 news cards; per ADR-015]**
+- [x] **News ingest migration: Yahoo RSS → Finnhub `/company-news`** — QNT-141 **[gates QNT-72 + QNT-73 news cards; per ADR-015]**
     - Schema migration 012 adds `publisher_name` + `image_url` + `sentiment_label` columns to `equity_raw.news_raw` (existing dedup key `(ticker, published_at, id)` unchanged).
     - Ingest rewrite: replace Yahoo RSS with Finnhub `/company-news` per partition; map `source` → ingest provenance, `publisher_name` → originating outlet, `image_url` → `image`, `sentiment_label` → `'pending'` (classifier picks up per QNT-131).
     - One-time 1y backfill on first run (Finnhub free tier explicitly allows 1y history per `freeTier: "1 year of historical news and new updates"` in the docs JSON).

@@ -98,10 +98,11 @@ def fundamentals_weekly_schedule(context: ScheduleEvaluationContext):
     default_status=DefaultScheduleStatus.RUNNING,
 )
 def news_raw_schedule(context: ScheduleEvaluationContext):
-    """News RSS refresh every 4 hours (per-ticker Yahoo Finance feeds).
+    """News refresh every 4 hours via Finnhub /company-news (QNT-141, ADR-015).
 
-    Yahoo Finance RSS has no rate limit and no key — a 4-hour cadence gives
-    reasonable coverage without hammering the upstream.
+    Finnhub free tier is 60 RPM with 1y historical backfill. 10 tickers × 6
+    ticks/day = 60 calls/day — ~1% of the per-minute budget, well clear of
+    the ceiling. Requires FINNHUB_API_KEY in env / SOPS prod (QNT-102).
     """
     ts = context.scheduled_execution_time.isoformat() if context.scheduled_execution_time else ""
     for ticker in TICKERS:
