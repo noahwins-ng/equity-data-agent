@@ -247,7 +247,7 @@ Updated automatically by `/ship` and `/sync-docs`.
 
 - [x] Configure LiteLLM proxy via `litellm_config.yaml` — QNT-59
     - **Default**: routes to Groq (`https://api.groq.com/openai/v1`, llama-3.3-70b-versatile) via `GROQ_API_KEY`. Email-only free tier (30 RPM / 6K TPM / up to 14.4K RPD) covers Phase 5 dev + steady-state portfolio demos. ~500 tok/s inference keeps prompt-iteration fast.
-    - **Override**: routes to Google AI Studio Gemini 2.5 Flash via `GEMINI_API_KEY` — free-tier quality override (15 RPM / 1500 RPD, no credit card) for the hero demo thesis (QNT-94), README screenshot (QNT-66), and as the per-provider axis in the QNT-67 eval harness.
+    - **Override**: routes to Google AI Studio Gemini 2.5 Flash via `GEMINI_API_KEY` — free-tier quality override (15 RPM / 1500 RPD, no credit card) for README screenshots (QNT-66 / QNT-139) and as the per-provider axis in the QNT-67 eval harness.
     - Model alias: `equity-agent/default` — zero agent code changes to switch backends.
     - See ADR-011 for provider selection rationale (why Groq over Ollama Cloud / Gemini / OpenAI / self-hosted).
 - [x] Demote Gemini override from Pro to Flash — QNT-123
@@ -298,7 +298,6 @@ Updated automatically by `/ship` and `/sync-docs`.
     - **SSE events**: `tool_call` → `thinking` → `thesis` → `done`
 - [x] Portfolio README — QNT-66 **[moved from Phase 7 — front-page recruiter artifact]**
     - Three portfolio screenshots deferred to QNT-139 (same milestone, same cycle) — README ships scaffold + capture recipe (`docs/screenshots/README.md`) and references QNT-139 inline so the deferral is visible.
-    - QNT-94 demo embedded as a visible link above the fold; activates once QNT-94 commits `docs/demo.mp4`.
     - Caught + fixed mid-smoke-test: `make setup` ran plain `uv sync` (skipped workspace members) → bumped to `uv sync --all-packages`. README's first-touch path is now end-to-end-verified.
     - Architecture diagram (mermaid, reused from `project-requirement.md` §3.1)
     - One Langfuse trace screenshot (a full `plan → gather → synthesize` run)
@@ -306,10 +305,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - One agent-thesis screenshot (CLI output, NVDA or similar)
     - One-paragraph hallucination-resistance pitch (ties ADR-003 + QNT-67 eval harness)
     - This matters more than anything in Phase 7. Recruiters read the README before opening any code file.
-- [ ] 30-second CLI demo screencast — QNT-94
-    - Record `python -m agent analyze NVDA` producing a thesis end-to-end; commit as `docs/demo.mp4` (or host and link from README above-the-fold)
-    - Single most-watched portfolio artifact. Must show: command invocation → first tool call → streamed thinking → final thesis, within ≤45s (target 30s).
-- [ ] Verify: Run agent on 2-3 tickers, review thesis quality, confirm zero hallucinated calculations in Langfuse traces; hallucination eval passes on all golden-set questions; README renders correctly on GitHub with all screenshots and the embedded/linked demo
+- [ ] Verify: Run agent on 2-3 tickers, review thesis quality, confirm zero hallucinated calculations in Langfuse traces; hallucination eval passes on all golden-set questions; README renders correctly on GitHub with all screenshots
 
 ---
 

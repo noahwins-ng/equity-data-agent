@@ -2,8 +2,6 @@
 
 > An AI research system for US equities where **the LLM never does math.** Every number in every thesis is pre-computed by Dagster, served as a human-readable report by FastAPI, and only *interpreted* by the LangGraph agent. Hallucinated financials are architecturally impossible.
 
-**[30-second CLI demo →](https://linear.app/noahwins/issue/QNT-94)** &nbsp;·&nbsp; embeds inline here once [QNT-94](https://linear.app/noahwins/issue/QNT-94) lands `docs/demo.mp4`.
-
 ---
 
 ## Why this exists
