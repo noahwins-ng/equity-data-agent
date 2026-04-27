@@ -35,6 +35,7 @@ Architecture Decision Records (ADRs). Read these to understand **why** we chose 
 - [012-domain-conventions-in-reports-not-prompts.md](decisions/012-domain-conventions-in-reports-not-prompts.md)
 - [013-stay-on-bespoke-compose-not-coolify.md](decisions/013-stay-on-bespoke-compose-not-coolify.md)
 - [014-nextjs-rendering-mode-per-page.md](decisions/014-nextjs-rendering-mode-per-page.md)
+- [015-news-source-and-sentiment-topology.md](decisions/015-news-source-and-sentiment-topology.md)
 
 ### [guides/](guides/)
 How to do common tasks. Operational runbooks.
