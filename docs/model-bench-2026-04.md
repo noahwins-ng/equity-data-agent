@@ -1,8 +1,8 @@
 # Free-tier LLM bench — April 2026
 
-**Date**: 2026-04-26
-**Linear**: [QNT-129](https://linear.app/noahwins/issue/QNT-129) — bench harness lives at `python -m agent.evals --model <alias>`, raw rows in `packages/agent/src/agent/evals/history.csv`.
-**Outcome**: replaced `qwen/qwen3-32b` (12/16 hallucination_ok) with `meta-llama/llama-4-scout-17b-16e-instruct` (16/16 + best on every soft metric) as the fallback behind `equity-agent/default`. See [Recommendation](#recommendation).
+**Date**: 2026-04-26 (initial bench), 2026-04-27 (reference re-run)
+**Linear**: [QNT-129](https://linear.app/noahwins/issue/QNT-129) — bench harness lives at `python -m agent.evals --model <alias>`, raw rows in `packages/agent/src/agent/evals/history.csv`. [QNT-138](https://linear.app/noahwins/issue/QNT-138) — clean reference row on a fresh Groq TPD bucket.
+**Outcome**: replaced `qwen/qwen3-32b` (12/16 hallucination_ok) with `meta-llama/llama-4-scout-17b-16e-instruct` (16/16 + best judge / latency) as the fallback behind `equity-agent/default`; **kept Llama-3.3-70B as default** after QNT-138's clean re-run showed Scout's pre-registered promotion thresholds were not met. See [Recommendation](#recommendation).
 
 ---
 
@@ -66,8 +66,8 @@ Sorted by hallucination_ok (the only hard contract that doesn't have a vacuous-p
 
 | Model | hallucination_ok | tool_call_ok | judge | cosine | p50 elapsed | total tokens (lower bound) | Notes |
 |---|---|---|---|---|---|---|---|
-| **llama-4-scout-17b-16e-instruct** | **16/16** | **16/16** | **4.94** | **0.342** | **836 ms** | 8 064 | Wins every measure that is comparable to the reference — small but real lead on quality, larger lead on latency |
-| llama-3.3-70b (reference) | 16/16 (9 clean + 7 TPD-failed) | 16/16 | 3.56 | 0.336 (clean) / 0.189 (raw) | 1 110 ms (clean) / 10 448 ms (raw) | n/a | Hit Groq's 100K daily-token ceiling at record 10/16. Records 10–16 returned empty theses (cosine forced to 0, judge None, retry latency stretched the elapsed). The 9 clean records are the fair comparison row; raw averages are kept for diff-against-history reproducibility but read them with the asterisk |
+| **llama-3.3-70b (reference, default)** | **16/16** | **16/16** | 4.69 | **0.364** | 8 398 ms | 9 071 | QNT-138 clean re-run on fresh 100K TPD bucket. Best cosine in the bench. Wall-clock p50 dominated by per-alias bench TPM throttle (5 K TPM queues later plan calls); per-call Langfuse latency p50 is 311 ms. The original TPD-truncated sweep is retained in `history.csv` as audit trail |
+| llama-4-scout-17b-16e-instruct (fallback) | 16/16 | 16/16 | **4.94** | 0.342 | **836 ms** | 8 064 | Best judge and lowest wall-clock latency. Loses to Llama on cosine by 0.022 (Llama's full-row clean number, not the QNT-129 truncated 0.336) |
 | gpt-oss-120b | 16/16 | 16/16 | 1.69 | 0.296 | 12 525 ms | 15 287 | Refuses to interpret reports it gathered (see qualitative notes) |
 | gpt-oss-20b | 16/16 | 16/16 | 0.94 | 0.271 | 13 417 ms | 16 551 | Same defensive failure mode, more pronounced |
 | gemma-4-31b-it | 16/16 | 16/16 | 1.81 | 0.284 | 37 882 ms | 23 693 | Slow (per-call latency 16s p50); freeform scratchpad leaks into output tokens |
@@ -77,9 +77,9 @@ Sorted by hallucination_ok (the only hard contract that doesn't have a vacuous-p
 
 ### Per-model qualitative notes
 
-**llama-4-scout-17b-16e-instruct (winner, narrowly).** Beats the production reference on every comparable measure but the lead on cosine is a hair (0.342 vs 0.336 on the reference's 9 clean records, +0.006 — within run-to-run noise). The lead on judge (4.94 vs 3.56) and p50 elapsed (836 ms vs 1 110 ms on the reference's clean records) is more substantial. Plan output is concise; synthesize fills the four-section schema cleanly without scaffolding leakage; judge handles the rubric without reasoning bleed. Per-call latency p50 in Langfuse is 169 ms — three to fifty times faster than every other candidate.
+**llama-3.3-70b (reference, default).** QNT-138 re-ran the reference sweep on a fresh Groq 100K TPD bucket (run_id `20260427T122411Z-8ebb34`). 16/16 on every hard contract; cosine 0.364 is the best in the bench; judge 4.69 is second only to Scout. The wall-clock p50 of 8 398 ms is dominated by the per-alias bench TPM throttle on the bench harness — `bench-llama3-70b` is capped at 5 K TPM (~80% of Groq's 6 K free-tier TPM on 70B), so plan calls in later records queue rather than 429. Per-call Langfuse latency p50 is 311 ms (vs Scout's 169 ms): Scout is genuinely 2× faster per call, but not 10× as the wall-clock suggests. The original TPD-truncated sweep (`20260426T151730Z-5d616e`, 9 clean + 7 zero-cosine records) is retained in `history.csv` for reproducibility; the canonical reference row above uses the QNT-138 clean run.
 
-**llama-3.3-70b (reference).** 16/16 on the hard contracts on every record that completed. The sweep hit Groq's 100K daily-token ceiling at record 10/16 (`Used 99987, Requested 1621` from the Groq error payload), so records 10–16 returned empty theses. Both the published cosine (0.189) and the published p50 elapsed (10 448 ms) are dragged badly by those 7 zeros: the 9 clean records average 0.336 cosine and 1 110 ms p50 — much closer to Scout than the raw row suggests. The structural-format note (cosine vs the prose references in `goldens/questions.yaml` is an underestimate of structural matches post-QNT-133) is real and the next bench cycle should re-anchor the references; for THIS bench, read the reference row's clean-records numbers, not the raw averages.
+**llama-4-scout-17b-16e-instruct (fallback slot — confirmed by QNT-138).** Wins judge (4.94 vs 4.69) and per-call latency (169 ms vs 311 ms p50). Loses cosine on the clean reference row by 0.022 (0.342 vs 0.364) — within run-to-run noise but consistent direction across both runs. The QNT-129 ship rationale (5× the default's TPD ceiling, strictly better than the Qwen3-32B it replaced on every measured signal, same Groq client path) stands. QNT-138 closed-out the deferred default-promotion question against the pre-registered decision rule (cosine lead ≥ 0.02 OR judge lead ≥ 2.0): cosine lead is **negative** (Llama leads), judge lead is +0.25 — both well below the threshold. Scout stays in the fallback slot.
 
 **gpt-oss-120b / gpt-oss-20b (defensive failure).** Both score 16/16 on the hard contracts but produce theses like *"the supplied technical report does not provide any overbought indicator values such as RSI or moving-average levels"* — when the report does in fact contain RSI, MACD, and SMA stack data. The model parses the report but won't draw conclusions from it. Failure mode is the safe one (won't hallucinate) but useless for the thesis task. Both gpt-oss variants share this pattern; 120b is marginally less terse than 20b but the same posture.
 
@@ -104,14 +104,18 @@ Four reasons it's the obvious call:
 3. **5× the TPD headroom over the default** — Llama-3.3-70B is 100K TPD; Scout is 500K TPD. So the fallback can absorb 5× the daily volume the default can, which matches the original capacity-rationale Qwen was promoted under.
 4. **Strictly better quality than Qwen on every measure** — 16/16 vs 12/16 hallucination, judge 4.94 vs 1.44, cosine 0.342 vs 0.296. And materially faster (836 ms p50 vs 25 635 ms — 30× difference in wall time, mostly because Scout doesn't waste tokens on a `<think>` scratchpad).
 
-**What we're NOT doing yet — promoting Scout to default.** Scout has the best comparable numbers in the bench, but the lead over the production reference (Llama-3.3-70B on the 9 clean records) is genuinely small — cosine 0.342 vs 0.336 (+0.006, within noise), judge 4.94 vs 3.56 (real but soft signal — different self-judging biases per model), p50 836 ms vs 1 110 ms (real but the production model is also fast enough). This is enough to put Scout in the fallback slot — strictly better than Qwen on every measure — but not enough to overturn Llama-3.3-70B's months of production track record. We're holding off because:
+**Default decision: keep Llama-3.3-70B (QNT-138 closed-out).** The QNT-129 ship deferred the Scout-as-default question because the reference sweep was TPD-truncated at record 10/16, leaving a 9-clean-records preview where Scout led cosine by +0.006. [QNT-138](https://linear.app/noahwins/issue/QNT-138) re-ran the reference on a fresh 100K TPD bucket and the deferred question is now answerable on a full row. Pre-registered decision rule (set before the re-run, not after): *Scout cosine lead ≥ 0.02 OR judge lead ≥ 2.0 → promote Scout; else keep Llama.*
 
-- The cosine lead is sub-noise. Judge is biased per-model. The remaining signal is a 25% latency edge; that doesn't warrant a default swap.
-- Llama-3.3-70B has months of production track record. Scout has zero. The QNT-128 lesson — *don't promote on a single signal* — applies in both directions.
-- Promoting Scout to default while it's the fallback gives us free production telemetry. After two weeks of fallback traffic (or the next bench re-run, whichever lands first), if Scout's record holds, promote it then.
-- The reference sweep is also incomplete (TPD-truncated at record 10/16). A clean re-run on a fresh TPD bucket is a precondition for the promotion-to-default decision and will happen at the next bench cycle.
+Measured on the clean reference row:
 
-Tracked under [QNT-129 follow-up](https://linear.app/noahwins/issue/QNT-129) — re-evaluate Scout-as-default at the next bench run (see *Revisit cadence* below).
+- Scout cosine lead: **−0.022** (Llama leads 0.364 vs Scout 0.342)
+- Scout judge lead: **+0.25** (4.94 vs 4.69)
+
+Both metrics fall below the promotion threshold, and cosine has flipped sign once a complete sweep is on the table. Llama remains default; Scout remains fallback (5× the TPD ceiling and strictly better than the Qwen it replaced — that QNT-129 conclusion is unchanged).
+
+The remaining Scout edge is per-call latency (169 ms vs 311 ms p50, ~2×). Wall-clock p50 (836 ms vs 8 398 ms) makes the gap look 10× larger but is mostly the per-alias bench TPM cap queueing late-record plan calls on Llama; the production default has no such cap. A 2× per-call latency edge alone doesn't warrant disrupting a default with months of production track record.
+
+`litellm_config.yaml` is intentionally unchanged by QNT-138 — the chain shipped in QNT-129 (`equity-agent/default` → `equity-agent/fallback-llama4scout`) is the chain the bench data supports.
 
 ---
 
@@ -120,7 +124,6 @@ Tracked under [QNT-129 follow-up](https://linear.app/noahwins/issue/QNT-129) —
 Re-run this bench:
 
 - **Quarterly** (next: 2026-07-26) as a calendar trigger — model availability and free-tier policy on Groq + Google AI Studio churn faster than that on the no-card free tier.
-- **Two weeks after this PR ships** as a Scout-promotion gate — if Scout's production track record (visible in `evals/history.csv` as recurring `equity-agent/default` rows + Langfuse trace volume) is clean, re-run the bench and consider promoting Scout to default.
 - **When a candidate model graduates from preview** — `gemini-3.1-flash-lite-preview` is the obvious one; it could either go GA at a different price point or get withdrawn.
 - **When Groq deprecates one of the candidates** — Groq has rotated models in the past (the QNT-128 ADR-011 revisit-trigger calls this out explicitly).
 - **When a regression shows up in production** — `evals/history.csv` is the first place to look; if the production model's row has drifted, re-run this bench against the current candidates before swapping.
@@ -134,7 +137,7 @@ uv run python -m agent.evals --model equity-agent/bench-qwen3-32b
 # then check the new tail rows in evals/history.csv and update the table above
 ```
 
-To re-run the full bench, the harness script lives at `/tmp/qnt129-bench.sh` (copy into `scripts/` if it should become a permanent harness) and the post-hoc summarisers at `/tmp/qnt129-aggregate.py` (history.csv reader) and `/tmp/qnt129-token-summary.py` (Langfuse metrics reader). Move both into `scripts/evals/` if a second re-run is on the horizon.
+To re-run the full bench, the harness script lives at `/tmp/qnt129-bench.sh` (copy into `scripts/` if it should become a permanent harness). The post-hoc summarisers were promoted to the repo by QNT-138: `scripts/evals/aggregate_bench.py` (history.csv reader, defaults to latest sweep per alias — pass `--all-sweeps` for legacy behaviour) and `scripts/evals/token_summary.py` (Langfuse metrics reader; needs `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` from `.env`, run with `uv run --env-file .env`).
 
 ---
 
