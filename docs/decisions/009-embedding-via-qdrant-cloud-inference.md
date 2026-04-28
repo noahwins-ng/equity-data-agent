@@ -87,6 +87,50 @@ Those numbers are only relevant if we ever pivot back to self-hosted embedding, 
 
 Lesson captured (memory: `feedback_calibration_window`): the cost of checking the vendor's feature surface *before* writing the inline-compute design would have been one search query, and would have saved roughly 200 LOC of code + an ADR draft. This ADR stands as an example of a same-day pivot caught while the context was still fresh.
 
+### Apr-28 2026 — verified free-tier numbers + Workaround A escape hatch
+
+Post-QNT-141 (Finnhub migration) + alongside QNT-142 (delta-only embedding fix). Verified the Qdrant Cloud free-tier numbers and pre-sized the local-embedding escape hatch so a future maintainer can swap under pressure without re-researching.
+
+**Confirmed free-tier limits** (sources: <https://qdrant.tech/pricing>, <https://qdrant.tech/documentation/cloud-pricing-payments/>):
+
+- Storage: 4 GB disk / 1 GB RAM
+- Cloud inference: 5M tokens/month per model (consistent with this ADR's original budget)
+- Vector count cap and per-request rate limits: not published; treat as best-effort
+- Failure mode at limit: not documented publicly. Assume hard reject + paid-tier upgrade prompt rather than silent degradation, but verify empirically before relying on either.
+
+**Where we sit (post-QNT-141 + QNT-142):** ~810K tokens/month projected (16% of free-tier budget), matching the original calibration. Pre-QNT-142, the QNT-141 Finnhub backfill briefly threatened ~93× that load (28 211 rows × 6 ticks/day × `fetched_at` full-refresh window). QNT-142's `published_at` window + delta-only upsert restores the original sizing so the free tier stays comfortable.
+
+#### Workaround A — switch to local CPU embedding (escape hatch)
+
+This ADR keeps cloud inference. Workaround A is the documented path *if* a trigger fires; we do not deploy it pre-emptively.
+
+**Triggers to deploy:**
+
+- Qdrant moves `sentence-transformers/all-MiniLM-L6-v2` off the free-tier inference list.
+- Sustained consumption crosses 50% of the 5M tokens/month budget over a 30-day window.
+- Qdrant's free-tier cloud inference is rate-limited or hard-rejected in production (currently unobserved; QNT-142's reduction makes this much less likely).
+
+**Files to change** (verified 2026-04-28; line numbers approximate):
+
+- `packages/dagster-pipelines/src/dagster_pipelines/resources/qdrant.py` (~line 72): set `cloud_inference=False`, add an optional encoder field on the resource so dependent assets can pull the same model instance.
+- `packages/dagster-pipelines/src/dagster_pipelines/assets/news_embeddings.py` (~line 135): replace `vector=Document(text=..., model=EMBED_MODEL)` with `vector=encoder.encode(text).tolist()`. `PointStruct` accepts both shapes — no protocol or wire-format change.
+- `packages/dagster-pipelines/pyproject.toml`: add `sentence-transformers>=3.0` (~500 MB on disk including model weights) + `torch-cpu>=2.0` (~150 MB for the CPU-only build).
+- `packages/api/src/api/routers/search.py` (~line 77): same encoder swap for query-time consistency. The agent's semantic search must use the same model that produced the indexed vectors.
+
+**Cost of Workaround A:**
+
+- Docker image bloat: ~650 MB total (sentence-transformers package + torch-cpu + model weights).
+- Run-worker peak RSS: ~360 MB → ~600 MB. Still inside QNT-115's 3 GB cgroup with the 3-concurrent-runs cap (`660 MB daemon + 3 × 600 MB ≈ 2.46 GB`). Margin is tighter than the inline-compute math from the Apr-22 superseded decision because we're at 600 MB per worker, not 860 MB.
+- First-call cold-start: ~10-20 s loading the model into resident memory per worker. Sensors that fan out 10 partitions back-to-back pay the cold-start cost ~3 times (one per concurrent worker; subsequent partitions on the same worker reuse the loaded model).
+- Per-article inference: ~5-10 ms on a 2-core CPU. No rate limits.
+
+**Effect:**
+
+- Zero token-budget concern. Qdrant becomes a pure vector DB; we own embedding compute.
+- This ADR's "thin run worker" property is lost — that's the explicit trade-off accepted only if the inference budget becomes the binding constraint.
+- The asset's behavioural contract (idempotent upsert keyed on `point_id(ticker, url_id)`) is unchanged; existing QNT-93 asset checks continue to pass.
+- The Apr-22 same-day-pivot lesson stands: this is the same code, in the same place, that the original draft of this ADR proposed before the Qdrant Cloud Inference page was found. We keep the simpler path until a real trigger fires; if it does, the swap is bounded and well-understood.
+
 ## References
 
 - QNT-54 — Dagster asset: news embeddings → Qdrant (this ADR's driver)

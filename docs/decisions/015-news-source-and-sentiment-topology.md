@@ -194,3 +194,23 @@ Reopen this ADR if any of these fire:
 - QNT-93 — news asset checks; gets two new entries (`news_sentiment_pending_age`, `news_sentiment_label_distribution`).
 - QNT-120 — Qdrant point ID namespacing (the cross-store identity precedent reused above).
 - QNT-128 / QNT-129 / QNT-138 — Groq fallback chain that absorbs classifier load overflow.
+
+## Revision history
+
+**2026-04-28 (post-QNT-141, alongside QNT-142):** Topology (a) is preserved on paper, but the classifier itself is deferred — QNT-131 moved out of Phase 6 to Backlog. Three forces drove the call:
+
+1. **Heavy LLM use for a 3-class label** couples the classifier to the agent's Groq TPD bucket (calibrated in ADR-011 §"Free-tier budget") and inherits its rate-limit failure modes. QNT-142's Qdrant calibration trap surfaced the same shape on the embedding side post-QNT-141 backfill; we don't need a second copy of that risk on the classifier side.
+2. **The `pend` / POS / NEU / NEG chip is a visual nicety, not load-bearing** for the thesis. QNT-133's structured Setup / Bull Case / Bear Case / Verdict card already carries the reasoning weight that matters for the demo. The chip's marginal contribution to the portfolio narrative is small relative to the operational cost (asset + asset checks + API field + UI component + Groq budget coupling).
+3. **FinBERT (ProsusAI/finbert, local CPU inference) is the technically-cleaner direction** when/if revived — no LLM coupling, no rate limits, financial-news-tuned, three-class output matching the existing `sentiment_label` enum. The deferred QNT-131 description names FinBERT as the path; the Groq classifier path is rejected.
+
+What stays in place from this ADR:
+- News source (Finnhub `/company-news`) — shipped in QNT-141.
+- `sentiment_label LowCardinality(String) DEFAULT 'pending'` column in `equity_raw.news_raw`. Existing rows remain `'pending'` indefinitely; future revisit can populate them via the FinBERT path. Removing the column would be a breaking schema change for negligible benefit.
+- Cross-store identity invariant (Finnhub url → news_raw composite key → Qdrant point_id from QNT-120) — unaffected.
+
+What changes for downstream consumers:
+- **QNT-132** `provenance.sentiment` field becomes `null` (or omitted) until the classifier is revived. The field shape stays so a future revisit doesn't require a contract change.
+- **QNT-72 / QNT-73** news cards drop the sentiment chip slot in v1; render headline + publisher pill + date only.
+- The 24h `news_sentiment_pending_age` asset check named in §"Asset checks" is **not** added — it would WARN forever in the deferred state, which inverts its signal value. If/when QNT-131 is revived, the asset check ships with the classifier in the same PR.
+
+The sentiment topology decision (a) — i.e., "if and when there is a classifier, run it as an async downstream Dagster asset with a `pending` window" — is unchanged. This revision defers the *implementation*, not the topology choice.
