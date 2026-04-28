@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     # ingest is offline; news_raw asset surfaces a clear error on first call.
     FINNHUB_API_KEY: str = ""
 
+    # Provenance strip values surfaced by /api/v1/health (QNT-132).
+    # Single source of truth for the data-driven UI bottom strip — vendor swap
+    # or schedule shift updates the API, frontend re-renders without a deploy.
+    PROVENANCE_SOURCES: list[str] = ["yfinance", "Finnhub", "Qdrant"]
+    # Static fallback when Dagster schedule introspection fails (e.g. a future
+    # api-only image without dagster_pipelines installed). Format mirrors what
+    # the introspected path emits so the frontend never sees a shape change.
+    PROVENANCE_NEXT_INGEST_FALLBACK: str = "17:00 ET"
+
     @property
     def is_prod(self) -> bool:
         return self.ENV == "prod"
