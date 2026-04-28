@@ -333,7 +333,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - SPY benchmark ingest as a `BENCHMARK_TICKERS` constant — OHLCV-only, skipped from fundamentals/news/sentiment assets.
 - [x] **News ingest migration: Yahoo RSS → Finnhub `/company-news`** — QNT-141 **[gates QNT-72 + QNT-73 news cards; per ADR-015]**
     - Schema migration 012 adds `publisher_name` + `image_url` + `sentiment_label` columns to `equity_raw.news_raw` (existing dedup key `(ticker, published_at, id)` unchanged).
-    - Ingest rewrite: replace Yahoo RSS with Finnhub `/company-news` per partition; map `source` → ingest provenance, `publisher_name` → originating outlet, `image_url` → `image`, `sentiment_label` → `'pending'` (classifier picks up per QNT-131).
+    - Ingest rewrite: replace Yahoo RSS with Finnhub `/company-news` per partition; map `source` → ingest provenance, `publisher_name` → originating outlet, `image_url` → `image`, `sentiment_label` → `'pending'` (column exists per QNT-141 schema; QNT-131 classifier deferred — values stay `'pending'` indefinitely).
     - One-time 1y backfill on first run (Finnhub free tier explicitly allows 1y history per `freeTier: "1 year of historical news and new updates"` in the docs JSON).
     - `FINNHUB_API_KEY` added to `Settings` + `.env.example` + SOPS prod (per QNT-102).
     - Side-by-side density check (Finnhub vs RSS for one ticker, one week) before cutover; verify `news_embeddings` re-runs cleanly on Finnhub rows (point-id formula from QNT-120 is source-agnostic).
@@ -347,7 +347,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - **Chart**: TradingView Lightweight Charts, candlestick + volume. **Renders `adj_close` as candlestick close** to avoid split discontinuities. Date-range toggle 1M / 3M / 6M / YTD / 1Y / 5Y / MAX (no 1D/5D — EOD only). Indicator overlay chips: SMA / BB / RSI / ATR / OBV (no VWAP). SPY benchmark overlay (default off).
     - **Technicals card**: Daily / Weekly / Monthly aggregation tabs; RSI / MACD / ADX / ATR / SMA 20/50/200 / Bollinger %B / OBV trend rows with signal-threshold decorations.
     - **Fundamentals card**: Quarterly / Annual / TTM tabs; Revenue (YoY %) / Gross margin (bps Δ) / EBITDA margin (bps Δ) / Net income / EPS / FCF / Cash·debt / ROE / ROA. ROE/ROA show `N/A · point-in-time` on Q tab, value · trailing 4Q on TTM tab.
-    - **News card**: per-card publisher pill + sentiment chip (POS / NEU / NEG / `pend` placeholder via QNT-131); gracefully degrades if Phase 4 not deployed.
+    - **News card**: per-card publisher pill + date. **No sentiment chip in v1** — QNT-131 deferred 2026-04-28 (ADR-015 §"Revision history"). News card renders headline + publisher pill + date only.
     - **Provenance strip**: SOURCES / JOBS / SENTIMENT / AGENT — values read from `/health` (QNT-132), not hardcoded.
 - [ ] **Analyst chat (right pane)** — QNT-74
     - Persistent right-rail panel that follows the active `/ticker/[symbol]` route (per ADR-014 §4 + Anti-pattern §6: chat is part of `app/layout.tsx`, not a `/chat` route — a route would tear down in-flight SSE on every ticker navigation).
@@ -359,7 +359,7 @@ Updated automatically by `/ship` and `/sync-docs`.
 - [ ] **Backend support tickets that gate the design rendering**:
     - QNT-140 — ✓ **Done.** News-source + sentiment topology ADR (ADR-015) committed Finnhub `/company-news` + topology (a) async classifier asset.
     - QNT-141 — News ingest migration (Yahoo RSS → Finnhub `/company-news`); lands the schema columns (`publisher_name`, `image_url`, `sentiment_label`) that QNT-72/73 news cards consume. Per ADR-015.
-    - QNT-131 — `pending` sentiment state + classifier asset (gates `pend` chip on news cards). Kept and required under ADR-015 topology (a); 24h pending window pinned via asset check `news_sentiment_pending_age`.
+    - QNT-131 — **Deferred 2026-04-28 to Backlog.** Classifier scoped to FinBERT (local CPU inference, no LLM coupling) when revisited. News cards in v1 ship without the `pend` chip. Trigger: UX evidence the chip is load-bearing, or thesis-eval signal that per-article sentiment moves the needle. See ADR-015 §"Revision history" (post-QNT-141, alongside QNT-142). The `sentiment_label` column from QNT-141 stays in place defaulted to `'pending'` for the future revisit.
     - QNT-132 — `/api/v1/health` provenance block (gates the bottom strip + composer source list). Sentiment provenance value committed by ADR-015: `{"model": "Llama 3.3 70B", "provider": "Groq"}`, tracking the active LiteLLM `equity-agent/default` alias.
     - QNT-133 — agent thesis output restructured to Setup / Bull Case / Bear Case / Verdict (gates the thesis card render in QNT-74) — *Phase 5 milestone*
 - [ ] Generate TypeScript types from FastAPI's `/openapi.json` via `openapi-typescript` (`make types`) — do not handwrite types in `lib/api.ts`
