@@ -18,8 +18,10 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime
 from functools import lru_cache
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -48,6 +50,87 @@ def _dagster_counts() -> tuple[int, int]:
     except Exception as exc:  # pragma: no cover — defensive
         logger.warning("dagster counts unavailable: %s", exc)
         return 0, 0
+
+
+@lru_cache(maxsize=1)
+def _ohlcv_schedule_cron_tz() -> tuple[str, str] | None:
+    """Resolve (cron, timezone) for ``ohlcv_daily_schedule`` once per process.
+
+    The cron string is constant after deploy, so cache it; only the per-call
+    "next firing" math runs each request. Returns None on any failure so the
+    caller can fall back to ``settings.PROVENANCE_NEXT_INGEST_FALLBACK``.
+    """
+    try:
+        from dagster_pipelines.definitions import defs  # type: ignore[import-not-found]
+
+        sched = defs.get_schedule_def("ohlcv_daily_schedule")
+        cron = sched.cron_schedule
+        tz = sched.execution_timezone
+        if not isinstance(cron, str) or not tz:
+            return None
+        return (cron, tz)
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning("ohlcv schedule introspection failed: %s", exc)
+        return None
+
+
+# Stable user-facing timezone labels. Financial convention is the DST-agnostic
+# two-letter code ("ET", "PT", "CT") rather than ``strftime('%Z')`` — the latter
+# flips between EDT/EST twice a year and would make the strip flap. Anything
+# outside the mapping falls back to ``%Z`` so the suffix still tracks the live
+# tz, which is what AC-1 (single source of truth) requires.
+_TZ_ABBREV = {
+    "America/New_York": "ET",
+    "America/Chicago": "CT",
+    "America/Denver": "MT",
+    "America/Los_Angeles": "PT",
+}
+
+
+def _next_ingest_local() -> str:
+    """Format the next firing of ``ohlcv_daily_schedule`` as ``HH:MM <TZ>``.
+
+    The strip surfaces the user-facing recurring time; the cron emits the same
+    ``HH:MM`` every day so a time-of-day slice carries the same information as
+    a full timestamp without locale-specific date formatting on the frontend.
+    The tz suffix is derived from the schedule's ``execution_timezone`` so a
+    cron / tz change in ``schedules.py`` propagates without an API code edit.
+    On any failure (introspection, croniter, tz lookup) we surface the static
+    fallback from settings — provenance must never take /health down.
+    """
+    pair = _ohlcv_schedule_cron_tz()
+    if pair is None:
+        return settings.PROVENANCE_NEXT_INGEST_FALLBACK
+    cron, tz = pair
+    try:
+        from dagster._utils.schedules import (  # type: ignore[import-not-found]
+            cron_string_iterator,
+        )
+
+        now = datetime.now(ZoneInfo(tz))
+        next_dt = next(cron_string_iterator(now.timestamp(), cron, tz))
+        abbrev = _TZ_ABBREV.get(tz) or next_dt.strftime("%Z") or tz
+        return f"{next_dt.strftime('%H:%M')} {abbrev}"
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning("next_ingest_local computation failed: %s", exc)
+        return settings.PROVENANCE_NEXT_INGEST_FALLBACK
+
+
+def _provenance() -> dict[str, Any]:
+    """Subsystem provenance for the Phase 6 data-driven UI strip (QNT-132).
+
+    SOURCES + JOBS only — SENTIMENT row dropped post-QNT-131 deferral, AGENT
+    row dropped as a hardcoded constant. Field shape stays forward-compatible
+    so reviving QNT-131 just adds a ``sentiment`` key here.
+    """
+    return {
+        "sources": list(settings.PROVENANCE_SOURCES),
+        "jobs": {
+            "runtime": "Dagster",
+            "schedule": "daily",
+            "next_ingest_local": _next_ingest_local(),
+        },
+    }
 
 
 def _check_clickhouse() -> str:
@@ -101,6 +184,7 @@ def _health_payload(response: Response) -> dict[str, Any]:
             "dagster_assets": assets,
             "dagster_checks": checks,
         },
+        "provenance": _provenance(),
     }
 
 
