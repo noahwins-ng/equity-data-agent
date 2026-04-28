@@ -41,8 +41,9 @@ logger = logging.getLogger(__name__)
 news_partitions = StaticPartitionsDefinition(TICKERS)
 
 # Steady-state lookback window. 7 days matches the news_embeddings re-embed
-# window in news_embeddings.py (and gives a buffer over the 4h schedule), so
-# a single missed tick doesn't leave gaps. Backfill overrides via NewsRawConfig.
+# window in news_embeddings.py (and gives a 6-tick buffer over the daily
+# schedule), so a single missed tick doesn't leave gaps. Backfill overrides
+# via NewsRawConfig.
 _DEFAULT_LOOKBACK_DAYS = 7
 
 # Inter-call sleep, identical to the prior RSS path. Finnhub's free tier is

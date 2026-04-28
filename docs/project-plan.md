@@ -342,6 +342,11 @@ Updated automatically by `/ship` and `/sync-docs`.
     - Add delta-only upsert: scroll existing point IDs per ticker via `qdrant.scroll_ids` and skip rows whose `point_id(ticker, url_id)` is already indexed. Steady-state ticks now embed only new articles since the last tick.
     - Symmetric-window count check: both sides of `news_embeddings_vector_count_matches_source` scope to the same 7-day `published_at` window so neither the 1y CH backfill nor aged-out Qdrant points (no GC) lock the tolerance check into permanent WARN. Adversarial review (QNT-142) caught the Qdrant-side asymmetry that would have started false-failing within ~9 days otherwise.
     - Out of scope: Qdrant garbage-collection of points whose `published_at` aged past the window (the orphan check has the same monotonic-growth shape; needs a follow-up if `equity_news` storage starts tracking toward the 4 GB free-tier cap). News ingest schedule resume happens in Dagster UI post-deploy.
+- [x] **Shift `news_raw_schedule` from 4h cadence to daily (02:00 ET)** — QNT-143 **[aligns ingest cadence with design v2 EOD framing; cleans the only sub-daily schedule in the project]**
+    - `cron_schedule` flips from `0 */4 * * *` to `0 2 * * *` in `packages/dagster-pipelines/src/dagster_pipelines/schedules.py`. 7-day-per-week (no weekday filter) — news happens on weekends too (after-hours announcements, weekend macro, earnings warnings).
+    - Aligns with `docs/design-frontend-plan.md` push-back #1 ("Drop the 'LIVE / 8ms / 5s refresh' framing") and the QNT-72 bottom-left status `EOD · 02:00 ET`. Post-QNT-142 the 4h cadence was functionally cheap (delta-only upsert), but cheap-and-aligned beats cheap-and-vestigial.
+    - Inference token budget drops from ~270k/mo (5% of free tier) to ~70k/mo (1.4%); Dagster runs/day from 60 to 10; clean of overlap with ohlcv_daily (17:00 ET) and fundamentals_weekly (Sun 22:00 ET).
+    - QNT-93 freshness check `_MAX_INGESTION_LAG_HOURS` bumped from 24h to 48h (2× cadence) — tighter would flap right before each next tick now that cadence equals the prior threshold.
 - [ ] **Watchlist (left pane) + landing page** (`/`) — QNT-72
     - Persistent left-rail watchlist in `app/layout.tsx` (always visible, not a card grid).
     - 10 portfolio tickers + SPY benchmark; per-row: symbol · name · price · % change · 60-day inline-SVG sparkline.

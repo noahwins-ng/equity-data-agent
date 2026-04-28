@@ -197,6 +197,8 @@ Reopen this ADR if any of these fire:
 
 ## Revision history
 
+**2026-04-28 (QNT-143, ingest cadence):** "Ingest cadence: keep 4h" (§Decision) is **superseded** — `news_raw_schedule` shifted to `0 2 * * *` (02:00 ET daily, 7 days/week). The 4h cadence was inherited from QNT-53's RSS design when "near-real-time news chip" was a load-bearing demo claim; design v2 (`docs/design-frontend-plan.md` push-back #1) reframes the project as an analyst workstation with explicit `EOD · 02:00 ET` framing, so the only sub-daily schedule in the project quietly contradicted that. Post-QNT-142 the 4h cadence was functionally cheap (delta-only upsert), but cheap-and-aligned beats cheap-and-vestigial. Inference token budget drops from ~270k/mo (5%) to ~70k/mo (1.4%); Dagster runs/day from 60 to 10. The capacity table in §"Capacity math" is unaffected — Finnhub fits at any cadence we'd plausibly pick. The "Backfilling 1y of news in a single materialization run" anti-pattern (§Anti-patterns #4) now reads "the daily schedule then carries forward."
+
 **2026-04-28 (post-QNT-141, alongside QNT-142):** Topology (a) is preserved on paper, but the classifier itself is deferred — QNT-131 moved out of Phase 6 to Backlog. Three forces drove the call:
 
 1. **Heavy LLM use for a 3-class label** couples the classifier to the agent's Groq TPD bucket (calibrated in ADR-011 §"Free-tier budget") and inherits its rate-limit failure modes. QNT-142's Qdrant calibration trap surfaced the same shape on the embedding side post-QNT-141 backfill; we don't need a second copy of that risk on the classifier side.
