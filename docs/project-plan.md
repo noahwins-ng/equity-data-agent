@@ -337,6 +337,11 @@ Updated automatically by `/ship` and `/sync-docs`.
     - One-time 1y backfill on first run (Finnhub free tier explicitly allows 1y history per `freeTier: "1 year of historical news and new updates"` in the docs JSON).
     - `FINNHUB_API_KEY` added to `Settings` + `.env.example` + SOPS prod (per QNT-102).
     - Side-by-side density check (Finnhub vs RSS for one ticker, one week) before cutover; verify `news_embeddings` re-runs cleanly on Finnhub rows (point-id formula from QNT-120 is source-agnostic).
+- [x] **Bound `news_embeddings` to recent + delta-only upsert — protect Qdrant free tier post-QNT-141** — QNT-142 **[durable fix for the QNT-141 backfill blast radius; calibration multiplier surfaced via `feedback_full_refresh_multiplier.md`]**
+    - Switch `_FRESH_WINDOW_SQL` from `fetched_at >= now() - INTERVAL 7 DAY` to `published_at >= now() - INTERVAL 7 DAY` so the 28k-row Finnhub backfill (all `fetched_at = today`, 1y of `published_at` history) drops out of Qdrant scope. Pre-fix projection: 168k inferences/day, ~93x the calibrated free-tier budget.
+    - Add delta-only upsert: scroll existing point IDs per ticker via `qdrant.scroll_ids` and skip rows whose `point_id(ticker, url_id)` is already indexed. Steady-state ticks now embed only new articles since the last tick.
+    - Symmetric-window count check: both sides of `news_embeddings_vector_count_matches_source` scope to the same 7-day `published_at` window so neither the 1y CH backfill nor aged-out Qdrant points (no GC) lock the tolerance check into permanent WARN. Adversarial review (QNT-142) caught the Qdrant-side asymmetry that would have started false-failing within ~9 days otherwise.
+    - Out of scope: Qdrant garbage-collection of points whose `published_at` aged past the window (the orphan check has the same monotonic-growth shape; needs a follow-up if `equity_news` storage starts tracking toward the 4 GB free-tier cap). News ingest schedule resume happens in Dagster UI post-deploy.
 - [ ] **Watchlist (left pane) + landing page** (`/`) — QNT-72
     - Persistent left-rail watchlist in `app/layout.tsx` (always visible, not a card grid).
     - 10 portfolio tickers + SPY benchmark; per-row: symbol · name · price · % change · 60-day inline-SVG sparkline.

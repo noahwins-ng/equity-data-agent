@@ -15,6 +15,7 @@ ERROR by replacing the ``severity=`` kwarg in its ``AssetCheckResult``.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from dagster import (
@@ -28,6 +29,7 @@ from dagster_pipelines.assets.news_embeddings import (
     VECTOR_SIZE,
     news_embeddings,
     point_id,
+    ticker_filter,
 )
 from dagster_pipelines.resources.clickhouse import ClickHouseResource
 from dagster_pipelines.resources.qdrant import QdrantResource
@@ -36,6 +38,36 @@ if TYPE_CHECKING:
     from qdrant_client.models import Filter
 
 _NEWS_TABLE = "equity_raw.news_raw"
+
+# Same rolling-7d ``published_at`` window as ``news_embeddings._FRESH_WINDOW_SQL``
+# (QNT-142). The asset only embeds rows in this window, so both sides of the
+# count check are scoped to it — otherwise the 1y Finnhub backfill in
+# ClickHouse would dwarf Qdrant's 7-day rolling index, *and* old Qdrant points
+# (no GC, accumulating monotonically) would dwarf the windowed CH count after
+# ~9 days. Either asymmetry would lock the tolerance check into permanent WARN
+# state and mask the silent-failure class it exists to detect.
+_WINDOW_DAYS = 7
+_PUBLISHED_WINDOW_PREDICATE = f"published_at >= now() - INTERVAL {_WINDOW_DAYS} DAY"
+
+
+def _ticker_within_window_filter(ticker: str, cutoff_ts: int) -> Filter:
+    """Build a Qdrant filter scoped to ticker + ``published_at >= cutoff_ts``.
+
+    Distinct from the asset's ``ticker_filter`` because the count check needs
+    a payload-side window match to mirror the CH-side ``WHERE published_at >=
+    now() - INTERVAL 7 DAY``. The shared ``payload_indexes`` config in
+    ``NEWS_COLLECTION_SPEC`` exposes ``published_at`` as an integer index, so
+    the Range filter hits the index without a full scan.
+    """
+    from qdrant_client.models import FieldCondition, Filter, MatchValue, Range
+
+    return Filter(
+        must=[
+            FieldCondition(key="ticker", match=MatchValue(value=ticker)),
+            FieldCondition(key="published_at", range=Range(gte=cutoff_ts)),
+        ]
+    )
+
 
 _DEFAULT_SEVERITY = AssetCheckSeverity.WARN
 
@@ -49,20 +81,13 @@ _DEFAULT_SEVERITY = AssetCheckSeverity.WARN
 _COUNT_DELTA_TOLERANCE = 5
 
 
-def _ticker_filter(ticker: str) -> Filter:
-    """Build a Qdrant filter matching points whose payload ticker equals ``ticker``."""
-    from qdrant_client.models import FieldCondition, Filter, MatchValue
-
-    return Filter(must=[FieldCondition(key="ticker", match=MatchValue(value=ticker))])
-
-
 @asset_check(asset=news_embeddings)
 def news_embeddings_vector_count_matches_source(
     clickhouse: ClickHouseResource,
     qdrant: QdrantResource,
 ) -> AssetCheckResult:
     """Warn if per-ticker Qdrant point count diverges from news_raw's distinct
-    ``id`` count.
+    ``id`` count for articles inside the 7-day publish window.
 
     The asset keys Qdrant points by ``point_id(ticker, url_id)`` (QNT-120), so
     two news_raw rows with the same ``(ticker, id)`` but different
@@ -72,6 +97,13 @@ def news_embeddings_vector_count_matches_source(
     semantic match as drift; ``uniqExact(id)`` mirrors the per-ticker dedup
     the asset actually performs.
 
+    Both stores' counts are scoped to the same rolling-7d ``published_at``
+    window the asset uses (QNT-142). Symmetric scoping is load-bearing: a
+    one-sided window would let either the 1y Finnhub backfill in ClickHouse
+    (CH unwindowed) or aged-out Qdrant points that no longer match a fresh
+    CH row (Qdrant unwindowed; no GC) lock the check into permanent WARN
+    state within days, masking the silent-failure class it exists to catch.
+
     A per-ticker gap larger than the in-flight tolerance indicates the asset
     skipped some distinct URLs (transient Qdrant failure that exceeded the
     retry budget) or the feed produced many new rows since the last tick.
@@ -79,16 +111,26 @@ def news_embeddings_vector_count_matches_source(
     from shared.tickers import TICKERS
 
     ch_counts_df = clickhouse.query_df(
-        f"SELECT ticker, uniqExact(id) AS n FROM {_NEWS_TABLE} FINAL GROUP BY ticker"
+        f"SELECT ticker, uniqExact(id) AS n FROM {_NEWS_TABLE} FINAL "
+        f"WHERE {_PUBLISHED_WINDOW_PREDICATE} GROUP BY ticker"
     )
     ch_counts = {
         str(t): int(n) for t, n in zip(ch_counts_df["ticker"], ch_counts_df["n"], strict=False)
     }
 
+    # Single Python-side cutoff applied to every per-ticker Qdrant count call —
+    # one wall-clock anchor per check run keeps the CH window and the Qdrant
+    # window aligned across all 10 tickers (any drift here would re-introduce
+    # the asymmetry this scoping is meant to remove).
+    cutoff_ts = int((datetime.now(UTC) - timedelta(days=_WINDOW_DAYS)).timestamp())
+
     per_ticker_delta: dict[str, dict[str, int]] = {}
     divergences: dict[str, dict[str, int]] = {}
     for ticker in TICKERS:
-        qd = qdrant.count(COLLECTION, query_filter=_ticker_filter(ticker))
+        qd = qdrant.count(
+            COLLECTION,
+            query_filter=_ticker_within_window_filter(ticker, cutoff_ts),
+        )
         ch = ch_counts.get(ticker, 0)
         entry = {"qdrant": qd, "clickhouse": ch, "delta": qd - ch}
         per_ticker_delta[ticker] = entry
@@ -138,7 +180,7 @@ def news_embeddings_no_orphaned_vectors(
     for ticker in TICKERS:
         # scroll_ids paginates fully and raises if it hits the safety cap, so a
         # silently-truncated scroll cannot mask orphans beyond page 1.
-        qd_ids = qdrant.scroll_ids(COLLECTION, query_filter=_ticker_filter(ticker))
+        qd_ids = qdrant.scroll_ids(COLLECTION, query_filter=ticker_filter(ticker))
         if not qd_ids:
             continue
         total_scanned += len(qd_ids)
