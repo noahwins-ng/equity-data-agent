@@ -40,9 +40,20 @@ class _UpsertCall:
 
 
 @dataclass
+class _ScrollCall:
+    collection: str
+    ticker: str | None
+
+
+@dataclass
 class _Recorder:
     ensured: list[QdrantCollectionSpec] = field(default_factory=list)
     upserts: list[_UpsertCall] = field(default_factory=list)
+    scrolls: list[_ScrollCall] = field(default_factory=list)
+    # Pre-seeded "already in Qdrant" point IDs returned by scroll_ids.
+    # Defaults to empty (first run / nothing indexed yet); tests that exercise
+    # the QNT-142 delta-only filter set this to the IDs the asset should skip.
+    existing_ids: list[int] = field(default_factory=list)
 
 
 @pytest.fixture
@@ -61,9 +72,28 @@ def qdrant_recorder(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
     def _upsert(self: QdrantResource, collection: str, points: list[Any]) -> None:
         recorder.upserts.append(_UpsertCall(collection=collection, points=list(points)))
 
+    def _scroll_ids(
+        self: QdrantResource,
+        collection: str,
+        query_filter: Any | None = None,
+        page_size: int = 10_000,
+        max_pages: int = 100,
+    ) -> list[int]:
+        del page_size, max_pages  # fake is in-memory, pagination doesn't apply
+        ticker = _ticker_from_filter(query_filter) if query_filter is not None else None
+        recorder.scrolls.append(_ScrollCall(collection=collection, ticker=ticker))
+        return list(recorder.existing_ids)
+
     monkeypatch.setattr(QdrantResource, "ensure_collection", _ensure)
     monkeypatch.setattr(QdrantResource, "upsert_points", _upsert)
+    monkeypatch.setattr(QdrantResource, "scroll_ids", _scroll_ids)
     return recorder
+
+
+def _ticker_from_filter(query_filter: Any) -> str:
+    """Extract the ticker literal from the ``ticker_filter`` Qdrant Filter
+    the asset builds — mirrors the helper in test_news_asset_checks.py."""
+    return query_filter.must[0].match.value
 
 
 # ── ClickHouse fake ───────────────────────────────────────────────────────────
@@ -164,10 +194,14 @@ def test_builds_document_points_and_upserts(qdrant_recorder: _Recorder) -> None:
     assert {p.payload["ticker"] for p in call.points} == {"NVDA"}
 
 
-def test_query_filters_by_ticker_and_7_day_window(qdrant_recorder: _Recorder) -> None:
+def test_query_filters_by_ticker_and_published_at_7_day_window(
+    qdrant_recorder: _Recorder,
+) -> None:
     """The asset must pass partition_key as the ticker parameter and scope the
-    query to the 7-day fresh window — otherwise a backfill would re-embed the
-    full news history."""
+    query to the 7-day publish window. QNT-142 switched the column from
+    ``fetched_at`` to ``published_at`` to keep the per-tick Qdrant inference
+    budget bounded after the QNT-141 Finnhub backfill landed 28k rows with
+    ``fetched_at = today``."""
     clickhouse = _FakeClickHouse(_sample_df())
     ctx = build_asset_context(partition_key="NVDA")
 
@@ -181,12 +215,70 @@ def test_query_filters_by_ticker_and_7_day_window(qdrant_recorder: _Recorder) ->
     assert "equity_raw.news_raw" in clickhouse.last_query
     assert "INTERVAL 7 DAY" in clickhouse.last_query
     assert "FINAL" in clickhouse.last_query
+    # QNT-142: window column is published_at, not fetched_at. Failing this
+    # assertion means a regression has reintroduced the 93x inference-budget
+    # multiplier that paused the news_raw_schedule.
+    assert "published_at >= now() - INTERVAL 7 DAY" in clickhouse.last_query
+    assert "fetched_at" not in clickhouse.last_query
     assert clickhouse.last_parameters == {"ticker": "NVDA"}
+
+
+def test_delta_only_skips_already_indexed_points(qdrant_recorder: _Recorder) -> None:
+    """QNT-142: Qdrant already holds the first row's namespaced point ID, so
+    the asset must filter that row out and upsert only the second.
+
+    Without the delta filter, every tick would re-send every row in the
+    7-day window through Qdrant Cloud Inference — burning the free-tier
+    token budget on identical embeddings the server already has."""
+    df = _sample_df()
+    qdrant_recorder.existing_ids = [point_id("NVDA", int(df.iloc[0]["id"]))]
+
+    ctx = build_asset_context(partition_key="NVDA")
+    news_embeddings(
+        context=ctx,
+        clickhouse=_FakeClickHouse(df),  # type: ignore[arg-type]
+        qdrant=QdrantResource(),
+    )
+
+    # scroll_ids must be called for the partition ticker before any upsert.
+    assert len(qdrant_recorder.scrolls) == 1
+    assert qdrant_recorder.scrolls[0].ticker == "NVDA"
+
+    # Only the second row goes to Qdrant; the first is already indexed.
+    assert len(qdrant_recorder.upserts) == 1
+    call = qdrant_recorder.upserts[0]
+    assert len(call.points) == 1
+    assert call.points[0].id == point_id("NVDA", int(df.iloc[1]["id"]))
+
+
+def test_delta_only_skips_upsert_when_all_points_already_indexed(
+    qdrant_recorder: _Recorder,
+) -> None:
+    """When every candidate row is already in Qdrant the asset must not call
+    upsert at all — empty upserts are a no-op on the server but still consume
+    a round-trip we don't need."""
+    df = _sample_df()
+    qdrant_recorder.existing_ids = [point_id("NVDA", int(record_id)) for record_id in df["id"]]
+
+    ctx = build_asset_context(partition_key="NVDA")
+    news_embeddings(
+        context=ctx,
+        clickhouse=_FakeClickHouse(df),  # type: ignore[arg-type]
+        qdrant=QdrantResource(),
+    )
+
+    assert len(qdrant_recorder.scrolls) == 1
+    # The scroll must be ticker-scoped — a cross-ticker scroll could return
+    # IDs that suppress legitimate-new-on-this-ticker rows from upsert.
+    assert qdrant_recorder.scrolls[0].ticker == "NVDA"
+    assert qdrant_recorder.upserts == []
 
 
 def test_empty_partition_skips_qdrant_write(qdrant_recorder: _Recorder) -> None:
     """If the 7-day window has no news for the ticker (common on quiet days or
-    first-run tickers), the asset must not call upsert at all."""
+    first-run tickers), the asset must not call upsert at all — and must
+    short-circuit *before* the scroll, so an empty partition doesn't burn a
+    Qdrant round-trip on every tick."""
     clickhouse = _FakeClickHouse(
         pd.DataFrame(columns=["id", "ticker", "headline", "url", "source", "published_at"])
     )
@@ -199,6 +291,9 @@ def test_empty_partition_skips_qdrant_write(qdrant_recorder: _Recorder) -> None:
     )
 
     assert qdrant_recorder.upserts == []
+    # Empty CH → asset returns before scroll_ids; if a regression moves the
+    # scroll above the empty guard, this fails.
+    assert qdrant_recorder.scrolls == []
 
 
 def test_cloud_inference_enabled_by_default() -> None:

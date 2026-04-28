@@ -66,8 +66,13 @@ class _FakeQdrant:
     ids_by_ticker: dict[str, list[int]] = field(default_factory=dict)
     dimension: int = VECTOR_SIZE
     dimension_raises: Exception | None = None
+    # Filter shape recorder — tests that need to assert *which* filter shape
+    # the check passed to ``count`` (e.g., the QNT-142 published_at-windowed
+    # filter on the count check) read from this list. Append-only, ordered.
+    count_filters: list[Any] = field(default_factory=list)
 
     def count(self, _collection: str, query_filter: Any | None = None) -> int:
+        self.count_filters.append(query_filter)
         ticker = _ticker_from_filter(query_filter)
         return self.counts_by_ticker.get(ticker, 0)
 
@@ -290,6 +295,50 @@ def test_news_embeddings_vector_count_flags_large_divergence() -> None:
     divergent = e.metadata["divergent_tickers"].value
     assert isinstance(divergent, dict)
     assert "NVDA" in divergent
+
+
+def test_news_embeddings_vector_count_uses_published_at_windowed_qdrant_filter() -> None:
+    """Both sides of the count comparison must scope to the same 7-day
+    published_at window. Without the Qdrant-side window the gap drifts
+    monotonically as old points accumulate (no GC) past the CH-side cutoff
+    — the check would emit a permanent WARN within ~9 days of the QNT-141
+    backfill landing and mask real drift.
+
+    Verifies the structural shape of the filter sent to ``qdrant.count``:
+    a ticker FieldCondition + a published_at Range with a recent ``gte``.
+    """
+    from datetime import UTC, datetime
+
+    from shared.tickers import TICKERS
+
+    ch = _FakeClickHouse(
+        query_df_responses=[("GROUP BY ticker", _all_tickers_df(100))],
+    )
+    qdrant = _FakeQdrant(counts_by_ticker={t: 100 for t in TICKERS})
+
+    before = int(datetime.now(UTC).timestamp())
+    _run_check(
+        news_embeddings_vector_count_matches_source,
+        asset=news_embeddings,
+        resources={"clickhouse": ch, "qdrant": qdrant},
+    )
+    after = int(datetime.now(UTC).timestamp())
+
+    # One count call per ticker, all windowed.
+    assert len(qdrant.count_filters) == len(TICKERS)
+    seven_days_seconds = 7 * 24 * 60 * 60
+    for f in qdrant.count_filters:
+        # First condition is ticker (helper still finds it for the existing
+        # _ticker_from_filter shortcut), second is the published_at Range.
+        assert len(f.must) == 2
+        assert f.must[0].key == "ticker"
+        assert f.must[1].key == "published_at"
+        cutoff = f.must[1].range.gte
+        assert cutoff is not None
+        # ``gte`` cutoff lands within the window [now - 7d - test-fudge,
+        # now - 7d + test-fudge]; if anyone reverts to a one-sided window the
+        # fudged-by-execution-time bound still fails.
+        assert before - seven_days_seconds - 5 <= cutoff <= after - seven_days_seconds + 5
 
 
 def test_news_embeddings_no_orphaned_vectors_passes_when_all_ids_in_clickhouse() -> None:
