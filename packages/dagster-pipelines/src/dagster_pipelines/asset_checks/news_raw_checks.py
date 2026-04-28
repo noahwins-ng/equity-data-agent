@@ -31,11 +31,15 @@ _DEFAULT_SEVERITY = AssetCheckSeverity.WARN
 # UTC but feed publishers sometimes post a few minutes ahead of wall clock.
 _FUTURE_TOLERANCE_SECONDS = 3600
 
-# news_raw_schedule runs every 4h, so 24h (6× cadence) is a loose upper bound
-# for per-ticker freshness before something is obviously stalled. ReplacingMergeTree
-# refreshes fetched_at on every re-insert, so even a "quiet" ticker with no new
-# URLs still has a fresh fetched_at as long as the asset ran successfully.
-_MAX_INGESTION_LAG_HOURS = 24
+# news_raw_schedule runs daily at 02:00 ET (QNT-143). 48h (2× cadence) bounds
+# per-ticker freshness so the check fires after exactly one missed tick plus a
+# grace day — i.e., a silent failure on the Saturday tick warns by Monday's
+# check. Tighter than 48h would flap because max(fetched_at) approaches 24h
+# right before each next tick. Looser would mask consecutive silent failures.
+# ReplacingMergeTree refreshes fetched_at on every re-insert, so even a "quiet"
+# ticker with no new URLs still has a fresh fetched_at as long as the asset
+# ran successfully.
+_MAX_INGESTION_LAG_HOURS = 48
 
 
 @asset_check(asset=news_raw)
@@ -139,11 +143,11 @@ def news_raw_no_future_published_at(clickhouse: ClickHouseResource) -> AssetChec
 def news_raw_recent_ingestion(clickhouse: ClickHouseResource) -> AssetCheckResult:
     """Warn if any ticker's most recent fetched_at is older than _MAX_INGESTION_LAG_HOURS.
 
-    news_raw_schedule runs every 4h; ReplacingMergeTree refreshes fetched_at
-    on every re-insert of the same URL hash. So max(fetched_at) per ticker
-    should advance every tick even on quiet tickers. A ticker stuck >24h
-    indicates a silent ingestion failure (DNS, 404, parser regression) that
-    doesn't raise but also doesn't produce rows.
+    news_raw_schedule runs daily at 02:00 ET; ReplacingMergeTree refreshes
+    fetched_at on every re-insert of the same URL hash. So max(fetched_at) per
+    ticker should advance every tick even on quiet tickers. A ticker stuck
+    >48h indicates a silent ingestion failure (DNS, 404, parser regression)
+    that doesn't raise but also doesn't produce rows.
     """
     # One query returns every ticker's staleness; we classify stale/fresh in
     # Python rather than running a second full scan. Tickers entirely missing

@@ -220,7 +220,7 @@ def test_news_raw_recent_ingestion_reports_stale_tickers() -> None:
             (
                 "GROUP BY ticker",
                 pd.DataFrame(
-                    [{"ticker": "TSLA", "hours_since_fetch": 30}]
+                    [{"ticker": "TSLA", "hours_since_fetch": 60}]
                     + [
                         {"ticker": t, "hours_since_fetch": 2}
                         for t in (
@@ -241,7 +241,7 @@ def test_news_raw_recent_ingestion_reports_stale_tickers() -> None:
     )
     e = _run_check(news_raw_recent_ingestion, asset=news_raw, resources={"clickhouse": ch})
     assert not e.passed
-    assert e.metadata["stale_tickers"].value == {"TSLA": 30}
+    assert e.metadata["stale_tickers"].value == {"TSLA": 60}
     assert e.metadata["fresh_ticker_count"].value == 9
 
 

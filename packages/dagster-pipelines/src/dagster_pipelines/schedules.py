@@ -84,25 +84,26 @@ def fundamentals_weekly_schedule(context: ScheduleEvaluationContext):
         )
 
 
-# QNT-53 concurrency pre-flight (docs/patterns.md §"Adding a Dagster Asset"):
-#   dagster-daemon mem_limit = 3g (QNT-115). safe_concurrent_runs =
-#   (3072 − 660) / 360 ≈ 6. max_concurrent_runs = 3 (dagster.yaml, QNT-113).
-#   4-hour cron fans out 10 news partitions but the QueuedRunCoordinator
-#   serializes to 3 at a time. Overlap with ohlcv_daily_schedule (17:00 ET) and
-#   fundamentals_weekly_schedule (Sun 22:00 ET) stays within the cap — no
-#   mem_limit or max_concurrent_runs bump required.
+# 02:00 ET aligns with the design v2 EOD framing (docs/design-frontend-plan.md
+# push-back #1 + QNT-72 bottom-left status `EOD · 02:00 ET`). Clean of overlap
+# with ohlcv_daily_schedule (17:00 ET) and fundamentals_weekly_schedule
+# (Sun 22:00 ET); post-QNT-116 each run is an isolated container so daemon
+# mem_limit no longer gates concurrency.
 @schedule(
     job=news_raw_job,
-    cron_schedule="0 */4 * * *",  # every 4 hours on the hour
+    cron_schedule="0 2 * * *",  # 02:00 ET daily, 7 days/week
     execution_timezone="America/New_York",
     default_status=DefaultScheduleStatus.RUNNING,
 )
 def news_raw_schedule(context: ScheduleEvaluationContext):
-    """News refresh every 4 hours via Finnhub /company-news (QNT-141, ADR-015).
+    """News refresh daily at 02:00 ET via Finnhub /company-news (QNT-141, ADR-015).
 
-    Finnhub free tier is 60 RPM with 1y historical backfill. 10 tickers × 6
-    ticks/day = 60 calls/day — ~1% of the per-minute budget, well clear of
-    the ceiling. Requires FINNHUB_API_KEY in env / SOPS prod (QNT-102).
+    Finnhub free tier is 60 RPM with 1y historical backfill. 10 tickers × 1
+    tick/day = 10 calls/day — trivial against the per-minute ceiling, and
+    delta-only upsert (QNT-142) keeps Qdrant inference at ~70k tokens/month.
+    7-day cron: news happens on weekends too (after-hours announcements,
+    weekend macro, earnings warnings). Requires FINNHUB_API_KEY in env /
+    SOPS prod (QNT-102).
     """
     ts = context.scheduled_execution_time.isoformat() if context.scheduled_execution_time else ""
     for ticker in TICKERS:
