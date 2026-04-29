@@ -26,6 +26,11 @@ _TABLE = "equity_derived.fundamental_summary"
 # negative-earnings years (e.g. AMZN 2022 = latest_close × 2022 loss).
 _PE_MIN, _PE_MAX = -10_000.0, 10_000.0
 _NET_MARGIN_MIN, _NET_MARGIN_MAX = -100.0, 100.0  # percent
+# EBITDA margin shares net margin's [-100, 100] band — values outside that
+# range mean the numerator (single-period EBITDA) was divided by a
+# mismatched-period revenue, the same class of bug QNT-134 shipped on
+# quarterly rows before the fix-forward narrowed emission to TTM only.
+_EBITDA_MARGIN_MIN, _EBITDA_MARGIN_MAX = -100.0, 100.0  # percent
 
 
 @asset_check(asset=fundamental_summary)
@@ -77,6 +82,40 @@ def fundamental_summary_net_margin_in_band(
 
 
 @asset_check(asset=fundamental_summary)
+def fundamental_summary_ebitda_margin_in_band(
+    clickhouse: ClickHouseResource,
+) -> AssetCheckResult:
+    """Warn if ebitda_margin_pct is outside [-100, 100] percent.
+
+    Mirrors net_margin_pct's band check. The QNT-134 ship initially populated
+    ebitda_margin_pct on quarterly rows by dividing TTM EBITDA by a single-Q
+    revenue, producing values like 195%/233%/285% for NVDA. Without this band
+    check the bug only surfaced via manual spot-checking — the kind of
+    'first WARN' the asset-check rule (feedback_dont_explain_away_first_warn)
+    is meant to catch.
+    """
+    result = clickhouse.execute(
+        f"SELECT count() FROM {_TABLE} FINAL "
+        f"WHERE ebitda_margin_pct IS NOT NULL "
+        f"AND (ebitda_margin_pct < {_EBITDA_MARGIN_MIN} "
+        f"OR ebitda_margin_pct > {_EBITDA_MARGIN_MAX})"
+    )
+    bad = int(result.result_rows[0][0])
+    return AssetCheckResult(
+        passed=bad == 0,
+        severity=AssetCheckSeverity.WARN,
+        metadata={
+            "rows_outside_ebitda_margin_band": bad,
+            "band": [_EBITDA_MARGIN_MIN, _EBITDA_MARGIN_MAX],
+        },
+        description=(
+            f"{bad} rows with ebitda_margin_pct outside "
+            f"[{_EBITDA_MARGIN_MIN}, {_EBITDA_MARGIN_MAX}]"
+        ),
+    )
+
+
+@asset_check(asset=fundamental_summary)
 def fundamental_summary_no_infinities(clickhouse: ClickHouseResource) -> AssetCheckResult:
     """Warn if any ratio column contains +/-Infinity.
 
@@ -94,6 +133,7 @@ def fundamental_summary_no_infinities(clickhouse: ClickHouseResource) -> AssetCh
         "fcf_yoy_pct",
         "net_margin_pct",
         "gross_margin_pct",
+        "ebitda_margin_pct",
         "roe",
         "roa",
         "fcf_yield",

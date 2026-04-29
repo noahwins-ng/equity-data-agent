@@ -1,4 +1,5 @@
 from dagster_pipelines.asset_checks.fundamental_summary_checks import (
+    fundamental_summary_ebitda_margin_in_band,
     fundamental_summary_net_margin_in_band,
     fundamental_summary_no_infinities,
     fundamental_summary_pe_in_band,
@@ -63,6 +64,7 @@ ALL_ASSET_CHECKS = [
     # fundamental_summary
     fundamental_summary_pe_in_band,
     fundamental_summary_net_margin_in_band,
+    fundamental_summary_ebitda_margin_in_band,
     fundamental_summary_no_infinities,
     # news_raw
     news_raw_has_rows,
@@ -84,6 +86,7 @@ __all__ = [
     "daily_macd_signal_coherent",
     "daily_recent_no_nan",
     "daily_rsi_in_range",
+    "fundamental_summary_ebitda_margin_in_band",
     "fundamental_summary_net_margin_in_band",
     "fundamental_summary_no_infinities",
     "fundamental_summary_pe_in_band",

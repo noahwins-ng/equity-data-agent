@@ -85,8 +85,14 @@ def compute_fundamental_ratios(
     df["gross_margin_pct"] = (
         _safe_divide(df["gross_profit"], df["revenue"].replace(0, np.nan)) * 100
     )
-    # EBITDA margin substitutes operating margin (yfinance doesn't expose EBIT).
-    df["ebitda_margin_pct"] = _safe_divide(df["ebitda"], df["revenue"].replace(0, np.nan)) * 100
+    # EBITDA margin: yfinance only exposes a single point-in-time TTM value
+    # at `info.ebitda` (same number stamped onto every row by the ingest), so
+    # dividing by a single quarter's revenue produces a ~4× inflated ratio.
+    # We only emit ebitda_margin_pct on TTM rows where the denominator is
+    # also TTM revenue (see _build_ttm_rows). Quarterly + annual rows leave
+    # this column NULL — semantically ambiguous values are worse than absent
+    # ones for a downstream agent reading the report.
+    df["ebitda_margin_pct"] = np.nan
     df["roe"] = _safe_divide(df["net_income"], equity) * 100
     df["roa"] = _safe_divide(df["net_income"], df["total_assets"].replace(0, np.nan)) * 100
 
@@ -178,6 +184,12 @@ def _build_ttm_rows(
     ps_ttm = cast(pd.Series, market_cap_q / rev_ttm.replace(0, np.nan))
     nm_ttm = cast(pd.Series, ni_ttm / rev_ttm.replace(0, np.nan) * 100)
     fcf_yield_ttm = cast(pd.Series, fcf_ttm / market_cap_q * 100)
+    # EBITDA margin only makes sense as a TTM ratio because yfinance hands
+    # us a single TTM EBITDA figure (point-in-time, same on every ingested
+    # row). TTM revenue is the matching denominator, so this is the one
+    # row_type where ebitda_margin_pct is semantically defined.
+    ebitda_q = cast(pd.Series, q["ebitda"]).replace(0, np.nan)
+    ebitda_margin_ttm = cast(pd.Series, ebitda_q / rev_ttm.replace(0, np.nan) * 100)
 
     payload: dict[str, Any] = {
         "period_end": q["period_end"],
@@ -190,6 +202,7 @@ def _build_ttm_rows(
         "price_to_sales": ps_ttm,
         "net_margin_pct": nm_ttm,
         "fcf_yield": fcf_yield_ttm,
+        "ebitda_margin_pct": ebitda_margin_ttm,
     }
     # The asset always sets `ticker` AFTER calling this helper (one-ticker per
     # partition), so the test fixture omits the column. Only carry it through
