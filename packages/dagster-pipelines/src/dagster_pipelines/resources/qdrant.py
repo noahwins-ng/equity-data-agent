@@ -146,6 +146,46 @@ class QdrantResource(ConfigurableResource):
                     time.sleep(_RETRY_DELAY)
         raise RuntimeError(f"Qdrant upsert failed after {_MAX_RETRIES} attempts") from last_exc
 
+    def delete_points_by_filter(self, collection: str, query_filter: Any) -> None:
+        """Delete points in ``collection`` matching ``query_filter``.
+
+        Used by news_embeddings (QNT-145) to GC ticker-scoped points whose
+        ``published_at`` has aged past the rolling 7-day window. ADR-009
+        designed Qdrant as the rolling-7d semantic search index; without GC
+        the asset's in-window upsert filter let aged points accumulate
+        monotonically, eventually drowning live points and locking the
+        QNT-93 orphan check into permanent WARN.
+
+        Retry semantics match ``upsert_points``: transient 5xx / 429 /
+        transport errors retry up to ``_MAX_RETRIES``; everything else
+        (auth, validation) fails loud on first attempt.
+        """
+        from qdrant_client.models import FilterSelector
+
+        last_exc: Exception | None = None
+        for attempt in range(1, _MAX_RETRIES + 1):
+            try:
+                self._client().delete(
+                    collection_name=collection,
+                    points_selector=FilterSelector(filter=query_filter),
+                    wait=True,
+                )
+                return
+            except Exception as exc:
+                if not _is_transient_qdrant_error(exc):
+                    raise
+                last_exc = exc
+                if attempt < _MAX_RETRIES:
+                    logger.warning(
+                        "Qdrant delete failed (attempt %d/%d): %s — retrying in %.1fs",
+                        attempt,
+                        _MAX_RETRIES,
+                        exc,
+                        _RETRY_DELAY,
+                    )
+                    time.sleep(_RETRY_DELAY)
+        raise RuntimeError(f"Qdrant delete failed after {_MAX_RETRIES} attempts") from last_exc
+
     def count(self, collection: str, query_filter: Any | None = None) -> int:
         """Return the number of points in a collection (optionally filtered).
 

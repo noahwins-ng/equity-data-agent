@@ -24,6 +24,7 @@ from dagster_pipelines.assets.news_embeddings import (
     COLLECTION,
     EMBED_MODEL,
     VECTOR_SIZE,
+    WINDOW_DAYS,
     news_embeddings,
     point_id,
 )
@@ -46,10 +47,22 @@ class _ScrollCall:
 
 
 @dataclass
+class _DeleteCall:
+    """Records a ``QdrantResource.delete_points_by_filter`` invocation. ``cutoff``
+    is the integer ``lt`` bound on ``published_at`` extracted from the filter
+    (None if the filter doesn't carry a Range — defensive, asset always sets one)."""
+
+    collection: str
+    ticker: str | None
+    cutoff: int | None
+
+
+@dataclass
 class _Recorder:
     ensured: list[QdrantCollectionSpec] = field(default_factory=list)
     upserts: list[_UpsertCall] = field(default_factory=list)
     scrolls: list[_ScrollCall] = field(default_factory=list)
+    deletes: list[_DeleteCall] = field(default_factory=list)
     # Pre-seeded "already in Qdrant" point IDs returned by scroll_ids.
     # Defaults to empty (first run / nothing indexed yet); tests that exercise
     # the QNT-142 delta-only filter set this to the IDs the asset should skip.
@@ -84,9 +97,15 @@ def qdrant_recorder(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         recorder.scrolls.append(_ScrollCall(collection=collection, ticker=ticker))
         return list(recorder.existing_ids)
 
+    def _delete(self: QdrantResource, collection: str, query_filter: Any) -> None:
+        ticker = _ticker_from_filter(query_filter) if query_filter is not None else None
+        cutoff = _aged_cutoff_from_filter(query_filter) if query_filter is not None else None
+        recorder.deletes.append(_DeleteCall(collection=collection, ticker=ticker, cutoff=cutoff))
+
     monkeypatch.setattr(QdrantResource, "ensure_collection", _ensure)
     monkeypatch.setattr(QdrantResource, "upsert_points", _upsert)
     monkeypatch.setattr(QdrantResource, "scroll_ids", _scroll_ids)
+    monkeypatch.setattr(QdrantResource, "delete_points_by_filter", _delete)
     return recorder
 
 
@@ -94,6 +113,19 @@ def _ticker_from_filter(query_filter: Any) -> str:
     """Extract the ticker literal from the ``ticker_filter`` Qdrant Filter
     the asset builds — mirrors the helper in test_news_asset_checks.py."""
     return query_filter.must[0].match.value
+
+
+def _aged_cutoff_from_filter(query_filter: Any) -> int | None:
+    """Extract the ``lt`` bound on ``published_at`` from an ``aged_ticker_filter``
+    Filter (must=[ticker, published_at Range]). Returns None on filters that
+    don't carry a Range, which is how tests notice a regression that drops the
+    window predicate from the GC call."""
+    if len(query_filter.must) < 2:
+        return None
+    second = query_filter.must[1]
+    if second.key != "published_at" or second.range is None:
+        return None
+    return second.range.lt
 
 
 # ── ClickHouse fake ───────────────────────────────────────────────────────────
@@ -277,8 +309,10 @@ def test_delta_only_skips_upsert_when_all_points_already_indexed(
 def test_empty_partition_skips_qdrant_write(qdrant_recorder: _Recorder) -> None:
     """If the 7-day window has no news for the ticker (common on quiet days or
     first-run tickers), the asset must not call upsert at all — and must
-    short-circuit *before* the scroll, so an empty partition doesn't burn a
-    Qdrant round-trip on every tick."""
+    skip the scroll too, so an empty partition doesn't burn a Qdrant round-
+    trip on the upsert path. The GC tail still fires (QNT-145): a quiet
+    ticker may still have aged-out points from previous ticks that need
+    deletion regardless of whether new rows arrived."""
     clickhouse = _FakeClickHouse(
         pd.DataFrame(columns=["id", "ticker", "headline", "url", "source", "published_at"])
     )
@@ -291,9 +325,113 @@ def test_empty_partition_skips_qdrant_write(qdrant_recorder: _Recorder) -> None:
     )
 
     assert qdrant_recorder.upserts == []
-    # Empty CH → asset returns before scroll_ids; if a regression moves the
-    # scroll above the empty guard, this fails.
+    # Empty CH → upsert path short-circuits before scroll_ids; if a regression
+    # moves the scroll above the empty guard, this fails.
     assert qdrant_recorder.scrolls == []
+    # GC tail still runs: convergence on the rolling-7d window cannot depend
+    # on whether new CH rows arrived this tick.
+    assert len(qdrant_recorder.deletes) == 1
+    assert qdrant_recorder.deletes[0].ticker == "NVDA"
+
+
+# ── GC tail (QNT-145) ─────────────────────────────────────────────────────────
+
+
+def test_gc_deletes_aged_points_at_tail(qdrant_recorder: _Recorder) -> None:
+    """After a normal upsert, the asset must issue exactly one
+    ``delete_points_by_filter`` call scoped to (ticker, published_at < cutoff)
+    where ``cutoff ≈ now - WINDOW_DAYS``. Without this GC, points whose
+    published_at ages past the window accumulate monotonically in Qdrant."""
+    before = int(datetime.now(UTC).timestamp())
+    ctx = build_asset_context(partition_key="NVDA")
+
+    news_embeddings(
+        context=ctx,
+        clickhouse=_FakeClickHouse(_sample_df()),  # type: ignore[arg-type]
+        qdrant=QdrantResource(),
+    )
+    after = int(datetime.now(UTC).timestamp())
+
+    # Exactly one delete per tick — the asset is per-partition, so emitting
+    # more than one would scope-creep and risk deleting another ticker's points.
+    assert len(qdrant_recorder.deletes) == 1
+    call = qdrant_recorder.deletes[0]
+    assert call.collection == COLLECTION
+    assert call.ticker == "NVDA"
+
+    # Cutoff is the ``lt`` bound from the published_at Range condition; the
+    # extractor returns None if the filter is missing the Range, which is the
+    # exact regression shape this assertion catches.
+    window_seconds = WINDOW_DAYS * 24 * 60 * 60
+    assert call.cutoff is not None
+    assert before - window_seconds - 5 <= call.cutoff <= after - window_seconds + 5
+
+
+def test_gc_runs_even_when_no_recent_news(qdrant_recorder: _Recorder) -> None:
+    """A quiet ticker (no rows in the 7-day CH window) must still GC stale
+    Qdrant points from earlier ticks. Skipping GC on quiet ticks would let
+    points indexed N+1 days ago survive forever once the feed quietens —
+    the same monotonic-growth shape that motivated this ticket."""
+    clickhouse = _FakeClickHouse(
+        pd.DataFrame(columns=["id", "ticker", "headline", "url", "source", "published_at"])
+    )
+    ctx = build_asset_context(partition_key="NVDA")
+
+    news_embeddings(
+        context=ctx,
+        clickhouse=clickhouse,  # type: ignore[arg-type]
+        qdrant=QdrantResource(),
+    )
+
+    assert qdrant_recorder.upserts == []
+    assert len(qdrant_recorder.deletes) == 1
+    assert qdrant_recorder.deletes[0].ticker == "NVDA"
+    assert qdrant_recorder.deletes[0].cutoff is not None
+
+
+def test_gc_runs_when_all_candidates_already_indexed(qdrant_recorder: _Recorder) -> None:
+    """When every CH row is already in Qdrant the asset short-circuits the
+    upsert, but GC must still run — aged points are independent of whether
+    the candidate set produced any new upserts."""
+    df = _sample_df()
+    qdrant_recorder.existing_ids = [point_id("NVDA", int(record_id)) for record_id in df["id"]]
+
+    ctx = build_asset_context(partition_key="NVDA")
+    news_embeddings(
+        context=ctx,
+        clickhouse=_FakeClickHouse(df),  # type: ignore[arg-type]
+        qdrant=QdrantResource(),
+    )
+
+    assert qdrant_recorder.upserts == []
+    assert len(qdrant_recorder.deletes) == 1
+    assert qdrant_recorder.deletes[0].ticker == "NVDA"
+
+
+def test_gc_filter_is_complement_of_count_check_window() -> None:
+    """The asset GC and the QNT-142 count check must partition every Qdrant
+    point exactly once across the same anchor: count check keeps
+    ``published_at >= cutoff_ts``, GC deletes ``published_at < cutoff_ts``.
+    Same anchor, complementary predicates — without this any point at exactly
+    ``published_at == cutoff_ts`` would either get deleted AND counted (double-
+    bind) or neither (drift). Asserts the predicate operator the asset uses
+    is strictly less-than, mirroring the count check's gte boundary."""
+    from dagster_pipelines.assets.news_embeddings import aged_ticker_filter
+
+    cutoff = 1_700_000_000
+    # Filter's typed must-list is a Union over every Condition variant; the
+    # asset always emits FieldCondition with a Range, but pyright can't narrow
+    # the union from a runtime construction. ``Any`` keeps the assertions
+    # readable; tests in test_news_asset_checks.py use the same pattern.
+    f: Any = aged_ticker_filter("NVDA", cutoff)
+    assert len(f.must) == 2
+    assert f.must[0].key == "ticker"
+    assert f.must[0].match.value == "NVDA"
+    assert f.must[1].key == "published_at"
+    assert f.must[1].range.lt == cutoff
+    # gte must NOT also be set — that would create a half-open band that
+    # silently keeps every point (no point matches ``cutoff <= x < cutoff``).
+    assert f.must[1].range.gte is None
 
 
 def test_cloud_inference_enabled_by_default() -> None:

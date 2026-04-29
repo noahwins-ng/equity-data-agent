@@ -27,9 +27,9 @@ from dagster import (
 from dagster_pipelines.assets.news_embeddings import (
     COLLECTION,
     VECTOR_SIZE,
+    WINDOW_DAYS,
     news_embeddings,
     point_id,
-    ticker_filter,
 )
 from dagster_pipelines.resources.clickhouse import ClickHouseResource
 from dagster_pipelines.resources.qdrant import QdrantResource
@@ -39,15 +39,13 @@ if TYPE_CHECKING:
 
 _NEWS_TABLE = "equity_raw.news_raw"
 
-# Same rolling-7d ``published_at`` window as ``news_embeddings._FRESH_WINDOW_SQL``
-# (QNT-142). The asset only embeds rows in this window, so both sides of the
-# count check are scoped to it — otherwise the 1y Finnhub backfill in
-# ClickHouse would dwarf Qdrant's 7-day rolling index, *and* old Qdrant points
-# (no GC, accumulating monotonically) would dwarf the windowed CH count after
-# ~9 days. Either asymmetry would lock the tolerance check into permanent WARN
-# state and mask the silent-failure class it exists to detect.
-_WINDOW_DAYS = 7
-_PUBLISHED_WINDOW_PREDICATE = f"published_at >= now() - INTERVAL {_WINDOW_DAYS} DAY"
+# Same rolling ``published_at`` window as the asset's ``_FRESH_WINDOW_SQL`` and
+# QNT-145 GC tail. The asset only embeds rows in this window AND deletes points
+# outside it, so both sides of the count check (and now the orphan check) are
+# scoped to it — otherwise the 1y Finnhub backfill in ClickHouse would dwarf
+# Qdrant's 7-day rolling index, or aged Qdrant points pre-GC would dwarf the
+# windowed CH count, locking either check into permanent WARN.
+_PUBLISHED_WINDOW_PREDICATE = f"published_at >= now() - INTERVAL {WINDOW_DAYS} DAY"
 
 
 def _ticker_within_window_filter(ticker: str, cutoff_ts: int) -> Filter:
@@ -122,7 +120,7 @@ def news_embeddings_vector_count_matches_source(
     # one wall-clock anchor per check run keeps the CH window and the Qdrant
     # window aligned across all 10 tickers (any drift here would re-introduce
     # the asymmetry this scoping is meant to remove).
-    cutoff_ts = int((datetime.now(UTC) - timedelta(days=_WINDOW_DAYS)).timestamp())
+    cutoff_ts = int((datetime.now(UTC) - timedelta(days=WINDOW_DAYS)).timestamp())
 
     per_ticker_delta: dict[str, dict[str, int]] = {}
     divergences: dict[str, dict[str, int]] = {}
@@ -169,18 +167,30 @@ def news_embeddings_no_orphaned_vectors(
     the vector. Orphans contaminate semantic search with results that no
     longer have a source row to display.
 
+    QNT-145: scoped to the same rolling-7d ``published_at`` window the count
+    check uses. Pre-GC, an unscoped scroll over time would scan aged points
+    that no longer correspond to current source-of-truth rows; post-GC, those
+    points are deleted, so an unscoped scroll would silently become a no-op
+    on a quiet ticker — the same monotonic-growth asymmetry that masked
+    QNT-142's count check before it was symmetrised.
+
     Expected IDs are computed from news_raw in Python (rather than pushed down
     to SQL) because the namespacing is a Python-side helper; per-ticker row
     counts are bounded by the 7-day RSS volume, so the in-memory set is tiny.
     """
     from shared.tickers import TICKERS
 
+    cutoff_ts = int((datetime.now(UTC) - timedelta(days=WINDOW_DAYS)).timestamp())
+
     orphan_counts: dict[str, int] = {}
     total_scanned = 0
     for ticker in TICKERS:
         # scroll_ids paginates fully and raises if it hits the safety cap, so a
         # silently-truncated scroll cannot mask orphans beyond page 1.
-        qd_ids = qdrant.scroll_ids(COLLECTION, query_filter=ticker_filter(ticker))
+        qd_ids = qdrant.scroll_ids(
+            COLLECTION,
+            query_filter=_ticker_within_window_filter(ticker, cutoff_ts),
+        )
         if not qd_ids:
             continue
         total_scanned += len(qd_ids)

@@ -66,10 +66,13 @@ class _FakeQdrant:
     ids_by_ticker: dict[str, list[int]] = field(default_factory=dict)
     dimension: int = VECTOR_SIZE
     dimension_raises: Exception | None = None
-    # Filter shape recorder — tests that need to assert *which* filter shape
-    # the check passed to ``count`` (e.g., the QNT-142 published_at-windowed
-    # filter on the count check) read from this list. Append-only, ordered.
+    # Filter shape recorders — tests that need to assert *which* filter shape
+    # the check passed to ``count`` / ``scroll_ids`` (QNT-142 windowed count
+    # filter, QNT-145 windowed orphan-check scroll filter) read from these.
+    # Append-only, ordered.
     count_filters: list[Any] = field(default_factory=list)
+    scroll_filters: list[Any] = field(default_factory=list)
+    delete_filters: list[Any] = field(default_factory=list)
 
     def count(self, _collection: str, query_filter: Any | None = None) -> int:
         self.count_filters.append(query_filter)
@@ -84,8 +87,12 @@ class _FakeQdrant:
         max_pages: int = 100,
     ) -> list[int]:
         del page_size, max_pages  # fake is in-memory, pagination doesn't apply
+        self.scroll_filters.append(query_filter)
         ticker = _ticker_from_filter(query_filter)
         return list(self.ids_by_ticker.get(ticker, []))
+
+    def delete_points_by_filter(self, _collection: str, query_filter: Any) -> None:
+        self.delete_filters.append(query_filter)
 
     def collection_dimension(self, _collection: str) -> int:
         if self.dimension_raises is not None:
@@ -422,6 +429,53 @@ def test_news_embeddings_no_orphaned_vectors_ignores_cross_ticker_ids() -> None:
     )
     assert not e.passed
     assert e.metadata["orphans_per_ticker"].value == {"MSFT": 1}
+
+
+def test_news_embeddings_no_orphaned_vectors_uses_published_at_windowed_scroll_filter() -> None:
+    """QNT-145: the orphan check must scroll Qdrant scoped to the same 7-day
+    ``published_at`` window the count check uses. Without this scoping, after
+    GC ships the orphan check becomes a no-op on quiet tickers (no points
+    outside the window means scrolling all-time is the same as scrolling the
+    window) — but the asymmetry is exactly the trap that broke QNT-142's count
+    check before symmetrising. Scoping on both checks keeps the two stores'
+    contracts symmetric and makes regressions surface immediately.
+    """
+    from datetime import UTC, datetime
+
+    from shared.tickers import TICKERS
+
+    ch = _FakeClickHouse(
+        query_df_responses=[
+            ("SELECT id FROM equity_raw.news_raw", pd.DataFrame({"id": [1, 2, 3]})),
+        ],
+    )
+    qdrant = _FakeQdrant(
+        ids_by_ticker={t: [point_id(t, i) for i in [1, 2, 3]] for t in TICKERS},
+    )
+
+    before = int(datetime.now(UTC).timestamp())
+    _run_check(
+        news_embeddings_no_orphaned_vectors,
+        asset=news_embeddings,
+        resources={"clickhouse": ch, "qdrant": qdrant},
+    )
+    after = int(datetime.now(UTC).timestamp())
+
+    # One scroll per ticker, all windowed.
+    assert len(qdrant.scroll_filters) == len(TICKERS)
+    seven_days_seconds = 7 * 24 * 60 * 60
+    for f in qdrant.scroll_filters:
+        # Same ticker + published_at Range shape as the count-check filter.
+        assert len(f.must) == 2
+        assert f.must[0].key == "ticker"
+        assert f.must[1].key == "published_at"
+        cutoff = f.must[1].range.gte
+        assert cutoff is not None
+        # ``gte`` cutoff lands within the window [now - 7d - test-fudge,
+        # now - 7d + test-fudge]; if anyone reverts to the unscoped
+        # ``ticker_filter`` (no Range), pyright still accepts but this
+        # assertion fails because Range is None.
+        assert before - seven_days_seconds - 5 <= cutoff <= after - seven_days_seconds + 5
 
 
 def test_news_embeddings_embedding_dimension_passes_at_384() -> None:
