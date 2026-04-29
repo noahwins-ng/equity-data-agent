@@ -220,7 +220,7 @@ equity-data-agent/
 │   └── workflows/
 │       ├── ci.yml                  # Lint + test on PR
 │       └── deploy.yml              # SSH deploy on push to main
-├── migrations/                     # Version-controlled ClickHouse DDL (run in order via make migrate)
+├── migrations/                     # Version-controlled ClickHouse DDL (auto-applied on deploy; `make migrate` for local dev)
 │   ├── 000_create_databases.sql    # CREATE DATABASE IF NOT EXISTS equity_raw / equity_derived
 │   ├── 001_create_ohlcv_raw.sql
 │   ├── 002_create_fundamentals.sql
@@ -633,7 +633,7 @@ Backend (GitHub Actions):
         └── cd /opt/equity-data-agent
               └── git pull origin main
                     └── docker compose --profile prod up -d --build
-                          └── make migrate   # run DDL migrations after ClickHouse is healthy
+                          └── Apply migrations/*.sql over HTTP (idempotent, QNT-146)
                                 └── Verify deploy: curl /health with 60s retry loop
 
 Frontend (Vercel):

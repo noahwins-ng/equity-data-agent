@@ -183,7 +183,7 @@ Slash commands (`/pick`, `/implement`, `/sanity-check`, `/review`, `/ship`, `/go
 
 **Backend** — Hetzner CX41 (16GB), Docker Compose, GitHub Actions CD:
 
-- Push to `main` → SSH → `git pull` → `make migrate` → `docker compose up -d` → restart any service whose bind-mounted config changed → two hard gates: `git rev-parse HEAD` matches the merged commit SHA, and the Dagster definitions module loads with the expected asset/check/schedule counts.
+- Push to `main` → SSH → `git pull` → `docker compose up -d` → apply `migrations/*.sql` over HTTP (idempotent DDL, QNT-146) → restart any service whose bind-mounted config changed → two hard gates: `git rev-parse HEAD` matches the merged commit SHA, and the Dagster definitions module loads with the expected asset/check/schedule counts.
 - Topology ([ADR-010](docs/decisions/010-dagster-production-topology.md)): split `dagster-code-server` (gRPC on :4000) + `dagster-daemon` + webserver, with `DockerRunLauncher` so each Dagster run is its own ephemeral container with its own cgroup.
 - Secrets at rest: SOPS-encrypted `.env.sops`, decrypted on deploy.
 - Alerting: UptimeRobot probe on `/api/v1/health` (Discord) + a `docker-events-notify` systemd unit streaming `die`/`kill`/`oom`/`restart` events to Discord ≤30 s.
