@@ -37,6 +37,11 @@ COLLECTION = "equity_news"
 VECTOR_SIZE = 384  # all-MiniLM-L6-v2 output dimension
 EMBED_MODEL = "sentence-transformers/all-minilm-l6-v2"
 
+# Rolling window the asset operates over (ADR-009). Single source of truth
+# shared by ``_FRESH_WINDOW_SQL`` (CH-side upsert input), the QNT-145 GC tail
+# (Qdrant-side delete), and the QNT-93 count + orphan checks (Qdrant scope).
+WINDOW_DAYS = 7
+
 NEWS_COLLECTION_SPEC = QdrantCollectionSpec(
     name=COLLECTION,
     vector_size=VECTOR_SIZE,
@@ -44,19 +49,19 @@ NEWS_COLLECTION_SPEC = QdrantCollectionSpec(
     payload_indexes={"ticker": "keyword", "published_at": "integer"},
 )
 
-# Bound the per-partition scan to articles *published* in the last 7 days
-# (QNT-142). Prior to QNT-141's Finnhub migration this filter was on
-# ``fetched_at`` and the per-tick volume was a bounded ~30 rows; the Finnhub
-# backfill landed 28k rows with ``fetched_at = today`` and 1y of
+# Bound the per-partition scan to articles *published* in the last
+# ``WINDOW_DAYS`` (QNT-142). Prior to QNT-141's Finnhub migration this filter
+# was on ``fetched_at`` and the per-tick volume was a bounded ~30 rows; the
+# Finnhub backfill landed 28k rows with ``fetched_at = today`` and 1y of
 # ``published_at`` history, which would have multiplied the per-tick Qdrant
 # inference budget by ~93x. Filtering on ``published_at`` keeps Qdrant as
 # the rolling-7d semantic search index ADR-009 designed for; the 1y backfill
 # stays in ClickHouse for the news card on the ticker-detail page.
-_FRESH_WINDOW_SQL = """
+_FRESH_WINDOW_SQL = f"""
 SELECT id, ticker, headline, url, source, published_at
 FROM equity_raw.news_raw FINAL
 WHERE ticker = %(ticker)s
-  AND published_at >= now() - INTERVAL 7 DAY
+  AND published_at >= now() - INTERVAL {WINDOW_DAYS} DAY
 ORDER BY published_at DESC
 """
 
@@ -70,6 +75,27 @@ def ticker_filter(ticker: str) -> "Filter":
     from qdrant_client.models import FieldCondition, Filter, MatchValue
 
     return Filter(must=[FieldCondition(key="ticker", match=MatchValue(value=ticker))])
+
+
+def aged_ticker_filter(ticker: str, cutoff_ts: int) -> "Filter":
+    """Build a Qdrant filter matching points whose payload ticker equals
+    ``ticker`` AND ``published_at < cutoff_ts``.
+
+    Used by the asset's GC tail (QNT-145) to delete points whose
+    ``published_at`` has aged past the rolling window. The complement of the
+    windowed filter the QNT-142 count check uses, applied at the same Python-
+    side ``cutoff_ts`` anchor: the count check counts ``published_at >=
+    cutoff_ts`` and the asset deletes ``published_at < cutoff_ts``, so the
+    union of "kept" and "deleted" partitions every point exactly once.
+    """
+    from qdrant_client.models import FieldCondition, Filter, MatchValue, Range
+
+    return Filter(
+        must=[
+            FieldCondition(key="ticker", match=MatchValue(value=ticker)),
+            FieldCondition(key="published_at", range=Range(lt=cutoff_ts)),
+        ]
+    )
 
 
 def point_id(ticker: str, url_id: int) -> int:
@@ -118,71 +144,104 @@ def news_embeddings(
     (fixes the QNT-120 silent overwrite). Re-runs are idempotent — the
     delta filter short-circuits the upsert when every candidate already
     exists in Qdrant.
+
+    QNT-145: after the (possibly empty) upsert, GC any ticker-scoped points
+    whose ``published_at`` has aged past the rolling window. Runs every tick
+    even on quiet tickers — points indexed in earlier ticks may have aged
+    out since the last run, and skipping GC on a quiet tick would let the
+    asymmetry between "in-window upsert" and "all-time retention" reopen
+    the monotonic-growth gap this ticket exists to close.
     """
+    from datetime import UTC, datetime, timedelta
+
     from qdrant_client.models import Document, PointStruct
 
     ticker = context.partition_key
 
     qdrant.ensure_collection(NEWS_COLLECTION_SPEC)
 
+    # Single Python-side cutoff anchor for this tick. The CH read predicate
+    # (``published_at >= now() - INTERVAL N DAY``) is server-side and re-
+    # evaluated on each query, but the Qdrant GC needs a concrete value to
+    # send in the filter; deriving it once here keeps "what we read" and
+    # "what we keep" referring to the same conceptual cutoff per tick. The
+    # QNT-93 count check uses the same derivation pattern for symmetry.
+    cutoff_ts = int((datetime.now(UTC) - timedelta(days=WINDOW_DAYS)).timestamp())
+
     df = clickhouse.query_df(_FRESH_WINDOW_SQL, parameters={"ticker": ticker})
     if df.empty:
-        context.log.info("No recent news for %s — skipping", ticker)
-        return
+        context.log.info("No recent news for %s — skipping upsert", ticker)
+    else:
+        import pandas as pd
 
-    import pandas as pd
-
-    # Pull every Qdrant point ID currently indexed under this ticker so we
-    # can skip rows that are already embedded. ``scroll_ids`` paginates
-    # under the hood and raises if it hits the safety cap, so a runaway
-    # collection surfaces as a failed run rather than silently truncated.
-    existing_ids: set[int] = set(qdrant.scroll_ids(COLLECTION, query_filter=ticker_filter(ticker)))
-
-    points: list[PointStruct] = []
-    for record in df.to_dict(orient="records"):
-        pid = point_id(str(record["ticker"]), int(record["id"]))
-        if pid in existing_ids:
-            continue
-        # equity_raw.news_raw.published_at is DateTime NOT NULL, so the cast
-        # from NaT-capable pd.Timestamp to a concrete Timestamp is safe.
-        # tz_localize("UTC") makes the UTC interpretation explicit — pandas'
-        # default already treats naive .timestamp() as UTC, but stating it
-        # removes ambiguity if this code ever migrates off pd.Timestamp.
-        published_at: pd.Timestamp = pd.Timestamp(record["published_at"]).tz_localize(  # type: ignore[assignment]
-            "UTC"
+        # Pull every Qdrant point ID currently indexed under this ticker so we
+        # can skip rows that are already embedded. ``scroll_ids`` paginates
+        # under the hood and raises if it hits the safety cap, so a runaway
+        # collection surfaces as a failed run rather than silently truncated.
+        existing_ids: set[int] = set(
+            qdrant.scroll_ids(COLLECTION, query_filter=ticker_filter(ticker))
         )
-        points.append(
-            PointStruct(
-                id=pid,
-                # Document is embedded server-side by Qdrant using the named
-                # model; no local inference, no model weights, no CPU/memory
-                # cost on the dagster run-worker beyond the HTTP round-trip.
-                vector=Document(text=str(record["headline"]), model=EMBED_MODEL),
-                payload={
-                    "ticker": str(record["ticker"]),
-                    # Qdrant integer index requires int; store unix seconds.
-                    "published_at": int(published_at.timestamp()),
-                    "url": str(record["url"]),
-                    "headline": str(record["headline"]),
-                    "source": str(record["source"]),
-                },
+
+        points: list[PointStruct] = []
+        for record in df.to_dict(orient="records"):
+            pid = point_id(str(record["ticker"]), int(record["id"]))
+            if pid in existing_ids:
+                continue
+            # equity_raw.news_raw.published_at is DateTime NOT NULL, so the cast
+            # from NaT-capable pd.Timestamp to a concrete Timestamp is safe.
+            # tz_localize("UTC") makes the UTC interpretation explicit — pandas'
+            # default already treats naive .timestamp() as UTC, but stating it
+            # removes ambiguity if this code ever migrates off pd.Timestamp.
+            published_at: pd.Timestamp = pd.Timestamp(record["published_at"]).tz_localize(  # type: ignore[assignment]
+                "UTC"
             )
-        )
+            points.append(
+                PointStruct(
+                    id=pid,
+                    # Document is embedded server-side by Qdrant using the named
+                    # model; no local inference, no model weights, no CPU/memory
+                    # cost on the dagster run-worker beyond the HTTP round-trip.
+                    vector=Document(text=str(record["headline"]), model=EMBED_MODEL),
+                    payload={
+                        "ticker": str(record["ticker"]),
+                        # Qdrant integer index requires int; store unix seconds.
+                        "published_at": int(published_at.timestamp()),
+                        "url": str(record["url"]),
+                        "headline": str(record["headline"]),
+                        "source": str(record["source"]),
+                    },
+                )
+            )
 
-    if not points:
-        context.log.info(
-            "All %d candidate articles for %s already embedded — skipping upsert",
-            len(df),
-            ticker,
-        )
-        return
+        if points:
+            qdrant.upsert_points(COLLECTION, points)
+            context.log.info(
+                "Upserted %d new embeddings for %s to %s (%d candidates, %d already indexed)",
+                len(points),
+                ticker,
+                COLLECTION,
+                len(df),
+                len(df) - len(points),
+            )
+        else:
+            context.log.info(
+                "All %d candidate articles for %s already embedded — skipping upsert",
+                len(df),
+                ticker,
+            )
 
-    qdrant.upsert_points(COLLECTION, points)
+    # GC tail: delete ticker-scoped points whose ``published_at < cutoff_ts``.
+    # The asset only ever upserts points inside the window, so deleting points
+    # outside it converges Qdrant on ADR-009's rolling-7d definition: any
+    # point that lingers past the window is by construction a stale upsert
+    # from an earlier tick, never a current source of truth.
+    qdrant.delete_points_by_filter(COLLECTION, aged_ticker_filter(ticker, cutoff_ts))
+    # qdrant_client's filtered ``delete`` doesn't return a count, so the run
+    # history records the cutoff (not "N points"); the count drops out of
+    # ``news_embeddings_vector_count_matches_source`` on the next check tick.
     context.log.info(
-        "Upserted %d new embeddings for %s to %s (%d candidates, %d already indexed)",
-        len(points),
+        "GC: purged aged points for %s (cutoff_ts=%d, window=%d days)",
         ticker,
-        COLLECTION,
-        len(df),
-        len(df) - len(points),
+        cutoff_ts,
+        WINDOW_DAYS,
     )
