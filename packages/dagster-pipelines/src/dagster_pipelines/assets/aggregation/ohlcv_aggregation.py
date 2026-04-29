@@ -9,15 +9,18 @@ from dagster import (
     StaticPartitionsDefinition,
     asset,
 )
-from shared.tickers import ALL_OHLCV_TICKERS
+from shared.tickers import TICKERS
 
 from dagster_pipelines.resources.clickhouse import ClickHouseResource
 
 logger = logging.getLogger(__name__)
 
-# Mirrors ohlcv_raw partitions — benchmark tickers (SPY) ride the same
-# OHLCV-aggregation lineage so /ohlcv/SPY?timeframe=weekly|monthly is queryable.
-ticker_partitions = StaticPartitionsDefinition(ALL_OHLCV_TICKERS)
+# Aggregation stays on TICKERS — Dagster requires every asset in
+# ``ohlcv_downstream_job`` to share a partition def, and indicators /
+# fundamental_summary partition on TICKERS. Benchmark tickers (SPY) are
+# OHLCV-only per the QNT-134 spec, so weekly/monthly is intentionally not
+# computed for them.
+ticker_partitions = StaticPartitionsDefinition(TICKERS)
 
 
 def _aggregate_ohlcv(df: pd.DataFrame, period_col: str) -> pd.DataFrame:
