@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -45,10 +45,14 @@ def compute_fundamental_ratios(
     fundamentals_df: pd.DataFrame,
     latest_close: float,
 ) -> pd.DataFrame:
-    """Compute 15 fundamental ratios from raw financial data.
+    """Compute fundamental ratios from raw financial data.
 
     Price-based ratios (P/E, P/B, P/S, FCF yield) use latest_close from ohlcv_raw
-    to ensure current market pricing.
+    to ensure current market pricing. Beyond the original 15 ratios this also
+    emits ``ebitda_margin_pct`` (substitute for operating margin since yfinance
+    doesn't expose EBIT), bps deltas for gross/net margin YoY, and rolling-4Q
+    TTM rows under ``period_type='ttm'`` carrying revenue/net_income/fcf/eps as
+    raw sums plus the same ratio set computed off the rolled-up base.
     """
     df = fundamentals_df.copy().sort_values("period_end")
 
@@ -81,6 +85,8 @@ def compute_fundamental_ratios(
     df["gross_margin_pct"] = (
         _safe_divide(df["gross_profit"], df["revenue"].replace(0, np.nan)) * 100
     )
+    # EBITDA margin substitutes operating margin (yfinance doesn't expose EBIT).
+    df["ebitda_margin_pct"] = _safe_divide(df["ebitda"], df["revenue"].replace(0, np.nan)) * 100
     df["roe"] = _safe_divide(df["net_income"], equity) * 100
     df["roa"] = _safe_divide(df["net_income"], df["total_assets"].replace(0, np.nan)) * 100
 
@@ -101,16 +107,100 @@ def compute_fundamental_ratios(
         ("net_income", "net_income_yoy_pct"),
         ("free_cash_flow", "fcf_yoy_pct"),
     ]
-    for src_col, dst_col in yoy_cols:
+    for _src_col, dst_col in yoy_cols:
         df[dst_col] = np.nan
+    df["gross_margin_bps_yoy"] = np.nan
+    df["net_margin_bps_yoy"] = np.nan
 
     for period_type, group in df.groupby("period_type"):
         periods = 4 if period_type == "quarterly" else 1
         for src_col, dst_col in yoy_cols:
             yoy = _yoy_growth(group, src_col, periods)
             df.loc[group.index, dst_col] = yoy
+        # Margin deltas in basis points: 1 percentage point = 100 bps. Take
+        # absolute differences vs prior-year same period, no division.
+        for margin_col, dst_col in (
+            ("gross_margin_pct", "gross_margin_bps_yoy"),
+            ("net_margin_pct", "net_margin_bps_yoy"),
+        ):
+            prior = group[margin_col].shift(periods)
+            df.loc[group.index, dst_col] = (group[margin_col] - prior) * 100
+
+    # TTM rows — emit one synthetic row per quarterly period_end carrying the
+    # rolling-4Q sums of revenue/net_income/fcf and ratios computed on those
+    # sums. Annual rows already represent a 4Q snapshot, so TTM is generated
+    # only from the quarterly slice.
+    ttm = _build_ttm_rows(df, latest_close)
+    if not ttm.empty:
+        df = pd.concat([df, ttm], ignore_index=True)
 
     return df
+
+
+def _build_ttm_rows(
+    df: pd.DataFrame,
+    latest_close: float,
+) -> pd.DataFrame:
+    """Build period_type='ttm' rows from the quarterly slice of ``df``.
+
+    Sums revenue/net_income/free_cash_flow over a trailing-4-quarter window;
+    derives eps_ttm from rolling NI. P/E (TTM) is recomputed against the same
+    rolling sum to match what consumers will read off the TTM row directly.
+    Returns the new rows; caller appends.
+    """
+    # Reset to a contiguous integer index so the rolling outputs and the boolean
+    # `valid` mask align by position regardless of any reset_index a future
+    # caller may apply upstream — the original code relied on q's inherited
+    # df index, which would silently misalign if df were ever reset.
+    q = df[df["period_type"] == "quarterly"].copy().reset_index(drop=True)
+    if q.empty:
+        return pd.DataFrame()
+
+    rev_ttm = cast(pd.Series, cast(pd.Series, q["revenue"]).rolling(window=4, min_periods=4).sum())
+    ni_ttm = cast(
+        pd.Series, cast(pd.Series, q["net_income"]).rolling(window=4, min_periods=4).sum()
+    )
+    fcf_ttm = cast(
+        pd.Series, cast(pd.Series, q["free_cash_flow"]).rolling(window=4, min_periods=4).sum()
+    )
+
+    valid = rev_ttm.notna() & ni_ttm.notna() & fcf_ttm.notna()
+    if not bool(valid.any()):
+        return pd.DataFrame()
+
+    # Per-share rollup uses the matching quarter's shares_outstanding so EPS_TTM
+    # tracks the share count at the period end (vs latest), matching the EPS
+    # convention SEC filings use for "EPS, trailing twelve months".
+    shares_q = cast(pd.Series, q["shares_outstanding"]).replace(0, np.nan)
+    eps_ttm = cast(pd.Series, ni_ttm / shares_q)
+    market_cap_q = cast(pd.Series, latest_close * shares_q)
+    pe_ttm = cast(pd.Series, market_cap_q / ni_ttm.replace(0, np.nan))
+    ps_ttm = cast(pd.Series, market_cap_q / rev_ttm.replace(0, np.nan))
+    nm_ttm = cast(pd.Series, ni_ttm / rev_ttm.replace(0, np.nan) * 100)
+    fcf_yield_ttm = cast(pd.Series, fcf_ttm / market_cap_q * 100)
+
+    payload: dict[str, Any] = {
+        "period_end": q["period_end"],
+        "period_type": "ttm",
+        "revenue_ttm": rev_ttm,
+        "net_income_ttm": ni_ttm,
+        "fcf_ttm": fcf_ttm,
+        "eps": eps_ttm,
+        "pe_ratio": pe_ttm,
+        "price_to_sales": ps_ttm,
+        "net_margin_pct": nm_ttm,
+        "fcf_yield": fcf_yield_ttm,
+    }
+    # The asset always sets `ticker` AFTER calling this helper (one-ticker per
+    # partition), so the test fixture omits the column. Only carry it through
+    # when it's already present in the input frame.
+    if "ticker" in q.columns:
+        payload["ticker"] = q["ticker"]
+    out = pd.DataFrame(payload).loc[valid]
+
+    # N/M when EPS_TTM is near-zero, mirroring the quarterly convention.
+    out.loc[out["eps"].abs() < _EPS_NM_THRESHOLD, "pe_ratio"] = np.nan
+    return out
 
 
 @asset(
@@ -182,15 +272,26 @@ def fundamental_summary(
         "revenue_yoy_pct",
         "net_income_yoy_pct",
         "fcf_yoy_pct",
+        "gross_margin_bps_yoy",
+        "net_margin_bps_yoy",
         "net_margin_pct",
         "gross_margin_pct",
+        "ebitda_margin_pct",
         "roe",
         "roa",
         "fcf_yield",
         "debt_to_equity",
         "current_ratio",
+        "revenue_ttm",
+        "net_income_ttm",
+        "fcf_ttm",
         "computed_at",
     ]
+    # TTM rows append columns that don't exist on quarterly/annual rows; ensure
+    # all output columns are present so the insert dataframe is well-formed.
+    for col in output_cols:
+        if col not in result.columns:
+            result[col] = pd.NA
     output = pd.DataFrame(result[output_cols])
 
     clickhouse.insert_df("equity_derived.fundamental_summary", output)

@@ -27,6 +27,9 @@ from dagster_pipelines.asset_checks.ohlcv_raw_checks import (
     ohlcv_raw_no_null_close,
 )
 from dagster_pipelines.asset_checks.technical_indicators_checks import (
+    daily_adx_in_range,
+    daily_atr_non_negative,
+    daily_bb_pct_b_in_soft_band,
     daily_macd_signal_coherent,
     daily_recent_no_nan,
     daily_rsi_in_range,
@@ -50,6 +53,9 @@ ALL_ASSET_CHECKS = [
     daily_rsi_in_range,
     daily_macd_signal_coherent,
     daily_recent_no_nan,
+    daily_adx_in_range,
+    daily_atr_non_negative,
+    daily_bb_pct_b_in_soft_band,
     weekly_rsi_in_range,
     weekly_macd_signal_coherent,
     weekly_recent_no_nan,
@@ -72,6 +78,9 @@ ALL_ASSET_CHECKS = [
 
 __all__ = [
     "ALL_ASSET_CHECKS",
+    "daily_adx_in_range",
+    "daily_atr_non_negative",
+    "daily_bb_pct_b_in_soft_band",
     "daily_macd_signal_coherent",
     "daily_recent_no_nan",
     "daily_rsi_in_range",

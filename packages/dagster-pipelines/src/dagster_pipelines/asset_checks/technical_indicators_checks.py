@@ -29,10 +29,18 @@ _WEEKLY_TABLE = "equity_derived.technical_indicators_weekly"
 _MONTHLY_TABLE = "equity_derived.technical_indicators_monthly"
 
 # Columns required post-warm-up for daily + weekly (>=50 bars available).
+# sma_200 needs 200 bars — exists on daily (~500 bars) but not weekly (~104) or
+# monthly (~24); checked separately on daily only.
 _POST_WARMUP_COLS = ("rsi_14", "sma_20", "ema_12", "ema_26", "macd", "macd_signal")
 
 # Bars considered "recent" for the no-NaN check.
 _RECENT_BARS = 30
+
+# %B is bounded around [0, 1] but soft — breakouts can spike well outside.
+# A rolling band (cap at -0.5 / 1.5 ≈ 50% beyond the band) catches arithmetic
+# corruption (NaN escapes, wrong divisor) without flagging legitimate breakout
+# extremes. Real-world spikes past ±0.5 are rare and short-lived.
+_BB_PCT_B_MIN, _BB_PCT_B_MAX = -0.5, 1.5
 
 
 def _rsi_out_of_range_count(clickhouse: ClickHouseResource, table: str) -> int:
@@ -184,7 +192,84 @@ def monthly_rsi_in_range(clickhouse: ClickHouseResource) -> AssetCheckResult:
     return _rsi_check_result(clickhouse, _MONTHLY_TABLE)
 
 
+# ---- new-indicator domain bounds (QNT-134) ----
+# ADX is by definition ∈ [0, 100]; ATR is a price range so non-negative; OBV is
+# unbounded but must be finite. %B is bounded soft (see _BB_PCT_B_MIN/MAX) so
+# breakouts pass but arithmetic corruption fires. Daily-only because weekly
+# (104 bars) and monthly (24 bars) don't reliably clear the 14-bar Wilder
+# warm-up windows for a check at table scope to be meaningful — repeat the
+# pattern only if these get added to weekly/monthly later.
+
+
+def _adx_out_of_range_count(clickhouse: ClickHouseResource, table: str) -> int:
+    result = clickhouse.execute(
+        f"SELECT count() FROM {table} FINAL "
+        f"WHERE adx_14 IS NOT NULL AND (adx_14 < 0 OR adx_14 > 100)"
+    )
+    return int(result.result_rows[0][0])
+
+
+def _atr_negative_count(clickhouse: ClickHouseResource, table: str) -> int:
+    result = clickhouse.execute(
+        f"SELECT count() FROM {table} FINAL WHERE atr_14 IS NOT NULL AND atr_14 < 0"
+    )
+    return int(result.result_rows[0][0])
+
+
+def _bb_pct_b_extreme_count(clickhouse: ClickHouseResource, table: str) -> int:
+    """Count rows where %B is far outside the soft band (±50% beyond [0,1])."""
+    result = clickhouse.execute(
+        f"SELECT count() FROM {table} FINAL "
+        f"WHERE bb_pct_b IS NOT NULL "
+        f"AND (bb_pct_b < {_BB_PCT_B_MIN} OR bb_pct_b > {_BB_PCT_B_MAX})"
+    )
+    return int(result.result_rows[0][0])
+
+
+@asset_check(asset=technical_indicators_daily)
+def daily_adx_in_range(clickhouse: ClickHouseResource) -> AssetCheckResult:
+    """Warn if any daily ADX-14 value is outside [0, 100]."""
+    bad = _adx_out_of_range_count(clickhouse, _DAILY_TABLE)
+    return AssetCheckResult(
+        passed=bad == 0,
+        severity=AssetCheckSeverity.WARN,
+        metadata={"rows_outside_adx_range": bad, "table": _DAILY_TABLE},
+        description=f"{bad} rows with ADX outside [0, 100]",
+    )
+
+
+@asset_check(asset=technical_indicators_daily)
+def daily_atr_non_negative(clickhouse: ClickHouseResource) -> AssetCheckResult:
+    """Warn if any daily ATR-14 value is negative — ATR is a magnitude."""
+    bad = _atr_negative_count(clickhouse, _DAILY_TABLE)
+    return AssetCheckResult(
+        passed=bad == 0,
+        severity=AssetCheckSeverity.WARN,
+        metadata={"rows_with_negative_atr": bad, "table": _DAILY_TABLE},
+        description=f"{bad} rows with ATR < 0",
+    )
+
+
+@asset_check(asset=technical_indicators_daily)
+def daily_bb_pct_b_in_soft_band(clickhouse: ClickHouseResource) -> AssetCheckResult:
+    """Warn if %B falls far outside [0, 1] — soft-bound for breakouts."""
+    bad = _bb_pct_b_extreme_count(clickhouse, _DAILY_TABLE)
+    return AssetCheckResult(
+        passed=bad == 0,
+        severity=AssetCheckSeverity.WARN,
+        metadata={
+            "rows_outside_bb_pct_b_band": bad,
+            "soft_band": [_BB_PCT_B_MIN, _BB_PCT_B_MAX],
+            "table": _DAILY_TABLE,
+        },
+        description=(f"{bad} rows with %B outside soft band [{_BB_PCT_B_MIN}, {_BB_PCT_B_MAX}]"),
+    )
+
+
 __all__ = [
+    "daily_adx_in_range",
+    "daily_atr_non_negative",
+    "daily_bb_pct_b_in_soft_band",
     "daily_macd_signal_coherent",
     "daily_recent_no_nan",
     "daily_rsi_in_range",

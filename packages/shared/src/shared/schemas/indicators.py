@@ -7,15 +7,21 @@ class _TechnicalIndicatorsBase(BaseModel):
     ticker: str
     sma_20: float | None = None
     sma_50: float | None = None
+    sma_200: float | None = None
     ema_12: float | None = None
     ema_26: float | None = None
     rsi_14: float | None = None
     macd: float | None = None
     macd_signal: float | None = None
     macd_hist: float | None = None
+    macd_bullish_cross: int = 0  # UInt8 in ClickHouse — 0/1 flag, no warm-up null
     bb_upper: float | None = None
     bb_middle: float | None = None
     bb_lower: float | None = None
+    bb_pct_b: float | None = None
+    adx_14: float | None = None
+    atr_14: float | None = None
+    obv: float | None = None
     computed_at: datetime | None = None
 
 

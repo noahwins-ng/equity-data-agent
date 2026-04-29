@@ -143,6 +143,38 @@ def test_ohlcv_unknown_ticker_returns_404(client: TestClient) -> None:
     assert "Unknown ticker" in r.json()["detail"]
 
 
+def test_ohlcv_benchmark_ticker_spy_is_allowed(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # SPY is a benchmark — not in TICKERS but valid for /ohlcv. Verifies the
+    # benchmark routes through ALL_OHLCV_TICKERS without leaking onto the
+    # fundamentals/news endpoints.
+    fake = _FakeClient(
+        _fake_result([(date(2026, 1, 2), 480.0, 482.0, 478.0, 481.0, 481.0, 50000000)])
+    )
+    _install_fake(monkeypatch, fake)
+
+    r = client.get("/api/v1/ohlcv/SPY")
+    assert r.status_code == 200
+    assert r.json()[0]["time"] == "2026-01-02"
+    assert fake.last_parameters == {"ticker": "SPY"}
+
+
+def test_fundamentals_rejects_spy(client: TestClient) -> None:
+    # Benchmark tickers must NOT leak onto fundamentals — they have no
+    # fundamentals data and should 404 the same as unknown symbols do.
+    r = client.get("/api/v1/fundamentals/SPY")
+    assert r.status_code == 404
+    assert "Unknown ticker" in r.json()["detail"]
+
+
+def test_indicators_rejects_spy(client: TestClient) -> None:
+    # Same gate: indicators partition on TICKERS only.
+    r = client.get("/api/v1/indicators/SPY")
+    assert r.status_code == 404
+    assert "Unknown ticker" in r.json()["detail"]
+
+
 def test_ohlcv_lowercase_ticker_is_normalized(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -437,7 +469,7 @@ def test_fundamentals_returns_ratios_and_validates_ticker(
     assert "Unknown ticker" in r_bad.json()["detail"]
 
 
-_SUMMARY_COLS = ("ticker", "price", "prior_close", "rsi_14", "sma_50")
+_SUMMARY_COLS = ("ticker", "price", "prior_close", "rsi_14", "sma_50", "sparkline")
 
 
 def test_dashboard_summary_categorizes_all_tickers(
@@ -446,13 +478,16 @@ def test_dashboard_summary_categorizes_all_tickers(
     # Three rows covering every categorization branch: overbought+bullish,
     # oversold+bearish, and a neutral/neutral row whose SMA-50 is still in the
     # 50-day warm-up window (must fall back to "neutral" trend).
+    nvda_sparkline = [150.0 + i * 0.05 for i in range(60)]
+    aapl_sparkline = [180.0 - i * 0.1 for i in range(60)]
+    msft_sparkline = [400.0] * 60
     fake = _FakeClient(
         _FakeResult(
             _SUMMARY_COLS,
             [
-                ("NVDA", 153.0, 149.49, 72.3, 140.0),
-                ("AAPL", 180.0, 185.0, 28.5, 195.0),
-                ("MSFT", 400.0, 400.0, 50.0, None),
+                ("NVDA", 153.0, 149.49, 72.3, 140.0, nvda_sparkline),
+                ("AAPL", 180.0, 185.0, 28.5, 195.0, aapl_sparkline),
+                ("MSFT", 400.0, 400.0, 50.0, None, msft_sparkline),
             ],
         )
     )
@@ -470,6 +505,7 @@ def test_dashboard_summary_categorizes_all_tickers(
         "rsi_14": 72.3,
         "rsi_signal": "overbought",
         "trend_status": "bullish",
+        "sparkline": nvda_sparkline,
     }
     assert by_ticker["AAPL"]["rsi_signal"] == "oversold"
     assert by_ticker["AAPL"]["trend_status"] == "bearish"
@@ -478,6 +514,11 @@ def test_dashboard_summary_categorizes_all_tickers(
     assert by_ticker["MSFT"]["trend_status"] == "neutral"
     assert by_ticker["MSFT"]["rsi_signal"] == "neutral"
     assert by_ticker["MSFT"]["daily_change_pct"] == pytest.approx(0.0)
+    # Sparkline of 60 closes ships per ticker (avoids the 10× per-ticker /ohlcv
+    # fan-out the frontend would otherwise need on dashboard load).
+    for row in body:
+        assert len(row["sparkline"]) == 60
+        assert all(isinstance(v, float) for v in row["sparkline"])
 
     # Rows are emitted in TICKERS-registry order so the frontend doesn't re-sort.
     assert [row["ticker"] for row in body] == ["NVDA", "AAPL", "MSFT"]
@@ -488,17 +529,20 @@ def test_dashboard_summary_categorizes_all_tickers(
     assert "equity_raw.ohlcv_raw" in fake.last_query
     assert "equity_derived.technical_indicators_daily" in fake.last_query
     assert fake.last_query.count("FINAL") >= 2
-    assert fake.last_parameters == {"tickers": list(TICKERS)}
+    assert fake.last_parameters == {"tickers": list(TICKERS), "bars": 60}
 
 
 def test_dashboard_summary_handles_missing_prior_close(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Single-day history (no prior close) → daily_change_pct must be null
-    # rather than throwing or defaulting to zero.
-    fake = _FakeClient(_FakeResult(_SUMMARY_COLS, [("NVDA", 153.0, None, 50.0, 140.0)]))
+    # rather than throwing or defaulting to zero. The sparkline still ships;
+    # an empty array is the documented "no history" fallback.
+    fake = _FakeClient(_FakeResult(_SUMMARY_COLS, [("NVDA", 153.0, None, 50.0, 140.0, [])]))
     _install_fake(monkeypatch, fake)
 
     r = client.get("/api/v1/dashboard/summary")
     assert r.status_code == 200
-    assert r.json()[0]["daily_change_pct"] is None
+    body = r.json()
+    assert body[0]["daily_change_pct"] is None
+    assert body[0]["sparkline"] == []

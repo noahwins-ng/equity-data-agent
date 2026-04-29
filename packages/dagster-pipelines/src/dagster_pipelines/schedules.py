@@ -9,7 +9,7 @@ from dagster import (
     define_asset_job,
     schedule,
 )
-from shared.tickers import TICKERS
+from shared.tickers import ALL_OHLCV_TICKERS, TICKERS
 
 from dagster_pipelines.assets.ohlcv_raw import OHLCVConfig
 from dagster_pipelines.retry import DEPLOY_WINDOW_RUN_RETRY_TAGS
@@ -54,10 +54,11 @@ def ohlcv_daily_schedule(context: ScheduleEvaluationContext):
     """Daily OHLCV refresh at market close (5 PM ET, Mon-Fri).
 
     Uses period='5d' for incremental fetches instead of full backfill.
-    Weekday-only cron ensures no runs on weekends.
+    Weekday-only cron ensures no runs on weekends. Benchmark tickers (SPY)
+    ride the same schedule — they're partitions of ohlcv_raw too.
     """
     ts = context.scheduled_execution_time.isoformat() if context.scheduled_execution_time else ""
-    for ticker in TICKERS:
+    for ticker in ALL_OHLCV_TICKERS:
         yield RunRequest(
             run_key=f"ohlcv_{ticker}_{ts}",
             partition_key=ticker,

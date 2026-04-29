@@ -12,6 +12,7 @@ from dagster import (
     define_asset_job,
     sensor,
 )
+from shared.tickers import BENCHMARK_TICKERS
 
 from dagster_pipelines.retry import DEPLOY_WINDOW_RETRY, DEPLOY_WINDOW_RUN_RETRY_TAGS
 
@@ -31,6 +32,20 @@ ohlcv_downstream_job = define_asset_job(
         "technical_indicators_weekly",
         "technical_indicators_monthly",
         "fundamental_summary",
+    ),
+    op_retry_policy=DEPLOY_WINDOW_RETRY,
+    tags=DEPLOY_WINDOW_RUN_RETRY_TAGS,
+)
+
+# Benchmark tickers (SPY) materialize OHLCV-shaped assets only. Indicators and
+# fundamental_summary partition on TICKERS, not ALL_OHLCV_TICKERS, so triggering
+# them with a benchmark partition_key would error. Slimmer downstream selection
+# keeps the sensor branch valid for the benchmark fan-out.
+ohlcv_benchmark_downstream_job = define_asset_job(
+    name="ohlcv_benchmark_downstream_job",
+    selection=AssetSelection.assets(
+        "ohlcv_weekly",
+        "ohlcv_monthly",
     ),
     op_retry_policy=DEPLOY_WINDOW_RETRY,
     tags=DEPLOY_WINDOW_RUN_RETRY_TAGS,
@@ -62,15 +77,24 @@ def _build_materialization_sensor(
     name: str,
     asset_key: AssetKey,
     job: Any,
+    benchmark_job: Any | None = None,
 ):
     """Build a sensor that watches for materialization events on a partitioned asset
     and triggers a downstream job for each partition that materialized.
 
     Unlike @asset_sensor which processes one event per tick, this queries ALL
-    new events since the cursor in a single evaluation.
+    new events since the cursor in a single evaluation. When ``benchmark_job``
+    is supplied, partitions that match ``BENCHMARK_TICKERS`` route to the
+    slimmer benchmark downstream — fundamentals/indicator assets aren't
+    partitioned for benchmark tickers, so the regular job would error.
     """
+    sensor_kwargs: dict[str, Any] = {"name": name, "default_status": DefaultSensorStatus.RUNNING}
+    if benchmark_job is not None:
+        sensor_kwargs["jobs"] = [job, benchmark_job]
+    else:
+        sensor_kwargs["job"] = job
 
-    @sensor(name=name, job=job, default_status=DefaultSensorStatus.RUNNING)
+    @sensor(**sensor_kwargs)
     def _sensor(context: SensorEvaluationContext):
         cursor = int(context.cursor) if context.cursor else None
 
@@ -89,10 +113,19 @@ def _build_materialization_sensor(
 
         for event in events:
             partition = event.partition_key
-            if partition:
+            if not partition:
+                continue
+            if benchmark_job is not None and partition in BENCHMARK_TICKERS:
                 yield RunRequest(
                     run_key=f"{name}_{partition}_{event.storage_id}",
                     partition_key=partition,
+                    job_name=benchmark_job.name,
+                )
+            else:
+                yield RunRequest(
+                    run_key=f"{name}_{partition}_{event.storage_id}",
+                    partition_key=partition,
+                    job_name=job.name,
                 )
 
         # Advance cursor past all processed events
@@ -105,6 +138,7 @@ ohlcv_raw_sensor = _build_materialization_sensor(
     name="ohlcv_raw_sensor",
     asset_key=AssetKey("ohlcv_raw"),
     job=ohlcv_downstream_job,
+    benchmark_job=ohlcv_benchmark_downstream_job,
 )
 
 fundamentals_sensor = _build_materialization_sensor(
