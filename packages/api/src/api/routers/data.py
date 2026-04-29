@@ -12,7 +12,7 @@ from enum import StrEnum
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from shared.tickers import ALL_OHLCV_TICKERS, TICKERS
+from shared.tickers import ALL_OHLCV_TICKERS, TICKER_METADATA, TICKERS
 
 from api.clickhouse import get_client
 
@@ -104,7 +104,8 @@ def get_dashboard_summary() -> list[dict[str, Any]]:
 
     One JSON array covering all configured tickers — avoids the N+1 request
     fan-out the frontend would otherwise need on page load. Each row carries
-    today's actual ``close`` (not ``adj_close`` — we want market price), the
+    the company short ``name`` (sourced from ``TICKER_METADATA``), today's
+    actual ``close`` (not ``adj_close`` — we want market price), the
     day-over-day change, the latest RSI-14 + SMA-50, pre-categorized
     ``rsi_signal`` / ``trend_status`` labels, and a 60-bar ``sparkline``
     array (recent daily closes, oldest first) so the watchlist sparkline
@@ -182,9 +183,11 @@ def get_dashboard_summary() -> list[dict[str, Any]]:
             daily_change_pct = (price - float(prior_close)) / float(prior_close) * 100
 
         sparkline = record["sparkline"] or []
+        meta = TICKER_METADATA.get(record["ticker"], {})
         rows.append(
             {
                 "ticker": record["ticker"],
+                "name": meta.get("name", record["ticker"]),
                 "price": price,
                 "daily_change_pct": daily_change_pct,
                 "rsi_14": rsi,
