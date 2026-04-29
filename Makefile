@@ -20,7 +20,7 @@ dev-api: ## Start FastAPI on localhost:8000
 	uv run uvicorn api.main:app --reload --port 8000
 
 dev-frontend: ## Start Next.js on localhost:3001
-	cd frontend && npm run dev -- --port 3001
+	cd frontend && npm run dev
 
 dev-litellm: ## Start LiteLLM proxy on localhost:4000 (reads GROQ_API_KEY / GEMINI_API_KEY from .env)
 	# --platform linux/amd64: LiteLLM stable images are amd64-only; runs via Rosetta/QEMU
