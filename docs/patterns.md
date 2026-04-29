@@ -228,7 +228,7 @@ ORDER BY (ticker, date);
 - Always `ReplacingMergeTree` with a version column (`fetched_at` or `computed_at`)
 - Always `PARTITION BY ticker` and `ORDER BY (ticker, <temporal_key>)`
 - `LowCardinality(String)` for ticker column
-- Run via `make migrate`
+- Run via `make migrate` locally; CD applies all `migrations/*.sql` automatically on every deploy (QNT-146)
 
 ---
 

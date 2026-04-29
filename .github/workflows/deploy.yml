@@ -114,6 +114,50 @@ jobs:
             export GIT_SHA
             docker compose --profile prod up -d --build
 
+      - name: Run ClickHouse migrations
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HETZNER_HOST }}
+          username: ${{ secrets.HETZNER_USER }}
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          script: |
+            # QNT-146: apply every migrations/*.sql against prod ClickHouse on
+            # every deploy. All migration files use idempotent DDL (CREATE …
+            # IF NOT EXISTS, ADD COLUMN IF NOT EXISTS), so re-applying is a
+            # no-op when nothing changed and removes the manual `make migrate`
+            # gate that bit us in QNT-134 (sma_200/adx_14/revenue_ttm columns
+            # missing in prod after PR #152, 60+ min recovery).
+            #
+            # `--fail` makes curl exit non-zero on HTTP error responses (4xx/5xx),
+            # `set -euo pipefail` aborts the loop on the first failure, and the
+            # explicit `exit 1` surfaces it as a CD failure rather than a silent
+            # log line. Don't downgrade to `make migrate` here — the Makefile
+            # target swallows errors with `|| echo " FAILED"`, which is fine for
+            # interactive dev but defeats the CD gate.
+            set -euo pipefail
+            shopt -s nullglob   # empty migrations dir → loop runs zero times instead of with the literal glob
+            cd /opt/equity-data-agent
+
+            # Wait for ClickHouse to accept traffic. Normally already healthy
+            # before this step (the image isn't rebuilt on most deploys), but
+            # if the CH tag ever bumps, `docker compose up -d --build` restarts
+            # it and we'd fire curl mid-startup. healthcheck.start_period is
+            # 60s; budget 90s here for headroom.
+            for i in $(seq 1 45); do
+              if curl -sf http://localhost:8123/ping > /dev/null; then break; fi
+              if [ "$i" -eq 45 ]; then echo "::error::ClickHouse not ready after 90s"; exit 1; fi
+              sleep 2
+            done
+
+            applied=0
+            for f in migrations/*.sql; do
+              echo "=== $f ==="
+              curl -s --fail --data-binary @"$f" http://localhost:8123/ \
+                || { echo "::error::Migration $f failed"; exit 1; }
+              applied=$((applied + 1))
+            done
+            echo "All $applied migrations applied (or already in place)"
+
       - name: Restart services with changed bind-mounted configs
         uses: appleboy/ssh-action@v1
         with:

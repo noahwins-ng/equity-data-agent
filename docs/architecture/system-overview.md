@@ -137,7 +137,7 @@ LiteLLM proxy (v1.81.14-stable, pinned) routes model requests (see ADR-011):
 - **Prod Backend**: Hetzner CX41 (16GB) → Docker Compose (ClickHouse 4GB + Dagster/FastAPI/Caddy/LiteLLM 12GB — no local model inference; LLM calls go to Groq / Gemini via LiteLLM)
 - **Prod Frontend**: Vercel (Next.js 15, free tier) → calls FastAPI over HTTPS
 - **HTTPS**: Caddy service in Docker Compose handles TLS termination (auto HTTPS via Let's Encrypt)
-- **CI/CD**: GitHub Actions → backend: SSH → git pull → `make migrate` → docker compose up, then two hard gates (QNT-88/89): assert `git rev-parse HEAD` equals the merged commit SHA and assert the Dagster definitions module loads with the expected asset/check/schedule counts. Frontend: Vercel auto-deploy on push to main.
+- **CI/CD**: GitHub Actions → backend: SSH → git pull → docker compose up → apply `migrations/*.sql` over HTTP (idempotent, QNT-146), then two hard gates (QNT-88/89): assert `git rev-parse HEAD` equals the merged commit SHA and assert the Dagster definitions module loads with the expected asset/check/schedule counts. Frontend: Vercel auto-deploy on push to main.
 - **Rollback**: `make rollback` — SSHs to Hetzner, checks out `HEAD~1`, rebuilds Docker, verifies health (60s timeout with retries)
 - **Health Monitoring**: `scripts/health-monitor.sh` runs every 15 min on Hetzner via cron — checks API `/health` + Docker service status, logs failures to `health-monitor.log`. Session-start hook reads this log and warns on failures. Install: `make monitor-install`. Check: `make monitor-log`.
 - **Dagster UI**: Internal only in prod — access via SSH tunnel (`ssh -L 3000:localhost:3000 hetzner`), no auth configured
