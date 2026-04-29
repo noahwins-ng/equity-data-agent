@@ -12,7 +12,7 @@ from enum import StrEnum
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from shared.tickers import TICKERS
+from shared.tickers import ALL_OHLCV_TICKERS, TICKERS
 
 from api.clickhouse import get_client
 
@@ -53,6 +53,11 @@ _INDICATOR_TIMEFRAME_QUERY: dict[Timeframe, tuple[str, str]] = {
 
 _RSI_OVERBOUGHT = 70.0
 _RSI_OVERSOLD = 30.0
+
+# Sparkline window length on the dashboard (~3 trading months) — matches the
+# 60-bar context the design v2 watchlist cards render. Computed server-side
+# in one query so the frontend page-load avoids the N+1 fan-out per ticker.
+_SPARKLINE_BARS = 60
 
 
 def _rsi_signal(rsi: float | None) -> str:
@@ -100,26 +105,42 @@ def get_dashboard_summary() -> list[dict[str, Any]]:
     One JSON array covering all configured tickers — avoids the N+1 request
     fan-out the frontend would otherwise need on page load. Each row carries
     today's actual ``close`` (not ``adj_close`` — we want market price), the
-    day-over-day change, the latest RSI-14 + SMA-50, and pre-categorized
-    ``rsi_signal`` / ``trend_status`` labels so the frontend renders without
-    re-deriving thresholds. Tickers without at least one OHLCV row are omitted.
+    day-over-day change, the latest RSI-14 + SMA-50, pre-categorized
+    ``rsi_signal`` / ``trend_status`` labels, and a 60-bar ``sparkline``
+    array (recent daily closes, oldest first) so the watchlist sparkline
+    chart renders without an extra ``/ohlcv`` round-trip per ticker. Tickers
+    without at least one OHLCV row are omitted.
     """
     query = """
         WITH
+        ohlcv_ranked AS (
+            SELECT
+                ticker,
+                date,
+                close,
+                row_number() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+            FROM equity_raw.ohlcv_raw FINAL
+            WHERE ticker IN %(tickers)s
+        ),
         ohlcv_recent AS (
             SELECT
                 ticker,
                 anyIf(close, rn = 1) AS price,
                 anyIf(close, rn = 2) AS prior_close
-            FROM (
-                SELECT
-                    ticker,
-                    close,
-                    row_number() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
-                FROM equity_raw.ohlcv_raw FINAL
-                WHERE ticker IN %(tickers)s
-            )
+            FROM ohlcv_ranked
             WHERE rn <= 2
+            GROUP BY ticker
+        ),
+        sparkline_recent AS (
+            -- ClickHouse's groupArray is documented as having an implementation-
+            -- defined order, so we materialize (date, close) pairs, sort by date
+            -- ascending, then project close. Ascending date = oldest-first =
+            -- left-to-right chart order.
+            SELECT
+                ticker,
+                arrayMap(t -> t.2, arraySort(t -> t.1, groupArray((date, close)))) AS sparkline
+            FROM ohlcv_ranked
+            WHERE rn <= %(bars)s
             GROUP BY ticker
         ),
         indicators_latest AS (
@@ -136,11 +157,16 @@ def get_dashboard_summary() -> list[dict[str, Any]]:
             o.price AS price,
             o.prior_close AS prior_close,
             i.rsi_14 AS rsi_14,
-            i.sma_50 AS sma_50
+            i.sma_50 AS sma_50,
+            s.sparkline AS sparkline
         FROM ohlcv_recent AS o
         LEFT JOIN indicators_latest AS i ON o.ticker = i.ticker
+        LEFT JOIN sparkline_recent AS s ON o.ticker = s.ticker
     """
-    result = get_client().query(query, parameters={"tickers": list(TICKERS)})
+    result = get_client().query(
+        query,
+        parameters={"tickers": list(TICKERS), "bars": _SPARKLINE_BARS},
+    )
 
     order = {ticker: idx for idx, ticker in enumerate(TICKERS)}
     rows: list[dict[str, Any]] = []
@@ -155,6 +181,7 @@ def get_dashboard_summary() -> list[dict[str, Any]]:
         if prior_close is not None and float(prior_close) != 0.0:
             daily_change_pct = (price - float(prior_close)) / float(prior_close) * 100
 
+        sparkline = record["sparkline"] or []
         rows.append(
             {
                 "ticker": record["ticker"],
@@ -163,6 +190,7 @@ def get_dashboard_summary() -> list[dict[str, Any]]:
                 "rsi_14": rsi,
                 "rsi_signal": _rsi_signal(rsi),
                 "trend_status": _trend_status(price, sma_50),
+                "sparkline": [float(v) for v in sparkline],
             }
         )
     rows.sort(key=lambda r: order.get(r["ticker"], len(order)))
@@ -179,10 +207,11 @@ def get_ohlcv(
     Response shape matches TradingView Lightweight Charts' candlestick input:
     ``{time, open, high, low, close, adj_close, volume}[]`` where ``time`` is
     an ISO date string (``YYYY-MM-DD``) — the library accepts this directly, so
-    the frontend needs no transformation.
+    the frontend needs no transformation. Benchmark tickers (SPY) are valid
+    here but rejected by ``/fundamentals`` and ``/search/news``.
     """
     ticker = ticker.upper()
-    if ticker not in TICKERS:
+    if ticker not in ALL_OHLCV_TICKERS:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
 
     table, date_col = _TIMEFRAME_QUERY[timeframe]

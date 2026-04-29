@@ -326,7 +326,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - Each page/panel names: rendering mode, data-fetch location (RSC vs client vs API route), cache / revalidate strategy, and failure-mode rendering. Watchlist sidebar likely RSC + ISR; ticker detail middle pane SSR with client-side toggles; chat panel CSR + `fetch`/`ReadableStream`. **Also decides**: persistent right-pane chat (per design v2) vs `/chat` route — recommend persistent panel.
     - Output: `docs/decisions/014-nextjs-rendering-mode-per-page.md` — every subsequent Phase 6 ticket references it by section.
 - [ ] Initialize Next.js app in `frontend/` with Tailwind CSS — QNT-71
-- [ ] **Phase 6 backend support: indicators + fundamentals + sparkline + SPY** — QNT-134 **[gates QNT-72 + QNT-73]**
+- [x] **Phase 6 backend support: indicators + fundamentals + sparkline + SPY** — QNT-134 **[gates QNT-72 + QNT-73]**
     - New indicators: SMA200, ADX(14), ATR(14), OBV, Bollinger %B, MACD bullish-cross flag.
     - Fundamental additions: EBITDA margin (substitutes op margin), gross/net margin bps deltas, TTM rollup asset (rolling-4Q sums of revenue / net income / FCF / EPS).
     - Sparkline field on `GET /api/v1/dashboard/summary` (60 daily closes per ticker — server-side, no N+1 client calls).

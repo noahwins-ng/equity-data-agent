@@ -12,13 +12,15 @@ from dagster import (
     StaticPartitionsDefinition,
     asset,
 )
-from shared.tickers import TICKERS
+from shared.tickers import ALL_OHLCV_TICKERS
 
 from dagster_pipelines.resources.clickhouse import ClickHouseResource
 
 logger = logging.getLogger(__name__)
 
-ohlcv_partitions = StaticPartitionsDefinition(TICKERS)
+# Includes BENCHMARK_TICKERS (SPY) so the design v2 watchlist row can render
+# against the index without each ticker page paying for an extra fetch.
+ohlcv_partitions = StaticPartitionsDefinition(ALL_OHLCV_TICKERS)
 
 
 class OHLCVConfig(Config):
