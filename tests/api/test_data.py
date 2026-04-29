@@ -500,6 +500,7 @@ def test_dashboard_summary_categorizes_all_tickers(
 
     assert by_ticker["NVDA"] == {
         "ticker": "NVDA",
+        "name": "NVIDIA",
         "price": 153.0,
         "daily_change_pct": pytest.approx((153.0 - 149.49) / 149.49 * 100),
         "rsi_14": 72.3,

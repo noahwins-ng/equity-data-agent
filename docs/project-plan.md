@@ -360,7 +360,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - Tightens `news_embeddings_no_orphaned_vectors` (QNT-93) to scroll within the same 7-day window — without it the orphan check would silently become a no-op once GC ships, the same monotonic-growth asymmetry that broke QNT-142's count check before symmetrising.
     - `WINDOW_DAYS` promoted to a module-level constant in `news_embeddings.py` so the CH SQL window, GC filter, count check, and orphan check all reference one value (no risk of one drifting).
     - Pre-deploy verification (2026-04-29 per QNT-142's bucketed-distribution query): 5933 total points across 10 tickers, 923 in the 7-30d bucket. Post-deploy AC: every ticker has 0 points with `published_at < now() - INTERVAL 7 DAY` after the first scheduled tick.
-- [ ] **Watchlist (left pane) + landing page** (`/`) — QNT-72
+- [x] **Watchlist (left pane) + landing page** (`/`) — QNT-72
     - Persistent left-rail watchlist in `app/layout.tsx` (always visible, not a card grid).
     - 10 portfolio tickers + SPY benchmark; per-row: symbol · name · price · % change · 60-day inline-SVG sparkline.
     - Bottom-left status: `EOD · 02:00 ET` (sourced from QNT-132 `/health` provenance once available).
