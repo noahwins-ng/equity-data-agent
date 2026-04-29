@@ -327,7 +327,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - Phase 4 retro carry-over: the Dagster quickstart-topology arc (QNT-100 → QNT-116, 17h across 4 incidents) and Qdrant point-ID arc (QNT-54 → QNT-120) both burned hours because the prod-vs-tutorial gap surfaced at deploy, not design. Next.js app-router has the same shape — SSR-by-default + RSC boundaries + SSE streaming don't all compose.
     - Each page/panel names: rendering mode, data-fetch location (RSC vs client vs API route), cache / revalidate strategy, and failure-mode rendering. Watchlist sidebar likely RSC + ISR; ticker detail middle pane SSR with client-side toggles; chat panel CSR + `fetch`/`ReadableStream`. **Also decides**: persistent right-pane chat (per design v2) vs `/chat` route — recommend persistent panel.
     - Output: `docs/decisions/014-nextjs-rendering-mode-per-page.md` — every subsequent Phase 6 ticket references it by section.
-- [ ] Initialize Next.js app in `frontend/` with Tailwind CSS — QNT-71
+- [x] Initialize Next.js app in `frontend/` with Tailwind CSS — QNT-71
 - [x] **Phase 6 backend support: indicators + fundamentals + sparkline + SPY** — QNT-134 **[gates QNT-72 + QNT-73]**
     - New indicators: SMA200, ADX(14), ATR(14), OBV, Bollinger %B, MACD bullish-cross flag.
     - Fundamental additions: EBITDA margin (substitutes op margin), gross/net margin bps deltas, TTM rollup asset (rolling-4Q sums of revenue / net income / FCF / EPS).
