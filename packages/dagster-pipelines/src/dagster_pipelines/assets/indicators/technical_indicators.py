@@ -166,16 +166,18 @@ def compute_indicators(df: pd.DataFrame, price_col: str = "adj_close") -> pd.Dat
         dx = 100 * (plus_di - minus_di).abs() / di_sum
         df["adx_14"] = dx.ewm(alpha=1 / 14, min_periods=14, adjust=False).mean()
 
-        # OBV — cumulative signed volume. yfinance reports raw share count
-        # (not split-adjusted), so for tickers with splits the cumulative sum
-        # is artificially low for pre-split bars (1 pre-split share == N
-        # post-split shares for an N:1 split). TradingView back-adjusts
-        # volume to current-share-basis by default, so to match what a
-        # trader sees on the chart we multiply by close/adj_close — the
-        # cumulative split factor (close = pre-split nominal price,
-        # adj_close = post-split-equivalent price). Folds in dividend
-        # adjustments too but those are tiny vs splits like NVDA's 10:1.
-        # For tickers with no splits adj_close ≈ close so this is a no-op.
+        # OBV — cumulative signed volume. NOTE: the absolute level is window-
+        # dependent — it integrates from the earliest bar in the partition's
+        # backfill (currently ~2y), so it WILL diverge from TradingView's
+        # default chart, which integrates over a much longer history. OBV's
+        # analytical value is slope / direction / divergences, not absolute
+        # level — only those carry signal across window-start differences.
+        #
+        # The close/adj_close multiplier below is defensive: empirically
+        # yfinance's `auto_adjust=False` already returns split-adjusted close
+        # AND volume (so adj_factor ≈ 1.0006, just dividend adjustment), but
+        # if a future yfinance release changes that for any ticker the
+        # adjustment keeps OBV in current-share-basis terms automatically.
         adj_factor = df["close"] / df["adj_close"].replace(0, np.nan)
         adj_volume = df["volume"] * adj_factor
         sign = np.sign(close.diff().fillna(0)).astype("int64")
