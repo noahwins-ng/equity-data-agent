@@ -27,7 +27,6 @@ from dagster_pipelines.sensors import (
     fundamentals_sensor,
     news_downstream_job,
     news_raw_sensor,
-    ohlcv_benchmark_downstream_job,
     ohlcv_downstream_job,
     ohlcv_raw_sensor,
 )
@@ -51,7 +50,6 @@ defs = Definitions(
         fundamentals_weekly_job,
         news_raw_job,
         ohlcv_downstream_job,
-        ohlcv_benchmark_downstream_job,
         fundamentals_downstream_job,
         news_downstream_job,
     ],
