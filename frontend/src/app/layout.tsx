@@ -42,7 +42,7 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full bg-zinc-950 text-zinc-100">
-        <div className="grid h-screen grid-cols-[16rem_minmax(0,1fr)_20rem]">
+        <div className="grid h-screen grid-cols-[17rem_minmax(0,1fr)_28rem]">
           <Watchlist />
           <main className="overflow-y-auto">{children}</main>
           <ChatPanelPlaceholder />

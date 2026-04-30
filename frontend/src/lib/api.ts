@@ -16,7 +16,11 @@
  *   - cache: "force-cache" → cache indefinitely (rare)
  */
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+// Default to 127.0.0.1 (not "localhost") so browser fetches reach the API
+// reliably on macOS — `localhost` resolves to both IPv4 and IPv6, and Chrome's
+// fetch may try `::1` first; uvicorn binds IPv4-only by default. Override via
+// NEXT_PUBLIC_API_URL in any prod / preview deploy where the API lives off-host.
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 
 /** Default revalidation window for daily-cadence data (60 s — see ADR-014 §1). */
 export const DEFAULT_REVALIDATE_SECONDS = 60;
@@ -88,3 +92,136 @@ export async function apiFetchRaw(
 }
 
 export { API_BASE_URL };
+
+/**
+ * Build-time prerender flag — true when running `next build` so server fetches
+ * inside `generateStaticParams` / page components can fall back gracefully if
+ * FastAPI is unreachable. Without this, a Vercel preview build for a PR that
+ * only touches the frontend would fail because the prod API is firewalled to
+ * a different origin during CI. At runtime the flag is false and missing data
+ * surfaces normally.
+ */
+export const IS_PRERENDER =
+  process.env.NEXT_PHASE === "phase-production-build" ||
+  process.env.NEXT_PHASE === "phase-export";
+
+// ─── Typed response shapes ──────────────────────────────────────────────────
+//
+// These mirror packages/api/src/api/routers/data.py. Field names + nullability
+// must stay aligned with the FastAPI response models — `make types` is the
+// long-term plan; for now we hand-maintain the surfaces the ticker page reads.
+
+export type Timeframe = "daily" | "weekly" | "monthly";
+export type PeriodType = "quarterly" | "annual" | "ttm";
+
+export type OhlcvRow = {
+  time: string; // ISO date, YYYY-MM-DD
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  adj_close: number;
+  volume: number;
+};
+
+export type IndicatorRow = {
+  time: string;
+  sma_20: number | null;
+  sma_50: number | null;
+  sma_200: number | null;
+  ema_12: number | null;
+  ema_26: number | null;
+  rsi_14: number | null;
+  macd: number | null;
+  macd_signal: number | null;
+  macd_hist: number | null;
+  macd_bullish_cross: number; // 0/1 flag
+  bb_upper: number | null;
+  bb_middle: number | null;
+  bb_lower: number | null;
+  bb_pct_b: number | null;
+  adx_14: number | null;
+  atr_14: number | null;
+  obv: number | null;
+};
+
+export type FundamentalRow = {
+  ticker: string;
+  period_end: string;
+  period_type: PeriodType;
+  pe_ratio: number | null;
+  ev_ebitda: number | null;
+  price_to_book: number | null;
+  price_to_sales: number | null;
+  eps: number | null;
+  revenue_yoy_pct: number | null;
+  net_income_yoy_pct: number | null;
+  fcf_yoy_pct: number | null;
+  net_margin_pct: number | null;
+  gross_margin_pct: number | null;
+  ebitda_margin_pct: number | null;
+  gross_margin_bps_yoy: number | null;
+  net_margin_bps_yoy: number | null;
+  roe: number | null;
+  roa: number | null;
+  fcf_yield: number | null;
+  debt_to_equity: number | null;
+  current_ratio: number | null;
+  revenue_ttm: number | null;
+  net_income_ttm: number | null;
+  fcf_ttm: number | null;
+  // Absolute period values from equity_raw.fundamentals — populated for
+  // quarterly + annual rows; null on TTM rows (use *_ttm fields for those).
+  revenue: number | null;
+  net_income: number | null;
+  free_cash_flow: number | null;
+  ebitda: number | null;
+};
+
+export type NewsRow = {
+  id: string;
+  headline: string;
+  body: string;
+  publisher_name: string;
+  image_url: string;
+  url: string;
+  source: string;
+  published_at: string; // ISO datetime
+  sentiment_label: string;
+  // Derived in API SQL via `domain(url)`. Used as the primary publisher
+  // signal for direct outlet URLs; for Finnhub redirects (host ===
+  // "finnhub.io") fall back to `publisher_name` since the redirect target
+  // is opaque to us.
+  host: string;
+};
+
+export type QuoteResponse = {
+  ticker: string;
+  name: string;
+  sector: string | null;
+  industry: string | null;
+  price: number | null;
+  prev_close: number | null;
+  open: number | null;
+  day_high: number | null;
+  day_low: number | null;
+  volume: number | null;
+  avg_volume_30d: number | null;
+  market_cap: number | null;
+  pe_ratio_ttm: number | null;
+  as_of: string | null;
+};
+
+export type HealthProvenance = {
+  sources: string[];
+  jobs: {
+    runtime: string;
+    schedule: string;
+    next_ingest_local: string;
+  };
+};
+
+export type HealthResponse = {
+  status: "ok" | "degraded" | "down";
+  provenance?: HealthProvenance;
+};

@@ -194,15 +194,21 @@ _INDICATOR_COLS = (
     "time",
     "sma_20",
     "sma_50",
+    "sma_200",
     "ema_12",
     "ema_26",
     "rsi_14",
     "macd",
     "macd_signal",
     "macd_hist",
+    "macd_bullish_cross",
     "bb_upper",
     "bb_middle",
     "bb_lower",
+    "bb_pct_b",
+    "adx_14",
+    "atr_14",
+    "obv",
 )
 
 
@@ -213,13 +219,15 @@ def _fake_indicator_result(rows: list[tuple[Any, ...]]) -> _FakeResult:
 def test_indicators_daily_returns_iso_date_and_all_fields(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # First row is inside the SMA-50 warm-up window → nulls must survive the round-trip.
+    # First row is inside the SMA-200 warm-up window → nulls must survive the
+    # round-trip. macd_bullish_cross is a UInt8 0/1 flag without warm-up.
     fake = _FakeClient(
         _fake_indicator_result(
             [
                 (
                     date(2026, 1, 2),
                     148.5,
+                    142.0,
                     None,
                     151.2,
                     146.8,
@@ -227,23 +235,34 @@ def test_indicators_daily_returns_iso_date_and_all_fields(
                     1.2,
                     0.9,
                     0.3,
+                    0,
                     160.0,
                     148.5,
                     137.0,
+                    0.55,
+                    None,
+                    None,
+                    None,
                 ),
                 (
                     date(2026, 1, 3),
                     148.9,
                     142.1,
+                    140.0,
                     151.4,
                     147.0,
                     59.1,
                     1.3,
                     0.95,
                     0.35,
+                    1,
                     160.5,
                     149.0,
                     137.5,
+                    0.62,
+                    25.4,
+                    3.1,
+                    1234567.0,
                 ),
             ]
         )
@@ -256,18 +275,26 @@ def test_indicators_daily_returns_iso_date_and_all_fields(
     assert body[0] == {
         "time": "2026-01-02",
         "sma_20": 148.5,
-        "sma_50": None,
+        "sma_50": 142.0,
+        "sma_200": None,
         "ema_12": 151.2,
         "ema_26": 146.8,
         "rsi_14": 58.3,
         "macd": 1.2,
         "macd_signal": 0.9,
         "macd_hist": 0.3,
+        "macd_bullish_cross": 0,
         "bb_upper": 160.0,
         "bb_middle": 148.5,
         "bb_lower": 137.0,
+        "bb_pct_b": 0.55,
+        "adx_14": None,
+        "atr_14": None,
+        "obv": None,
     }
-    assert body[1]["sma_50"] == 142.1
+    assert body[1]["sma_200"] == 140.0
+    assert body[1]["macd_bullish_cross"] == 1
+    assert body[1]["adx_14"] == 25.4
     assert fake.last_query is not None
     assert "equity_derived.technical_indicators_daily" in fake.last_query
     assert "FINAL" in fake.last_query
@@ -275,29 +302,33 @@ def test_indicators_daily_returns_iso_date_and_all_fields(
     assert fake.last_parameters == {"ticker": "NVDA"}
 
 
+def _indicator_row(d: date) -> tuple[Any, ...]:
+    return (
+        d,
+        148.0,  # sma_20
+        142.0,  # sma_50
+        140.0,  # sma_200
+        151.0,  # ema_12
+        146.0,  # ema_26
+        60.0,  # rsi_14
+        1.5,  # macd
+        1.0,  # macd_signal
+        0.5,  # macd_hist
+        0,  # macd_bullish_cross
+        161.0,  # bb_upper
+        149.0,  # bb_middle
+        137.0,  # bb_lower
+        0.5,  # bb_pct_b
+        22.0,  # adx_14
+        3.0,  # atr_14
+        100000.0,  # obv
+    )
+
+
 def test_indicators_weekly_uses_derived_weekly_table(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    fake = _FakeClient(
-        _fake_indicator_result(
-            [
-                (
-                    date(2026, 1, 5),
-                    148.0,
-                    142.0,
-                    151.0,
-                    146.0,
-                    60.0,
-                    1.5,
-                    1.0,
-                    0.5,
-                    161.0,
-                    149.0,
-                    137.0,
-                )
-            ]
-        )
-    )
+    fake = _FakeClient(_fake_indicator_result([_indicator_row(date(2026, 1, 5))]))
     _install_fake(monkeypatch, fake)
 
     r = client.get("/api/v1/indicators/NVDA", params={"timeframe": "weekly"})
@@ -311,26 +342,7 @@ def test_indicators_weekly_uses_derived_weekly_table(
 def test_indicators_monthly_uses_derived_monthly_table(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    fake = _FakeClient(
-        _fake_indicator_result(
-            [
-                (
-                    date(2026, 1, 1),
-                    148.0,
-                    142.0,
-                    151.0,
-                    146.0,
-                    60.0,
-                    1.5,
-                    1.0,
-                    0.5,
-                    161.0,
-                    149.0,
-                    137.0,
-                )
-            ]
-        )
-    )
+    fake = _FakeClient(_fake_indicator_result([_indicator_row(date(2026, 1, 1))]))
     _install_fake(monkeypatch, fake)
 
     r = client.get("/api/v1/indicators/NVDA", params={"timeframe": "monthly"})
@@ -371,19 +383,33 @@ _FUNDAMENTAL_COLS = (
     "fcf_yoy_pct",
     "net_margin_pct",
     "gross_margin_pct",
+    "ebitda_margin_pct",
+    "gross_margin_bps_yoy",
+    "net_margin_bps_yoy",
     "roe",
     "roa",
     "fcf_yield",
     "debt_to_equity",
     "current_ratio",
+    "revenue_ttm",
+    "net_income_ttm",
+    "fcf_ttm",
+    # Absolute-value columns from the LEFT JOIN onto equity_raw.fundamentals
+    # — populated for quarterly + annual rows so the frontend can render
+    # `Revenue` / `Net income` / `FCF` outside of TTM. Null on TTM rows.
+    "revenue",
+    "net_income",
+    "free_cash_flow",
+    "ebitda",
 )
 
 
 def test_fundamentals_returns_ratios_and_validates_ticker(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Two rows: a fully-populated annual row, and a quarterly row whose
-    # denominator-division fields are null to verify nulls round-trip.
+    # Two rows: a fully-populated TTM row carrying the new bps-delta + rollup
+    # fields, and a quarterly row whose denominator-division fields are null
+    # to verify nulls round-trip.
     fake = _FakeClient(
         _FakeResult(
             _FUNDAMENTAL_COLS,
@@ -391,7 +417,7 @@ def test_fundamentals_returns_ratios_and_validates_ticker(
                 (
                     "NVDA",
                     date(2025, 12, 31),
-                    "annual",
+                    "ttm",
                     32.5,
                     22.1,
                     18.4,
@@ -402,11 +428,21 @@ def test_fundamentals_returns_ratios_and_validates_ticker(
                     85.0,
                     50.0,
                     75.0,
+                    40.0,  # ebitda_margin_pct
+                    250.0,  # gross_margin_bps_yoy (+2.50 pp)
+                    400.0,  # net_margin_bps_yoy (+4.00 pp)
                     65.0,
                     35.0,
                     0.03,
                     0.25,
                     3.5,
+                    100_000_000_000.0,  # revenue_ttm
+                    50_000_000_000.0,  # net_income_ttm
+                    40_000_000_000.0,  # fcf_ttm
+                    None,  # revenue (raw — TTM row has no raw row to join)
+                    None,  # net_income
+                    None,  # free_cash_flow
+                    None,  # ebitda
                 ),
                 (
                     "NVDA",
@@ -427,6 +463,16 @@ def test_fundamentals_returns_ratios_and_validates_ticker(
                     None,
                     None,
                     None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    25_000_000_000.0,  # revenue (Q3 absolute)
+                    12_000_000_000.0,  # net_income
+                    9_000_000_000.0,  # free_cash_flow
+                    11_000_000_000.0,  # ebitda
                 ),
             ],
         )
@@ -436,32 +482,27 @@ def test_fundamentals_returns_ratios_and_validates_ticker(
     r = client.get("/api/v1/fundamentals/nvda")
     assert r.status_code == 200
     body = r.json()
-    assert body[0] == {
-        "ticker": "NVDA",
-        "period_end": "2025-12-31",
-        "period_type": "annual",
-        "pe_ratio": 32.5,
-        "ev_ebitda": 22.1,
-        "price_to_book": 18.4,
-        "price_to_sales": 15.0,
-        "eps": 4.80,
-        "revenue_yoy_pct": 60.0,
-        "net_income_yoy_pct": 120.0,
-        "fcf_yoy_pct": 85.0,
-        "net_margin_pct": 50.0,
-        "gross_margin_pct": 75.0,
-        "roe": 65.0,
-        "roa": 35.0,
-        "fcf_yield": 0.03,
-        "debt_to_equity": 0.25,
-        "current_ratio": 3.5,
-    }
+    assert body[0]["period_type"] == "ttm"
+    assert body[0]["ebitda_margin_pct"] == 40.0
+    assert body[0]["gross_margin_bps_yoy"] == 250.0
+    assert body[0]["net_margin_bps_yoy"] == 400.0
+    assert body[0]["revenue_ttm"] == 100_000_000_000.0
+    assert body[0]["fcf_ttm"] == 40_000_000_000.0
     assert body[1]["period_end"] == "2025-09-30"
     assert body[1]["pe_ratio"] is None
+    assert body[1]["ebitda_margin_pct"] is None
+    # Quarterly row carries absolute revenue / net_income / fcf / ebitda from
+    # the LEFT JOIN onto equity_raw.fundamentals — without these the frontend
+    # can't render Revenue / Net income / FCF outside of TTM.
+    assert body[1]["revenue"] == 25_000_000_000.0
+    assert body[1]["net_income"] == 12_000_000_000.0
+    assert body[1]["free_cash_flow"] == 9_000_000_000.0
+    assert body[1]["ebitda"] == 11_000_000_000.0
     assert fake.last_query is not None
     assert "equity_derived.fundamental_summary" in fake.last_query
+    assert "equity_raw.fundamentals" in fake.last_query
     assert "FINAL" in fake.last_query
-    assert "ORDER BY period_end DESC" in fake.last_query
+    assert "ORDER BY s.period_end DESC" in fake.last_query
     assert fake.last_parameters == {"ticker": "NVDA"}
 
     r_bad = client.get("/api/v1/fundamentals/BOGUS")
@@ -547,3 +588,279 @@ def test_dashboard_summary_handles_missing_prior_close(
     body = r.json()
     assert body[0]["daily_change_pct"] is None
     assert body[0]["sparkline"] == []
+
+
+_NEWS_COLS = (
+    "id",
+    "headline",
+    "body",
+    "publisher_name",
+    "image_url",
+    "url",
+    "source",
+    "published_at",
+    "sentiment_label",
+    # Derived in SQL via `domain(url)` — primary publisher signal for the
+    # frontend pill, used to disambiguate Finnhub redirect URLs from real
+    # outlet URLs.
+    "host",
+)
+
+
+def test_news_returns_iso_timestamp_and_window_filter(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import datetime as dt
+
+    fake = _FakeClient(
+        _FakeResult(
+            _NEWS_COLS,
+            [
+                (
+                    "12345",
+                    "NVIDIA reports record Q4 revenue",
+                    "NVIDIA's Q4 revenue beat estimates...",
+                    "Reuters",
+                    "https://example.com/img.jpg",
+                    "https://reuters.com/article",
+                    "finnhub",
+                    dt(2026, 4, 28, 14, 30, 0),
+                    "pending",
+                    "reuters.com",
+                ),
+                (
+                    "12346",
+                    "Analyst lifts NVDA price target",
+                    "Goldman raised the price target to $200",
+                    "Bloomberg",
+                    "",  # image_url empty → frontend hides thumbnail
+                    "https://bloomberg.com/article",
+                    "finnhub",
+                    dt(2026, 4, 27, 9, 0, 0),
+                    "pending",
+                    "bloomberg.com",
+                ),
+            ],
+        )
+    )
+    _install_fake(monkeypatch, fake)
+
+    r = client.get("/api/v1/news/NVDA")
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body) == 2
+    assert body[0] == {
+        "id": "12345",
+        "headline": "NVIDIA reports record Q4 revenue",
+        "body": "NVIDIA's Q4 revenue beat estimates...",
+        "publisher_name": "Reuters",
+        "image_url": "https://example.com/img.jpg",
+        "url": "https://reuters.com/article",
+        "source": "finnhub",
+        "published_at": "2026-04-28T14:30:00",
+        "sentiment_label": "pending",
+        "host": "reuters.com",
+    }
+    # Empty image_url survives — the frontend treats "" as missing.
+    assert body[1]["image_url"] == ""
+    assert fake.last_query is not None
+    assert "equity_raw.news_raw" in fake.last_query
+    assert "FINAL" in fake.last_query
+    assert "ORDER BY published_at DESC" in fake.last_query
+    assert fake.last_parameters is not None
+    assert fake.last_parameters["ticker"] == "NVDA"
+    assert fake.last_parameters["days"] == 7  # default window matches the card header
+    assert fake.last_parameters["limit"] == 25
+
+
+def test_news_respects_days_and_limit_query(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeClient(_FakeResult(_NEWS_COLS, []))
+    _install_fake(monkeypatch, fake)
+
+    r = client.get("/api/v1/news/NVDA", params={"days": 30, "limit": 50})
+    assert r.status_code == 200
+    assert r.json() == []  # empty rows is a valid 200 — same as service-down per ADR-014 §5
+    assert fake.last_parameters == {"ticker": "NVDA", "days": 30, "limit": 50}
+
+
+def test_news_unknown_ticker_returns_404(client: TestClient) -> None:
+    r = client.get("/api/v1/news/BOGUS")
+    assert r.status_code == 404
+    assert "Unknown ticker" in r.json()["detail"]
+
+
+def test_news_rejects_spy(client: TestClient) -> None:
+    # Benchmark tickers have no news pipeline — same gate as fundamentals.
+    r = client.get("/api/v1/news/SPY")
+    assert r.status_code == 404
+
+
+def test_news_lowercase_ticker_is_normalized(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeClient(_FakeResult(_NEWS_COLS, []))
+    _install_fake(monkeypatch, fake)
+    r = client.get("/api/v1/news/nvda")
+    assert r.status_code == 200
+    assert fake.last_parameters is not None
+    assert fake.last_parameters["ticker"] == "NVDA"
+
+
+def test_news_clamps_invalid_query_params(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeClient(_FakeResult(_NEWS_COLS, []))
+    _install_fake(monkeypatch, fake)
+    # days=0 is below the lower bound; FastAPI must 422 rather than passing it through.
+    r = client.get("/api/v1/news/NVDA", params={"days": 0})
+    assert r.status_code == 422
+    # limit > max should also fail validation.
+    r2 = client.get("/api/v1/news/NVDA", params={"limit": 1000})
+    assert r2.status_code == 422
+
+
+_QUOTE_OHLCV_COLS = (
+    "as_of",
+    "today_open",
+    "day_high",
+    "day_low",
+    "price",
+    "prev_close",
+    "today_volume",
+    "avg_volume_30d",
+    "bars_in_window",
+)
+
+
+class _MultiQueryFakeClient:
+    """Fake client returning canned results in call order — used for the
+    quote endpoint, which fans out over OHLCV + fundamentals + raw market cap.
+    """
+
+    def __init__(self, results: list[_FakeResult]) -> None:
+        self._results = list(results)
+        self.calls: list[tuple[str, dict[str, Any] | None]] = []
+
+    def query(self, query: str, parameters: dict[str, Any] | None = None) -> _FakeResult:
+        self.calls.append((query, parameters))
+        if not self._results:
+            raise AssertionError("no more canned results")
+        return self._results.pop(0)
+
+
+def test_quote_returns_full_header_bundle(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # OHLCV: 30+ bars in window → avg_volume populated.
+    fake = _MultiQueryFakeClient(
+        [
+            _FakeResult(
+                _QUOTE_OHLCV_COLS,
+                [
+                    (
+                        date(2026, 4, 28),
+                        152.0,
+                        158.0,
+                        151.5,
+                        157.0,
+                        149.0,
+                        22_000_000,
+                        18_500_000.0,
+                        30,
+                    )
+                ],
+            ),
+            _FakeResult(("pe_ratio",), [(32.5,)]),
+            _FakeResult(("market_cap",), [(3_900_000_000_000.0,)]),
+        ]
+    )
+    monkeypatch.setattr(clickhouse_module, "get_client", lambda: fake)
+    monkeypatch.setattr(data_module, "get_client", lambda: fake)
+
+    r = client.get("/api/v1/quote/NVDA")
+    assert r.status_code == 200
+    body = r.json()
+    assert body == {
+        "ticker": "NVDA",
+        "name": "NVIDIA",
+        "sector": "Technology",
+        "industry": "Semiconductors",
+        "price": 157.0,
+        "prev_close": 149.0,
+        "open": 152.0,
+        "day_high": 158.0,
+        "day_low": 151.5,
+        "volume": 22_000_000,
+        "avg_volume_30d": 18_500_000.0,
+        "market_cap": 3_900_000_000_000.0,
+        "pe_ratio_ttm": 32.5,
+        "as_of": "2026-04-28",
+    }
+    # Three queries: OHLCV bundle → P/E TTM → raw market cap.
+    assert len(fake.calls) == 3
+    assert "equity_raw.ohlcv_raw" in fake.calls[0][0]
+    assert "period_type = 'ttm'" in fake.calls[1][0]
+    assert "equity_raw.fundamentals" in fake.calls[2][0]
+
+
+def test_quote_avg_volume_is_null_when_window_short(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Brand-new ticker with only 5 bars → avg_volume_30d must be null rather
+    # than a partial average that would mislead the % comparison label.
+    fake = _MultiQueryFakeClient(
+        [
+            _FakeResult(
+                _QUOTE_OHLCV_COLS,
+                [
+                    (
+                        date(2026, 4, 28),
+                        152.0,
+                        158.0,
+                        151.5,
+                        157.0,
+                        149.0,
+                        22_000_000,
+                        21_000_000.0,
+                        5,
+                    )
+                ],
+            ),
+            _FakeResult(("pe_ratio",), []),
+            _FakeResult(("market_cap",), []),
+        ]
+    )
+    monkeypatch.setattr(clickhouse_module, "get_client", lambda: fake)
+    monkeypatch.setattr(data_module, "get_client", lambda: fake)
+
+    r = client.get("/api/v1/quote/NVDA")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["avg_volume_30d"] is None
+    assert body["pe_ratio_ttm"] is None
+    assert body["market_cap"] is None
+
+
+def test_quote_unknown_ticker_returns_404(client: TestClient) -> None:
+    r = client.get("/api/v1/quote/BOGUS")
+    assert r.status_code == 404
+
+
+def test_quote_rejects_spy(client: TestClient) -> None:
+    r = client.get("/api/v1/quote/SPY")
+    assert r.status_code == 404
+
+
+def test_quote_returns_404_when_no_ohlcv_rows(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No OHLCV history → 404 rather than a quote with all-null fields.
+    fake = _MultiQueryFakeClient([_FakeResult(_QUOTE_OHLCV_COLS, [])])
+    monkeypatch.setattr(clickhouse_module, "get_client", lambda: fake)
+    monkeypatch.setattr(data_module, "get_client", lambda: fake)
+
+    r = client.get("/api/v1/quote/NVDA")
+    assert r.status_code == 404
+    assert "No OHLCV data" in r.json()["detail"]

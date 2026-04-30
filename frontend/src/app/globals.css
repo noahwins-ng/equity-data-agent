@@ -9,3 +9,28 @@ html,
 body {
   height: 100%;
 }
+
+/* Dark scrollbar theme — keeps the watchlist / news / route pane scroll
+ * tracks visually inside the zinc palette instead of the OS default light
+ * grey, which broke the dark theme on Chrome/Edge and stood out as a bright
+ * stripe on the v2 layout. Firefox uses scrollbar-color; Webkit needs the
+ * pseudo-elements. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(63 63 70) rgb(9 9 11);
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: rgb(9 9 11);
+}
+*::-webkit-scrollbar-thumb {
+  background: rgb(63 63 70);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgb(82 82 91);
+}

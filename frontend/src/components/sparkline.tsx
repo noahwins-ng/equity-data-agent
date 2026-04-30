@@ -30,7 +30,7 @@ export type SparklineProps = {
 
 export function Sparkline({
   values,
-  width = 96,
+  width = 80,
   height = 28,
   stroke,
   className,

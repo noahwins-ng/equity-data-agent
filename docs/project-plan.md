@@ -365,7 +365,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - 10 portfolio tickers + SPY benchmark; per-row: symbol · name · price · % change · 60-day inline-SVG sparkline.
     - Bottom-left status: `EOD · 02:00 ET` (sourced from QNT-132 `/health` provenance once available).
     - Calls `GET /api/v1/dashboard/summary` (single request returns all 11 tickers including sparkline arrays — no N+1).
-- [ ] **Ticker detail (middle pane)** (`/ticker/[symbol]`) — QNT-73
+- [x] **Ticker detail (middle pane)** (`/ticker/[symbol]`) — QNT-73
     - **Quote header**: price + change + OPEN / DAY RANGE / VOL / MKT CAP / P/E TTM (no FWD).
     - **Chart**: TradingView Lightweight Charts, candlestick + volume. **Renders `adj_close` as candlestick close** to avoid split discontinuities. Date-range toggle 1M / 3M / 6M / YTD / 1Y / 5Y / MAX (no 1D/5D — EOD only). Indicator overlay chips: SMA / BB / RSI / ATR / OBV (no VWAP). SPY benchmark overlay (default off).
     - **Technicals card**: Daily / Weekly / Monthly aggregation tabs; RSI / MACD / ADX / ATR / SMA 20/50/200 / Bollinger %B / OBV trend rows with signal-threshold decorations.
