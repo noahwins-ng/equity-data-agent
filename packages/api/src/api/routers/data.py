@@ -7,11 +7,11 @@ arrays for chart rendering (TradingView Lightweight Charts, etc.).
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from shared.tickers import ALL_OHLCV_TICKERS, TICKER_METADATA, TICKERS
 
 from api.clickhouse import get_client
@@ -34,15 +34,21 @@ _TIMEFRAME_QUERY: dict[Timeframe, tuple[str, str]] = {
 _INDICATOR_COLUMNS = (
     "sma_20",
     "sma_50",
+    "sma_200",
     "ema_12",
     "ema_26",
     "rsi_14",
     "macd",
     "macd_signal",
     "macd_hist",
+    "macd_bullish_cross",
     "bb_upper",
     "bb_middle",
     "bb_lower",
+    "bb_pct_b",
+    "adx_14",
+    "atr_14",
+    "obv",
 )
 
 _INDICATOR_TIMEFRAME_QUERY: dict[Timeframe, tuple[str, str]] = {
@@ -90,12 +96,23 @@ _FUNDAMENTAL_COLUMNS = (
     "fcf_yoy_pct",
     "net_margin_pct",
     "gross_margin_pct",
+    "ebitda_margin_pct",
+    "gross_margin_bps_yoy",
+    "net_margin_bps_yoy",
     "roe",
     "roa",
     "fcf_yield",
     "debt_to_equity",
     "current_ratio",
+    "revenue_ttm",
+    "net_income_ttm",
+    "fcf_ttm",
 )
+
+# News card window — matches design v2's "Last 7d" framing on the news card.
+_NEWS_WINDOW_DAYS = 7
+_NEWS_DEFAULT_LIMIT = 25
+_NEWS_MAX_LIMIT = 100
 
 
 @router.get("/dashboard/summary")
@@ -252,12 +269,114 @@ def get_fundamentals(ticker: str) -> list[dict[str, Any]]:
     if ticker not in TICKERS:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
 
-    columns = ", ".join(_FUNDAMENTAL_COLUMNS)
+    # Two LEFT JOINs onto equity_raw.fundamentals:
+    #   r  — same (ticker, period_end, period_type) → surfaces absolute
+    #        revenue / net_income / fcf / ebitda for quarterly + annual rows
+    #        (fundamental_summary only stores ratios + the rolling-4Q TTM
+    #        aggregates, not raw period values).
+    #   bs — TTM rows joined to the quarterly raw row at the same period_end
+    #        → surfaces balance-sheet values (total_assets, total_liabilities,
+    #        current_assets, current_liabilities, total_debt) so we can
+    #        compute ROE / ROA / Debt-to-Equity / Current Ratio on TTM rows.
+    #        The asset's `_build_ttm_rows` doesn't populate these, so without
+    #        this join the TTM card shows several "—" cells.
+    #
+    # Override columns (roe / roa / debt_to_equity / current_ratio) come
+    # *before* their summary counterparts in the SELECT list and use
+    # COALESCE — quarterly + annual rows keep the asset-computed value;
+    # TTM rows fall back to the BS-derived calculation.
+    override_cols = {"roe", "roa", "debt_to_equity", "current_ratio", "gross_margin_pct"}
+    # Explicit `AS` aliases — without them ClickHouse retains the `s.` table
+    # prefix in result.column_names when joins introduce name ambiguity, and
+    # the dict-zipping below would produce keys like "s.period_end".
+    summary_cols = ", ".join(
+        f"s.{c} AS {c}" for c in _FUNDAMENTAL_COLUMNS if c not in override_cols
+    )
+    # `gp_ttm` CTE rolls 4 quarters of gross_profit per ticker so we can
+    # synthesize TTM gross margin (= 4Q gross_profit / revenue_ttm). The
+    # asset's `_build_ttm_rows` doesn't compute gross_margin_pct because it
+    # would need this same rolling sum, so we'd otherwise show "—" for
+    # gross margin on every TTM row. `qcount = 4` guards against the first
+    # three quarters where the window is undefined.
     query = f"""
-        SELECT {columns}
-        FROM equity_derived.fundamental_summary FINAL
-        WHERE ticker = %(ticker)s
-        ORDER BY period_end DESC, period_type ASC
+        WITH gp_ttm AS (
+            SELECT
+                ticker,
+                period_end,
+                sum(gross_profit) OVER (
+                    PARTITION BY ticker
+                    ORDER BY period_end
+                    ROWS BETWEEN 3 PRECEDING AND CURRENT ROW
+                ) AS gross_profit_ttm,
+                count() OVER (
+                    PARTITION BY ticker
+                    ORDER BY period_end
+                    ROWS BETWEEN 3 PRECEDING AND CURRENT ROW
+                ) AS qcount
+            FROM equity_raw.fundamentals FINAL
+            WHERE period_type = 'quarterly'
+        )
+        SELECT
+            {summary_cols},
+            COALESCE(s.gross_margin_pct, IF(
+                s.period_type = 'ttm'
+                AND gp.qcount = 4
+                AND s.revenue_ttm > 0,
+                gp.gross_profit_ttm / s.revenue_ttm * 100,
+                NULL
+            )) AS gross_margin_pct,
+            COALESCE(s.roe, IF(
+                s.period_type = 'ttm'
+                AND (bs.total_assets - bs.total_liabilities) > 0
+                AND s.net_income_ttm IS NOT NULL,
+                s.net_income_ttm / (bs.total_assets - bs.total_liabilities) * 100,
+                NULL
+            )) AS roe,
+            COALESCE(s.roa, IF(
+                s.period_type = 'ttm'
+                AND bs.total_assets > 0
+                AND s.net_income_ttm IS NOT NULL,
+                s.net_income_ttm / bs.total_assets * 100,
+                NULL
+            )) AS roa,
+            COALESCE(s.debt_to_equity, IF(
+                s.period_type = 'ttm'
+                AND (bs.total_assets - bs.total_liabilities) > 0,
+                bs.total_debt / (bs.total_assets - bs.total_liabilities),
+                NULL
+            )) AS debt_to_equity,
+            COALESCE(s.current_ratio, IF(
+                s.period_type = 'ttm'
+                AND bs.current_liabilities > 0,
+                bs.current_assets / bs.current_liabilities,
+                NULL
+            )) AS current_ratio,
+            r.revenue        AS revenue,
+            r.net_income     AS net_income,
+            r.free_cash_flow AS free_cash_flow,
+            r.ebitda         AS ebitda
+        FROM equity_derived.fundamental_summary AS s FINAL
+        LEFT JOIN (
+            SELECT ticker, period_end, period_type, revenue, net_income,
+                   free_cash_flow, ebitda
+            FROM equity_raw.fundamentals FINAL
+        ) AS r
+            ON s.ticker = r.ticker
+            AND s.period_end = r.period_end
+            AND s.period_type = r.period_type
+        LEFT JOIN (
+            SELECT ticker, period_end, total_assets, total_liabilities,
+                   current_assets, current_liabilities, total_debt
+            FROM equity_raw.fundamentals FINAL
+            WHERE period_type = 'quarterly'
+        ) AS bs
+            ON s.ticker = bs.ticker
+            AND s.period_end = bs.period_end
+        LEFT JOIN gp_ttm AS gp
+            ON s.ticker = gp.ticker
+            AND s.period_end = gp.period_end
+        WHERE s.ticker = %(ticker)s
+        ORDER BY s.period_end DESC, s.period_type ASC
     """
     result = get_client().query(query, parameters={"ticker": ticker})
 
@@ -306,3 +425,184 @@ def get_indicators(
             record["time"] = time_value.isoformat()
         rows.append(record)
     return rows
+
+
+@router.get("/news/{ticker}")
+def get_news(
+    ticker: str,
+    days: int = Query(default=_NEWS_WINDOW_DAYS, ge=1, le=90),
+    limit: int = Query(default=_NEWS_DEFAULT_LIMIT, ge=1, le=_NEWS_MAX_LIMIT),
+) -> list[dict[str, Any]]:
+    """Return recent ``ticker`` news rows for the design-v2 news card.
+
+    Sourced directly from ``equity_raw.news_raw`` — bypasses Qdrant because
+    the news card is a chronological feed, not a semantic search. The 7-day
+    default matches the card header (``NEWS Last 7d``); response shape is
+    ``{id, headline, body, publisher_name, image_url, url, source,
+    published_at, sentiment_label}[]`` ordered most-recent-first.
+
+    Per ADR-014 anti-pattern §5: empty list is a valid 200 response and is
+    rendered identically to "service down" by the frontend (an "empty news"
+    panel) — the card consumer must not differentiate.
+    """
+    ticker = ticker.upper()
+    if ticker not in TICKERS:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+
+    # `host` is derived from the URL so the frontend can prefer the actual
+    # serving domain over Finnhub's feed-source label. Finnhub redirects
+    # *all* "Yahoo"/"Benzinga"/"CNBC"-tagged articles through finnhub.io —
+    # we can't tell from those URLs who actually wrote the article, so the
+    # tag is the best signal we have. When the URL is a real outlet
+    # (finance.yahoo.com, fool.com, marketwatch.com, …) the host is more
+    # accurate than the often-empty `publisher_name`.
+    query = """
+        SELECT
+            toString(id) AS id,
+            headline,
+            body,
+            publisher_name,
+            image_url,
+            url,
+            source,
+            published_at,
+            sentiment_label,
+            domain(url) AS host
+        FROM equity_raw.news_raw FINAL
+        WHERE ticker = %(ticker)s
+          AND published_at >= now() - INTERVAL %(days)s DAY
+        ORDER BY published_at DESC
+        LIMIT %(limit)s
+    """
+    result = get_client().query(
+        query,
+        parameters={"ticker": ticker, "days": days, "limit": limit},
+    )
+
+    rows: list[dict[str, Any]] = []
+    for row in result.result_rows:
+        record = dict(zip(result.column_names, row, strict=True))
+        published = record["published_at"]
+        if isinstance(published, datetime):
+            record["published_at"] = published.isoformat()
+        rows.append(record)
+    return rows
+
+
+@router.get("/quote/{ticker}")
+def get_quote(ticker: str) -> dict[str, Any]:
+    """Return the design-v2 quote-header bundle for ``ticker``.
+
+    One round-trip — the alternative is the frontend stitching ``/ohlcv``
+    (last bar + 30-bar avg volume) and ``/fundamentals`` (TTM P/E + raw
+    market cap) on every navigation. Computing it server-side keeps the
+    quote header on a single ``revalidate: 60`` cache key.
+
+    Response shape:
+
+    ``{ticker, name, sector, industry, price, prev_close, open, day_high,
+    day_low, volume, avg_volume_30d, market_cap, pe_ratio_ttm, as_of}``
+
+    where ``as_of`` is the ISO date of the latest bar (the ``close`` framing
+    on the design v2 mock — EOD only, NOT a live timestamp). All numeric
+    fields are nullable: a brand-new ticker without 30 prior bars surfaces
+    ``avg_volume_30d=null`` rather than a partial average.
+    """
+    ticker = ticker.upper()
+    if ticker not in TICKERS:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+
+    # Aliases must NOT collide with input column names — ClickHouse resolves
+    # the alias before re-reading the column inside another aggregate, which
+    # raises "aggregate inside aggregate" (code 184). Hence `today_*`/`price`.
+    ohlcv_query = """
+        WITH ranked AS (
+            SELECT
+                date,
+                open,
+                high,
+                low,
+                close,
+                volume,
+                row_number() OVER (ORDER BY date DESC) AS rn
+            FROM equity_raw.ohlcv_raw FINAL
+            WHERE ticker = %(ticker)s
+        )
+        SELECT
+            anyIf(date,   rn = 1) AS as_of,
+            anyIf(open,   rn = 1) AS today_open,
+            anyIf(high,   rn = 1) AS day_high,
+            anyIf(low,    rn = 1) AS day_low,
+            anyIf(close,  rn = 1) AS price,
+            anyIf(close,  rn = 2) AS prev_close,
+            anyIf(volume, rn = 1) AS today_volume,
+            avgIf(volume, rn <= 30) AS avg_volume_30d,
+            countIf(rn <= 30) AS bars_in_window
+        FROM ranked
+    """
+    fundamentals_query = """
+        SELECT pe_ratio
+        FROM equity_derived.fundamental_summary FINAL
+        WHERE ticker = %(ticker)s
+          AND period_type = 'ttm'
+          AND pe_ratio IS NOT NULL
+        ORDER BY period_end DESC
+        LIMIT 1
+    """
+    market_cap_query = """
+        SELECT market_cap
+        FROM equity_raw.fundamentals FINAL
+        WHERE ticker = %(ticker)s
+          AND market_cap > 0
+        ORDER BY period_end DESC, period_type ASC
+        LIMIT 1
+    """
+
+    client = get_client()
+    ohlcv = client.query(ohlcv_query, parameters={"ticker": ticker})
+    if not ohlcv.result_rows:
+        raise HTTPException(status_code=404, detail=f"No OHLCV data for {ticker}")
+    ohlcv_row = dict(zip(ohlcv.column_names, ohlcv.result_rows[0], strict=True))
+
+    pe_rows = client.query(fundamentals_query, parameters={"ticker": ticker}).result_rows
+    pe_ratio_ttm = float(pe_rows[0][0]) if pe_rows and pe_rows[0][0] is not None else None
+
+    cap_rows = client.query(market_cap_query, parameters={"ticker": ticker}).result_rows
+    market_cap = float(cap_rows[0][0]) if cap_rows and cap_rows[0][0] is not None else None
+
+    as_of = ohlcv_row.get("as_of")
+    if isinstance(as_of, date):
+        as_of = as_of.isoformat()
+
+    avg_volume = ohlcv_row.get("avg_volume_30d")
+    bars_in_window = int(ohlcv_row.get("bars_in_window") or 0)
+    # avgIf with no rows still emits 0; surface null so the UI labels it
+    # "—" instead of pretending the average is a real, tiny number.
+    if bars_in_window < 30:
+        avg_volume = None
+
+    meta = TICKER_METADATA.get(ticker, {})
+    return {
+        "ticker": ticker,
+        "name": meta.get("name", ticker),
+        "sector": meta.get("sector"),
+        "industry": meta.get("industry"),
+        "price": float(ohlcv_row["price"]) if ohlcv_row.get("price") is not None else None,
+        "prev_close": (
+            float(ohlcv_row["prev_close"]) if ohlcv_row.get("prev_close") is not None else None
+        ),
+        "open": (
+            float(ohlcv_row["today_open"]) if ohlcv_row.get("today_open") is not None else None
+        ),
+        "day_high": (
+            float(ohlcv_row["day_high"]) if ohlcv_row.get("day_high") is not None else None
+        ),
+        "day_low": (float(ohlcv_row["day_low"]) if ohlcv_row.get("day_low") is not None else None),
+        "volume": (
+            int(ohlcv_row["today_volume"]) if ohlcv_row.get("today_volume") is not None else None
+        ),
+        "avg_volume_30d": float(avg_volume) if avg_volume is not None else None,
+        "market_cap": market_cap,
+        "pe_ratio_ttm": pe_ratio_ttm,
+        "as_of": as_of,
+    }

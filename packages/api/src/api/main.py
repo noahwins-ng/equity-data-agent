@@ -23,8 +23,9 @@ from functools import lru_cache
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from shared.config import settings
 
 from api.clickhouse import get_client
@@ -224,6 +225,29 @@ app.include_router(reports_router)
 app.include_router(data_router)
 app.include_router(search_router)
 app.include_router(tickers_router)
+
+
+@app.exception_handler(Exception)
+async def cors_aware_exception_handler(
+    request: Request,
+    _exc: Exception,
+) -> JSONResponse:
+    """Catch otherwise-unhandled exceptions so the 500 response still carries
+    CORS headers.
+
+    Starlette's ``ServerErrorMiddleware`` wraps the *entire* user middleware
+    stack — including ``CORSMiddleware`` — so an exception that bubbles past
+    ``ExceptionMiddleware`` produces a 500 with no ``Access-Control-Allow-
+    Origin``. The browser then surfaces the 500 as a misleading
+    "blocked by CORS policy" error and the actual root-cause stack is hidden.
+
+    Registering this handler at the app level moves the conversion *inside*
+    ``ExceptionMiddleware`` so the CORS layer still adds its headers on the
+    way out. The error body is intentionally generic — the underlying
+    exception is logged by Starlette before this fires.
+    """
+    logger.exception("unhandled exception on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
 
 @app.api_route("/api/v1/health", methods=["GET", "HEAD"], tags=["health"])
