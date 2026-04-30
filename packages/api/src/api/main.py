@@ -29,7 +29,13 @@ from fastapi.responses import JSONResponse
 from shared.config import settings
 
 from api.clickhouse import get_client
-from api.routers import data_router, reports_router, search_router, tickers_router
+from api.routers import (
+    agent_chat_router,
+    data_router,
+    reports_router,
+    search_router,
+    tickers_router,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -217,7 +223,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3001"],
     allow_origin_regex=r"https://.*\.vercel\.app",
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -225,6 +231,7 @@ app.include_router(reports_router)
 app.include_router(data_router)
 app.include_router(search_router)
 app.include_router(tickers_router)
+app.include_router(agent_chat_router)
 
 
 @app.exception_handler(Exception)

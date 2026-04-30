@@ -372,7 +372,7 @@ Updated automatically by `/ship` and `/sync-docs`.
     - **Fundamentals card**: Quarterly / Annual / TTM tabs; Revenue (YoY %) / Gross margin (bps Δ) / EBITDA margin (bps Δ) / Net income / EPS / FCF / Cash·debt / ROE / ROA. ROE/ROA show `N/A · point-in-time` on Q tab, value · trailing 4Q on TTM tab.
     - **News card**: per-card publisher pill + date. **No sentiment chip in v1** — QNT-131 deferred 2026-04-28 (ADR-015 §"Revision history"). News card renders headline + publisher pill + date only.
     - **Provenance strip**: SOURCES + JOBS only — values read from `/health` (QNT-132), not hardcoded. SENTIMENT row dropped post-QNT-131-deferral (`provenance.sentiment` is `null`); AGENT row dropped as a constant not worth a contract for. Trimmed scope still demonstrates the data-driven UI pattern on the surface that actually changes (vendor swap, schedule shift).
-- [ ] **Analyst chat (right pane)** — QNT-74
+- [x] **Analyst chat (right pane)** — QNT-74
     - Persistent right-rail panel that follows the active `/ticker/[symbol]` route (per ADR-014 §4 + Anti-pattern §6: chat is part of `app/layout.tsx`, not a `/chat` route — a route would tear down in-flight SSE on every ticker navigation).
     - `POST /api/v1/agent/chat` SSE endpoint streams `tool_call` / `tool_result` / `prose_chunk` / `thesis` / `done` events. **No Vercel AI SDK** — native `fetch` + `ReadableStream` + optional `eventsource-parser` (~2KB).
     - Tool-call rows show human labels + real args + result counts + latencies (e.g. `Reading price history · NVDA · 60d daily   60 bars · 38ms ✓`).

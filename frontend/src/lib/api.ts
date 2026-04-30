@@ -225,3 +225,57 @@ export type HealthResponse = {
   status: "ok" | "degraded" | "down";
   provenance?: HealthProvenance;
 };
+
+// ─── Agent chat (QNT-74) ────────────────────────────────────────────────────
+//
+// Mirrors `packages/api/src/api/routers/agent_chat.py` SSE event payloads.
+// The chat panel parses raw SSE frames into these typed shapes — one place
+// owns the contract so a router-side change surfaces as a TypeScript error
+// in the panel rather than a silent UI drift.
+
+export type ChatRequest = {
+  ticker: string;
+  message: string;
+  tools_enabled?: boolean;
+  cite_sources?: boolean;
+};
+
+export type ToolCallEvent = {
+  name: string;
+  label: string;
+  args: Record<string, unknown>;
+  started_at: number;
+};
+
+export type ToolResultEvent = {
+  name: string;
+  label: string;
+  latency_ms: number;
+  summary: string;
+  ok: boolean;
+};
+
+export type ProseChunkEvent = {
+  delta: string;
+};
+
+export type VerdictStance = "constructive" | "cautious" | "negative" | "mixed";
+
+export type ThesisPayload = {
+  setup: string;
+  bull_case: string[];
+  bear_case: string[];
+  verdict_stance: VerdictStance;
+  verdict_action: string;
+};
+
+export type DoneEvent = {
+  tools_count: number;
+  citations_count: number;
+  confidence: number;
+};
+
+export type ChatErrorEvent = {
+  detail: string;
+  code: string;
+};

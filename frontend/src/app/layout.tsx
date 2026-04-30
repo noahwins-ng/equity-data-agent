@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { ChatPanelPlaceholder } from "@/components/chat-panel-placeholder";
+import { ChatPanel } from "@/components/chat-panel";
 import { Watchlist } from "@/components/watchlist";
 import "./globals.css";
 
@@ -41,11 +41,11 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full bg-zinc-950 text-zinc-100">
-        <div className="grid h-screen grid-cols-[17rem_minmax(0,1fr)_28rem]">
+      <body className="h-full overflow-hidden bg-zinc-950 text-zinc-100">
+        <div className="grid h-screen grid-cols-[17rem_minmax(0,1fr)_28rem] grid-rows-1 overflow-hidden">
           <Watchlist />
-          <main className="overflow-y-auto">{children}</main>
-          <ChatPanelPlaceholder />
+          <main className="min-h-0 overflow-y-auto">{children}</main>
+          <ChatPanel />
         </div>
       </body>
     </html>
