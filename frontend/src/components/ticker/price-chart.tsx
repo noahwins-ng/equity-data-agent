@@ -83,24 +83,28 @@ function isoToTime(iso: string): UTCTimestamp {
   return Math.floor(Date.parse(`${iso}T00:00:00Z`) / 1000) as UTCTimestamp;
 }
 
-function filterByRange<T extends { time: UTCTimestamp }>(rows: T[], range: RangeId): T[] {
+function computeVisibleRange(
+  candles: { time: UTCTimestamp }[],
+  range: RangeId,
+): { from: UTCTimestamp; to: UTCTimestamp } | null {
+  // Returns the [from, to] viewport for the selected preset, or null when the
+  // timescale should fall back to fitContent (MAX or empty data). The full
+  // dataset is always pushed to the chart; we only zoom — older candles stay
+  // accessible via pan/scroll. (TradingView convention.)
+  if (candles.length === 0) return null;
   const preset = DATE_RANGES.find((r) => r.id === range);
-  if (!preset || preset.days === null) return rows;
-
+  if (!preset || preset.days === null) return null;
+  const lastSec = candles[candles.length - 1].time;
   if (preset.days === -1) {
-    // YTD — slice from Jan 1 of the latest bar's year.
-    if (rows.length === 0) return rows;
-    const lastIso = new Date(rows[rows.length - 1].time * 1000);
-    const startSec = Math.floor(
-      Date.UTC(lastIso.getUTCFullYear(), 0, 1) / 1000,
+    // YTD — anchor at Jan 1 of the latest bar's year, in UTC seconds.
+    const lastDate = new Date((lastSec as number) * 1000);
+    const fromSec = Math.floor(
+      Date.UTC(lastDate.getUTCFullYear(), 0, 1) / 1000,
     ) as UTCTimestamp;
-    return rows.filter((r) => r.time >= startSec);
+    return { from: fromSec, to: lastSec };
   }
-
-  if (rows.length === 0) return rows;
-  const lastSec = rows[rows.length - 1].time;
-  const cutoff = (lastSec - preset.days * 86400) as UTCTimestamp;
-  return rows.filter((r) => r.time >= cutoff);
+  const fromSec = (lastSec - preset.days * 86400) as UTCTimestamp;
+  return { from: fromSec, to: lastSec };
 }
 
 function backAdjusted(ohlcv: OhlcvRow[]): CandlestickData<UTCTimestamp>[] {
@@ -174,7 +178,10 @@ function spyOverlayLine(
 export function PriceChart({ ticker }: { ticker: string }) {
   // 2 years of daily bars are backfilled (assets/ohlcv_raw.py), so MAX is
   // genuinely "everything we have" — saves the user clicking through the
-  // preset chain to see the full window.
+  // preset chain to see the full window. Range state persists across ticker
+  // switches by design: a user comparing two stocks at the same window
+  // shouldn't have to re-click the preset on every watchlist hop. The viewport
+  // re-applies to the new dataset via the range effect in ChartCanvas.
   const [range, setRange] = useState<RangeId>("MAX");
   const [barInterval, setBarInterval] = useState<Timeframe>("daily");
   // Default to a clean candlestick-only view. Each overlay is opt-in so the
@@ -281,32 +288,22 @@ export function PriceChart({ ticker }: { ticker: string }) {
 
   const candles = useMemo(() => backAdjusted(ohlcv), [ohlcv]);
   const volume = useMemo(() => volumeBars(ohlcv, candles), [ohlcv, candles]);
-  const visibleCandles = useMemo(() => filterByRange(candles, range), [candles, range]);
-  const visibleVolume = useMemo(() => filterByRange(volume, range), [volume, range]);
-  const visibleIndicators = useMemo(() => {
-    return indicators
-      .map((r) => ({ ...r, _t: isoToTime(r.time) }))
-      .filter((r) => {
-        if (visibleCandles.length === 0) return true;
-        return r._t >= visibleCandles[0].time && r._t <= visibleCandles[visibleCandles.length - 1].time;
-      });
-  }, [indicators, visibleCandles]);
-
-  const visibleSpy = useMemo(() => {
+  // Indicator rows carry an extra `_t` UTCTimestamp so OhlcReadout can match by
+  // exact bar without re-parsing on every crosshair move.
+  const indicatorRows = useMemo(
+    () => indicators.map((r) => ({ ...r, _t: isoToTime(r.time) })),
+    [indicators],
+  );
+  // SPY is normalised against the symbol's first bar over the full dataset.
+  // Pre-QNT-155 the anchor was the first bar of the visible *slice*, which
+  // re-computed on range change (TradingView "Compare" convention — both lines
+  // start at 0% within the selected window). Full-extent anchoring is simpler
+  // and keeps the line stable across zoom; if the per-window 0% baseline is
+  // wanted back, it's a separate ticket.
+  const spyLine = useMemo(() => {
     if (!showSpy || spy.tf !== barInterval || spy.data.length === 0) return [];
-    const first = visibleCandles[0]?.time;
-    const last = visibleCandles[visibleCandles.length - 1]?.time;
-    if (first === undefined || last === undefined) return [];
-    const sliced = spy.data.filter((r) => {
-      const t = isoToTime(r.time);
-      return t >= first && t <= last;
-    });
-    const ohlcvBase = ohlcv.filter((r) => {
-      const t = isoToTime(r.time);
-      return t >= first && t <= last;
-    });
-    return spyOverlayLine(sliced, ohlcvBase);
-  }, [showSpy, spy, barInterval, ohlcv, visibleCandles]);
+    return spyOverlayLine(spy.data, ohlcv);
+  }, [showSpy, spy, barInterval, ohlcv]);
 
   return (
     <section
@@ -326,9 +323,9 @@ export function PriceChart({ ticker }: { ticker: string }) {
         onToggleLog={() => setLogScale((l) => !l)}
       />
       <OhlcReadout
-        candles={visibleCandles}
-        volume={visibleVolume}
-        indicators={visibleIndicators}
+        candles={candles}
+        volume={volume}
+        indicators={indicatorRows}
         overlays={overlays}
         hovered={hovered}
       />
@@ -338,12 +335,13 @@ export function PriceChart({ ticker }: { ticker: string }) {
         </p>
       ) : (
         <ChartCanvas
-          candles={visibleCandles}
-          volume={visibleVolume}
-          indicators={visibleIndicators}
+          candles={candles}
+          volume={volume}
+          indicators={indicatorRows}
           overlays={overlays}
-          spyLine={visibleSpy}
+          spyLine={spyLine}
           logScale={logScale}
+          range={range}
           onCrosshairMove={onCrosshairMove}
         />
       )}
@@ -475,6 +473,7 @@ function ChartCanvas({
   overlays,
   spyLine,
   logScale,
+  range,
   onCrosshairMove,
 }: {
   candles: CandlestickData<UTCTimestamp>[];
@@ -483,6 +482,7 @@ function ChartCanvas({
   overlays: Record<OverlayId, boolean>;
   spyLine: LineData<UTCTimestamp>[];
   logScale: boolean;
+  range: RangeId;
   onCrosshairMove: (time: UTCTimestamp | null) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -562,13 +562,32 @@ function ChartCanvas({
     });
   }, [logScale]);
 
-  // Push data on every change. Lightweight Charts sorts internally, but we
-  // emit data already-sorted from the API to be safe.
+  // Push the FULL dataset on every change. Lightweight Charts sorts internally,
+  // but we emit data already-sorted from the API to be safe. Viewport zoom is
+  // handled by a separate effect that calls `setVisibleRange` / `fitContent` on
+  // the time scale — the dataset itself is never sliced (TradingView convention:
+  // older candles stay accessible via pan/scroll).
   useEffect(() => {
     candleSeriesRef.current?.setData(candles);
     volSeriesRef.current?.setData(volume);
-    chartRef.current?.timeScale().fitContent();
   }, [candles, volume]);
+
+  // Apply the range preset as a viewport zoom rather than a data filter. Runs
+  // on range change AND on data refresh (ticker / interval swap) so the chosen
+  // range is re-applied to the new dataset. Manual pan/pinch by the user does
+  // not change `range` or `candles`, so a manual zoom persists until the user
+  // clicks a preset or the data refreshes.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    if (candles.length === 0) return;
+    const visible = computeVisibleRange(candles, range);
+    if (visible === null) {
+      chart.timeScale().fitContent();
+    } else {
+      chart.timeScale().setVisibleRange(visible);
+    }
+  }, [range, candles]);
 
   // Indicator overlays. Same-pane series (SMA / BB / SPY) update incrementally;
   // sub-pane series (RSI / ATR / OBV) are torn down and rebuilt every time
