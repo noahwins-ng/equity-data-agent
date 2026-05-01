@@ -180,9 +180,12 @@ def test_build_synthesis_prompt_user_message_carries_task_and_reports() -> None:
 
 
 def test_build_synthesis_prompt_handles_empty_reports() -> None:
-    """Short-circuit case mirrors graph.py's `_after_gather` ending early.
-    Even if synthesize is called with no reports, the system rules must still
-    travel — defense in depth against future graph rewrites."""
+    """Defense-in-depth: the synthesize prompt builder is exercised
+    independently of the graph topology. QNT-156 removed the
+    gather → END short-circuit (synthesize now always runs and falls back
+    to a conversational redirect on empty reports), but a future graph
+    rewrite could still hand the builder an empty dict — the system rules
+    must always travel regardless."""
     messages = build_synthesis_prompt(ticker="NVDA", question="", reports={})
     assert messages[0].content == SYSTEM_PROMPT
     assert "(no reports available)" in str(messages[1].content)

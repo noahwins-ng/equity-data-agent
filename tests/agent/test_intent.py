@@ -162,3 +162,125 @@ def test_heuristic_short_circuits_llm_call(monkeypatch: pytest.MonkeyPatch) -> N
     structured = _patch_llm_pipeline(monkeypatch, IntentDecision(intent="quick_fact"))
     assert classify_intent("What's the RSI?") == "quick_fact"
     assert structured.invoke.call_count == 0
+
+
+# ─── QNT-156: comparison + conversational heuristic ───────────────────────
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Compare NVDA vs AAPL on valuation.",
+        "How does META stack up against GOOGL on margins?",
+        "Which is cheaper, V or MA?".replace("MA", "JPM"),  # MA isn't in TICKERS
+        "NVDA vs AAPL",
+        "AAPL versus MSFT — which is the better buy?",
+    ],
+)
+def test_heuristic_classifies_comparison_with_two_tickers(question: str) -> None:
+    """Two named tickers + a comparison phrase should heuristically route
+    to ``comparison`` without an LLM call."""
+    from agent.intent import _heuristic_intent
+
+    assert _heuristic_intent(question) == "comparison"
+
+
+def test_heuristic_does_not_classify_single_ticker_comparison_phrase() -> None:
+    """A comparison phrase with only ONE named ticker is ambiguous — the
+    user might be comparing to a synthetic peer not in our coverage. The
+    heuristic must NOT fire ``comparison`` (we'd have nothing to compare
+    against). Either the heuristic falls through to thesis/quick_fact for
+    a different reason, or it defers to the LLM — both are acceptable;
+    the only forbidden outcome is ``comparison``."""
+    from agent.intent import _heuristic_intent
+
+    # One ticker + a comparison phrase — must NOT trigger the comparison
+    # branch (we can't satisfy it). Heuristic may still pick another
+    # shape via downstream checks.
+    assert _heuristic_intent("How does NVDA compare to the broader chip sector?") != "comparison"
+
+
+def test_heuristic_does_not_classify_three_tickers_as_comparison() -> None:
+    """Three tickers + comparison phrase: the heuristic still routes to
+    comparison (the synthesize node clips to 2 and the redirect handles
+    the overflow case). The LLM doesn't need to disambiguate this."""
+    from agent.intent import _heuristic_intent
+
+    # Three tickers — heuristic still says comparison; graph clips to 2.
+    assert _heuristic_intent("Compare NVDA vs AAPL vs MSFT on margins") == "comparison"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "hi",
+        "hello",
+        "hey",
+        "Hi!",
+        "Hello?",
+        "What can you do?",
+        "what do you do",
+        "How does this work?",
+        "What's the weather?",
+        "tell me a joke",
+        "Sing me a song",
+    ],
+)
+def test_heuristic_classifies_conversational(question: str) -> None:
+    """Greetings, capability asks, and clearly off-domain inputs should
+    heuristically route to ``conversational`` without an LLM call."""
+    from agent.intent import _heuristic_intent
+
+    assert _heuristic_intent(question) == "conversational"
+
+
+def test_heuristic_ambiguous_open_ended_about_ticker_is_not_conversational() -> None:
+    """An open-ended ticker question that happens to start with a word
+    overlapping the conversational vocabulary must not route to
+    conversational. ``Tell me about UNH`` is the canonical example —
+    QNT-149 has it as the headline ambiguity case."""
+    from agent.intent import _heuristic_intent
+
+    assert _heuristic_intent("Tell me about UNH") is None
+
+
+def test_extract_tickers_handles_ordering_and_dupes() -> None:
+    """``extract_tickers`` returns first-occurrence order, dedup'd, only
+    matching shared.tickers.TICKERS — used by the comparison-resolution
+    path in graph.py."""
+    from agent.intent import extract_tickers
+
+    assert extract_tickers("Compare NVDA vs AAPL and NVDA again") == ["NVDA", "AAPL"]
+    assert extract_tickers("no tickers here") == []
+    # Boundary check: NVDA inside a longer alpha run does NOT match
+    assert extract_tickers("nvdaily") == []
+
+
+def test_llm_fallback_returns_comparison(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Heuristic returns None → LLM picks comparison."""
+    _patch_llm_pipeline(monkeypatch, IntentDecision(intent="comparison"))
+    assert (
+        classify_intent("How would you contrast UNH and the broader healthcare names?")
+        == "comparison"
+    )
+
+
+def test_llm_fallback_returns_conversational(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Heuristic returns None → LLM picks conversational."""
+    _patch_llm_pipeline(monkeypatch, IntentDecision(intent="conversational"))
+    assert classify_intent("Are you a chatbot or what exactly?") == "conversational"
+
+
+def test_heuristic_help_phrase_with_ticker_does_not_misclassify_as_conversational() -> None:
+    """Regression (review finding): "help me understand NVDA's RSI" used to
+    heuristically route to conversational because "help me" is in the
+    conversational token list. With a ticker named in the question the
+    heuristic must defer to the LLM (or fall through to a downstream
+    branch) — never fire conversational on a question that's clearly
+    about a covered equity."""
+    from agent.intent import _heuristic_intent
+
+    assert _heuristic_intent("help me understand NVDA's RSI") != "conversational"
+    assert _heuristic_intent("help me with AAPL fundamentals") != "conversational"
+    # No-ticker conversational asks still fire correctly.
+    assert _heuristic_intent("help me figure out how this works") == "conversational"

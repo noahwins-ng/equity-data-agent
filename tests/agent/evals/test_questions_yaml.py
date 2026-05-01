@@ -26,8 +26,16 @@ def test_every_ticker_has_at_least_one_question() -> None:
 
 def test_every_record_has_at_least_one_expected_tool() -> None:
     # An empty expected_tools list trivially passes the tool-call check —
-    # always a typo, never intentional.
+    # always a typo for the equity-research shapes (thesis / quick_fact /
+    # comparison). The conversational path is the explicit exception: it
+    # skips the gather node entirely so empty IS the right answer there
+    # (QNT-156). Records opt in via ``expected_intent: conversational``.
     for r in load_goldens():
+        if r.expected_intent == "conversational":
+            assert not r.expected_tools, (
+                f"{r.id}: conversational records must have empty expected_tools"
+            )
+            continue
         assert r.expected_tools, f"{r.id}: expected_tools is empty"
 
 

@@ -38,6 +38,8 @@ from typing import Any
 import yaml
 from shared.tickers import TICKERS
 
+from agent.comparison import ComparisonAnswer
+from agent.conversational import ConversationalAnswer
 from agent.evals.hallucination import check as check_hallucination
 from agent.evals.judge import score as judge_score_fn
 from agent.evals.similarity import cosine
@@ -70,13 +72,20 @@ HISTORY_FIELDS = (
 
 @dataclass(frozen=True)
 class GoldenRecord:
-    """One row from goldens/questions.yaml."""
+    """One row from goldens/questions.yaml.
+
+    ``expected_intent`` defaults to "auto" — the harness lets the
+    classifier decide and just scores whatever shape comes out. Setting it
+    explicitly is informational; the conversational shape additionally
+    permits an empty ``expected_tools`` list (the path skips gather).
+    """
 
     id: str
     ticker: str
     question: str
     expected_tools: tuple[str, ...]
     reference_thesis: str
+    expected_intent: str = "auto"
 
 
 @dataclass(frozen=True)
@@ -120,6 +129,7 @@ def load_goldens(path: Path = GOLDENS_PATH) -> list[GoldenRecord]:
             reference = str(entry["reference_thesis"]).strip()
         except KeyError as exc:
             raise ValueError(f"{path}: question missing field {exc}") from exc
+        expected_intent = str(entry.get("expected_intent", "auto"))
         if rec_id in seen_ids:
             raise ValueError(f"{path}: duplicate question id {rec_id!r}")
         if ticker not in TICKERS:
@@ -132,6 +142,7 @@ def load_goldens(path: Path = GOLDENS_PATH) -> list[GoldenRecord]:
                 question=question,
                 expected_tools=expected,
                 reference_thesis=reference,
+                expected_intent=expected_intent,
             )
         )
     return records
@@ -155,17 +166,32 @@ def _git_sha() -> str:
 def _prompt_version() -> str:
     """Stable hash of the system prompts + report-tool registry.
 
-    Hashing all three (thesis + quick-fact + tools) keeps a tool-name rename
-    or a prompt edit on either path visible in history.csv as a different
-    ``prompt_version`` — so a regression showing "judge 8 → 5 the day
-    prompt_version changed" reads obviously in the diff.
+    Hashing all five (thesis + quick-fact + comparison + conversational +
+    tools) keeps a tool-name rename or a prompt edit on any path visible in
+    history.csv as a different ``prompt_version`` — so a regression
+    showing "judge 8 → 5 the day prompt_version changed" reads obviously
+    in the diff.
     """
     from hashlib import sha256
 
-    from agent.prompts import QUICK_FACT_SYSTEM_PROMPT, REPORT_TOOLS, SYSTEM_PROMPT
+    from agent.prompts import (
+        COMPARISON_SYSTEM_PROMPT,
+        CONVERSATIONAL_SYSTEM_PROMPT,
+        QUICK_FACT_SYSTEM_PROMPT,
+        REPORT_TOOLS,
+        SYSTEM_PROMPT,
+    )
 
     payload = (
-        SYSTEM_PROMPT + "\n" + QUICK_FACT_SYSTEM_PROMPT + "\n" + ",".join(sorted(REPORT_TOOLS))
+        SYSTEM_PROMPT
+        + "\n"
+        + QUICK_FACT_SYSTEM_PROMPT
+        + "\n"
+        + COMPARISON_SYSTEM_PROMPT
+        + "\n"
+        + CONVERSATIONAL_SYSTEM_PROMPT
+        + "\n"
+        + ",".join(sorted(REPORT_TOOLS))
     )
     return sha256(payload.encode("utf-8")).hexdigest()[:10]
 
@@ -198,28 +224,44 @@ def run_record(record: GoldenRecord, *, llm_for_judge: Any | None = None) -> Eva
         )
     elapsed_ms = int((time.perf_counter() - started) * 1000)
 
-    # QNT-133: state["thesis"] is now a structured ``Thesis`` model. The eval
-    # scorers (hallucination / judge / cosine) all want a flat string, so
-    # render through ``to_markdown`` here rather than push the per-section
-    # contract into each scorer.
-    #
-    # QNT-149: a question may classify as ``quick_fact``, in which case the
-    # synthesize node populates ``state["quick_fact"]`` instead. The same
-    # contract applies — render to markdown for the scorers. Existing
-    # goldens are all thesis-shaped open-ended asks, so this code path
-    # exists today only as forward compatibility for new quick-fact
-    # goldens; the legacy thesis branch remains the default.
+    # QNT-133/149/156: state can carry one of four structured payloads
+    # (``thesis``, ``quick_fact``, ``comparison``, ``conversational``). The
+    # eval scorers (hallucination / judge / cosine) all want a flat
+    # string, so render through ``to_markdown`` here rather than push the
+    # per-shape contract into each scorer. Comparison runs check
+    # hallucination against the union of all per-ticker reports;
+    # conversational runs treat ANY digit as a hallucination per the
+    # QNT-156 guardrail.
     thesis_obj = state.get("thesis")
     quick_fact_obj = state.get("quick_fact")
-    if isinstance(thesis_obj, Thesis):
+    comparison_obj = state.get("comparison")
+    conversational_obj = state.get("conversational")
+    if isinstance(comparison_obj, ComparisonAnswer):
+        thesis = comparison_obj.to_markdown()
+    elif isinstance(thesis_obj, Thesis):
         thesis = thesis_obj.to_markdown()
     elif isinstance(quick_fact_obj, QuickFactAnswer):
         thesis = quick_fact_obj.to_markdown()
+    elif isinstance(conversational_obj, ConversationalAnswer):
+        thesis = conversational_obj.to_markdown()
     else:
         thesis = ""
     reports = dict(state.get("reports") or {})
 
-    hresult = check_hallucination(thesis, reports.values())
+    # Comparison runs gather reports per ticker — flatten to a corpus the
+    # hallucination scorer can scan against.
+    reports_by_ticker = state.get("reports_by_ticker") or {}
+    if reports_by_ticker:
+        flat_reports: list[str] = []
+        for ticker_reports in reports_by_ticker.values():
+            flat_reports.extend(ticker_reports.values())
+    else:
+        flat_reports = list(reports.values())
+
+    # Conversational answers must contain NO digits (QNT-156 guardrail);
+    # the hallucination scorer's "every number must appear in a report"
+    # rule already enforces this when reports are empty (any digit ⇒ flag).
+    hresult = check_hallucination(thesis, flat_reports)
     tresult = check_tool_calls(record.expected_tools, recorder)
     judge_score = judge_score_fn(
         record.question, thesis, record.reference_thesis, llm=llm_for_judge

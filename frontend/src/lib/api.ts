@@ -269,10 +269,17 @@ export type ThesisPayload = {
   verdict_action: string;
 };
 
-// QNT-149: classifier picks one of these shapes for each run. The panel
-// uses ``intent`` to swap layout (thesis card vs. compact quick-fact) and
-// the matching payload is delivered on the corresponding event.
-export type Intent = "thesis" | "quick_fact";
+// QNT-149 / QNT-156: classifier picks one of these shapes for each run.
+// The panel uses ``intent`` to swap layout (thesis card vs. compact
+// quick-fact / comparison / conversational) and the matching payload is
+// delivered on the corresponding event. ``conversational`` also serves as
+// the deterministic fallback when ANY synthesize path fails — the panel
+// always renders an in-domain reply, never a blank state or stack trace.
+export type Intent =
+  | "thesis"
+  | "quick_fact"
+  | "comparison"
+  | "conversational";
 
 export type IntentEvent = {
   intent: Intent;
@@ -284,6 +291,39 @@ export type QuickFactPayload = {
   answer: string;
   cited_value: string;
   source: QuickFactSource | null;
+};
+
+// QNT-156: comparison response shape. Two per-ticker sections (in user-named
+// order) plus a qualitative differences paragraph. No cross-ticker numeric
+// claims by contract — every cited value comes verbatim from one ticker's
+// reports.
+export type ComparisonSource = "technical" | "fundamental" | "news";
+
+export type ComparisonValue = {
+  label: string;
+  value: string;
+  source: ComparisonSource;
+};
+
+export type ComparisonSection = {
+  ticker: string;
+  summary: string;
+  key_values: ComparisonValue[];
+};
+
+export type ComparisonPayload = {
+  sections: ComparisonSection[];
+  differences: string;
+};
+
+// QNT-156: conversational response shape — short prose answer + an
+// optional list of 3 example questions. Used both for greetings/off-domain
+// asks AND as the deterministic fallback when any other intent fails to
+// produce its primary payload (no reports gathered, structured-output
+// crash, comparison parser couldn't find two tickers).
+export type ConversationalPayload = {
+  answer: string;
+  suggestions: string[];
 };
 
 export type DoneEvent = {

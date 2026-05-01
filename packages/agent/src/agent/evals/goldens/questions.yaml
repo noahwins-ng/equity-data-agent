@@ -235,3 +235,50 @@ questions:
       lookup.
 
       **Value:** <RSI value> (source: technical)
+
+  # QNT-156: comparison golden. Two-ticker question that the classifier
+  # heuristic routes to the comparison response shape. The graph fetches
+  # reports for each ticker independently; the synthesize step renders a
+  # ComparisonAnswer with per-ticker sections + a qualitative differences
+  # paragraph. ADR-003 still applies: no cross-ticker arithmetic — the LLM
+  # does not compute a synthetic delta the reports do not state. The record
+  # ticker is one of the two named tickers (the loader gates on
+  # shared.tickers.TICKERS); the second ticker is parsed from the question.
+  - id: nvda-vs-aapl-fundamental
+    ticker: NVDA
+    question: "Compare NVDA vs AAPL on valuation and fundamentals."
+    expected_tools:
+      - fundamental
+    expected_intent: comparison
+    reference_thesis: |
+      A useful answer renders one section per ticker with verbatim cited
+      values from each ticker's fundamental report (latest P/E, EPS,
+      revenue trend) and a SHORT qualitative differences paragraph that
+      contrasts the two ("trades at a richer multiple", "shows stronger
+      margin trend") WITHOUT computing a synthetic ratio or delta the
+      reports do not state. Each per-ticker section cites only that
+      ticker's reports. No "NVDA's P/E is 2x AAPL's" — that is
+      arithmetic and violates ADR-003.
+
+  # QNT-156: conversational golden. Off-domain question that the
+  # classifier heuristic routes to the conversational shape. The graph
+  # skips the gather node entirely (no reports needed) and the synthesize
+  # node returns a ConversationalAnswer that names what the agent CAN do
+  # plus three suggested questions. The hallucination scorer treats ANY
+  # digit in the conversational answer as a regression — there are no
+  # reports to cite, so any number IS hallucinated. ``ticker`` is set to
+  # an arbitrary symbol just so the loader's ticker-membership check
+  # passes; the agent never gathers a report for it.
+  - id: conversational-off-domain-weather
+    ticker: NVDA
+    question: "What's the weather like today?"
+    expected_tools: []
+    expected_intent: conversational
+    reference_thesis: |
+      A useful answer is a polite "I don't know that" + a one-line
+      redirect to what the agent CAN do (cover ten US public equities
+      across technical, fundamental, and news reports; produce a
+      thesis, a quick fact, or a side-by-side comparison). It includes
+      three suggested questions drawn from the agent's actual
+      capabilities. CONTAINS NO DIGITS — no years, no counts, no
+      percentages.
