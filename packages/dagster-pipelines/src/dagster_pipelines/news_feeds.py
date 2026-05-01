@@ -20,6 +20,8 @@ seekingalpha.com, …) instead of the redirect host. See ADR-016.
 from __future__ import annotations
 
 import logging
+import random
+import time
 from datetime import date
 from typing import Any
 from urllib.parse import urlparse
@@ -48,6 +50,39 @@ _RESOLVE_MAX_REDIRECTS = 5
 # come through this URL and need resolution; everything else is already a
 # direct outlet URL and ``urlparse`` is the answer.
 _FINNHUB_REDIRECT_HOST = "finnhub.io"
+
+# Per-process rate limit on requests to ``finnhub.io``. ADR-015 documents
+# 60 RPM on the authenticated ``/company-news`` endpoint; the unauthenticated
+# redirect server at ``/api/news?id=...`` empirically appears to share or
+# closely shadow that bucket. The QNT-148 prod smoke (NVDA partition, 250
+# articles) ran at ~4 RPS uncapped and got 43% resolution success; the failed
+# URLs all returned ``Location: /`` consistent with throttle activation. With
+# Dagster's max_concurrent_runs=3 the aggregate ceiling is 3 × 1/_INTER_FINNHUB
+# = 2 RPS, well under the 1 RPS-per-bucket free-tier limit with a 2x cushion.
+# Jitter avoids a thundering herd if multiple partitions launch in lockstep.
+_INTER_FINNHUB_REQUEST_SECONDS = 1.5
+_FINNHUB_JITTER_SECONDS = 0.2
+
+# Process-local "when did we last hit finnhub.io" tracker. Subprocess workers
+# launched by DockerRunLauncher each own a fresh copy, so this is a per-
+# partition limiter — see the comment block above for the aggregate budget.
+_last_finnhub_request_at: float = 0.0
+
+
+def _sleep_for_finnhub_rate_limit() -> None:
+    """Block until the next Finnhub request is allowed by the rate budget.
+
+    No-op if enough wall-clock time has already passed since the last call;
+    otherwise sleeps the remainder plus 0-200ms jitter. Updates the tracker
+    after the (potential) sleep so back-to-back calls space correctly even
+    under burst.
+    """
+    global _last_finnhub_request_at
+    now = time.monotonic()
+    deadline = _last_finnhub_request_at + _INTER_FINNHUB_REQUEST_SECONDS
+    if now < deadline:
+        time.sleep(deadline - now + random.uniform(0, _FINNHUB_JITTER_SECONDS))
+    _last_finnhub_request_at = time.monotonic()
 
 
 class FinnhubAPIKeyMissing(RuntimeError):
@@ -220,7 +255,13 @@ def _fetch_head_or_get(http: httpx.Client, url: str) -> tuple[int | None, str]:
     fallback — the context manager exits *without* reading the body, so we
     pay only the headers + redirect-chain cost, not the per-article HTML
     payload.
+
+    Both HEAD and the GET fallback go through ``_sleep_for_finnhub_rate_limit``
+    so the process stays under Finnhub's 60 RPM bucket (per QNT-148 follow-
+    up: an uncapped 4 RPS burst dropped resolution success to 43% with the
+    failed URLs returning ``Location: /``, the throttle signal).
     """
+    _sleep_for_finnhub_rate_limit()
     try:
         response = http.head(url)
     except (httpx.HTTPError, ValueError) as exc:
@@ -234,6 +275,7 @@ def _fetch_head_or_get(http: httpx.Client, url: str) -> tuple[int | None, str]:
     if response is not None and response.status_code not in {403, 405, 501}:
         return response.status_code, str(response.url)
 
+    _sleep_for_finnhub_rate_limit()
     try:
         # Stream context exits without consuming the body — `response.url`
         # is populated from headers, which is all the resolver needs.
