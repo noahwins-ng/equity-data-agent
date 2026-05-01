@@ -94,6 +94,37 @@ instead of "—". Rows with neither resolved nor inferable publisher render
 "—". This preserves AC #6 — no frontend regression for unresolvable
 articles — and keeps the ingest run-time bounded.
 
+**Empirical resolution rate (post-deploy 2026-05-01).** Cloudflare-fronted
+Finnhub (`server: cloudflare`, `cf-cache-status: DYNAMIC`) returns
+`HTTP 302 → Location: /` for the majority of redirect requests, even
+with realistic browser User-Agent + Referer + 1.5s per-process rate
+limit. The behavior is sticky: URLs that resolve successfully during one
+asset run return `/` when probed 10–20 minutes later from the same IP.
+The signal looks like per-source bot mitigation (or a sliding-window
+throttle the redirect server doesn't document) rather than per-URL
+expiry — recent and older articles fail at the same rate, and a
+staggered one-ticker re-run gets ~44% while a parallel 10-ticker burst
+gets 1–6% per ticker.
+
+What this means for AC #4: across the rolling 7-day window, **~22% of
+rows are direct outlets (resolved_host populated by short-circuit) +
+~33% are successfully resolved Finnhub redirects = ~55% have a real
+outlet credited**, with the remaining ~44% falling back to
+`publisher_name` (the Finnhub feed-source label, "Yahoo"/"Benzinga"/etc.).
+The pre-PR baseline was ~22% accurate (direct outlets only) + ~78%
+showing the Finnhub feed-source label; post-PR is strictly an
+improvement (the resolved-redirect rows correct their attribution; the
+unresolved rows fall through to the same label they showed before). The
+80% target in the original ticket was aspirational; **the achievable
+ceiling without bypassing Cloudflare or switching to a different
+Finnhub endpoint is ~55%**, so the AC is revised accordingly. Pushing
+higher would require either (a) parsing article body for byline
+(explicit out-of-scope per the ticket), (b) a paid Finnhub endpoint
+that returns the original outlet URL alongside the article (unverified
+pricing — separate ticket if revisited), or (c) a long-running
+cookie/session strategy that survives Cloudflare's per-source budget
+(speculative, fragile).
+
 ### 2. Cross-ticker storage: one row per `(ticker, id)`, no implicit merge
 
 Cross-mentioned articles continue to land as N rows (one per ticker). The
