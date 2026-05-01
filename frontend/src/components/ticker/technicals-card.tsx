@@ -264,8 +264,12 @@ function Row({
   // always renders in full, never gets ellipsis-clipped to `M...`. The
   // earlier `minmax(0, 1fr)` allowed a 0-width column at narrow viewports
   // and made the label unreadable on a 14" MacBook.
+  //
+  // Below 2xl: 2-column layout (label + value, chip dropped). At 2xl+:
+  // 3-column with the chip restored. Below 2xl the chip column would be
+  // empty + leave a 12px gap, so we drop it from the template entirely.
   return (
-    <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-3 py-1">
+    <div className="grid grid-cols-[1fr_auto] items-center gap-x-3 py-1 2xl:grid-cols-[1fr_auto_auto]">
       <dt className="whitespace-nowrap text-[11px] uppercase tracking-wider text-zinc-400">
         {label}
       </dt>
@@ -275,7 +279,13 @@ function Row({
           <span className={`ml-1.5 text-[11px] ${extraColor ?? "text-zinc-500"}`}>{extra}</span>
         ) : null}
       </dd>
-      <div className="min-w-0">
+      {/* Decoration chip is hidden below 2xl. The chip (POSITIVE / STRONG /
+          NEUTRAL / EXTENDED) is supplementary signaling — at 14" MacBook
+          width the column-3 pill overflows the card's right edge, leaving
+          a clipped half-pill that's worse than no pill. The numeric value
+          + extra still convey the signal; user gets the full chip back at
+          2xl+ where there's room. */}
+      <div className="hidden min-w-0 2xl:block">
         <Tag tag={tag ?? null} />
       </div>
     </div>
