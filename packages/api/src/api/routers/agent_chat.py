@@ -1,4 +1,4 @@
-"""Agent chat SSE endpoint — ``POST /api/v1/agent/chat`` (QNT-74).
+"""Agent chat SSE endpoint — ``POST /api/v1/agent/chat`` (QNT-74, QNT-149, QNT-156).
 
 The endpoint streams Server-Sent Events while a LangGraph run executes against
 the requested ticker. The frontend right-rail chat panel consumes the same
@@ -31,6 +31,17 @@ Event contract
                     intent == "quick_fact"; the panel renders a compact
                     answer + cited value chip and skips the thesis card.
 
+``comparison``    — full :class:`~agent.comparison.ComparisonAnswer` model
+                    dumped to JSON (QNT-156). Emitted only when
+                    intent == "comparison"; the panel renders a side-by-side
+                    card and skips the thesis card.
+
+``conversational``— full :class:`~agent.conversational.ConversationalAnswer`
+                    dumped to JSON (QNT-156). Emitted when intent ==
+                    "conversational" OR when ANY synthesize path falls back
+                    to a deterministic domain redirect. The panel renders a
+                    short prose answer + suggestion list.
+
 ``intent``        — ``{intent}`` one-shot event emitted right after the
                     classify node decides which shape will be produced
                     (QNT-149). Lets the panel preempt its layout while
@@ -61,6 +72,8 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
+from agent.comparison import ComparisonAnswer
+from agent.conversational import ConversationalAnswer
 from agent.graph import OPTIONAL_TOOLS, build_graph
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
@@ -169,6 +182,21 @@ def _count_quick_fact_citations(quick_fact: QuickFactAnswer | None) -> int:
     # if there's any inline citation we trust that count over the structured
     # one (the chip renders from the inline match).
     return inline if inline else structured
+
+
+def _count_comparison_citations(comparison: ComparisonAnswer | None) -> int:
+    """Citations for the comparison path.
+
+    Each ``ComparisonValue`` counts as one citation (the structured
+    ``source`` field is required), plus any inline ``(source: …)`` parens
+    in the per-section summaries or the differences paragraph.
+    """
+    if comparison is None:
+        return 0
+    structured = sum(len(s.key_values) for s in comparison.sections)
+    inline_texts = [s.summary for s in comparison.sections] + [comparison.differences]
+    inline = sum(len(_CITATION_PATTERN.findall(text or "")) for text in inline_texts)
+    return structured + inline
 
 
 # ─── Prose chunking ─────────────────────────────────────────────────────────
@@ -331,6 +359,8 @@ async def _stream(request: ChatRequest) -> AsyncIterator[str]:
     state = final_state_holder.get("state") or {}
     thesis = state.get("thesis") if isinstance(state, dict) else None
     quick_fact = state.get("quick_fact") if isinstance(state, dict) else None
+    comparison = state.get("comparison") if isinstance(state, dict) else None
+    conversational = state.get("conversational") if isinstance(state, dict) else None
     intent = state.get("intent", "thesis") if isinstance(state, dict) else "thesis"
     confidence = float(state.get("confidence", 0.0)) if isinstance(state, dict) else 0.0
     errors = state.get("errors") or {} if isinstance(state, dict) else {}
@@ -346,34 +376,39 @@ async def _stream(request: ChatRequest) -> AsyncIterator[str]:
 
     # Surface required-tool failures the graph recorded so the panel can
     # indicate gaps (optional tools like ``news`` are silently dropped per
-    # OPTIONAL_TOOLS contract — those don't reach this dict).
+    # OPTIONAL_TOOLS contract — those don't reach this dict). For comparison
+    # runs the keys are namespaced ``ticker.tool``; strip the prefix so the
+    # tool-name check still works.
     for name, detail in errors.items():
-        if name in OPTIONAL_TOOLS:
+        bare_tool = name.rsplit(".", 1)[-1]
+        if bare_tool in OPTIONAL_TOOLS:
             continue
         yield _sse(
             "error",
-            {"detail": f"{_tool_label(name)} failed: {detail}", "code": "tool-failed"},
+            {"detail": f"{_tool_label(bare_tool)} failed: {detail}", "code": "tool-failed"},
         )
 
-    # QNT-149: branch on intent. Quick-fact emits a single ``quick_fact``
-    # event with the structured answer + cited value; thesis emits the
-    # existing prose_chunk + thesis pair.
-    if intent == "quick_fact":
-        if isinstance(quick_fact, QuickFactAnswer):
-            for chunk in _split_prose(quick_fact.answer):
-                yield _sse("prose_chunk", {"delta": chunk + " "})
-                await asyncio.sleep(0)
-            yield _sse("quick_fact", quick_fact.model_dump())
-        elif reports:
-            yield _sse(
-                "error",
-                {
-                    "detail": (
-                        "Quick-fact answer unavailable — model returned no structured output."
-                    ),
-                    "code": "quick-fact-empty",
-                },
-            )
+    # QNT-156: branch on intent. Each shape emits its own structured event;
+    # the deterministic conversational redirect (any synthesize-path
+    # failure) is also delivered through the conversational event so the
+    # panel always renders SOMETHING in-domain.
+    if intent == "conversational" and isinstance(conversational, ConversationalAnswer):
+        for chunk in _split_prose(conversational.answer):
+            yield _sse("prose_chunk", {"delta": chunk + " "})
+            await asyncio.sleep(0)
+        yield _sse("conversational", conversational.model_dump())
+    elif intent == "comparison" and isinstance(comparison, ComparisonAnswer):
+        # Stream the differences paragraph as prose so the panel has
+        # something to show before the full card lands.
+        for chunk in _split_prose(comparison.differences):
+            yield _sse("prose_chunk", {"delta": chunk + " "})
+            await asyncio.sleep(0)
+        yield _sse("comparison", comparison.model_dump())
+    elif intent == "quick_fact" and isinstance(quick_fact, QuickFactAnswer):
+        for chunk in _split_prose(quick_fact.answer):
+            yield _sse("prose_chunk", {"delta": chunk + " "})
+            await asyncio.sleep(0)
+        yield _sse("quick_fact", quick_fact.model_dump())
     elif isinstance(thesis, Thesis):
         # Stream prose. The structured-output runnable returns the entire
         # setup paragraph at once, so we re-chunk it client-side. A future
@@ -381,26 +416,32 @@ async def _stream(request: ChatRequest) -> AsyncIterator[str]:
         for chunk in _split_prose(thesis.setup):
             yield _sse("prose_chunk", {"delta": chunk + " "})
             await asyncio.sleep(0)  # cooperative yield so the body flushes
-
         yield _sse("thesis", thesis.model_dump())
-    elif reports:
-        # Graph reached synthesize but the LLM returned a malformed thesis
-        # (rare — see graph.py "_coerce_thesis"). Emit an explicit error so
-        # the panel doesn't render a half-state thesis card.
-        yield _sse(
-            "error",
-            {
-                "detail": "Thesis unavailable — model returned no structured output.",
-                "code": "thesis-empty",
-            },
-        )
-    # No reports + no payload: the graph short-circuited (every required
-    # tool failed). The error events above already surface the cause.
+    elif isinstance(conversational, ConversationalAnswer):
+        # Fallback redirect from a non-conversational intent that failed
+        # mid-synthesize (no reports gathered, structured-output crash, etc).
+        # The graph already populated ``conversational`` with a
+        # ``domain_redirect`` payload — surface it the same way the
+        # conversational intent does, so the panel renders the suggestion
+        # card instead of an error.
+        for chunk in _split_prose(conversational.answer):
+            yield _sse("prose_chunk", {"delta": chunk + " "})
+            await asyncio.sleep(0)
+        yield _sse("conversational", conversational.model_dump())
 
-    if intent == "quick_fact":
+    if intent == "comparison":
+        citations_count = _count_comparison_citations(
+            comparison if isinstance(comparison, ComparisonAnswer) else None
+        )
+    elif intent == "quick_fact":
         citations_count = _count_quick_fact_citations(
             quick_fact if isinstance(quick_fact, QuickFactAnswer) else None
         )
+    elif intent == "conversational":
+        # Conversational answers carry no citations by design — the
+        # hallucination scorer rejects any digit, and there are no reports
+        # to cite either.
+        citations_count = 0
     else:
         citations_count = _count_citations(thesis if isinstance(thesis, Thesis) else None)
 

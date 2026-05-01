@@ -271,9 +271,18 @@ def test_retry_on_transient_failure(stub_llm: _StructuredLLM) -> None:
     assert attempts["n"] == 2  # first failed, second succeeded
 
 
-def test_short_circuits_when_gather_produces_nothing(stub_llm: _StructuredLLM) -> None:
-    """Conditional edge routes gather -> END when no reports were gathered,
-    so synthesize isn't called with an empty prompt."""
+def test_no_reports_gathered_falls_back_to_conversational_redirect(
+    stub_llm: _StructuredLLM,
+) -> None:
+    """QNT-156: when gather produces nothing on a thesis ask, synthesize
+    no longer short-circuits to END. Instead it emits a deterministic
+    conversational redirect via ``domain_redirect`` so the panel always
+    sees an in-domain reply (cf. ADR-014 §4 — no blank states).
+
+    The structured runnable still must NOT fire (no LLM call wasted on an
+    empty prompt) — only the plan LLM call counts."""
+    from agent.conversational import ConversationalAnswer
+
     stub_llm.invoke.return_value = AIMessage(content="technical")
 
     def always_fails(_: str) -> str:
@@ -282,11 +291,14 @@ def test_short_circuits_when_gather_produces_nothing(stub_llm: _StructuredLLM) -
     graph = build_graph({"technical": always_fails})
     result = _run(graph)
 
-    assert "thesis" not in result
+    assert result["thesis"] is None
+    assert result["quick_fact"] is None
+    assert result["comparison"] is None
+    assert isinstance(result["conversational"], ConversationalAnswer)
     assert result["errors"]["technical"].startswith("RuntimeError")
-    # Synthesize was never called — only the plan LLM call should have fired.
+    # Plan ran (1 call), synthesize did NOT call the LLM — the fallback is
+    # deterministic, not generated.
     assert stub_llm.invoke.call_count == 1
-    # And the structured runnable was never invoked either.
     assert stub_llm.structured_invoke.call_count == 0
 
 
@@ -336,10 +348,16 @@ def test_llm_calls_go_through_traced_invoke(
 
 
 def test_no_tools_registered_yields_empty_plan(stub_llm: _StructuredLLM) -> None:  # noqa: ARG001
+    """QNT-156: with no tools registered, plan emits an empty list and
+    synthesize falls back to a deterministic conversational redirect
+    (the panel never sees a blank state)."""
+    from agent.conversational import ConversationalAnswer
+
     graph = build_graph({})
     result = _run(graph)
     assert result.get("plan") == []
-    assert "thesis" not in result
+    assert result["thesis"] is None
+    assert isinstance(result["conversational"], ConversationalAnswer)
 
 
 def test_parse_plan_picks_named_subset() -> None:
@@ -525,3 +543,250 @@ def test_quick_fact_intent_narrows_plan_prompt(
 
     assert captured, "plan node must call the LLM"
     assert "single-metric" in captured[0].lower() or "directly needed" in captured[0].lower()
+
+
+# ─── QNT-156: comparison + conversational + domain-redirect fallback ─────
+
+
+def test_classify_node_routes_to_comparison_for_two_ticker_question(
+    stub_llm: _StructuredLLM,
+) -> None:
+    """A multi-ticker comparison ask trips the heuristic to ``comparison``.
+    The graph fetches reports for each named ticker and synthesize returns
+    a ComparisonAnswer. AC: comparison response shape returns per-ticker
+    sections + a differences paragraph."""
+    from agent.comparison import ComparisonAnswer, ComparisonSection, ComparisonValue
+
+    stub_llm.invoke.return_value = AIMessage(content="fundamental")
+    expected = ComparisonAnswer(
+        sections=[
+            ComparisonSection(
+                ticker="NVDA",
+                summary="NVDA trades at a premium (source: fundamental).",
+                key_values=[ComparisonValue(label="P/E", value="50.0", source="fundamental")],
+            ),
+            ComparisonSection(
+                ticker="AAPL",
+                summary="AAPL trades closer to the market (source: fundamental).",
+                key_values=[ComparisonValue(label="P/E", value="32.0", source="fundamental")],
+            ),
+        ],
+        differences="NVDA carries a richer multiple than AAPL (source: fundamental).",
+    )
+    stub_llm.structured_invoke.return_value = expected
+    graph = build_graph({"fundamental": _mock_tool("fund")})
+
+    result = graph.invoke({"ticker": "NVDA", "question": "Compare NVDA vs AAPL on valuation."})
+
+    assert result["intent"] == "comparison"
+    assert isinstance(result["comparison"], ComparisonAnswer)
+    assert [s.ticker for s in result["comparison"].sections] == ["NVDA", "AAPL"]
+    assert result["thesis"] is None
+    assert result["quick_fact"] is None
+    # Reports were gathered for BOTH tickers.
+    assert set(result["reports_by_ticker"].keys()) == {"NVDA", "AAPL"}
+
+
+def test_comparison_with_only_one_resolved_ticker_falls_back_to_redirect(
+    stub_llm: _StructuredLLM, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the classifier picks ``comparison`` but the question only names
+    one ticker, the graph cannot satisfy the request — synthesize emits a
+    deterministic conversational redirect with hint=comparison."""
+    from agent.conversational import ConversationalAnswer
+
+    monkeypatch.setattr(graph_module, "classify_intent", lambda _q: "comparison")
+    stub_llm.invoke.return_value = AIMessage(content="fundamental")
+    graph = build_graph({"fundamental": _mock_tool("fund")})
+
+    # Only one ticker (NVDA) — not enough for a comparison.
+    result = graph.invoke({"ticker": "NVDA", "question": "Compare NVDA against the broader market"})
+
+    assert result["intent"] == "comparison"
+    assert result["comparison"] is None
+    assert isinstance(result["conversational"], ConversationalAnswer)
+    # Structured runnable was NEVER invoked — the fallback is deterministic.
+    assert stub_llm.structured_invoke.call_count == 0
+
+
+def test_classify_node_routes_to_conversational_for_off_domain_ask(
+    stub_llm: _StructuredLLM,
+) -> None:
+    """An off-domain question routes to ``conversational``. The synthesize
+    node calls the LLM (not the deterministic redirect path) and emits
+    a ConversationalAnswer with a redirect + suggestions."""
+    from agent.conversational import ConversationalAnswer
+
+    stub_llm.invoke.return_value = AIMessage(content="technical")
+    expected = ConversationalAnswer(
+        answer="I don't know about the weather — I cover US equities.",
+        suggestions=[
+            "What's NVDA's RSI right now?",
+            "How is MSFT valued relative to its earnings?",
+            "Should I be cautious about META?",
+        ],
+    )
+    stub_llm.structured_invoke.return_value = expected
+    graph = build_graph({"technical": _mock_tool("tech")})
+
+    result = graph.invoke({"ticker": "NVDA", "question": "What's the weather like today?"})
+
+    assert result["intent"] == "conversational"
+    assert isinstance(result["conversational"], ConversationalAnswer)
+    assert result["thesis"] is None
+    assert result["comparison"] is None
+    assert result["quick_fact"] is None
+    # Conversational path skips gather entirely — no tool calls fired.
+    assert result["reports"] == {}
+
+
+def test_conversational_failure_falls_back_to_deterministic_redirect(
+    stub_llm: _StructuredLLM,
+) -> None:
+    """If the conversational LLM call fails, the synthesize node still emits
+    a ConversationalAnswer — built deterministically via ``domain_redirect``
+    — so the panel never sees an empty state."""
+    from agent.conversational import ConversationalAnswer
+
+    stub_llm.invoke.return_value = AIMessage(content="technical")
+    stub_llm.structured_invoke.side_effect = RuntimeError("schema-validation")
+    graph = build_graph({"technical": _mock_tool("tech")})
+
+    result = graph.invoke({"ticker": "NVDA", "question": "Hi there!"})
+
+    assert result["intent"] == "conversational"
+    assert isinstance(result["conversational"], ConversationalAnswer)
+    # Deterministic redirect mentions covered tickers + suggestions.
+    answer = result["conversational"].answer
+    assert any(t in answer for t in ("NVDA", "AAPL", "MSFT"))
+    assert len(result["conversational"].suggestions) == 3
+
+
+def test_thesis_synthesis_failure_falls_back_to_conversational_redirect(
+    stub_llm: _StructuredLLM,
+) -> None:
+    """QNT-156: structured-output crash on the thesis path no longer leaves
+    state['thesis']=None with no replacement — synthesize emits the
+    deterministic conversational redirect."""
+    from agent.conversational import ConversationalAnswer
+
+    stub_llm.invoke.return_value = AIMessage(content="technical")
+    stub_llm.structured_invoke.side_effect = RuntimeError("schema-validation")
+    graph = build_graph({"technical": _mock_tool("tech")})
+
+    # Default question is thesis-shaped.
+    result = _run(graph)
+
+    assert result["intent"] == "thesis"
+    assert result["thesis"] is None
+    assert isinstance(result["conversational"], ConversationalAnswer)
+
+
+def test_comparison_skips_when_one_ticker_has_no_reports(
+    stub_llm: _StructuredLLM, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A comparison run where one ticker fails to gather any reports must
+    NOT produce a half-comparison — it falls back to a redirect."""
+    from agent.conversational import ConversationalAnswer
+
+    monkeypatch.setattr(graph_module, "classify_intent", lambda _q: "comparison")
+    stub_llm.invoke.return_value = AIMessage(content="fundamental")
+
+    def aapl_only(ticker: str) -> str:
+        if ticker == "AAPL":
+            return f"fund for {ticker}"
+        raise RuntimeError("nvda fundamentals down")
+
+    graph = build_graph({"fundamental": aapl_only})
+    result = graph.invoke({"ticker": "NVDA", "question": "Compare NVDA vs AAPL."})
+
+    assert result["intent"] == "comparison"
+    assert result["comparison"] is None
+    assert isinstance(result["conversational"], ConversationalAnswer)
+    # Structured runnable was NEVER invoked — fallback is deterministic.
+    assert stub_llm.structured_invoke.call_count == 0
+
+
+def test_conversational_intent_skips_plan_and_gather_llm_calls(
+    stub_llm: _StructuredLLM,
+) -> None:
+    """The conversational path must NOT call the plan LLM — there's
+    nothing to plan when no tools will fire. Only synthesize fires its
+    structured runnable."""
+    from agent.conversational import ConversationalAnswer
+
+    stub_llm.invoke.return_value = AIMessage(content="should-not-fire")
+    stub_llm.structured_invoke.return_value = ConversationalAnswer(
+        answer="hi there", suggestions=[]
+    )
+    graph = build_graph({"technical": _mock_tool("tech")})
+
+    graph.invoke({"ticker": "NVDA", "question": "hi"})
+
+    # Plan LLM call (raw invoke) must NOT have fired.
+    assert stub_llm.invoke.call_count == 0
+    # Synthesize structured runnable fires once.
+    assert stub_llm.structured_invoke.call_count == 1
+
+
+def test_conversational_answer_rejects_digits_in_answer() -> None:
+    """QNT-156 guardrail: ``ConversationalAnswer.has_numeric_claims`` flags
+    any digit so the hallucination scorer can treat numbers in
+    conversational answers as regressions (the path is supposed to stay
+    vibes-only — there are no reports to cite)."""
+    from agent.conversational import ConversationalAnswer
+
+    ok = ConversationalAnswer(answer="I cover ten US equities.")
+    flagged = ConversationalAnswer(answer="I cover 10 US equities.")
+    assert not ok.has_numeric_claims()
+    assert flagged.has_numeric_claims()
+
+
+def test_domain_redirect_rejects_digit_in_reason() -> None:
+    """Regression (review finding): ``domain_redirect.reason`` is
+    interpolated into the user-visible answer, so a caller passing a
+    string with a digit (HTTP status code, retry count, year) would
+    silently produce a payload that immediately fails the hallucination
+    eval. Guard at the boundary so the bug fires loudly at construction
+    time instead."""
+    import pytest as _pytest
+    from agent.conversational import domain_redirect
+    from shared.tickers import TICKERS
+
+    with _pytest.raises(ValueError, match="must not contain digits"):
+        domain_redirect(
+            reason="I had trouble after 3 retries.",
+            tickers=TICKERS,
+        )
+
+    # Clean reason still works.
+    redirect = domain_redirect(
+        reason="I couldn't pull a thesis right now.",
+        tickers=TICKERS,
+    )
+    assert not redirect.has_numeric_claims()
+
+
+def test_hint_from_intent_quick_fact_resolves_to_a_real_bank_label() -> None:
+    """Regression (review finding): ``_hint_from_intent`` used to return
+    ``"quick_fact"`` which is NOT a label in
+    :data:`agent.conversational._SUGGESTION_BANK`, silently degrading
+    quick-fact-failure redirects to the unbiased default. The hint MUST
+    resolve to a label that actually exists in the bank."""
+    from agent.conversational import _SUGGESTION_BANK
+    from agent.graph import _hint_from_intent
+
+    bank_labels = {label for label, _ in _SUGGESTION_BANK}
+
+    # Every non-conversational intent must produce a hint that actually
+    # appears in the bank — otherwise _pick_suggestions silently falls
+    # through to the no-hint default and the bias contract is broken.
+    for intent in ("thesis", "quick_fact", "comparison"):
+        hint = _hint_from_intent(intent)  # type: ignore[arg-type]
+        assert hint is not None, f"intent {intent!r} produced None hint"
+        assert hint in bank_labels, (
+            f"intent {intent!r} hint {hint!r} not in suggestion bank labels {bank_labels}"
+        )
+
+    # Conversational does not invoke the redirect (it IS the redirect).
+    assert _hint_from_intent("conversational") is None

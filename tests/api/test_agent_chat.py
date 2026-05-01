@@ -439,12 +439,25 @@ def test_quick_fact_intent_emits_quick_fact_event_not_thesis(
     assert done_data["confidence"] == 1.0
 
 
-def test_quick_fact_failure_emits_quick_fact_empty_error(
+def test_quick_fact_failure_emits_conversational_redirect(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """If the synthesize node returned no quick_fact (provider misbehaved),
-    the SSE stream surfaces ``code=quick-fact-empty`` so the panel doesn't
-    render half-state."""
+    """QNT-156: when the quick-fact synthesize path fails (provider
+    misbehaved, structured-output crash), the graph populates
+    ``state['conversational']`` with a deterministic ``domain_redirect``
+    payload. The SSE stream surfaces it as a ``conversational`` event so
+    the panel renders the redirect card instead of an error / blank
+    panel. The OLD ``quick-fact-empty`` error code no longer fires —
+    every synthesize-path failure goes through the conversational
+    fallback."""
+    from agent.conversational import domain_redirect
+    from shared.tickers import TICKERS
+
+    fallback = domain_redirect(
+        reason="I had trouble pulling a single answer to that.",
+        tickers=TICKERS,
+        hint="quick_fact",
+    )
 
     def _fake_build(tools: dict[str, Any]) -> Any:
         graph = MagicMock()
@@ -456,6 +469,8 @@ def test_quick_fact_failure_emits_quick_fact_empty_error(
             "errors": {},
             "thesis": None,
             "quick_fact": None,
+            "comparison": None,
+            "conversational": fallback,
             "confidence": 1.0,
         }
         return graph
@@ -465,8 +480,13 @@ def test_quick_fact_failure_emits_quick_fact_empty_error(
 
     r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "What's the RSI?"})
     frames = _parse_sse(r.text)
-    err = next(data for name, data in frames if name == "error")
-    assert err["code"] == "quick-fact-empty"
+    event_names = [name for name, _ in frames]
+    # The conversational fallback is delivered, NOT a quick-fact-empty error.
+    assert "conversational" in event_names
+    assert not any(f.get("code") == "quick-fact-empty" for name, f in frames if name == "error")
+    payload = next(data for name, data in frames if name == "conversational")
+    assert payload["answer"]
+    assert len(payload["suggestions"]) == 3
 
 
 def test_quick_fact_citations_count_matches_helper() -> None:
@@ -516,6 +536,185 @@ def test_message_length_capped_at_validation_layer(client: TestClient) -> None:
     big = "x" * 5000
     r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": big})
     assert r.status_code == 422
+
+
+# ─── QNT-156: comparison + conversational SSE events ─────────────────────
+
+
+def test_comparison_intent_emits_comparison_event_not_thesis(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QNT-156: when the graph returns intent=comparison, the SSE stream
+    emits an ``intent`` preamble and a ``comparison`` event; the thesis
+    + quick-fact cards are intentionally absent."""
+    from agent.comparison import ComparisonAnswer, ComparisonSection, ComparisonValue
+
+    comparison = ComparisonAnswer(
+        sections=[
+            ComparisonSection(
+                ticker="NVDA",
+                summary="NVDA trades at a premium (source: fundamental).",
+                key_values=[ComparisonValue(label="P/E", value="50.0", source="fundamental")],
+            ),
+            ComparisonSection(
+                ticker="AAPL",
+                summary="AAPL trades closer to the market (source: fundamental).",
+                key_values=[ComparisonValue(label="P/E", value="32.0", source="fundamental")],
+            ),
+        ],
+        differences="NVDA carries a richer multiple than AAPL (source: fundamental).",
+    )
+
+    def _fake_build(tools: dict[str, Any]) -> Any:  # noqa: ARG001
+        graph = MagicMock()
+        graph.invoke.return_value = {
+            "ticker": "NVDA",
+            "intent": "comparison",
+            "plan": ["fundamental"],
+            "reports": {"fundamental": "stub"},
+            "reports_by_ticker": {"NVDA": {"fundamental": "stub"}, "AAPL": {"fundamental": "stub"}},
+            "errors": {},
+            "thesis": None,
+            "quick_fact": None,
+            "comparison": comparison,
+            "conversational": None,
+            "confidence": 1.0,
+        }
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    r = client.post(
+        "/api/v1/agent/chat",
+        json={"ticker": "NVDA", "message": "Compare NVDA vs AAPL on valuation."},
+    )
+    frames = _parse_sse(r.text)
+    events = [name for name, _ in frames]
+
+    assert "intent" in events
+    intent_data = next(data for name, data in frames if name == "intent")
+    assert intent_data["intent"] == "comparison"
+
+    assert "comparison" in events
+    assert "thesis" not in events
+    assert "quick_fact" not in events
+    cmp_data = next(data for name, data in frames if name == "comparison")
+    assert [s["ticker"] for s in cmp_data["sections"]] == ["NVDA", "AAPL"]
+
+    done_data = frames[-1][1]
+    assert events[-1] == "done"
+    assert done_data["intent"] == "comparison"
+    # 2 cited values + 3 inline (source: fundamental) parens = 5.
+    assert done_data["citations_count"] >= 2
+
+
+def test_conversational_intent_emits_conversational_event(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QNT-156: a conversational intent emits a ``conversational`` event
+    with the prose answer + suggestion list. No thesis / quick-fact /
+    comparison cards fire. Citations count is 0 by contract."""
+    from agent.conversational import ConversationalAnswer
+
+    conversational = ConversationalAnswer(
+        answer="I cover US equities — try one of the suggestions below.",
+        suggestions=[
+            "What's NVDA's RSI right now?",
+            "How is MSFT valued relative to its earnings?",
+            "Compare NVDA vs AAPL on valuation.",
+        ],
+    )
+
+    def _fake_build(tools: dict[str, Any]) -> Any:  # noqa: ARG001
+        graph = MagicMock()
+        graph.invoke.return_value = {
+            "ticker": "NVDA",
+            "intent": "conversational",
+            "plan": [],
+            "reports": {},
+            "errors": {},
+            "thesis": None,
+            "quick_fact": None,
+            "comparison": None,
+            "conversational": conversational,
+            "confidence": 0.0,
+        }
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    r = client.post(
+        "/api/v1/agent/chat",
+        json={"ticker": "NVDA", "message": "What can you do?"},
+    )
+    frames = _parse_sse(r.text)
+    events = [name for name, _ in frames]
+
+    assert "conversational" in events
+    assert "thesis" not in events
+    assert "quick_fact" not in events
+    assert "comparison" not in events
+
+    payload = next(data for name, data in frames if name == "conversational")
+    assert payload["answer"]
+    assert len(payload["suggestions"]) == 3
+
+    done_data = frames[-1][1]
+    assert done_data["intent"] == "conversational"
+    # Conversational answers carry no citations by design.
+    assert done_data["citations_count"] == 0
+
+
+def test_thesis_failure_falls_back_to_conversational_redirect(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QNT-156: when the thesis synthesize path fails (structured-output
+    crash, no reports gathered), the graph populates
+    ``state['conversational']`` with a deterministic redirect. The SSE
+    stream surfaces it via the ``conversational`` event so the panel
+    renders the redirect card instead of an error / blank panel."""
+    from agent.conversational import domain_redirect
+    from shared.tickers import TICKERS
+
+    fallback = domain_redirect(
+        reason="I had trouble pulling a thesis together for that.",
+        tickers=TICKERS,
+        hint="thesis",
+    )
+
+    def _fake_build(tools: dict[str, Any]) -> Any:  # noqa: ARG001
+        graph = MagicMock()
+        graph.invoke.return_value = {
+            "ticker": "NVDA",
+            "intent": "thesis",
+            "plan": ["technical"],
+            "reports": {"technical": "stub"},
+            "errors": {},
+            "thesis": None,
+            "quick_fact": None,
+            "comparison": None,
+            "conversational": fallback,
+            "confidence": 1.0,
+        }
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    r = client.post(
+        "/api/v1/agent/chat",
+        json={"ticker": "NVDA", "message": "Should I buy NVDA?"},
+    )
+    frames = _parse_sse(r.text)
+    events = [name for name, _ in frames]
+
+    assert "conversational" in events
+    assert "thesis" not in events
+    payload = next(data for name, data in frames if name == "conversational")
+    assert payload["answer"]
+    assert len(payload["suggestions"]) == 3
 
 
 def test_cors_post_allowed(client: TestClient) -> None:

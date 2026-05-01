@@ -18,6 +18,8 @@ from pathlib import Path
 
 from shared.tickers import TICKERS
 
+from agent.comparison import ComparisonAnswer
+from agent.conversational import ConversationalAnswer
 from agent.graph import build_graph
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
@@ -42,6 +44,8 @@ def analyze(ticker: str, output: Path | None = None) -> int:
 
     thesis_obj = final_state.get("thesis")
     quick_fact_obj = final_state.get("quick_fact")
+    comparison_obj = final_state.get("comparison")
+    conversational_obj = final_state.get("conversational")
     intent = final_state.get("intent", "thesis")
     confidence = final_state.get("confidence", 0.0)
     errors = final_state.get("errors") or {}
@@ -50,14 +54,20 @@ def analyze(ticker: str, output: Path | None = None) -> int:
         for name, err in errors.items():
             print(f"[warn] {name}: {err}", file=sys.stderr)
 
-    # QNT-149: render whichever shape the synthesize node populated. The
-    # CLI keeps its plain-markdown stdout contract — quick-fact path renders
-    # short, thesis path renders the four sections — so callers piping to
-    # files don't have to branch on intent.
-    if intent == "quick_fact" and isinstance(quick_fact_obj, QuickFactAnswer):
+    # QNT-149 / QNT-156: render whichever shape the synthesize node
+    # populated. The CLI keeps its plain-markdown stdout contract — each
+    # shape's ``to_markdown`` mirrors what the chat panel shows, so callers
+    # piping to files don't have to branch on intent. Conversational is
+    # checked LAST because the deterministic fallback path also writes to
+    # ``state["conversational"]`` from a non-conversational intent.
+    if isinstance(comparison_obj, ComparisonAnswer):
+        rendered = comparison_obj.to_markdown().strip()
+    elif intent == "quick_fact" and isinstance(quick_fact_obj, QuickFactAnswer):
         rendered = quick_fact_obj.to_markdown().strip()
     elif isinstance(thesis_obj, Thesis):
         rendered = thesis_obj.to_markdown().strip()
+    elif isinstance(conversational_obj, ConversationalAnswer):
+        rendered = conversational_obj.to_markdown().strip()
     else:
         rendered = ""
 

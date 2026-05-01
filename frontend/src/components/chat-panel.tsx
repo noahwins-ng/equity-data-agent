@@ -29,6 +29,8 @@ import {
 import {
   API_BASE_URL,
   type ChatErrorEvent,
+  type ComparisonPayload,
+  type ConversationalPayload,
   type DoneEvent,
   type HealthResponse,
   type Intent,
@@ -65,6 +67,8 @@ type ChatRun = {
   proseChunks: string[];
   thesis: ThesisPayload | null;
   quickFact: QuickFactPayload | null;
+  comparison: ComparisonPayload | null;
+  conversational: ConversationalPayload | null;
   errors: ChatErrorEvent[];
   stats: DoneEvent | null;
 };
@@ -421,17 +425,157 @@ function QuickFactCard({
   );
 }
 
+// ─── Side-by-side comparison card (QNT-156) ───────────────────────────────
+//
+// Two columns, one per ticker, with a verbatim cited-values table beneath
+// the prose summary. The differences paragraph renders as a single block
+// below the two columns. ADR-003: every value here was copied verbatim from
+// one ticker's reports — the rendering layer never computes deltas.
+
+function ComparisonCard({
+  comparison,
+  stats,
+}: {
+  comparison: ComparisonPayload;
+  stats: DoneEvent | null;
+}) {
+  const tickerHeader = comparison.sections.map((s) => s.ticker).join(" vs ");
+  return (
+    <section className="rounded border border-zinc-800 bg-zinc-900/40">
+      <header className="flex items-baseline justify-between gap-2 border-b border-zinc-800 px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider text-zinc-400">
+        <span>Comparison · {tickerHeader || "session"}</span>
+        {stats && (
+          <span className="text-zinc-500">
+            {stats.tools_count} sources · {stats.citations_count} cited
+          </span>
+        )}
+      </header>
+
+      <div className="space-y-3 p-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {comparison.sections.map((section) => (
+            <div
+              key={section.ticker}
+              className="rounded border border-zinc-800 bg-zinc-950/60 p-2"
+            >
+              <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+                {section.ticker}
+              </div>
+              <ProseBlock text={section.summary} />
+              {section.key_values.length > 0 && (
+                <ul className="mt-2 space-y-1">
+                  {section.key_values.map((kv, i) => (
+                    <li
+                      key={`${section.ticker}-${i}`}
+                      className="flex items-baseline justify-between gap-2 font-mono text-[10px]"
+                    >
+                      <span className="uppercase tracking-wider text-zinc-500">
+                        {kv.label}
+                      </span>
+                      <span className="flex items-baseline gap-1">
+                        <span className="rounded border border-zinc-700 bg-zinc-950 px-1 py-px font-mono text-[10px] tabular-nums text-zinc-100">
+                          {kv.value}
+                        </span>
+                        <span className="rounded border border-zinc-700 bg-zinc-900 px-1 py-px text-[9px] uppercase tracking-wide text-zinc-400">
+                          {kv.source}
+                        </span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div className="rounded border border-zinc-800 bg-zinc-950/60 p-2">
+          <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+            Differences
+          </div>
+          <ProseBlock text={comparison.differences} />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ─── Conversational redirect card (QNT-156) ───────────────────────────────
+//
+// Used both for greetings/off-domain asks AND as the deterministic fallback
+// when any other intent fails to produce a payload. Renders the prose answer
+// + an optional bulleted suggestion list. Click a suggestion to drop it into
+// the composer (parent-driven via ``onSuggestion``).
+
+function ConversationalCard({
+  conversational,
+  onSuggestion,
+}: {
+  conversational: ConversationalPayload;
+  onSuggestion: (q: string) => void;
+}) {
+  return (
+    <section className="rounded border border-zinc-800 bg-zinc-900/40">
+      <header className="flex items-baseline justify-between gap-2 border-b border-zinc-800 px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider text-zinc-400">
+        <span>Analyst · session</span>
+      </header>
+
+      <div className="space-y-3 p-3">
+        <ProseBlock text={conversational.answer} />
+        {conversational.suggestions.length > 0 && (
+          <div>
+            <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+              You could ask
+            </div>
+            <ul className="space-y-1">
+              {conversational.suggestions.map((s, i) => (
+                <li key={i}>
+                  <button
+                    type="button"
+                    onClick={() => onSuggestion(s)}
+                    className="w-full rounded border border-zinc-800 bg-zinc-950/60 px-2 py-1 text-left font-mono text-[11px] text-zinc-300 transition hover:border-zinc-600 hover:text-zinc-100"
+                  >
+                    {s}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 // ─── Run renderer (one user prompt → one streamed answer) ────────────────
 
-function RunBlock({ run }: { run: ChatRun }) {
+function RunBlock({
+  run,
+  onSuggestion,
+}: {
+  run: ChatRun;
+  onSuggestion: (q: string) => void;
+}) {
   const proseText = run.proseChunks.join("");
   const isStreaming = run.status === "streaming";
-  // Hide free-form prose when the run produced a quick-fact card or a
-  // thesis card — both already render the answer's prose with chips. Only
-  // show standalone prose when the run is mid-stream and no card is
-  // present yet. ADR-014 §4: thesis card renders only when a thesis
-  // arrived; quick-fact does the same.
-  const showStandaloneProse = !run.thesis && !run.quickFact && proseText;
+  // Hide free-form prose when the run produced any structured card —
+  // each card renders its own prose with chips. Only show standalone
+  // prose when the run is mid-stream and no card has arrived yet.
+  // ADR-014 §4: each card renders only when its payload arrived.
+  const hasCard =
+    run.thesis !== null ||
+    run.quickFact !== null ||
+    run.comparison !== null ||
+    run.conversational !== null;
+  const showStandaloneProse = !hasCard && proseText;
+
+  // Streaming label — match the user's chosen layout so the spinner names
+  // the right shape.
+  const streamingLabel: Record<Intent, string> = {
+    thesis: "thesis…",
+    quick_fact: "quick fact…",
+    comparison: "comparison…",
+    conversational: "reply…",
+  };
 
   return (
     <article className="space-y-2 border-b border-zinc-800 px-3 py-3">
@@ -467,7 +611,12 @@ function RunBlock({ run }: { run: ChatRun }) {
       {/* Streamed prose (only when no card has arrived yet) */}
       {showStandaloneProse && <ProseBlock text={proseText} />}
 
-      {/* Quick-fact card (QNT-149) — replaces thesis when intent=quick_fact */}
+      {/* QNT-156: comparison card — renders when intent=comparison */}
+      {run.comparison && (
+        <ComparisonCard comparison={run.comparison} stats={run.stats} />
+      )}
+
+      {/* QNT-149: quick-fact card — renders when intent=quick_fact */}
       {run.quickFact && (
         <QuickFactCard ticker={run.ticker} quickFact={run.quickFact} stats={run.stats} />
       )}
@@ -477,11 +626,22 @@ function RunBlock({ run }: { run: ChatRun }) {
         <ThesisCard ticker={run.ticker} thesis={run.thesis} stats={run.stats} />
       )}
 
+      {/* QNT-156: conversational redirect — also serves as the
+        deterministic fallback when any other intent failed to produce a
+        primary payload. The hint below the suggestions explains where
+        the redirect came from. */}
+      {run.conversational && (
+        <ConversationalCard
+          conversational={run.conversational}
+          onSuggestion={onSuggestion}
+        />
+      )}
+
       {/* Status footer */}
       <div className="flex items-baseline justify-end gap-2 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
         {isStreaming ? (
           <span className="text-emerald-400">
-            streaming{run.intent === "quick_fact" ? " quick fact…" : "…"}
+            streaming {streamingLabel[run.intent ?? "thesis"]}
           </span>
         ) : run.status === "errored" ? (
           <span className="text-red-400">errored</span>
@@ -594,6 +754,8 @@ export function ChatPanel() {
           proseChunks: [],
           thesis: null,
           quickFact: null,
+          comparison: null,
+          conversational: null,
           errors: [
             {
               detail: "Pick a ticker from the watchlist before asking the analyst.",
@@ -618,6 +780,8 @@ export function ChatPanel() {
         proseChunks: [],
         thesis: null,
         quickFact: null,
+        comparison: null,
+        conversational: null,
         errors: [],
         stats: null,
       };
@@ -667,13 +831,25 @@ export function ChatPanel() {
           } else if (event === "quick_fact") {
             const ev = data as QuickFactPayload;
             updateRun(id, (r) => ({ ...r, quickFact: ev }));
+          } else if (event === "comparison") {
+            const ev = data as ComparisonPayload;
+            updateRun(id, (r) => ({ ...r, comparison: ev }));
+          } else if (event === "conversational") {
+            const ev = data as ConversationalPayload;
+            updateRun(id, (r) => ({ ...r, conversational: ev }));
           } else if (event === "done") {
             const ev = data as DoneEvent;
             updateRun(id, (r) => ({
               ...r,
               stats: ev,
               status:
-                r.errors.length > 0 && !r.thesis && !r.quickFact ? "errored" : "done",
+                r.errors.length > 0 &&
+                !r.thesis &&
+                !r.quickFact &&
+                !r.comparison &&
+                !r.conversational
+                  ? "errored"
+                  : "done",
             }));
           } else if (event === "error") {
             const ev = data as ChatErrorEvent;
@@ -731,7 +907,13 @@ export function ChatPanel() {
             </p>
           </div>
         ) : (
-          runs.map((run) => <RunBlock key={run.id} run={run} />)
+          runs.map((run) => (
+            <RunBlock
+              key={run.id}
+              run={run}
+              onSuggestion={(q) => startRun(q, true, true)}
+            />
+          ))
         )}
       </div>
 
