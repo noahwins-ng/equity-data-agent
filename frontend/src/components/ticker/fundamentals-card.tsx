@@ -256,7 +256,13 @@ function Row({
         {extra && extra !== "—" ? (
           <span className={`ml-1.5 text-[11px] ${extraColor ?? "text-zinc-500"}`}>
             {extra}
-            {extraLabel ? <span className="ml-1 text-zinc-500">{extraLabel}</span> : null}
+            {/* `YoY` / `yield` suffix hides below 2xl so the row doesn't
+                overflow the card on a 14" MacBook. The numeric delta is
+                self-describing enough at narrow widths; the label
+                returns at 2xl+ where the column has room. */}
+            {extraLabel ? (
+              <span className="ml-1 hidden text-zinc-500 2xl:inline">{extraLabel}</span>
+            ) : null}
           </span>
         ) : null}
       </dd>

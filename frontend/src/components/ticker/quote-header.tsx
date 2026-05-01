@@ -118,13 +118,19 @@ function Stat({
   extra?: string | null;
   extraColor?: string;
 }) {
+  // Inline `LABEL value` layout — label and value on the same baseline,
+  // not stacked vertically. At narrow viewports the dl's flex-wrap drops
+  // a stat to the next line as a unit; the inline format keeps each stat
+  // a one-line atom rather than a 2-line stack, so 5 stats fit on a
+  // single header row much more often (was wrapping into 3 messy rows
+  // on a 14" MacBook before this change).
   return (
-    <div className="whitespace-nowrap">
+    <div className="flex items-baseline gap-x-1.5 whitespace-nowrap">
       <dt className="text-[9px] uppercase tracking-wider text-zinc-500">{label}</dt>
       <dd className="font-mono text-xs tabular-nums text-zinc-100">
         {value}
         {extra ? (
-          <span className={`ml-1.5 text-[9px] ${extraColor ?? "text-zinc-500"}`}>{extra}</span>
+          <span className={`ml-1 text-[9px] ${extraColor ?? "text-zinc-500"}`}>{extra}</span>
         ) : null}
       </dd>
     </div>
