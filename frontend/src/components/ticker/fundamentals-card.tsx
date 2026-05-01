@@ -242,10 +242,16 @@ function Row({
   // Two-column track: label on the left, numeric value + a trailing
   // delta-pill on the right. Symmetric with the technicals card so the
   // three middle-pane cards read at the same rhythm.
+  //
+  // `1fr` (= `minmax(auto, 1fr)`) keeps the label column at min-content
+  // width as a floor, so labels like "EBITDA MARGIN" don't ellipsis-clip
+  // at narrow viewports.
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 py-1">
-      <dt className="text-[11px] uppercase tracking-wider text-zinc-400">{label}</dt>
-      <dd className="text-right font-mono text-sm tabular-nums text-zinc-50">
+    <div className="grid grid-cols-[1fr_auto] items-center gap-x-3 py-1">
+      <dt className="whitespace-nowrap text-[11px] uppercase tracking-wider text-zinc-400">
+        {label}
+      </dt>
+      <dd className="whitespace-nowrap text-right font-mono text-sm tabular-nums text-zinc-50">
         {value}
         {extra && extra !== "—" ? (
           <span className={`ml-1.5 text-[11px] ${extraColor ?? "text-zinc-500"}`}>

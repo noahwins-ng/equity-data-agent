@@ -259,12 +259,16 @@ function Row({
   // and chips don't bump into the value text (the v2-final reference: clean
   // gutters, monospaced numerics, pill-bordered chips).
   //
-  // Label column gets `truncate` so a long label (e.g. "MACD(12,26,9)") clips
-  // with an ellipsis at narrow viewports rather than visually overflowing
-  // into the value column. Value + chip stay readable.
+  // Grid template uses `1fr` (= `minmax(auto, 1fr)`) for the label column so
+  // it never shrinks below the label's min-content width — `MACD(12,26,9)`
+  // always renders in full, never gets ellipsis-clipped to `M...`. The
+  // earlier `minmax(0, 1fr)` allowed a 0-width column at narrow viewports
+  // and made the label unreadable on a 14" MacBook.
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-3 py-1">
-      <dt className="truncate text-[11px] uppercase tracking-wider text-zinc-400">{label}</dt>
+    <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-3 py-1">
+      <dt className="whitespace-nowrap text-[11px] uppercase tracking-wider text-zinc-400">
+        {label}
+      </dt>
       <dd className="whitespace-nowrap text-right font-mono text-sm tabular-nums text-zinc-50">
         {valueNode ?? value}
         {extra ? (
