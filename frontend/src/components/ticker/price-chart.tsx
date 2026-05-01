@@ -35,6 +35,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { apiFetch, type IndicatorRow, type OhlcvRow, type Timeframe } from "@/lib/api";
 
+import {
+  atrLegendText,
+  macdLegendText,
+  mainLegendText,
+  obvLegendText,
+  rsiLegendText,
+} from "./price-chart-legend";
+
 // ─── Date-range presets ────────────────────────────────────────────────────
 //
 // `null` days → MAX (use the full series). Order is the rendering order on
@@ -325,8 +333,6 @@ export function PriceChart({ ticker }: { ticker: string }) {
       <OhlcReadout
         candles={candles}
         volume={volume}
-        indicators={indicatorRows}
-        overlays={overlays}
         hovered={hovered}
       />
       {loadError ? (
@@ -490,6 +496,16 @@ function ChartCanvas({
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick", Time> | null>(null);
   const volSeriesRef = useRef<ISeriesApi<"Histogram", Time> | null>(null);
   const overlaySeriesRef = useRef<Map<string, ISeriesApi<"Line", Time>>>(new Map());
+  // Per-pane legend overlays (TradingView convention). Owned by this component
+  // — appended to the pane DOM via getHTMLElement() and re-attached every time
+  // the indicator effect rebuilds sub-panes (see the legend effect below).
+  const legendsRef = useRef<Map<string, HTMLDivElement>>(new Map());
+  // Closure that paints the legends for the bar at `time` (or the last bar
+  // when `time` is null — TradingView's "no crosshair" fallback). The legend
+  // effect rewrites this ref whenever data or overlay state changes; the
+  // crosshair handler installed at mount time reads through it so it always
+  // sees the latest data without needing to re-subscribe.
+  const updateLegendsRef = useRef<((time: UTCTimestamp | null) => void) | null>(null);
 
   // Mount chart once.
   useEffect(() => {
@@ -541,10 +557,13 @@ function ChartCanvas({
     // runtime value is always a number.
     const handler = (param: MouseEventParams<Time>) => {
       const t = param.time;
-      onCrosshairMove(typeof t === "number" ? (t as UTCTimestamp) : null);
+      const ts = typeof t === "number" ? (t as UTCTimestamp) : null;
+      onCrosshairMove(ts);
+      updateLegendsRef.current?.(ts);
     };
     chart.subscribeCrosshairMove(handler);
 
+    const legendsMap = legendsRef.current;
     return () => {
       chart.unsubscribeCrosshairMove(handler);
       chart.remove();
@@ -552,6 +571,9 @@ function ChartCanvas({
       candleSeriesRef.current = null;
       volSeriesRef.current = null;
       overlayMap.clear();
+      // Pane DOM is gone with chart.remove(); just drop our refs.
+      legendsMap.clear();
+      updateLegendsRef.current = null;
     };
   }, [onCrosshairMove]);
 
@@ -754,6 +776,171 @@ function ChartCanvas({
     chart.panes()[0].setStretchFactor(mainStretch);
   }, [indicators, overlays, spyLine]);
 
+  // ── Per-pane legends ──────────────────────────────────────────────────────
+  //
+  // Lightweight-charts ships no built-in legend (per the v5 docs: "Lightweight
+  // Charts doesn't include a built-in legend feature"); the documented recipe
+  // is an HTML overlay anchored to the chart container. We append the legends
+  // as siblings of the chart canvas inside `containerRef` (which we make
+  // position:relative) and compute each legend's `top` from the cumulative
+  // pane heights via `pane.getHeight()`. Anchoring to the pane element
+  // directly is unreliable — pane wrappers don't establish a positioning
+  // context, so absolute children fall through to the nearest positioned
+  // ancestor (viewport in our case).
+  useEffect(() => {
+    const chart = chartRef.current;
+    const container = containerRef.current;
+    if (!chart || !container) return;
+
+    // Capture the Map identity for the cleanup closure. Refs themselves are
+    // stable in React, but the exhaustive-deps lint rule asks us to snapshot
+    // the .current value to make that contract explicit. We mutate the Map
+    // in place across renders (set/clear) so this snapshot tracks the same
+    // collection the next setup uses.
+    const legendsMap = legendsRef.current;
+    for (const [, el] of legendsMap) el.remove();
+    legendsMap.clear();
+
+    if (candles.length === 0) {
+      updateLegendsRef.current = null;
+      return;
+    }
+
+    if (container.style.position === "" || container.style.position === "static") {
+      container.style.position = "relative";
+    }
+
+    function makeLegend(key: string): HTMLDivElement {
+      const div = document.createElement("div");
+      div.dataset.legend = key;
+      div.style.position = "absolute";
+      div.style.left = "8px";
+      div.style.fontFamily =
+        "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
+      div.style.fontSize = "11px";
+      div.style.lineHeight = "14px";
+      div.style.color = "#d4d4d8"; // zinc-300 — matches OhlcReadout
+      div.style.pointerEvents = "none"; // never block crosshair / pan events
+      div.style.zIndex = "2";
+      // `pre` honours \n in the formatter output (used by mainLegendText for
+      // its two-row layout) and preserves the multi-space group separators
+      // without ever soft-wrapping at character boundaries.
+      div.style.whiteSpace = "pre";
+      // container is captured by closure; the outer effect bails when it's null.
+      container!.appendChild(div);
+      return div;
+    }
+
+    legendsMap.set("main", makeLegend("main"));
+    if (overlays.RSI) legendsMap.set("RSI", makeLegend("RSI"));
+    if (overlays.MACD) legendsMap.set("MACD", makeLegend("MACD"));
+    if (overlays.ATR) legendsMap.set("ATR", makeLegend("ATR"));
+    if (overlays.OBV) legendsMap.set("OBV", makeLegend("OBV"));
+
+    function repositionAll() {
+      if (!chart) return;
+      const allPanes = chart.panes();
+      if (allPanes.length === 0) return;
+      // Pane Y offsets in container coordinates: pane i starts at
+      // sum(panes[0..i-1].getHeight()). Time scale lives below the bottom
+      // pane and is excluded from any pane's height.
+      const paneTops: number[] = [];
+      let acc = 0;
+      for (const p of allPanes) {
+        paneTops.push(acc);
+        acc += p.getHeight();
+      }
+      const main = legendsMap.get("main");
+      if (main) main.style.top = `${paneTops[0] + 4}px`;
+
+      const subOrder: OverlayId[] = [];
+      if (overlays.RSI) subOrder.push("RSI");
+      if (overlays.MACD) subOrder.push("MACD");
+      if (overlays.ATR) subOrder.push("ATR");
+      if (overlays.OBV) subOrder.push("OBV");
+      subOrder.forEach((key, i) => {
+        const legend = legendsMap.get(key);
+        if (!legend) return;
+        const paneTop = paneTops[i + 1];
+        if (paneTop === undefined) return;
+        legend.style.top = `${paneTop + 4}px`;
+      });
+    }
+
+    // First-paint position. The indicator effect that ran just before us may
+    // have called setStretchFactor + addPane, and lightweight-charts defers
+    // the resulting layout to the next animation frame, so an immediate
+    // pane.getHeight() can return stale values (and stack every sub-pane
+    // legend at top: 4px on the main pane). RAF the first call so we read
+    // post-layout heights; the ResizeObserver covers everything after.
+    const rafId = requestAnimationFrame(repositionAll);
+    // The chart auto-sizes to its container; pane heights also reflow on
+    // container resize (responsive 300px <-> 400px breakpoint). ResizeObserver
+    // fires on every resize, so we re-pin legend positions there too.
+    const resizeObs = new ResizeObserver(() => repositionAll());
+    resizeObs.observe(container);
+
+    // Lookups for the per-bar render. indByTime is O(1); spyByTime is built
+    // even when SPY is off (cheap; spyLine is empty in that case).
+    const indByTime = new Map<UTCTimestamp, IndicatorRowWithTime>();
+    for (const r of indicators) indByTime.set(r._t, r);
+    const spyByTime = new Map<UTCTimestamp, number>();
+    for (const s of spyLine) spyByTime.set(s.time, s.value);
+    // SPY change% is derived from the normalised line itself: spyOverlayLine()
+    // scales SPY so its first point sits at the symbol's first-bar level, so
+    // line[t]/line[0] - 1 == spy[t]/spy[0] - 1 == SPY's % from start.
+    // Anchoring on spyLine[0].value (rather than candles[0].close) keeps the
+    // legend internally consistent with whatever convention spyOverlayLine
+    // uses for its baseline.
+    const spyAnchor = spyLine[0]?.value ?? 0;
+    const lastTime = candles[candles.length - 1].time;
+
+    function spyChangePct(t: UTCTimestamp): number | null {
+      if (spyLine.length === 0 || spyAnchor === 0) return null;
+      const v = spyByTime.get(t);
+      if (v === undefined) return null;
+      return (v / spyAnchor - 1) * 100;
+    }
+
+    function update(time: UTCTimestamp | null) {
+      const t = time ?? lastTime;
+      const indRow = indByTime.get(t);
+      const main = legendsMap.get("main");
+      if (main) {
+        main.textContent = mainLegendText(
+          indRow,
+          overlays.SMA,
+          overlays.BB,
+          spyChangePct(t),
+        );
+      }
+      const rsi = legendsMap.get("RSI");
+      if (rsi) rsi.textContent = rsiLegendText(indRow);
+      const macd = legendsMap.get("MACD");
+      if (macd) macd.textContent = macdLegendText(indRow);
+      const atr = legendsMap.get("ATR");
+      if (atr) atr.textContent = atrLegendText(indRow);
+      const obv = legendsMap.get("OBV");
+      if (obv) obv.textContent = obvLegendText(indRow);
+    }
+
+    update(null);
+    updateLegendsRef.current = update;
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      resizeObs.disconnect();
+      // Defensive: between cleanup and the next setup the new effect run
+      // also tears down legends, so this is usually redundant. The case
+      // that matters is component unmount triggered by something other
+      // than chart.remove() — e.g. parent route change — where the divs
+      // would otherwise leak inside the React-managed container until GC.
+      for (const [, el] of legendsMap) el.remove();
+      legendsMap.clear();
+      updateLegendsRef.current = null;
+    };
+  }, [candles, indicators, overlays, spyLine]);
+
   // Container height is responsive (QNT-152): 300px on narrow viewports
   // (14" MacBook ~1280-1512px), 400px at 2xl breakpoint (≥1536px) and
   // above. The 2xl cut-over cleanly separates external monitor (full
@@ -778,33 +965,29 @@ function ChartCanvas({
 
 // ─── OHLCV crosshair readout ───────────────────────────────────────────────
 //
-// Renders a small monospace bar of O / H / L / C / Vol values either for the
-// candle currently under the cursor or — when the cursor is off-chart — the
-// most recent visible bar. Mirrors the upper-left readout bar in the full
-// TradingView app, the way users read a candlestick chart at a glance.
+// Renders a single monospace row of date + O / H / L / C / change / Vol for
+// the candle currently under the cursor (or, when off-chart, the most recent
+// bar). Indicator values now live in the per-pane legends inside the chart
+// canvas (QNT-157), so this header is OHLCV+change only.
 
 function OhlcReadout({
   candles,
   volume,
-  indicators,
-  overlays,
   hovered,
 }: {
   candles: CandlestickData<UTCTimestamp>[];
   volume: HistogramData<UTCTimestamp>[];
-  indicators: IndicatorRowWithTime[];
-  overlays: Record<OverlayId, boolean>;
   hovered: UTCTimestamp | null;
 }) {
   const targetTime = hovered ?? candles[candles.length - 1]?.time;
   if (targetTime === undefined) {
-    return <div className="h-[34px]" aria-hidden />;
+    return <div className="h-[18px]" aria-hidden />;
   }
 
   const candle = candles.find((c) => c.time === targetTime);
   const vol = volume.find((v) => v.time === targetTime);
   if (!candle) {
-    return <div className="h-[34px]" aria-hidden />;
+    return <div className="h-[18px]" aria-hidden />;
   }
 
   const upDay = candle.close >= candle.open;
@@ -818,80 +1001,36 @@ function OhlcReadout({
     timeZone: "UTC",
   });
 
-  // Indicator values at the hovered bar — used by the second readout row to
-  // surface SMA / BB numbers the same way OHLC does for the candle. Chooses
-  // the indicator row whose timestamp matches; for weekly / monthly the
-  // candle and indicator timestamps line up (both come from the same
-  // aggregation tables) so an exact match works.
-  const indRow = indicators.find((r) => r._t === targetTime);
-  const indParts: { label: string; value: string; color: string }[] = [];
-  if (overlays.SMA && indRow) {
-    if (indRow.sma_20 !== null)
-      indParts.push({ label: "SMA20", value: indRow.sma_20.toFixed(2), color: "#fbbf24" });
-    if (indRow.sma_50 !== null)
-      indParts.push({ label: "SMA50", value: indRow.sma_50.toFixed(2), color: "#f59e0b" });
-    if (indRow.sma_200 !== null)
-      indParts.push({ label: "SMA200", value: indRow.sma_200.toFixed(2), color: "#d97706" });
-  }
-  if (overlays.BB && indRow) {
-    if (indRow.bb_upper !== null)
-      indParts.push({ label: "BB↑", value: indRow.bb_upper.toFixed(2), color: OVERLAY_TONE.BB });
-    if (indRow.bb_middle !== null)
-      indParts.push({ label: "BB·", value: indRow.bb_middle.toFixed(2), color: OVERLAY_TONE.BB });
-    if (indRow.bb_lower !== null)
-      indParts.push({ label: "BB↓", value: indRow.bb_lower.toFixed(2), color: OVERLAY_TONE.BB });
-  }
-  if (overlays.MACD && indRow) {
-    if (indRow.macd !== null)
-      indParts.push({ label: "MACD", value: indRow.macd.toFixed(2), color: OVERLAY_TONE.MACD });
-    if (indRow.macd_signal !== null)
-      indParts.push({ label: "Sig", value: indRow.macd_signal.toFixed(2), color: "#f87171" });
-  }
-
   return (
     <div
       role="status"
       aria-live="polite"
-      className="flex flex-col gap-px pb-1 font-mono text-[11px] tabular-nums text-zinc-300"
+      className="flex h-[18px] flex-wrap items-baseline gap-x-3 pb-1 font-mono text-[11px] tabular-nums text-zinc-300"
     >
-      <div className="flex h-[16px] flex-wrap items-baseline gap-x-3">
-        <span className="text-zinc-500">{dateLabel}</span>
+      <span className="text-zinc-500">{dateLabel}</span>
+      <span>
+        <span className="text-zinc-500">O</span> {candle.open.toFixed(2)}
+      </span>
+      <span>
+        <span className="text-zinc-500">H</span> {candle.high.toFixed(2)}
+      </span>
+      <span>
+        <span className="text-zinc-500">L</span> {candle.low.toFixed(2)}
+      </span>
+      <span className={tone}>
+        <span className="text-zinc-500">C</span> {candle.close.toFixed(2)}
+      </span>
+      <span className={tone}>
+        {change >= 0 ? "+" : ""}
+        {change.toFixed(2)}
+        {changePct !== null ? ` (${change >= 0 ? "+" : ""}${changePct.toFixed(2)}%)` : ""}
+      </span>
+      {vol ? (
         <span>
-          <span className="text-zinc-500">O</span> {candle.open.toFixed(2)}
+          <span className="text-zinc-500">Vol</span>{" "}
+          {(vol.value / 1_000_000).toFixed(2)}M
         </span>
-        <span>
-          <span className="text-zinc-500">H</span> {candle.high.toFixed(2)}
-        </span>
-        <span>
-          <span className="text-zinc-500">L</span> {candle.low.toFixed(2)}
-        </span>
-        <span className={tone}>
-          <span className="text-zinc-500">C</span> {candle.close.toFixed(2)}
-        </span>
-        <span className={tone}>
-          {change >= 0 ? "+" : ""}
-          {change.toFixed(2)}
-          {changePct !== null ? ` (${change >= 0 ? "+" : ""}${changePct.toFixed(2)}%)` : ""}
-        </span>
-        {vol ? (
-          <span>
-            <span className="text-zinc-500">Vol</span>{" "}
-            {(vol.value / 1_000_000).toFixed(2)}M
-          </span>
-        ) : null}
-      </div>
-      <div className="flex h-[16px] flex-wrap items-baseline gap-x-3 text-[10px]">
-        {indParts.length === 0 ? (
-          <span className="text-zinc-700">&nbsp;</span>
-        ) : (
-          indParts.map((p) => (
-            <span key={p.label}>
-              <span className="text-zinc-500">{p.label}</span>{" "}
-              <span style={{ color: p.color }}>{p.value}</span>
-            </span>
-          ))
-        )}
-      </div>
+      ) : null}
     </div>
   );
 }
