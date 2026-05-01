@@ -37,8 +37,9 @@ import { apiFetch, type IndicatorRow, type OhlcvRow, type Timeframe } from "@/li
 
 import {
   atrLegendText,
+  fmtBigNum,
   macdLegendText,
-  mainLegendText,
+  mainLegendHtml,
   obvLegendText,
   rsiLegendText,
 } from "./price-chart-legend";
@@ -495,7 +496,12 @@ function ChartCanvas({
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick", Time> | null>(null);
   const volSeriesRef = useRef<ISeriesApi<"Histogram", Time> | null>(null);
-  const overlaySeriesRef = useRef<Map<string, ISeriesApi<"Line", Time>>>(new Map());
+  // The Map holds either Line series (most overlays) or one Histogram (the
+  // MACD histogram). The teardown path only needs `.removeSeries(...)` which
+  // is uniform across series types.
+  const overlaySeriesRef = useRef<
+    Map<string, ISeriesApi<"Line", Time> | ISeriesApi<"Histogram", Time>>
+  >(new Map());
   // Per-pane legend overlays (TradingView convention). Owned by this component
   // — appended to the pane DOM via getHTMLElement() and re-attached every time
   // the indicator effect rebuilds sub-panes (see the legend effect below).
@@ -652,7 +658,7 @@ function ChartCanvas({
     // Every series key that lives in a sub-pane. MACD has TWO lines (line +
     // signal) sharing the same pane; both keys must be tracked so the
     // teardown pass clears them before rebuild.
-    const SUB_PANE_KEYS = new Set(["RSI", "ATR", "OBV", "MACD", "MACD_SIGNAL"]);
+    const SUB_PANE_KEYS = new Set(["RSI", "ATR", "OBV", "MACD", "MACD_SIGNAL", "MACD_HIST"]);
 
     // Remove same-pane series that are no longer desired (skip sub-pane
     // entries — they're handled by the rebuild step below).
@@ -748,20 +754,86 @@ function ChartCanvas({
       sub.lines.forEach((line) => {
         const data = indicatorLine(indicators, line.field);
         if (data.length === 0) return;
-        const series = chart.addSeries(
-          LineSeries,
-          {
-            color: line.color,
-            lineWidth: 1 as const,
-            priceLineVisible: false,
-            lastValueVisible: true,
-          },
-          paneIndex,
-        );
+        // OBV magnitudes commonly run into the billions (NVDA OBV ~5.9B);
+        // the default plain-number axis label shows "5918115640.22" which
+        // overruns the right-axis gutter. Compact via fmtBigNum so the
+        // axis reads "5.9B" / "-2.1M" / etc. Other indicators stay on
+        // default formatting (RSI 0-100, MACD small ±N, ATR small +N).
+        const seriesOptions = {
+          color: line.color,
+          lineWidth: 1 as const,
+          priceLineVisible: false,
+          lastValueVisible: true,
+          ...(line.key === "OBV"
+            ? {
+                priceFormat: {
+                  type: "custom" as const,
+                  formatter: (price: number) => fmtBigNum(price, 1),
+                  minMove: 1,
+                },
+              }
+            : {}),
+        };
+        const series = chart.addSeries(LineSeries, seriesOptions, paneIndex);
         series.setData(data);
         overlaySeriesRef.current.set(line.key, series);
+        // RSI overbought / oversold reference lines (70 / 30) — the canonical
+        // thresholds per ADR-012. Drawn as dashed price lines on the RSI
+        // series so they sit on the same scale and disappear with it when
+        // the overlay toggles off.
+        if (line.key === "RSI") {
+          series.createPriceLine({
+            price: 70,
+            color: "rgba(239, 68, 68, 0.6)", // red-500 / 60%
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: false,
+            title: "70",
+          });
+          series.createPriceLine({
+            price: 30,
+            color: "rgba(34, 197, 94, 0.6)", // green-500 / 60%
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: false,
+            title: "30",
+          });
+        }
       });
     });
+
+    // MACD histogram — bars colored green when MACD > Signal (positive
+    // momentum) and red when below. Standard TradingView MACD pane shows
+    // line + signal + histogram together; we already surface the value in
+    // the legend, this adds the visual.
+    if (overlays.MACD) {
+      const macdPaneIndex =
+        activeSubs.findIndex((s) => s.lines.some((l) => l.key === "MACD")) + 1;
+      if (macdPaneIndex > 0) {
+        const histData: HistogramData<UTCTimestamp>[] = [];
+        for (const r of indicators) {
+          if (r.macd_hist !== null && !Number.isNaN(r.macd_hist)) {
+            histData.push({
+              time: r._t,
+              value: r.macd_hist,
+              color:
+                r.macd_hist >= 0
+                  ? "rgba(34, 197, 94, 0.5)"
+                  : "rgba(239, 68, 68, 0.5)",
+            });
+          }
+        }
+        if (histData.length > 0) {
+          const series = chart.addSeries(
+            HistogramSeries,
+            { priceLineVisible: false, lastValueVisible: false },
+            macdPaneIndex,
+          );
+          series.setData(histData);
+          overlaySeriesRef.current.set("MACD_HIST", series);
+        }
+      }
+    }
 
     // Adaptive main-pane stretch — keeps each sub-pane usable regardless of
     // how many of {RSI, MACD, ATR, OBV} are toggled on. With chart height
@@ -874,44 +946,41 @@ function ChartCanvas({
     // legend at top: 4px on the main pane). RAF the first call so we read
     // post-layout heights; the ResizeObserver covers everything after.
     const rafId = requestAnimationFrame(repositionAll);
-    // The chart auto-sizes to its container; pane heights also reflow on
-    // container resize (responsive 300px <-> 400px breakpoint). ResizeObserver
-    // fires on every resize, so we re-pin legend positions there too.
+    // Re-pin legends on (a) container resize (responsive 300px <-> 400px
+    // breakpoint, window resize) and (b) per-pane height change (user drags
+    // the divider between panes — container size doesn't change but the
+    // panes' heights do). One ResizeObserver instance, multiple targets.
     const resizeObs = new ResizeObserver(() => repositionAll());
     resizeObs.observe(container);
+    for (const p of chart.panes()) {
+      const el = p.getHTMLElement();
+      if (el) resizeObs.observe(el);
+    }
 
-    // Lookups for the per-bar render. indByTime is O(1); spyByTime is built
-    // even when SPY is off (cheap; spyLine is empty in that case).
+    // Indicator lookup for the per-bar render — O(1) by UTC timestamp.
     const indByTime = new Map<UTCTimestamp, IndicatorRowWithTime>();
     for (const r of indicators) indByTime.set(r._t, r);
-    const spyByTime = new Map<UTCTimestamp, number>();
-    for (const s of spyLine) spyByTime.set(s.time, s.value);
-    // SPY change% is derived from the normalised line itself: spyOverlayLine()
-    // scales SPY so its first point sits at the symbol's first-bar level, so
-    // line[t]/line[0] - 1 == spy[t]/spy[0] - 1 == SPY's % from start.
-    // Anchoring on spyLine[0].value (rather than candles[0].close) keeps the
-    // legend internally consistent with whatever convention spyOverlayLine
-    // uses for its baseline.
-    const spyAnchor = spyLine[0]?.value ?? 0;
     const lastTime = candles[candles.length - 1].time;
-
-    function spyChangePct(t: UTCTimestamp): number | null {
-      if (spyLine.length === 0 || spyAnchor === 0) return null;
-      const v = spyByTime.get(t);
-      if (v === undefined) return null;
-      return (v / spyAnchor - 1) * 100;
-    }
+    // SPY label appears in the legend only when the SPY series is actually
+    // rendered. spyLine is empty when the toggle is off OR while the SPY
+    // fetch is in flight, so this naturally suppresses the label until the
+    // line is ready to draw.
+    const showSpy = spyLine.length > 0;
 
     function update(time: UTCTimestamp | null) {
       const t = time ?? lastTime;
       const indRow = indByTime.get(t);
       const main = legendsMap.get("main");
       if (main) {
-        main.textContent = mainLegendText(
+        // innerHTML rather than textContent: mainLegendHtml emits markup
+        // (<br> row separators + a <span style> for the SPY label colour).
+        // Source values are all controlled (toFixed numbers + a constant
+        // hex string), so XSS surface is nil.
+        main.innerHTML = mainLegendHtml(
           indRow,
           overlays.SMA,
           overlays.BB,
-          spyChangePct(t),
+          showSpy,
         );
       }
       const rsi = legendsMap.get("RSI");

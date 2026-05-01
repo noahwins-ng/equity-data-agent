@@ -9,7 +9,7 @@ import type { IndicatorRow } from "@/lib/api";
 import {
   atrLegendText,
   macdLegendText,
-  mainLegendText,
+  mainLegendHtml,
   obvLegendText,
   rsiLegendText,
 } from "./price-chart-legend.ts";
@@ -66,24 +66,49 @@ test("obvLegendText scales to M/B with one decimal", () => {
   assert.equal(obvLegendText(row({ obv: 1_500_000_000 })), "OBV  1.5B");
 });
 
-test("mainLegendText shows toggled overlays only", () => {
-  // No overlays, no SPY: empty (ticker is in the quote header above).
-  assert.equal(mainLegendText(row({}), false, false, null), "");
+test("mainLegendHtml shows toggled overlays only", () => {
+  // No overlays: empty (ticker is in the quote header above).
+  assert.equal(mainLegendHtml(row({}), false, false, false), "");
 
-  // SMA only: single SMA row.
+  // SMA only: each SMA wrapped in its line's own colour span.
   assert.equal(
-    mainLegendText(
+    mainLegendHtml(
       row({ sma_20: 199.5, sma_50: 197.1, sma_200: 184.0 }),
       true,
       false,
-      null,
+      false,
     ),
-    "SMA20 199.50   SMA50 197.10   SMA200 184.00",
+    [
+      `<span style="color:#fbbf24">SMA20 199.50</span>`,
+      `<span style="color:#f59e0b">SMA50 197.10</span>`,
+      `<span style="color:#d97706">SMA200 184.00</span>`,
+    ].join("   "),
   );
 
-  // SMA + BB + SPY all on: 3 rows (SMAs / BB / SPY).
+  // BB only: all three bands share the same violet hue.
   assert.equal(
-    mainLegendText(
+    mainLegendHtml(
+      row({ bb_upper: 220.4, bb_middle: 198.2, bb_lower: 176.0 }),
+      false,
+      true,
+      false,
+    ),
+    [
+      `<span style="color:#a78bfa">BB↑ 220.40</span>`,
+      `<span style="color:#a78bfa">BB· 198.20</span>`,
+      `<span style="color:#a78bfa">BB↓ 176.00</span>`,
+    ].join("   "),
+  );
+
+  // SPY only: sky-blue label, no value.
+  assert.equal(
+    mainLegendHtml(row({}), false, false, true),
+    `<span style="color:#38bdf8">SPY</span>`,
+  );
+
+  // SMA + BB + SPY all on: three rows separated by <br>.
+  assert.equal(
+    mainLegendHtml(
       row({
         sma_20: 199.5,
         sma_50: 197.1,
@@ -94,20 +119,20 @@ test("mainLegendText shows toggled overlays only", () => {
       }),
       true,
       true,
-      2.3,
+      true,
     ),
-    "SMA20 199.50   SMA50 197.10   SMA200 184.00\nBB↑ 220.40   BB· 198.20   BB↓ 176.00\nSPY +2.30%",
-  );
-
-  // SPY only (no SMA, no BB): single SPY row.
-  assert.equal(
-    mainLegendText(row({}), false, false, 2.3),
-    "SPY +2.30%",
-  );
-
-  // Negative SPY: bare minus, no double sign.
-  assert.equal(
-    mainLegendText(row({}), false, false, -1.4),
-    "SPY -1.40%",
+    [
+      [
+        `<span style="color:#fbbf24">SMA20 199.50</span>`,
+        `<span style="color:#f59e0b">SMA50 197.10</span>`,
+        `<span style="color:#d97706">SMA200 184.00</span>`,
+      ].join("   "),
+      [
+        `<span style="color:#a78bfa">BB↑ 220.40</span>`,
+        `<span style="color:#a78bfa">BB· 198.20</span>`,
+        `<span style="color:#a78bfa">BB↓ 176.00</span>`,
+      ].join("   "),
+      `<span style="color:#38bdf8">SPY</span>`,
+    ].join("<br>"),
   );
 });
