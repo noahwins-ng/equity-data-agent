@@ -14,10 +14,10 @@ import { useEffect, useState } from "react";
 import { apiFetch, type IndicatorRow, type Timeframe } from "@/lib/api";
 import { changeColorClass, formatRatio } from "@/lib/format";
 
-const TIMEFRAMES: { id: Timeframe; label: string }[] = [
-  { id: "daily", label: "Daily" },
-  { id: "weekly", label: "Weekly" },
-  { id: "monthly", label: "Monthly" },
+const TIMEFRAMES: { id: Timeframe; label: string; short: string }[] = [
+  { id: "daily", label: "Daily", short: "D" },
+  { id: "weekly", label: "Weekly", short: "W" },
+  { id: "monthly", label: "Monthly", short: "M" },
 ];
 
 type Decoration = { label: string; tone: "bull" | "bear" | "neutral" };
@@ -157,15 +157,21 @@ export function TechnicalsCard({ ticker }: { ticker: string }) {
     >
       <div className="flex shrink-0 items-baseline justify-between border-b border-zinc-800 px-4 py-3">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-200">
-          Technicals
+          <span className="2xl:hidden">Tech</span>
+          <span className="hidden 2xl:inline">Technicals</span>
         </h2>
-        <div role="tablist" aria-label="Aggregation" className="flex gap-1 text-[10px]">
+        <div
+          role="tablist"
+          aria-label="Aggregation"
+          className="flex gap-0.5 text-[10px] 2xl:gap-1"
+        >
           {TIMEFRAMES.map((t) => (
             <button
               key={t.id}
               type="button"
               role="tab"
               aria-selected={timeframe === t.id}
+              aria-label={t.label}
               onClick={() => setTimeframe(t.id)}
               className={
                 timeframe === t.id
@@ -173,7 +179,8 @@ export function TechnicalsCard({ ticker }: { ticker: string }) {
                   : "rounded border border-transparent px-1.5 py-0.5 uppercase text-zinc-400 hover:bg-zinc-900"
               }
             >
-              {t.label}
+              <span className="2xl:hidden">{t.short}</span>
+              <span className="hidden 2xl:inline">{t.label}</span>
             </button>
           ))}
         </div>

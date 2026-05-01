@@ -116,7 +116,7 @@ export default async function TickerDetailPage({ params }: { params: Params }) {
       */}
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-hidden px-6 py-2 lg:grid-cols-3">
         <TechnicalsCard ticker={ticker} />
-        <FundamentalsCard ticker={ticker} />
+        <FundamentalsCard ticker={ticker} currentPrice={quote.price} />
         <NewsCard items={news} />
       </div>
       <ProvenanceStrip provenance={provenance ?? null} />
