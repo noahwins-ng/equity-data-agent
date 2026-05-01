@@ -67,7 +67,7 @@ export function QuoteHeader({ quote }: { quote: QuoteResponse }) {
             </span>
           )}
         </div>
-        <dl className="flex flex-1 items-center justify-center gap-x-6 overflow-hidden">
+        <dl className="flex min-w-0 flex-1 flex-wrap items-center justify-center gap-x-6 gap-y-1">
           <Stat label="Open" value={formatPrice(quote.open)} />
           <Stat
             label="Day range"
@@ -119,7 +119,7 @@ function Stat({
   extraColor?: string;
 }) {
   return (
-    <div>
+    <div className="whitespace-nowrap">
       <dt className="text-[9px] uppercase tracking-wider text-zinc-500">{label}</dt>
       <dd className="font-mono text-xs tabular-nums text-zinc-100">
         {value}

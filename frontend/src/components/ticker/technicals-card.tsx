@@ -258,10 +258,14 @@ function Row({
   // has its own track so values stay right-aligned regardless of label width
   // and chips don't bump into the value text (the v2-final reference: clean
   // gutters, monospaced numerics, pill-bordered chips).
+  //
+  // Label column gets `truncate` so a long label (e.g. "MACD(12,26,9)") clips
+  // with an ellipsis at narrow viewports rather than visually overflowing
+  // into the value column. Value + chip stay readable.
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-3 py-1">
-      <dt className="text-[11px] uppercase tracking-wider text-zinc-400">{label}</dt>
-      <dd className="text-right font-mono text-sm tabular-nums text-zinc-50">
+      <dt className="truncate text-[11px] uppercase tracking-wider text-zinc-400">{label}</dt>
+      <dd className="whitespace-nowrap text-right font-mono text-sm tabular-nums text-zinc-50">
         {valueNode ?? value}
         {extra ? (
           <span className={`ml-1.5 text-[11px] ${extraColor ?? "text-zinc-500"}`}>{extra}</span>
