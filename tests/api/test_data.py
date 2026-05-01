@@ -672,7 +672,10 @@ def test_news_returns_iso_timestamp_and_window_filter(
     # post-aggregation timestamp. Both shapes must show up in the rendered
     # query so the contract isn't accidentally regressed.
     assert "GROUP BY id" in fake.last_query
-    assert "ORDER BY published_at DESC" in fake.last_query
+    # Outer ORDER BY uses the renamed alias to dodge the ILLEGAL_AGGREGATION
+    # CH error (see test_news_query_dedups_by_article_id_with_argmax for the
+    # full regression context).
+    assert "ORDER BY latest_published_at DESC" in fake.last_query
     # The canonical publisher must come out of the resolved_host →
     # domain(url) → publisher_name fallback chain, not a single column.
     assert "resolved_host" in fake.last_query
@@ -753,6 +756,14 @@ def test_news_query_dedups_by_article_id_with_argmax(
     q = fake.last_query
     # Dedup contract: GROUP BY id, argMax over the payload columns.
     assert "GROUP BY id" in q
+    # Regression guard for the prod break that #162 shipped: ClickHouse
+    # raised ILLEGAL_AGGREGATION when the aggregated timestamp was aliased
+    # back to its source column name (``max(published_at) AS published_at``);
+    # the alias resolution then made the inner ``WHERE published_at >= ...``
+    # parse as ``WHERE max(published_at) >= ...``. Pin the rename so a
+    # well-meaning future cleanup can't silently re-break /news.
+    assert "max(published_at) AS latest_published_at" in q
+    assert "max(published_at) AS published_at" not in q
     for col in (
         "headline",
         "body",
