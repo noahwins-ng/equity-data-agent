@@ -5,15 +5,20 @@
  * the route-level revalidate. EOD framing per design v2: the `close <date>`
  * label uses the latest bar's date, NOT a live timestamp — the data is
  * intentionally daily-cadence and a "ticking clock" would lie.
+ *
+ * The header carries identity (ticker + name + chips) and the latest price.
+ * Open / Day range / Volume are NOT duplicated here — the OHLCV strip below
+ * the chart already shows them at the bar level. P/E TTM moved into the
+ * Fundamentals card (it's a valuation ratio, not a quote attribute). Mkt
+ * cap rides as a precise-number suffix on the cap-tier chip rather than as
+ * its own stat, because the chip already conveys the same axis (size).
  */
 
 import {
   changeColorClass,
   formatAsOfDate,
   formatCompact,
-  formatPct,
   formatPrice,
-  formatRatio,
   formatSignedPct,
 } from "@/lib/format";
 import type { QuoteResponse } from "@/lib/api";
@@ -38,20 +43,16 @@ export function QuoteHeader({ quote }: { quote: QuoteResponse }) {
       : null;
   const changeColor = changeColorClass(change);
 
-  const volRatio =
-    quote.volume !== null && quote.avg_volume_30d !== null && quote.avg_volume_30d > 0
-      ? (quote.volume / quote.avg_volume_30d - 1) * 100
-      : null;
-
   const capTier = CAP_TIER(quote.market_cap);
+  const capValue = formatCompact(quote.market_cap);
 
   return (
     <header
       aria-label={`Quote header for ${quote.ticker}`}
       className="border-b border-zinc-800 bg-zinc-950 px-6 py-1.5"
     >
-      <div className="flex items-center gap-4">
-        <div className="flex min-w-0 shrink-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
           <h1 className="font-mono text-xl font-semibold tracking-tight text-zinc-50">
             {quote.ticker}
           </h1>
@@ -63,33 +64,16 @@ export function QuoteHeader({ quote }: { quote: QuoteResponse }) {
           )}
           {capTier && (
             <span className="rounded border border-zinc-700 px-1 py-px text-[9px] uppercase tracking-wider text-zinc-300">
+              {/* Cap-tier chip carries both the categorical label and the
+                  precise value. "Mega-cap · $5.06T" reads as one atom and
+                  saves the row a dedicated Stat for Mkt cap. */}
               {capTier}
+              {capValue !== "—" ? (
+                <span className="ml-1 normal-case text-zinc-400">· {capValue}</span>
+              ) : null}
             </span>
           )}
         </div>
-        <dl className="flex min-w-0 flex-1 flex-wrap items-center justify-center gap-x-6 gap-y-1">
-          <Stat label="Open" value={formatPrice(quote.open)} />
-          <Stat
-            label="Day range"
-            value={
-              quote.day_low !== null && quote.day_high !== null
-                ? `${formatPrice(quote.day_low)} – ${formatPrice(quote.day_high)}`
-                : "—"
-            }
-          />
-          <Stat
-            label="Vol"
-            value={formatCompact(quote.volume)}
-            extra={
-              volRatio !== null
-                ? `${volRatio >= 0 ? "+" : ""}${formatPct(volRatio, 0)} vs 30d`
-                : null
-            }
-            extraColor={changeColorClass(volRatio)}
-          />
-          <Stat label="Mkt cap" value={formatCompact(quote.market_cap)} />
-          <Stat label="P/E TTM" value={formatRatio(quote.pe_ratio_ttm)} />
-        </dl>
         <div className="flex shrink-0 items-baseline gap-2 whitespace-nowrap">
           <span className="font-mono text-2xl font-semibold tabular-nums leading-none text-zinc-50">
             {formatPrice(quote.price)}
@@ -104,35 +88,5 @@ export function QuoteHeader({ quote }: { quote: QuoteResponse }) {
         </div>
       </div>
     </header>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  extra,
-  extraColor,
-}: {
-  label: string;
-  value: string;
-  extra?: string | null;
-  extraColor?: string;
-}) {
-  // Inline `LABEL value` layout — label and value on the same baseline,
-  // not stacked vertically. At narrow viewports the dl's flex-wrap drops
-  // a stat to the next line as a unit; the inline format keeps each stat
-  // a one-line atom rather than a 2-line stack, so 5 stats fit on a
-  // single header row much more often (was wrapping into 3 messy rows
-  // on a 14" MacBook before this change).
-  return (
-    <div className="flex items-baseline gap-x-1.5 whitespace-nowrap">
-      <dt className="text-[9px] uppercase tracking-wider text-zinc-500">{label}</dt>
-      <dd className="font-mono text-xs tabular-nums text-zinc-100">
-        {value}
-        {extra ? (
-          <span className={`ml-1 text-[9px] ${extraColor ?? "text-zinc-500"}`}>{extra}</span>
-        ) : null}
-      </dd>
-    </div>
   );
 }

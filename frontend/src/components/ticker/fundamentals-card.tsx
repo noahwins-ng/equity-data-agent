@@ -21,10 +21,10 @@ import { useEffect, useMemo, useState } from "react";
 import { apiFetch, type FundamentalRow, type PeriodType } from "@/lib/api";
 import { changeColorClass, formatBps, formatCompact, formatPct, formatRatio, formatSignedPct } from "@/lib/format";
 
-const PERIOD_TABS: { id: PeriodType; label: string }[] = [
-  { id: "quarterly", label: "Quarterly" },
-  { id: "annual", label: "Annual" },
-  { id: "ttm", label: "TTM" },
+const PERIOD_TABS: { id: PeriodType; label: string; short: string }[] = [
+  { id: "quarterly", label: "Quarterly", short: "Q" },
+  { id: "annual", label: "Annual", short: "A" },
+  { id: "ttm", label: "TTM", short: "T" },
 ];
 
 function pickLatest(rows: FundamentalRow[], period: PeriodType): FundamentalRow | null {
@@ -62,7 +62,17 @@ function pickEbitdaMargin(row: FundamentalRow): number | null {
   return (row.ebitda / row.revenue) * 100;
 }
 
-export function FundamentalsCard({ ticker }: { ticker: string }) {
+export function FundamentalsCard({
+  ticker,
+  currentPrice,
+}: {
+  ticker: string;
+  // Latest close from the quote endpoint, used as the numerator when we
+  // compute P/E against the displayed period's EPS denominator. The card
+  // computes P/E per period (Annual / Quarterly-annualised / TTM) rather
+  // than rendering a single P/E TTM regardless of the active tab.
+  currentPrice: number | null;
+}) {
   const [period, setPeriod] = useState<PeriodType>("annual");
   // Co-locate data with the ticker it was fetched for; derive loading/error
   // in render to avoid setState-synchronously-inside-effect (React 19 lint).
@@ -116,15 +126,21 @@ export function FundamentalsCard({ ticker }: { ticker: string }) {
     >
       <div className="flex shrink-0 items-baseline justify-between border-b border-zinc-800 px-4 py-3">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-200">
-          Fundamentals
+          <span className="2xl:hidden">Fund</span>
+          <span className="hidden 2xl:inline">Fundamentals</span>
         </h2>
-        <div role="tablist" aria-label="Period" className="flex gap-1 text-[10px]">
+        <div
+          role="tablist"
+          aria-label="Period"
+          className="flex gap-0.5 text-[10px] 2xl:gap-1"
+        >
           {PERIOD_TABS.map((p) => (
             <button
               key={p.id}
               type="button"
               role="tab"
               aria-selected={period === p.id}
+              aria-label={p.label}
               onClick={() => setPeriod(p.id)}
               className={
                 period === p.id
@@ -132,7 +148,8 @@ export function FundamentalsCard({ ticker }: { ticker: string }) {
                   : "rounded border border-transparent px-1.5 py-0.5 uppercase text-zinc-400 hover:bg-zinc-900"
               }
             >
-              {p.label}
+              <span className="2xl:hidden">{p.short}</span>
+              <span className="hidden 2xl:inline">{p.label}</span>
             </button>
           ))}
         </div>
@@ -159,6 +176,13 @@ export function FundamentalsCard({ ticker }: { ticker: string }) {
             </p>
           )}
           <dl className="divide-y divide-zinc-800/60 text-sm">
+            {/* P/E is period-aware: Annual = price / annual EPS,
+                Quarterly = price / (Q EPS × 4) annualised, TTM = price /
+                TTM EPS. The label travels with the period so the user
+                isn't misled by a single number across all tabs. peCell
+                returns { label, value } — Row's props match exactly, so
+                spread directly. */}
+            <Row {...peCell(display, currentPrice)} />
             <Row
               label="Revenue"
               value={formatCompact(pickAbsolute(display, "revenue"))}
@@ -202,6 +226,27 @@ export function FundamentalsCard({ ticker }: { ticker: string }) {
       </div>
     </section>
   );
+}
+
+function peCell(
+  row: FundamentalRow,
+  price: number | null,
+): { label: string; value: string } {
+  // Label travels with the displayed period: Annual = "P/E", Quarterly =
+  // "P/E annualised" (single-Q EPS × 4 — flagged so it's not mistaken for
+  // a true TTM P/E), TTM = "P/E TTM". Returns "—" when price or EPS are
+  // missing, or when the effective denominator is zero. Negative EPS
+  // produces a negative P/E (loss-making companies — valid signal).
+  const label =
+    row.period_type === "annual"
+      ? "P/E"
+      : row.period_type === "quarterly"
+        ? "P/E annualised"
+        : "P/E TTM";
+  if (price === null || row.eps === null) return { label, value: "—" };
+  const denom = row.period_type === "quarterly" ? row.eps * 4 : row.eps;
+  if (denom === 0) return { label, value: "—" };
+  return { label, value: formatRatio(price / denom, 2) };
 }
 
 function roeRoaCell(
