@@ -438,25 +438,61 @@ def get_news(
     Sourced directly from ``equity_raw.news_raw`` — bypasses Qdrant because
     the news card is a chronological feed, not a semantic search. The 7-day
     default matches the card header (``NEWS Last 7d``); response shape is
-    ``{id, headline, body, publisher_name, image_url, url, source,
-    published_at, sentiment_label}[]`` ordered most-recent-first.
+    ``{id, headline, body, publisher, publisher_name, image_url, url,
+    source, published_at, sentiment_label}[]`` ordered most-recent-first.
 
     Per ADR-014 anti-pattern §5: empty list is a valid 200 response and is
     rendered identically to "service down" by the frontend (an "empty news"
     panel) — the card consumer must not differentiate.
+
+    Per QNT-148 / ADR-016, two non-obvious behaviours:
+
+    * ``publisher`` is the canonical pill label, computed once here:
+      prefer ``resolved_host`` (set at ingest), fall back to the URL host
+      when the URL is already a direct outlet, fall back to the trimmed
+      Finnhub-supplied label, finally empty string. The frontend reads
+      ``item.publisher`` with no fallback chain. (``publisher_name`` and
+      ``url`` stay in the payload so a future debug surface can show the
+      raw inputs without another query.)
+    * Same-ticker rows are de-duplicated by article ``id`` (URL hash):
+      Finnhub occasionally returns the same article URL across multiple
+      ticks with a slightly shifted ``datetime`` epoch, which lands as
+      multiple rows because the ReplacingMergeTree key is
+      ``(ticker, published_at, id)``. We keep the most recent
+      ``published_at`` per ``id`` so the card doesn't show duplicates.
+      Cross-ticker dedup is intentionally not done here — the same URL
+      under AAPL and MSFT lands as two distinct rows by design (one per
+      mention) and would surface to a future "Related across portfolio"
+      view rather than silently collapsing under one ticker.
     """
     ticker = ticker.upper()
     if ticker not in TICKERS:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
 
-    # `host` is derived from the URL so the frontend can prefer the actual
-    # serving domain over Finnhub's feed-source label. Finnhub redirects
-    # *all* "Yahoo"/"Benzinga"/"CNBC"-tagged articles through finnhub.io —
-    # we can't tell from those URLs who actually wrote the article, so the
-    # tag is the best signal we have. When the URL is a real outlet
-    # (finance.yahoo.com, fool.com, marketwatch.com, …) the host is more
-    # accurate than the often-empty `publisher_name`.
+    # The argMax(field, published_at) per column means a re-fetch with a
+    # later published_at wins — including for ``resolved_host``. This is
+    # intentional: if Finnhub rewrites the redirect target between ticks,
+    # the pill silently updates to the new outlet on the next render. The
+    # alternative (pin to first-seen value) would persist a stale host past
+    # the article's actual outlet, which is worse for credit accuracy.
     query = """
+        WITH deduped AS (
+            SELECT
+                id,
+                argMax(headline, published_at) AS headline,
+                argMax(body, published_at) AS body,
+                argMax(publisher_name, published_at) AS publisher_name,
+                argMax(image_url, published_at) AS image_url,
+                argMax(url, published_at) AS url,
+                argMax(source, published_at) AS source,
+                max(published_at) AS published_at,
+                argMax(sentiment_label, published_at) AS sentiment_label,
+                argMax(resolved_host, published_at) AS resolved_host
+            FROM equity_raw.news_raw FINAL
+            WHERE ticker = %(ticker)s
+              AND published_at >= now() - INTERVAL %(days)s DAY
+            GROUP BY id
+        )
         SELECT
             toString(id) AS id,
             headline,
@@ -467,10 +503,16 @@ def get_news(
             source,
             published_at,
             sentiment_label,
-            domain(url) AS host
-        FROM equity_raw.news_raw FINAL
-        WHERE ticker = %(ticker)s
-          AND published_at >= now() - INTERVAL %(days)s DAY
+            multiIf(
+                resolved_host != '',
+                    resolved_host,
+                domain(url) NOT IN ('finnhub.io', ''),
+                    replaceRegexpOne(domain(url), '^www\\.', ''),
+                trim(BOTH ' ' FROM publisher_name) != '',
+                    trim(BOTH ' ' FROM publisher_name),
+                ''
+            ) AS publisher
+        FROM deduped
         ORDER BY published_at DESC
         LIMIT %(limit)s
     """

@@ -22,6 +22,7 @@ import time
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+import httpx
 import pandas as pd
 from dagster import (
     AssetExecutionContext,
@@ -33,7 +34,11 @@ from dagster import (
 )
 from shared.tickers import TICKERS
 
-from dagster_pipelines.news_feeds import fetch_company_news
+from dagster_pipelines.news_feeds import (
+    fetch_company_news,
+    make_resolver_client,
+    resolve_publisher_host,
+)
 from dagster_pipelines.resources.clickhouse import ClickHouseResource
 
 logger = logging.getLogger(__name__)
@@ -77,12 +82,22 @@ def _url_hash(url: str) -> int:
     return int(hashlib.blake2b(url.encode("utf-8"), digest_size=8).hexdigest(), 16)
 
 
-def _article_to_row(article: dict[str, Any], ticker: str) -> dict[str, Any] | None:
+def _article_to_row(
+    article: dict[str, Any],
+    ticker: str,
+    *,
+    resolver_client: httpx.Client | None = None,
+) -> dict[str, Any] | None:
     """Convert a Finnhub /company-news article dict to a news_raw row.
 
     Returns None for unusable rows (no URL, no headline, no datetime). Empty
     image URLs are kept — design v2 reserves the thumbnail slot but renders a
     placeholder when ``image_url`` is empty.
+
+    ``resolver_client`` is forwarded to ``resolve_publisher_host`` so the
+    asset can share one ``httpx.Client`` across all articles in a partition
+    (connection-pooled — the alternative is a fresh client per call which
+    burns ~5x the wall-clock at scale). Tests stub it.
     """
     url = (article.get("url") or "").strip()
     headline = (article.get("headline") or "").strip()
@@ -111,6 +126,10 @@ def _article_to_row(article: dict[str, Any], ticker: str) -> dict[str, Any] | No
         # asset has rows to operate on. The 24h pending-age asset check
         # bounds the worst case observable to readers.
         "sentiment_label": "pending",
+        # Per QNT-148: resolved at ingest, '' on any failure (timeout, 4xx).
+        # Direct outlet URLs short-circuit to host(url); finnhub.io redirects
+        # follow up to 5 hops within a 5s deadline.
+        "resolved_host": resolve_publisher_host(url, client=resolver_client),
     }
 
 
@@ -149,11 +168,25 @@ def news_raw(
         context.log.warning("No articles returned for %s — skipping insert", ticker)
         return
 
-    rows: list[dict[str, Any]] = []
-    for article in articles:
-        row = _article_to_row(article, ticker=ticker)
-        if row is not None:
-            rows.append(row)
+    # One pooled client for all redirect resolutions in this partition.
+    # Connection reuse is the difference between ~30 ms/call (warm pool) and
+    # ~150 ms/call (cold connect per article) at the observed ~30-row daily
+    # volume per ticker. The asset's RetryPolicy handles transient errors at
+    # the partition level; per-article failures soft-fail to '' inside the
+    # resolver and never bubble up here. ``make_resolver_client`` keeps the
+    # timeout / redirect-budget config centralised in news_feeds.py.
+    resolver_client = make_resolver_client()
+    try:
+        rows: list[dict[str, Any]] = []
+        resolved_count = 0
+        for article in articles:
+            row = _article_to_row(article, ticker=ticker, resolver_client=resolver_client)
+            if row is not None:
+                rows.append(row)
+                if row["resolved_host"]:
+                    resolved_count += 1
+    finally:
+        resolver_client.close()
 
     if not rows:
         context.log.warning(
@@ -178,10 +211,17 @@ def news_raw(
         "publisher_name",
         "image_url",
         "sentiment_label",
+        "resolved_host",
     ]
     df = pd.DataFrame(df[cols])
 
     clickhouse.insert_df("equity_raw.news_raw", df)
-    context.log.info("Inserted %d Finnhub rows for %s", len(df), ticker)
+    context.log.info(
+        "Inserted %d Finnhub rows for %s (%d/%d resolved_host populated)",
+        len(df),
+        ticker,
+        resolved_count,
+        len(rows),
+    )
 
     time.sleep(_INTER_CALL_SLEEP_SECONDS)

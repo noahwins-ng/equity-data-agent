@@ -46,31 +46,11 @@ export function NewsCard({ items }: { items: NewsRow[] }) {
   );
 }
 
-/**
- * Pill label for a news item.
- *
- * Two distinct cases live in the warehouse:
- *
- *   1. Finnhub-tagged articles where `publisher_name` is "Yahoo" /
- *      "Benzinga" / "CNBC" / etc. and the URL is `finnhub.io/...`. Finnhub
- *      redirects to wherever — we can't see the original outlet, so the
- *      Finnhub label is the best signal we have, even though "Yahoo"
- *      could syndicate from Reuters / Bloomberg / Fool / etc.
- *   2. Articles with empty `publisher_name` and a *direct* outlet URL
- *      (finance.yahoo.com, fool.com, marketwatch.com, wsj.com, …). Here
- *      the URL host is more accurate than what Finnhub's feed-source field
- *      reports. The legacy fallback to `item.source` ("finnhub") was
- *      mislabeling ~28% of weekly articles as "FINNHUB" — the host strips
- *      `www.` and surfaces the actual serving domain instead.
- */
-function publisherLabel(item: NewsRow): string {
-  const host = item.host?.replace(/^www\./, "") ?? "";
-  if (host && host !== "finnhub.io") return host;
-  return item.publisher_name?.trim() || "—";
-}
-
 function NewsItem({ item }: { item: NewsRow }) {
-  const publisher = publisherLabel(item);
+  // Canonical publisher field is computed server-side once (QNT-148 / ADR-016).
+  // The fallback chain (resolved_host → direct host → publisher_name) lives
+  // in the API; the frontend only needs the placeholder for the empty case.
+  const publisher = item.publisher || "—";
 
   return (
     <a

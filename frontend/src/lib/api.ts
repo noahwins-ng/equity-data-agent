@@ -188,11 +188,11 @@ export type NewsRow = {
   source: string;
   published_at: string; // ISO datetime
   sentiment_label: string;
-  // Derived in API SQL via `domain(url)`. Used as the primary publisher
-  // signal for direct outlet URLs; for Finnhub redirects (host ===
-  // "finnhub.io") fall back to `publisher_name` since the redirect target
-  // is opaque to us.
-  host: string;
+  // Canonical publisher label, computed server-side once (QNT-148 / ADR-016):
+  // prefers the resolved outlet from a Finnhub redirect, falls back to the
+  // direct URL host, falls back to `publisher_name`, finally empty string.
+  // The card renders `publisher || "—"` with no further fallback chain.
+  publisher: string;
 };
 
 export type QuoteResponse = {
