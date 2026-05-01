@@ -133,6 +133,23 @@ def test_url_hash_is_deterministic_and_per_url() -> None:
 
 
 @pytest.fixture(autouse=True)
+def _disable_finnhub_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Skip the inter-request sleep in tests.
+
+    The resolver's 1.5s rate limit is correct for prod (under Finnhub's
+    60 RPM bucket; see ``news_feeds._INTER_FINNHUB_REQUEST_SECONDS``)
+    but would make every redirect-resolver test wait ~1.5s and turn the
+    20-test suite into a 30s minimum. Zero is safe in tests because the
+    transport is mocked; no real network call leaves the process.
+    """
+    from dagster_pipelines import news_feeds as _news_feeds
+
+    monkeypatch.setattr(_news_feeds, "_INTER_FINNHUB_REQUEST_SECONDS", 0.0)
+    monkeypatch.setattr(_news_feeds, "_FINNHUB_JITTER_SECONDS", 0.0)
+    monkeypatch.setattr(_news_feeds, "_last_finnhub_request_at", 0.0)
+
+
+@pytest.fixture(autouse=True)
 def _set_finnhub_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """Default to a non-empty key so most tests skip the missing-key guard."""
     monkeypatch.setenv("FINNHUB_API_KEY", "test-key")
@@ -347,6 +364,47 @@ def test_resolve_publisher_host_handles_malformed_url() -> None:
     """Garbage URLs return '' rather than blowing up the partition run."""
     assert resolve_publisher_host("") == ""
     assert resolve_publisher_host("not-a-url") == ""
+
+
+def test_finnhub_rate_limit_sleeps_between_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Inter-request sleep guards every Finnhub call.
+
+    Drives the helper directly (rather than through ``resolve_publisher_host``)
+    so the assertion is on the rate-limit math and not coupled to which
+    branches inside the resolver fire.
+
+    The autouse fixture above zeroes out ``_INTER_FINNHUB_REQUEST_SECONDS``
+    for the rest of the suite; this test re-arms it. Without this regression
+    test the 1.5s production sleep could be silently dropped by a refactor
+    and AC#4 would quietly regress from 80%+ back to 43% (per QNT-148 prod
+    smoke pre-rate-limiter).
+    """
+    from dagster_pipelines import news_feeds as _news_feeds
+
+    monkeypatch.setattr(_news_feeds, "_INTER_FINNHUB_REQUEST_SECONDS", 0.05)
+    monkeypatch.setattr(_news_feeds, "_FINNHUB_JITTER_SECONDS", 0.0)
+    monkeypatch.setattr(_news_feeds, "_last_finnhub_request_at", 0.0)
+
+    sleep_calls: list[float] = []
+    monkeypatch.setattr(_news_feeds.time, "sleep", lambda d: sleep_calls.append(d))
+
+    # Frozen monotonic so the math is determ. The function calls monotonic
+    # twice per invocation (once to compute, once to write the tracker); a
+    # single fixed value is enough because the test isn't simulating real
+    # elapsed time, just the "is the budget consumed" check.
+    monkeypatch.setattr(_news_feeds.time, "monotonic", lambda: 1.0)
+
+    # First call: tracker=0.0, now=1.0 → deadline=0.05, 1.0 >= 0.05, no sleep.
+    _news_feeds._sleep_for_finnhub_rate_limit()
+    assert sleep_calls == []
+
+    # Second call: tracker=1.0 (set by the first call), now=1.0 → deadline=1.05,
+    # 1.0 < 1.05 → sleep ~0.05s.
+    _news_feeds._sleep_for_finnhub_rate_limit()
+    assert len(sleep_calls) == 1
+    assert sleep_calls[0] == pytest.approx(0.05, abs=1e-9)
 
 
 # ── _article_to_row + resolver wiring ─────────────────────────────────────────
