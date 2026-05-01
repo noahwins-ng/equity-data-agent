@@ -1,4 +1,4 @@
-"""Tests for the agent CLI entry point (QNT-60, QNT-133).
+"""Tests for the agent CLI entry point (QNT-60, QNT-133, QNT-149).
 
 Mocks ``build_graph`` so the CLI is tested in isolation from the API layer.
 The graph itself is covered by tests/agent/test_graph.py.
@@ -8,6 +8,10 @@ rather than a flat string. The CLI is responsible for re-rendering it to
 markdown for stdout / ``--output``, so the tests stub ``state["thesis"]``
 with real ``Thesis`` instances and assert the rendered markdown surfaces
 in the expected places.
+
+QNT-149 added a second response shape (quick-fact). The CLI renders
+whichever one ``state['intent']`` selects so callers piping to files
+don't have to branch.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from agent import __main__ as cli
+from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 
 
@@ -66,13 +71,40 @@ def test_analyze_success_prints_thesis_and_exits_0(
     stub_graph.invoke.assert_called_once_with({"ticker": "NVDA"})
 
 
+def test_analyze_quick_fact_intent_prints_short_answer(
+    stub_graph: MagicMock, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """QNT-149: when the graph picks intent=quick_fact, the CLI renders the
+    QuickFactAnswer markdown — short answer + Value line — and skips the
+    four-section thesis output entirely."""
+    stub_graph.invoke.return_value = {
+        "intent": "quick_fact",
+        "thesis": None,
+        "quick_fact": QuickFactAnswer(
+            answer="RSI sits at 62 (source: technical).",
+            cited_value="62",
+            source="technical",
+        ),
+        "confidence": 1.0,
+        "errors": {},
+    }
+    assert cli.main(["analyze", "NVDA"]) == 0
+    out = capsys.readouterr()
+    assert "RSI sits at 62" in out.out
+    assert "**Value:** 62 (source: technical)" in out.out
+    # No thesis sections rendered.
+    assert "## Setup" not in out.out
+    assert "## Bull Case" not in out.out
+    assert "intent=quick_fact" in out.err
+
+
 def test_analyze_missing_thesis_exits_1(
     stub_graph: MagicMock, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Short-circuit case: gather produced nothing, no Thesis in state."""
     stub_graph.invoke.return_value = {"confidence": 0.0, "errors": {}}
     assert cli.main(["analyze", "NVDA"]) == 1
-    assert "No thesis produced" in capsys.readouterr().err
+    assert "No answer produced" in capsys.readouterr().err
 
 
 def test_analyze_none_thesis_exits_1(
@@ -82,7 +114,7 @@ def test_analyze_none_thesis_exits_1(
     CLI must treat that the same as the missing-key case."""
     stub_graph.invoke.return_value = {"thesis": None, "confidence": 0.0, "errors": {}}
     assert cli.main(["analyze", "NVDA"]) == 1
-    assert "No thesis produced" in capsys.readouterr().err
+    assert "No answer produced" in capsys.readouterr().err
 
 
 @pytest.mark.usefixtures("stub_graph")

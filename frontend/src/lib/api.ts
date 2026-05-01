@@ -269,10 +269,28 @@ export type ThesisPayload = {
   verdict_action: string;
 };
 
+// QNT-149: classifier picks one of these shapes for each run. The panel
+// uses ``intent`` to swap layout (thesis card vs. compact quick-fact) and
+// the matching payload is delivered on the corresponding event.
+export type Intent = "thesis" | "quick_fact";
+
+export type IntentEvent = {
+  intent: Intent;
+};
+
+export type QuickFactSource = "technical" | "fundamental" | "news";
+
+export type QuickFactPayload = {
+  answer: string;
+  cited_value: string;
+  source: QuickFactSource | null;
+};
+
 export type DoneEvent = {
   tools_count: number;
   citations_count: number;
   confidence: number;
+  intent?: Intent;
 };
 
 export type ChatErrorEvent = {

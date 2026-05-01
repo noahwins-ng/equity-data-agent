@@ -19,6 +19,7 @@ from pathlib import Path
 from shared.tickers import TICKERS
 
 from agent.graph import build_graph
+from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 from agent.tools import default_report_tools
 from agent.tracing import langfuse, observe
@@ -40,6 +41,8 @@ def analyze(ticker: str, output: Path | None = None) -> int:
     final_state = graph.invoke({"ticker": ticker})
 
     thesis_obj = final_state.get("thesis")
+    quick_fact_obj = final_state.get("quick_fact")
+    intent = final_state.get("intent", "thesis")
     confidence = final_state.get("confidence", 0.0)
     errors = final_state.get("errors") or {}
 
@@ -47,26 +50,31 @@ def analyze(ticker: str, output: Path | None = None) -> int:
         for name, err in errors.items():
             print(f"[warn] {name}: {err}", file=sys.stderr)
 
-    # ``thesis`` is a structured ``Thesis`` since QNT-133 — re-render to
-    # markdown for stdout / ``--output`` so the CLI keeps the legacy contract
-    # (a plain markdown file). The structured form remains accessible via the
-    # graph's state for callers that want JSON (API, frontend).
-    thesis_md = thesis_obj.to_markdown().strip() if isinstance(thesis_obj, Thesis) else ""
+    # QNT-149: render whichever shape the synthesize node populated. The
+    # CLI keeps its plain-markdown stdout contract — quick-fact path renders
+    # short, thesis path renders the four sections — so callers piping to
+    # files don't have to branch on intent.
+    if intent == "quick_fact" and isinstance(quick_fact_obj, QuickFactAnswer):
+        rendered = quick_fact_obj.to_markdown().strip()
+    elif isinstance(thesis_obj, Thesis):
+        rendered = thesis_obj.to_markdown().strip()
+    else:
+        rendered = ""
 
-    if not thesis_md:
-        print(f"No thesis produced for {ticker} (no reports gathered).", file=sys.stderr)
+    if not rendered:
+        print(f"No answer produced for {ticker} (no reports gathered).", file=sys.stderr)
         return 1
 
-    print(thesis_md)
-    print(f"\n[confidence={confidence}]", file=sys.stderr)
+    print(rendered)
+    print(f"\n[intent={intent} confidence={confidence}]", file=sys.stderr)
 
     if output is not None:
         try:
-            output.write_text(thesis_md + "\n")
+            output.write_text(rendered + "\n")
         except OSError as exc:
             print(f"[error] cannot write {output}: {exc}", file=sys.stderr)
             return 1
-        print(f"Wrote thesis to {output}", file=sys.stderr)
+        print(f"Wrote answer to {output}", file=sys.stderr)
 
     return 0
 

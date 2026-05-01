@@ -44,6 +44,7 @@ from agent.evals.similarity import cosine
 from agent.evals.tool_calls import check as check_tool_calls
 from agent.evals.tool_calls import wrap_with_recorder
 from agent.graph import build_graph
+from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 from agent.tools import default_report_tools
 
@@ -152,17 +153,20 @@ def _git_sha() -> str:
 
 
 def _prompt_version() -> str:
-    """Stable hash of the system prompt + report-tool registry.
+    """Stable hash of the system prompts + report-tool registry.
 
-    Hashing both keeps a tool-name rename or a system-prompt edit visible in
-    history.csv as a different ``prompt_version`` — so a regression showing
-    "judge 8 → 5 the day prompt_version changed" reads obviously in the diff.
+    Hashing all three (thesis + quick-fact + tools) keeps a tool-name rename
+    or a prompt edit on either path visible in history.csv as a different
+    ``prompt_version`` — so a regression showing "judge 8 → 5 the day
+    prompt_version changed" reads obviously in the diff.
     """
     from hashlib import sha256
 
-    from agent.prompts import REPORT_TOOLS, SYSTEM_PROMPT
+    from agent.prompts import QUICK_FACT_SYSTEM_PROMPT, REPORT_TOOLS, SYSTEM_PROMPT
 
-    payload = SYSTEM_PROMPT + "\n" + ",".join(sorted(REPORT_TOOLS))
+    payload = (
+        SYSTEM_PROMPT + "\n" + QUICK_FACT_SYSTEM_PROMPT + "\n" + ",".join(sorted(REPORT_TOOLS))
+    )
     return sha256(payload.encode("utf-8")).hexdigest()[:10]
 
 
@@ -198,8 +202,21 @@ def run_record(record: GoldenRecord, *, llm_for_judge: Any | None = None) -> Eva
     # scorers (hallucination / judge / cosine) all want a flat string, so
     # render through ``to_markdown`` here rather than push the per-section
     # contract into each scorer.
+    #
+    # QNT-149: a question may classify as ``quick_fact``, in which case the
+    # synthesize node populates ``state["quick_fact"]`` instead. The same
+    # contract applies — render to markdown for the scorers. Existing
+    # goldens are all thesis-shaped open-ended asks, so this code path
+    # exists today only as forward compatibility for new quick-fact
+    # goldens; the legacy thesis branch remains the default.
     thesis_obj = state.get("thesis")
-    thesis = thesis_obj.to_markdown() if isinstance(thesis_obj, Thesis) else ""
+    quick_fact_obj = state.get("quick_fact")
+    if isinstance(thesis_obj, Thesis):
+        thesis = thesis_obj.to_markdown()
+    elif isinstance(quick_fact_obj, QuickFactAnswer):
+        thesis = quick_fact_obj.to_markdown()
+    else:
+        thesis = ""
     reports = dict(state.get("reports") or {})
 
     hresult = check_hallucination(thesis, reports.values())
