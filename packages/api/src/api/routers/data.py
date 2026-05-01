@@ -475,6 +475,14 @@ def get_news(
     # the pill silently updates to the new outlet on the next render. The
     # alternative (pin to first-seen value) would persist a stale host past
     # the article's actual outlet, which is worse for credit accuracy.
+    #
+    # ClickHouse-specific: the aggregated timestamp is aliased
+    # ``latest_published_at`` rather than ``published_at`` to avoid an
+    # ``ILLEGAL_AGGREGATION`` error in the CTE's own WHERE clause —
+    # ClickHouse's name-resolution sees the alias and refuses to filter on
+    # what it then treats as ``WHERE max(published_at) >= ...``. Renaming
+    # the alias keeps the WHERE referring to the column. The outer SELECT
+    # restores the column name for the API contract.
     query = """
         WITH deduped AS (
             SELECT
@@ -485,7 +493,7 @@ def get_news(
                 argMax(image_url, published_at) AS image_url,
                 argMax(url, published_at) AS url,
                 argMax(source, published_at) AS source,
-                max(published_at) AS published_at,
+                max(published_at) AS latest_published_at,
                 argMax(sentiment_label, published_at) AS sentiment_label,
                 argMax(resolved_host, published_at) AS resolved_host
             FROM equity_raw.news_raw FINAL
@@ -501,7 +509,7 @@ def get_news(
             image_url,
             url,
             source,
-            published_at,
+            latest_published_at AS published_at,
             sentiment_label,
             multiIf(
                 resolved_host != '',
@@ -513,7 +521,7 @@ def get_news(
                 ''
             ) AS publisher
         FROM deduped
-        ORDER BY published_at DESC
+        ORDER BY latest_published_at DESC
         LIMIT %(limit)s
     """
     result = get_client().query(
