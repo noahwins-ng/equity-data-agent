@@ -23,7 +23,18 @@ Event contract
                     explicit narrative output from the synthesize node.
 
 ``thesis``        — full :class:`~agent.thesis.Thesis` model dumped to JSON.
-                    Renders the Setup / Bull / Bear / Verdict card.
+                    Renders the Setup / Bull / Bear / Verdict card. Emitted
+                    only when intent == "thesis".
+
+``quick_fact``    — full :class:`~agent.quick_fact.QuickFactAnswer` model
+                    dumped to JSON (QNT-149). Emitted only when
+                    intent == "quick_fact"; the panel renders a compact
+                    answer + cited value chip and skips the thesis card.
+
+``intent``        — ``{intent}`` one-shot event emitted right after the
+                    classify node decides which shape will be produced
+                    (QNT-149). Lets the panel preempt its layout while
+                    tools are still running.
 
 ``done``          — ``{tools_count, citations_count, confidence, errors}``
                     final stats. ``citations_count`` is the number of inline
@@ -51,6 +62,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from agent.graph import OPTIONAL_TOOLS, build_graph
+from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 from agent.tools import default_report_tools
 from fastapi import APIRouter
@@ -141,6 +153,22 @@ def _count_citations(thesis: Thesis | None) -> int:
         return 0
     fields = [thesis.setup, thesis.verdict_action, *thesis.bull_case, *thesis.bear_case]
     return sum(len(_CITATION_PATTERN.findall(text or "")) for text in fields)
+
+
+def _count_quick_fact_citations(quick_fact: QuickFactAnswer | None) -> int:
+    """Citations for the quick-fact path. The structured ``source`` field
+    counts as one citation when populated; we also pick up any inline
+    ``(source: …)`` parens in the prose answer so the count matches what
+    the panel renders.
+    """
+    if quick_fact is None:
+        return 0
+    inline = len(_CITATION_PATTERN.findall(quick_fact.answer or ""))
+    structured = 1 if quick_fact.source and quick_fact.cited_value else 0
+    # Avoid double-counting when the prose already cites the same source —
+    # if there's any inline citation we trust that count over the structured
+    # one (the chip renders from the inline match).
+    return inline if inline else structured
 
 
 # ─── Prose chunking ─────────────────────────────────────────────────────────
@@ -302,9 +330,19 @@ async def _stream(request: ChatRequest) -> AsyncIterator[str]:
 
     state = final_state_holder.get("state") or {}
     thesis = state.get("thesis") if isinstance(state, dict) else None
+    quick_fact = state.get("quick_fact") if isinstance(state, dict) else None
+    intent = state.get("intent", "thesis") if isinstance(state, dict) else "thesis"
     confidence = float(state.get("confidence", 0.0)) if isinstance(state, dict) else 0.0
     errors = state.get("errors") or {} if isinstance(state, dict) else {}
     reports = state.get("reports") or {} if isinstance(state, dict) else {}
+
+    # Tell the panel which shape is coming so it can pre-empt layout (hide
+    # the thesis card slot for quick-fact intents). Emitted whenever the
+    # graph produced an ``intent`` field, regardless of whether synthesize
+    # ultimately returned a payload — the panel uses it as a lightweight
+    # routing signal, not the data itself.
+    if isinstance(state, dict) and "intent" in state:
+        yield _sse("intent", {"intent": intent})
 
     # Surface required-tool failures the graph recorded so the panel can
     # indicate gaps (optional tools like ``news`` are silently dropped per
@@ -317,10 +355,29 @@ async def _stream(request: ChatRequest) -> AsyncIterator[str]:
             {"detail": f"{_tool_label(name)} failed: {detail}", "code": "tool-failed"},
         )
 
-    # Stream prose. The structured-output runnable returns the entire setup
-    # paragraph at once, so we re-chunk it client-side. A future revision
-    # could thread an LLM token stream into this slot.
-    if isinstance(thesis, Thesis):
+    # QNT-149: branch on intent. Quick-fact emits a single ``quick_fact``
+    # event with the structured answer + cited value; thesis emits the
+    # existing prose_chunk + thesis pair.
+    if intent == "quick_fact":
+        if isinstance(quick_fact, QuickFactAnswer):
+            for chunk in _split_prose(quick_fact.answer):
+                yield _sse("prose_chunk", {"delta": chunk + " "})
+                await asyncio.sleep(0)
+            yield _sse("quick_fact", quick_fact.model_dump())
+        elif reports:
+            yield _sse(
+                "error",
+                {
+                    "detail": (
+                        "Quick-fact answer unavailable — model returned no structured output."
+                    ),
+                    "code": "quick-fact-empty",
+                },
+            )
+    elif isinstance(thesis, Thesis):
+        # Stream prose. The structured-output runnable returns the entire
+        # setup paragraph at once, so we re-chunk it client-side. A future
+        # revision could thread an LLM token stream into this slot.
         for chunk in _split_prose(thesis.setup):
             yield _sse("prose_chunk", {"delta": chunk + " "})
             await asyncio.sleep(0)  # cooperative yield so the body flushes
@@ -337,15 +394,23 @@ async def _stream(request: ChatRequest) -> AsyncIterator[str]:
                 "code": "thesis-empty",
             },
         )
-    # No reports + no thesis: the graph short-circuited (every required tool
-    # failed). The error events above already surface the cause.
+    # No reports + no payload: the graph short-circuited (every required
+    # tool failed). The error events above already surface the cause.
+
+    if intent == "quick_fact":
+        citations_count = _count_quick_fact_citations(
+            quick_fact if isinstance(quick_fact, QuickFactAnswer) else None
+        )
+    else:
+        citations_count = _count_citations(thesis if isinstance(thesis, Thesis) else None)
 
     yield _sse(
         "done",
         {
             "tools_count": len(reports),
-            "citations_count": _count_citations(thesis if isinstance(thesis, Thesis) else None),
+            "citations_count": citations_count,
             "confidence": confidence,
+            "intent": intent,
         },
     )
 

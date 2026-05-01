@@ -26,6 +26,7 @@ from agent.evals.golden_set import (
     run_record,
     summarise,
 )
+from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 
 
@@ -147,6 +148,60 @@ class TestRunRecord:
         assert not outcome.hallucination_ok
         assert not outcome.tool_call_ok
         assert "graph error" in outcome.hallucination_reason
+
+    def test_quick_fact_state_is_rendered_for_scorers(
+        self,
+        stub_graph: Callable[[dict[str, Any]], None],
+        stub_judge: MagicMock,  # noqa: ARG002
+    ) -> None:
+        """QNT-149: when synthesize populates ``quick_fact`` instead of
+        ``thesis``, the eval harness must render that to markdown so the
+        hallucination + judge + cosine scorers still see real text. AC:
+        QNT-67 hallucination + QNT-128 golden-set evals pass on the new
+        paths."""
+        stub_graph(
+            {
+                "thesis": None,
+                "quick_fact": QuickFactAnswer(
+                    answer="RSI is 72.5 (source: technical).",
+                    cited_value="72.5",
+                    source="technical",
+                ),
+                "reports": {"technical": "RSI is 72.5 today"},
+                "errors": {},
+            }
+        )
+        outcome = run_record(_record())
+        # Hallucination check sees the cited value via to_markdown.
+        assert outcome.hallucination_ok, outcome.hallucination_reason
+        # Cosine measured the rendered text, not the empty string.
+        assert outcome.cosine > 0
+        # Tool-call check still runs against the recorder, independent of
+        # output shape.
+        assert "technical" in outcome.actual_tools
+
+    def test_quick_fact_with_unsupported_number_fails_hallucination(
+        self,
+        stub_graph: Callable[[dict[str, Any]], None],
+        stub_judge: MagicMock,  # noqa: ARG002
+    ) -> None:
+        """A quick-fact answer that quotes a value not in the reports must
+        fail the hallucination scorer the same way a thesis would."""
+        stub_graph(
+            {
+                "thesis": None,
+                "quick_fact": QuickFactAnswer(
+                    answer="RSI is 999 (source: technical).",
+                    cited_value="999",
+                    source="technical",
+                ),
+                "reports": {"technical": "RSI is 72.5"},
+                "errors": {},
+            }
+        )
+        outcome = run_record(_record())
+        assert not outcome.hallucination_ok
+        assert "999" in outcome.hallucination_reason
 
 
 class TestAppendHistory:

@@ -1,9 +1,13 @@
-"""Tests for the agent chat SSE endpoint (QNT-74).
+"""Tests for the agent chat SSE endpoint (QNT-74, QNT-149).
 
 The endpoint streams Server-Sent Events while a LangGraph run executes. Tests
 patch ``build_graph`` + ``default_report_tools`` so the agent never calls the
 real LiteLLM proxy or hits ClickHouse — the contract under test is the SSE
 event sequence + payload shape, not the agent's reasoning.
+
+QNT-149: the endpoint additionally emits ``intent`` and ``quick_fact``
+events when the classify node picks the quick-fact response shape. Tests
+below cover both routes.
 
 Each TestClient call buffers the full streaming body, so we re-parse the
 ``event: …\\ndata: …`` frames to assert the canonical sequence.
@@ -17,6 +21,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 from api import main as main_module
 from api.routers import agent_chat as chat_module
@@ -79,10 +84,12 @@ def stub_graph(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
                 reports[name] = fn(ticker)
             return {
                 "ticker": ticker,
+                "intent": "thesis",
                 "plan": list(tools.keys()),
                 "reports": reports,
                 "errors": {},
                 "thesis": thesis,
+                "quick_fact": None,
                 "confidence": 0.67,
             }
 
@@ -184,10 +191,12 @@ def test_prose_chunks_split_setup_into_clauses(
         graph = MagicMock()
         graph.invoke.return_value = {
             "ticker": "NVDA",
+            "intent": "thesis",
             "plan": [],
             "reports": {"technical": "stub"},  # non-empty so prose path runs
             "errors": {},
             "thesis": thesis,
+            "quick_fact": None,
             "confidence": 0.5,
         }
         return graph
@@ -248,10 +257,12 @@ def test_no_thesis_when_reports_empty_emits_done_with_zero(
         graph = MagicMock()
         graph.invoke.return_value = {
             "ticker": "NVDA",
+            "intent": "thesis",
             "plan": [],
             "reports": {},
             "errors": {"technical": "tool-not-registered"},
             "thesis": None,
+            "quick_fact": None,
             "confidence": 0.0,
         }
         return graph
@@ -303,10 +314,12 @@ def test_optional_tool_failure_does_not_emit_error_event(
         graph = MagicMock()
         graph.invoke.return_value = {
             "ticker": "NVDA",
+            "intent": "thesis",
             "plan": ["technical", "news"],
             "reports": {"technical": "stub"},
             "errors": {"news": "qdrant-down"},  # optional — should be filtered
             "thesis": thesis,
+            "quick_fact": None,
             "confidence": 0.5,
         }
         return graph
@@ -334,10 +347,12 @@ def test_tools_disabled_skips_tool_calls(
         graph = MagicMock()
         graph.invoke.return_value = {
             "ticker": "NVDA",
+            "intent": "thesis",
             "plan": [],
             "reports": {"technical": "stub"},
             "errors": {},
             "thesis": thesis,
+            "quick_fact": None,
             "confidence": 0.5,
         }
         return graph
@@ -368,6 +383,116 @@ def test_summary_uses_error_string_when_tool_returns_error_marker() -> None:
         "[error] timeout: connection refused at http://api/api/v1/reports/technical/NVDA",
     )
     assert summary.startswith("[error]")
+
+
+def test_quick_fact_intent_emits_quick_fact_event_not_thesis(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QNT-149: when the graph returns intent=quick_fact, the SSE stream
+    emits an ``intent`` preamble and a ``quick_fact`` event; the thesis
+    card is intentionally absent. AC: chat panel renders both shapes;
+    thesis card hidden when absent."""
+    quick_fact = QuickFactAnswer(
+        answer="RSI sits at 62 (source: technical).",
+        cited_value="62",
+        source="technical",
+    )
+
+    def _fake_build(tools: dict[str, Any]) -> Any:
+        graph = MagicMock()
+        graph.invoke.return_value = {
+            "ticker": "NVDA",
+            "intent": "quick_fact",
+            "plan": ["technical"],
+            "reports": {"technical": "## technical NVDA\nRSI: 62"},
+            "errors": {},
+            "thesis": None,
+            "quick_fact": quick_fact,
+            "confidence": 1.0,
+        }
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "What's the RSI?"})
+    frames = _parse_sse(r.text)
+    events = [name for name, _ in frames]
+
+    # intent preamble fires before any payload
+    assert "intent" in events
+    intent_data = next(data for name, data in frames if name == "intent")
+    assert intent_data["intent"] == "quick_fact"
+
+    # The quick-fact payload arrives, the thesis card does NOT
+    assert "quick_fact" in events
+    assert "thesis" not in events
+    qf_data = next(data for name, data in frames if name == "quick_fact")
+    assert qf_data == quick_fact.model_dump()
+
+    # Done payload carries intent + a non-zero citations count from the
+    # inline (source: technical) cite in the answer prose.
+    done_data = frames[-1][1]
+    assert events[-1] == "done"
+    assert done_data["intent"] == "quick_fact"
+    assert done_data["citations_count"] >= 1
+    assert done_data["confidence"] == 1.0
+
+
+def test_quick_fact_failure_emits_quick_fact_empty_error(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the synthesize node returned no quick_fact (provider misbehaved),
+    the SSE stream surfaces ``code=quick-fact-empty`` so the panel doesn't
+    render half-state."""
+
+    def _fake_build(tools: dict[str, Any]) -> Any:
+        graph = MagicMock()
+        graph.invoke.return_value = {
+            "ticker": "NVDA",
+            "intent": "quick_fact",
+            "plan": ["technical"],
+            "reports": {"technical": "stub"},
+            "errors": {},
+            "thesis": None,
+            "quick_fact": None,
+            "confidence": 1.0,
+        }
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "What's the RSI?"})
+    frames = _parse_sse(r.text)
+    err = next(data for name, data in frames if name == "error")
+    assert err["code"] == "quick-fact-empty"
+
+
+def test_quick_fact_citations_count_matches_helper() -> None:
+    """``_count_quick_fact_citations`` honours inline (source: …) parens
+    over the structured ``source`` field — same chip vocabulary the panel
+    renders for the thesis path."""
+    qf_inline = QuickFactAnswer(
+        answer="RSI is 62 (source: technical).",
+        cited_value="62",
+        source="technical",
+    )
+    assert chat_module._count_quick_fact_citations(qf_inline) == 1
+
+    qf_structured_only = QuickFactAnswer(
+        answer="RSI is 62.",  # no inline cite
+        cited_value="62",
+        source="technical",
+    )
+    assert chat_module._count_quick_fact_citations(qf_structured_only) == 1
+
+    qf_unsupported = QuickFactAnswer(
+        answer="RSI not available in the supplied reports.",
+        cited_value="",
+        source=None,
+    )
+    assert chat_module._count_quick_fact_citations(qf_unsupported) == 0
 
 
 def test_count_citations_matches_source_pattern() -> None:

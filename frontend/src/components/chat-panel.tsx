@@ -31,7 +31,10 @@ import {
   type ChatErrorEvent,
   type DoneEvent,
   type HealthResponse,
+  type Intent,
+  type IntentEvent,
   type ProseChunkEvent,
+  type QuickFactPayload,
   type ThesisPayload,
   type ToolCallEvent,
   type ToolResultEvent,
@@ -57,9 +60,11 @@ type ChatRun = {
   prompt: string;
   startedAt: number;
   status: RunStatus;
+  intent: Intent | null;
   toolRows: ToolRow[];
   proseChunks: string[];
   thesis: ThesisPayload | null;
+  quickFact: QuickFactPayload | null;
   errors: ChatErrorEvent[];
   stats: DoneEvent | null;
 };
@@ -368,11 +373,65 @@ function ThesisCard({
   );
 }
 
+// ─── Quick-fact compact card (QNT-149) ────────────────────────────────────
+//
+// The quick-fact path returns a short prose answer plus exactly one cited
+// value. We render the answer the same way as thesis prose (so inline
+// (source: …) chips work), and surface the structured cited value as a
+// monospaced chip below the answer when present. The thesis card is
+// intentionally absent for this run shape.
+
+function QuickFactCard({
+  ticker,
+  quickFact,
+  stats,
+}: {
+  ticker: string | null;
+  quickFact: QuickFactPayload;
+  stats: DoneEvent | null;
+}) {
+  return (
+    <section className="rounded border border-zinc-800 bg-zinc-900/40">
+      <header className="flex items-baseline justify-between gap-2 border-b border-zinc-800 px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider text-zinc-400">
+        <span>Quick fact · {ticker ?? "session"}</span>
+        {stats && (
+          <span className="text-zinc-500">
+            {stats.tools_count} sources · {stats.citations_count} cited
+          </span>
+        )}
+      </header>
+
+      <div className="space-y-2 p-3">
+        <ProseBlock text={quickFact.answer} />
+        {quickFact.cited_value && quickFact.source && (
+          <div className="flex items-baseline gap-2">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+              Value
+            </span>
+            <span className="rounded border border-zinc-700 bg-zinc-950 px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-zinc-100">
+              {quickFact.cited_value}
+            </span>
+            <span className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-zinc-400">
+              {quickFact.source}
+            </span>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 // ─── Run renderer (one user prompt → one streamed answer) ────────────────
 
 function RunBlock({ run }: { run: ChatRun }) {
   const proseText = run.proseChunks.join("");
   const isStreaming = run.status === "streaming";
+  // Hide free-form prose when the run produced a quick-fact card or a
+  // thesis card — both already render the answer's prose with chips. Only
+  // show standalone prose when the run is mid-stream and no card is
+  // present yet. ADR-014 §4: thesis card renders only when a thesis
+  // arrived; quick-fact does the same.
+  const showStandaloneProse = !run.thesis && !run.quickFact && proseText;
 
   return (
     <article className="space-y-2 border-b border-zinc-800 px-3 py-3">
@@ -405,10 +464,15 @@ function RunBlock({ run }: { run: ChatRun }) {
         </div>
       ))}
 
-      {/* Streamed prose */}
-      {proseText && <ProseBlock text={proseText} />}
+      {/* Streamed prose (only when no card has arrived yet) */}
+      {showStandaloneProse && <ProseBlock text={proseText} />}
 
-      {/* Structured thesis */}
+      {/* Quick-fact card (QNT-149) — replaces thesis when intent=quick_fact */}
+      {run.quickFact && (
+        <QuickFactCard ticker={run.ticker} quickFact={run.quickFact} stats={run.stats} />
+      )}
+
+      {/* Structured thesis (only when intent=thesis) */}
       {run.thesis && (
         <ThesisCard ticker={run.ticker} thesis={run.thesis} stats={run.stats} />
       )}
@@ -416,7 +480,9 @@ function RunBlock({ run }: { run: ChatRun }) {
       {/* Status footer */}
       <div className="flex items-baseline justify-end gap-2 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
         {isStreaming ? (
-          <span className="text-emerald-400">streaming…</span>
+          <span className="text-emerald-400">
+            streaming{run.intent === "quick_fact" ? " quick fact…" : "…"}
+          </span>
         ) : run.status === "errored" ? (
           <span className="text-red-400">errored</span>
         ) : run.stats ? (
@@ -523,9 +589,11 @@ export function ChatPanel() {
           prompt,
           startedAt: Date.now(),
           status: "errored",
+          intent: null,
           toolRows: [],
           proseChunks: [],
           thesis: null,
+          quickFact: null,
           errors: [
             {
               detail: "Pick a ticker from the watchlist before asking the analyst.",
@@ -545,9 +613,11 @@ export function ChatPanel() {
         prompt,
         startedAt: Date.now(),
         status: "streaming",
+        intent: null,
         toolRows: [],
         proseChunks: [],
         thesis: null,
+        quickFact: null,
         errors: [],
         stats: null,
       };
@@ -588,15 +658,22 @@ export function ChatPanel() {
               ...r,
               proseChunks: [...r.proseChunks, ev.delta],
             }));
+          } else if (event === "intent") {
+            const ev = data as IntentEvent;
+            updateRun(id, (r) => ({ ...r, intent: ev.intent }));
           } else if (event === "thesis") {
             const ev = data as ThesisPayload;
             updateRun(id, (r) => ({ ...r, thesis: ev }));
+          } else if (event === "quick_fact") {
+            const ev = data as QuickFactPayload;
+            updateRun(id, (r) => ({ ...r, quickFact: ev }));
           } else if (event === "done") {
             const ev = data as DoneEvent;
             updateRun(id, (r) => ({
               ...r,
               stats: ev,
-              status: r.errors.length > 0 && !r.thesis ? "errored" : "done",
+              status:
+                r.errors.length > 0 && !r.thesis && !r.quickFact ? "errored" : "done",
             }));
           } else if (event === "error") {
             const ev = data as ChatErrorEvent;

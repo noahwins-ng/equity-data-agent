@@ -215,3 +215,23 @@ questions:
       (regulatory, litigation, M&A) without manufacturing a narrative, and
       tags (source: news). If no news report is available it says so and
       lowers the confidence line accordingly.
+
+  # QNT-149: quick-fact golden. Single-metric question that the classifier
+  # heuristic routes to the quick_fact response shape (no thesis card, just
+  # a short answer + cited value). The reference text mirrors the shape
+  # ``QuickFactAnswer.to_markdown()`` produces so the cosine + judge
+  # scorers compare like-against-like.
+  - id: nvda-quickfact-rsi
+    ticker: NVDA
+    question: "What's NVDA's RSI right now?"
+    expected_tools:
+      - technical
+    reference_thesis: |
+      A useful answer states NVDA's current RSI value verbatim from the
+      technical report and labels the bucket (overbought, neutral,
+      oversold) with the canonical thresholds the report cites. Cites
+      (source: technical) inline. No thesis sections, no padding with
+      fundamental or news context — the question is a single-metric
+      lookup.
+
+      **Value:** <RSI value> (source: technical)
