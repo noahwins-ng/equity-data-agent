@@ -18,6 +18,7 @@ from dagster_pipelines.assets.news_raw import _article_to_row, _url_hash
 from dagster_pipelines.news_feeds import (
     FinnhubAPIKeyMissing,
     fetch_company_news,
+    resolve_publisher_host,
 )
 
 # ── _article_to_row ───────────────────────────────────────────────────────────
@@ -40,8 +41,22 @@ def _finnhub_article(**overrides: Any) -> dict[str, Any]:
     return base
 
 
+def _stub_resolver_client(handler: Any) -> httpx.Client:
+    """An ``httpx.Client`` whose transport is the supplied handler.
+
+    Tests use this to drive ``resolve_publisher_host`` deterministically —
+    no real network in the unit-test path. Mirrors the
+    ``fetch_company_news`` stubbing pattern below.
+    """
+    return httpx.Client(
+        transport=httpx.MockTransport(handler),
+        follow_redirects=True,
+    )
+
+
 def test_article_to_row_maps_all_columns() -> None:
     article = _finnhub_article()
+    # Direct outlet URL — resolver short-circuits to host(url), no transport call.
     row = _article_to_row(article, ticker="NVDA")
     assert row is not None
     assert row["id"] == _url_hash(article["url"])
@@ -54,6 +69,8 @@ def test_article_to_row_maps_all_columns() -> None:
     assert row["publisher_name"] == article["source"]
     assert row["image_url"] == article["image"]
     assert row["sentiment_label"] == "pending"
+    # example.com is already a direct outlet — short-circuits to the host.
+    assert row["resolved_host"] == "example.com"
     # Epoch -> naive UTC datetime, matching ClickHouse DateTime semantics.
     expected_published = datetime.fromtimestamp(article["datetime"], tz=UTC).replace(tzinfo=None)
     assert row["published_at"] == expected_published
@@ -195,6 +212,165 @@ def test_fetch_company_news_raises_on_4xx() -> None:
                 to_date=date(2024, 1, 1),
                 client=client,
             )
+
+
+# ── resolve_publisher_host ────────────────────────────────────────────────────
+
+
+def test_resolve_publisher_host_short_circuits_for_direct_outlets() -> None:
+    """Non-finnhub hosts skip the network entirely.
+
+    AC #2 in QNT-148: "Skips resolution for URLs already on a non-finnhub.io host."
+    Verified by handing in a transport that *errors* on every call — if the
+    resolver tried to call it, the test would explode.
+    """
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("transport must not be called for direct outlets")
+
+    with _stub_resolver_client(handler) as client:
+        assert resolve_publisher_host("https://www.fool.com/article", client=client) == "fool.com"
+        assert (
+            resolve_publisher_host("https://finance.yahoo.com/x", client=client)
+            == "finance.yahoo.com"
+        )
+        assert resolve_publisher_host("https://cnbc.com/x", client=client) == "cnbc.com"
+
+
+def test_resolve_publisher_host_follows_finnhub_redirect_to_outlet() -> None:
+    """Standard Finnhub redirect path: HEAD on finnhub.io → 302 → outlet."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "finnhub.io":
+            return httpx.Response(302, headers={"location": "https://www.cnbc.com/article"})
+        if request.url.host == "www.cnbc.com":
+            return httpx.Response(200)
+        raise AssertionError(f"unexpected host {request.url.host}")
+
+    with _stub_resolver_client(handler) as client:
+        result = resolve_publisher_host("https://finnhub.io/api/news?id=12345", client=client)
+    # `www.` stripped — frontend used to do this, now centralised at the API
+    # boundary so the canonical publisher field is render-ready.
+    assert result == "cnbc.com"
+
+
+def test_resolve_publisher_host_soft_fails_on_timeout() -> None:
+    """Per AC #2: timeouts soft-fail to '' so the asset doesn't crash on
+    flaky outlet servers — the frontend pill falls back via the API's
+    ``multiIf`` chain (resolved_host → host(url) → publisher_name)."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("simulated outlet timeout")
+
+    with _stub_resolver_client(handler) as client:
+        assert resolve_publisher_host("https://finnhub.io/api/news?id=1", client=client) == ""
+
+
+def test_resolve_publisher_host_soft_fails_on_4xx() -> None:
+    """Outlet returning a 404 / 410 also soft-fails — we'd rather store ''
+    and let the publisher_name fallback render than persist a misleading host."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    with _stub_resolver_client(handler) as client:
+        assert resolve_publisher_host("https://finnhub.io/api/news?id=2", client=client) == ""
+
+
+def test_resolve_publisher_host_handles_405_with_get_fallback() -> None:
+    """Some outlet servers (cloudflare-fronted) reject HEAD with 405 but
+    accept GET. The resolver retries with a streamed GET in that case.
+
+    Real-world topology: Finnhub serves a clean 302; the *outlet* is what
+    rejects HEAD. We model that here so a future regression that special-
+    cases "405 only on the redirect host" surfaces against this test.
+    """
+
+    call_count = {"head": 0, "get": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "HEAD":
+            call_count["head"] += 1
+            if request.url.host == "finnhub.io":
+                # Finnhub itself answers HEAD with a clean redirect.
+                return httpx.Response(302, headers={"location": "https://seekingalpha.com/article"})
+            # Outlet (cloudflare-fronted) rejects HEAD entirely.
+            return httpx.Response(405)
+        call_count["get"] += 1
+        # GET fallback: Finnhub redirects, outlet returns 200 with body.
+        if request.url.host == "finnhub.io":
+            return httpx.Response(302, headers={"location": "https://seekingalpha.com/article"})
+        return httpx.Response(200)
+
+    with _stub_resolver_client(handler) as client:
+        assert (
+            resolve_publisher_host("https://finnhub.io/api/news?id=3", client=client)
+            == "seekingalpha.com"
+        )
+    # HEAD ran at least once; GET fallback engaged because the outlet 405'd.
+    assert call_count["head"] >= 1
+    assert call_count["get"] >= 1
+
+
+def test_resolve_publisher_host_returns_empty_when_final_url_stays_on_finnhub() -> None:
+    """If headers come back with a 200 and the final URL is still finnhub.io
+    (no redirect happened — Finnhub returned a 200 directly, or the chain
+    looped back), we treat as unresolved. The API fallback chain renders
+    ``publisher_name`` instead of crediting "finnhub.io" as the outlet."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # 200 with no redirect — final URL stays on finnhub.io.
+        if request.url.host == "finnhub.io":
+            return httpx.Response(200)
+        raise AssertionError("should not have left finnhub.io")
+
+    with _stub_resolver_client(handler) as client:
+        assert resolve_publisher_host("https://finnhub.io/api/news?id=4", client=client) == ""
+
+
+def test_resolve_publisher_host_soft_fails_on_redirect_loop() -> None:
+    """Httpx raises TooManyRedirects when ``max_redirects`` is exceeded.
+    The resolver must catch it (it's a subclass of ``httpx.HTTPError``)
+    and return '' rather than letting the partition run crash on a
+    malformed redirect chain."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        # Always redirect back to ourselves — httpx will hit max_redirects
+        # and raise TooManyRedirects before the resolver sees a status.
+        return httpx.Response(302, headers={"location": "https://finnhub.io/api/news?id=loop"})
+
+    with _stub_resolver_client(handler) as client:
+        assert resolve_publisher_host("https://finnhub.io/api/news?id=loop", client=client) == ""
+
+
+def test_resolve_publisher_host_handles_malformed_url() -> None:
+    """Garbage URLs return '' rather than blowing up the partition run."""
+    assert resolve_publisher_host("") == ""
+    assert resolve_publisher_host("not-a-url") == ""
+
+
+# ── _article_to_row + resolver wiring ─────────────────────────────────────────
+
+
+def test_article_to_row_populates_resolved_host_for_finnhub_redirect() -> None:
+    """The asset hands its pooled httpx.Client to ``_article_to_row`` so
+    every article in the partition shares one connection pool. AC #2:
+    finnhub.io URLs get resolved; non-finnhub URLs short-circuit."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "finnhub.io":
+            return httpx.Response(302, headers={"location": "https://www.benzinga.com/article"})
+        return httpx.Response(200)
+
+    with _stub_resolver_client(handler) as client:
+        row = _article_to_row(
+            _finnhub_article(url="https://finnhub.io/api/news?id=999"),
+            ticker="MSFT",
+            resolver_client=client,
+        )
+
+    assert row is not None
+    assert row["resolved_host"] == "benzinga.com"
 
 
 # Hide the test-key env var from any subsequent integration-style imports.

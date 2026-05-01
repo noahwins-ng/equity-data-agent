@@ -600,10 +600,11 @@ _NEWS_COLS = (
     "source",
     "published_at",
     "sentiment_label",
-    # Derived in SQL via `domain(url)` — primary publisher signal for the
-    # frontend pill, used to disambiguate Finnhub redirect URLs from real
-    # outlet URLs.
-    "host",
+    # Per QNT-148 / ADR-016: a single canonical pill label, computed
+    # server-side via the multiIf chain (resolved_host → URL host →
+    # publisher_name → ''). The frontend reads `item.publisher` with no
+    # further fallback. Replaces the prior `host` column.
+    "publisher",
 )
 
 
@@ -659,14 +660,23 @@ def test_news_returns_iso_timestamp_and_window_filter(
         "source": "finnhub",
         "published_at": "2026-04-28T14:30:00",
         "sentiment_label": "pending",
-        "host": "reuters.com",
+        "publisher": "reuters.com",
     }
     # Empty image_url survives — the frontend treats "" as missing.
     assert body[1]["image_url"] == ""
     assert fake.last_query is not None
     assert "equity_raw.news_raw" in fake.last_query
     assert "FINAL" in fake.last_query
+    # Dedup is by article id within ticker (ADR-016 §3) — the SQL collapses
+    # same-id rows that drift on `published_at` and orders by the
+    # post-aggregation timestamp. Both shapes must show up in the rendered
+    # query so the contract isn't accidentally regressed.
+    assert "GROUP BY id" in fake.last_query
     assert "ORDER BY published_at DESC" in fake.last_query
+    # The canonical publisher must come out of the resolved_host →
+    # domain(url) → publisher_name fallback chain, not a single column.
+    assert "resolved_host" in fake.last_query
+    assert "publisher_name" in fake.last_query
     assert fake.last_parameters is not None
     assert fake.last_parameters["ticker"] == "NVDA"
     assert fake.last_parameters["days"] == 7  # default window matches the card header
@@ -719,6 +729,44 @@ def test_news_clamps_invalid_query_params(
     # limit > max should also fail validation.
     r2 = client.get("/api/v1/news/NVDA", params={"limit": 1000})
     assert r2.status_code == 422
+
+
+def test_news_query_dedups_by_article_id_with_argmax(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR-016 §3: same-ticker repeat rows (timestamp drift) collapse to one
+    card row per article. The dedup signal is the URL hash (`id`); each
+    payload field is `argMax(field, published_at)` so a re-fetch with a
+    corrected headline / publisher_name actually wins over the original.
+
+    Mocked at the SQL level — the assertion is on the rendered query
+    shape, not the data round-trip — because the live behaviour depends
+    on ClickHouse `argMax` semantics that the FakeClient can't simulate.
+    """
+    fake = _FakeClient(_FakeResult(_NEWS_COLS, []))
+    _install_fake(monkeypatch, fake)
+
+    r = client.get("/api/v1/news/NVDA")
+    assert r.status_code == 200
+
+    assert fake.last_query is not None
+    q = fake.last_query
+    # Dedup contract: GROUP BY id, argMax over the payload columns.
+    assert "GROUP BY id" in q
+    for col in (
+        "headline",
+        "body",
+        "publisher_name",
+        "image_url",
+        "url",
+        "source",
+        "sentiment_label",
+        "resolved_host",
+    ):
+        # Each payload column must come from argMax keyed on published_at.
+        assert f"argMax({col}, published_at)" in q, f"missing argMax for {col}"
+    # The published_at column itself uses max() — no argMax for the key.
+    assert "max(published_at)" in q
 
 
 _QUOTE_OHLCV_COLS = (
