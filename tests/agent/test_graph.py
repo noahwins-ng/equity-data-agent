@@ -82,11 +82,23 @@ class _StructuredLLM:
 
 @pytest.fixture
 def stub_llm(monkeypatch: pytest.MonkeyPatch) -> _StructuredLLM:
-    """Replace ``agent.graph.get_llm`` with a stub that supports both the
-    plan call (raw ``invoke``) and the synthesize call
-    (``with_structured_output(Thesis).invoke``)."""
+    """Replace ``agent.graph.get_llm`` and ``agent.intent.get_llm`` with a
+    stub that supports both the plan call (raw ``invoke``) and the synthesize
+    call (``with_structured_output(Thesis).invoke``).
+
+    QNT-156: ``intent.get_llm`` MUST be patched too — when the classifier
+    heuristic returns None, ``classify_intent`` calls its own ``get_llm``
+    instance, which would otherwise try the real LiteLLM proxy. CI has no
+    proxy, so an unpatched call surfaces as a connection-error → bias-to-
+    thesis fallback that masquerades as a different bug. Local dev runs
+    with LiteLLM up and would silently pass.
+    """
+    from agent import intent as intent_module
+
     llm = _StructuredLLM()
-    monkeypatch.setattr(graph_module, "get_llm", MagicMock(return_value=llm))
+    factory = MagicMock(return_value=llm)
+    monkeypatch.setattr(graph_module, "get_llm", factory)
+    monkeypatch.setattr(intent_module, "get_llm", factory)
     monkeypatch.setattr(
         graph_module.langfuse,
         "traced_invoke",
@@ -652,7 +664,12 @@ def test_conversational_failure_falls_back_to_deterministic_redirect(
     stub_llm.structured_invoke.side_effect = RuntimeError("schema-validation")
     graph = build_graph({"technical": _mock_tool("tech")})
 
-    result = graph.invoke({"ticker": "NVDA", "question": "Hi there!"})
+    # "what can you do?" is heuristic-classified as conversational without
+    # an LLM call (multi-word phrase in _CONVERSATIONAL_TOKENS) — the test
+    # would otherwise depend on whether the local LiteLLM proxy is reachable
+    # because intent.classify_intent has its own get_llm code path. CI has
+    # no proxy, so a heuristic-only question keeps the test deterministic.
+    result = graph.invoke({"ticker": "NVDA", "question": "what can you do?"})
 
     assert result["intent"] == "conversational"
     assert isinstance(result["conversational"], ConversationalAnswer)
