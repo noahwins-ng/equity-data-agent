@@ -735,16 +735,23 @@ function ChartCanvas({
     chart.panes()[0].setStretchFactor(mainStretch);
   }, [indicators, overlays, spyLine]);
 
-  // Fixed height — toggling RSI / ATR / OBV no longer pushes the cards row
-  // below. The adaptive stretch factor (see indicator effect) keeps each
-  // sub-pane ~80px regardless of how many are toggled.
-  const heightPx = 400;
+  // Container height is responsive (QNT-152): 300px on narrow viewports
+  // (14" MacBook ~1280-1512px), 400px at 2xl breakpoint (≥1536px) and
+  // above. The 2xl cut-over cleanly separates external monitor (full
+  // chart) from MacBook (compressed) so the cards row below isn't
+  // pushed off-screen on a 14" laptop. The chart instance uses
+  // autoSize=true (line 511) and the existing ResizeObserver pattern,
+  // so no JS-side height re-config is needed when the container
+  // resizes — the library follows the container.
+  //
+  // The adaptive sub-pane stretch factor (see indicator effect above)
+  // keeps each sub-pane proportional regardless of total height, so the
+  // 300/400 ratio doesn't break the RSI/MACD/ATR/OBV indicator panes.
 
   return (
     <div
       ref={containerRef}
-      className="w-full"
-      style={{ height: `${heightPx}px` }}
+      className="h-[300px] w-full 2xl:h-[400px]"
       data-testid="price-chart-canvas"
     />
   );
