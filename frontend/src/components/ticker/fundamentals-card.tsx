@@ -138,7 +138,7 @@ export function FundamentalsCard({ ticker }: { ticker: string }) {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 px-4 py-1">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-1">
       {error ? (
         <p className="text-sm text-red-400" data-testid="fundamentals-error">
           Fundamentals unavailable. <span className="text-zinc-500">{error}</span>
