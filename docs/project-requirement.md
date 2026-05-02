@@ -182,7 +182,7 @@ When the agent needs to assess NVDA:
 | **LiteLLM Proxy** | LLM routing | Switch between Groq (default) and Gemini 2.5 Flash (override) without code changes. See ADR-011 + QNT-123 (Pro → Flash swap after Pro fell off the free tier). **Pin version in pyproject.toml** (supply chain incident March 2026 — do not float) |
 | **Groq** | Managed inference (default) | `https://api.groq.com/openai/v1` (OpenAI-compatible), llama-3.3-70b-versatile at ~500 tok/s. Free tier (30 RPM / 6K TPM / up to 14.4K RPD) covers Phase 5 dev + portfolio demos. No local model container on Hetzner. |
 | **Langfuse** | Observability | Trace agent thoughts, tool calls, and latency |
-| **Next.js 15** | Frontend | App Router, SSR/SSG, React 19, Turbopack stable, Vercel-native deployment |
+| **Next.js 16** | Frontend | App Router, SSR/SSG, React 19, Turbopack stable, Vercel-native deployment |
 | **TradingView Lightweight Charts v5** | Financial charting | Free (Apache 2.0), candlestick, volume, indicator overlays, native multi-pane support |
 | **Tailwind CSS** | Styling | Utility-first, fast iteration, consistent design |
 | **Vercel** | Frontend hosting | Zero-config Next.js deployment, global CDN, preview deploys |
@@ -195,7 +195,7 @@ When the agent needs to assess NVDA:
 | Service | Max Memory | Notes |
 |---|---|---|
 | ClickHouse | 4 GB | `max_memory_usage` setting |
-| Dagster + FastAPI + Caddy + LiteLLM + OS | 12 GB | Inference via Groq / Gemini 2.5 Flash (see ADR-011) — no local model container. LiteLLM proxy ~300MB. 6GB freed vs self-hosted Ollama. |
+| Dagster + FastAPI + cloudflared + LiteLLM + OS | 12 GB | Inference via Groq / Gemini 2.5 Flash (see ADR-011) — no local model container. LiteLLM proxy ~300MB, cloudflared ~50MB. 6GB freed vs self-hosted Ollama. |
 
 ---
 
@@ -208,13 +208,13 @@ equity-data-agent/
 ├── pyproject.toml                  # Root workspace definition
 ├── uv.lock
 ├── Dockerfile                      # Multi-stage build: `base` (uv + deps) → `dagster` target → `api` target
-├── Caddyfile                       # Caddy reverse proxy config (prod HTTPS termination)
+├── Caddyfile                       # Dormant — retained under `prod-caddy` profile for the future named-tunnel + own-domain upgrade path. Active prod HTTPS is via cloudflared (ADR-018).
 ├── litellm_config.yaml             # LiteLLM model routing: dev/prod → Groq (default); override → Gemini 2.5 Flash. See ADR-011 + QNT-123.
 ├── docker-compose.yml              # Profiles: dev, prod
 ├── docs/
 │   ├── project-requirement.md      # This document
 │   ├── architecture/               # System overview, data flow
-│   ├── decisions/                  # ADRs (ADR-001 through ADR-006+)
+│   ├── decisions/                  # ADRs (ADR-001 through ADR-018)
 │   └── guides/                     # Local dev setup, runbooks
 ├── .github/
 │   └── workflows/
@@ -261,7 +261,7 @@ equity-data-agent/
 │           ├── tools/              # Tool definitions (call FastAPI endpoints)
 │           ├── prompts/            # System prompts, report templates
 │           └── main.py
-├── frontend/                       # Next.js 15 application (not a uv workspace)
+├── frontend/                       # Next.js 16 application (not a uv workspace)
 │   ├── package.json
 │   ├── next.config.ts
 │   ├── tailwind.config.ts
@@ -596,29 +596,36 @@ services:
     # Routes to Groq (https://api.groq.com/openai/v1) by default — see ADR-011
     # ...
 
-  caddy:
-    image: caddy:2-alpine
-    ports: ["80:80", "443:443"]
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
-      - caddy_data:/data
-    # Caddyfile: your-domain.com { reverse_proxy api:8000 }
-    # Auto HTTPS via Let's Encrypt — required for Vercel → Hetzner HTTPS
+  cloudflared:
+    image: cloudflare/cloudflared:2026.3.0
+    command: tunnel --no-autoupdate --url http://api:8000
+    # No public ports — connects OUTBOUND to Cloudflare and exposes the API
+    # at a free *.trycloudflare.com hostname (read from `docker logs cloudflared`).
+    # See ADR-018 for the choice of quick tunnel over a paid named-tunnel domain.
+
+  # Caddy is retained under the `prod-caddy` profile for the future named-tunnel
+  # + own-domain upgrade path. Inactive in default `prod` profile.
+  # caddy:
+  #   image: caddy:2-alpine
+  #   ports: ["80:80", "443:443"]
+  #   profiles: [prod-caddy]
+  #   ...
 
 volumes:
-  caddy_data:        # persists TLS certificates across container restarts
+  caddy_data:        # persists TLS certificates if/when Caddy is reactivated
   clickhouse_data:   # persists ClickHouse data across container restarts (CRITICAL — omitting this loses all market data on `docker compose down`)
 ```
 
 - Environment variable: `CLICKHOUSE_HOST=clickhouse` when `ENV=prod` (Docker network)
-- **HTTPS is required in production**: Vercel serves the frontend over HTTPS. Calling a plain HTTP FastAPI endpoint from Vercel would be blocked as mixed content. Caddy handles HTTPS termination automatically.
+- **HTTPS in production (post-Phase-6, ADR-018)**: Vercel serves the frontend over HTTPS. FastAPI port :8000 is bound to **loopback only** (`127.0.0.1:8000`) on Hetzner — no public ingress port. The `cloudflared` quick-tunnel service connects outbound to Cloudflare, which exposes the API at a free `*.trycloudflare.com` HTTPS hostname. End-to-end TLS, free Cloudflare WAF + DDoS protection, $0 cost. The trade-off is a hostname that rotates on cloudflared restart (~1-2× per year on stable Hetzner uptime); recovery runbook in `docs/guides/vercel-deploy.md`.
 - **Dagster UI is internal only**: Do NOT expose port 3000 externally. Access via SSH tunnel (`ssh -L 3000:localhost:3000 hetzner`) when needed. No public auth is configured.
 - **Port exposure policy**:
-  - **Externally accessible**: 22 (SSH), 80, 443 (Caddy — HTTPS only)
-  - **Docker-internal only** (not bound to host): 8123 (ClickHouse), 8000 (FastAPI), 3000 (Dagster), 4000 (LiteLLM)
-  - **Recommendation**: Configure Hetzner firewall to allow only 22, 80, 443 inbound. All other ports are reachable only via Docker internal network or SSH tunnel.
+  - **Externally accessible**: 22 (SSH) only — `cloudflared` makes outbound connections, no inbound port required.
+  - **Bound to host loopback only** (`127.0.0.1`): 8000 (FastAPI), 3000 (Dagster webserver), 8123 (ClickHouse for SSH-tunnel dev access).
+  - **Docker-internal only** (not bound to host at all): 4000 (LiteLLM).
+  - **Recommendation**: Configure Hetzner firewall to allow only 22 inbound. No port exposure beyond SSH.
 
-> **Recommendation**: Use Docker Compose **profiles**. The `dev` profile starts only ClickHouse (for when you want a local DB but run services natively). The `prod` profile starts everything including Caddy.
+> **Recommendation**: Use Docker Compose **profiles**. The `dev` profile starts only ClickHouse (for when you want a local DB but run services natively). The `prod` profile starts everything including cloudflared. The dormant `prod-caddy` profile activates Caddy if/when you upgrade to a named tunnel + own domain.
 
 ### 7.3 CI/CD (GitHub Actions + Vercel)
 
@@ -788,16 +795,16 @@ One-time setup for a fresh Hetzner CX41. After this, the CI/CD pipeline in Secti
    - `QDRANT_API_KEY=<from Qdrant Cloud dashboard>`
    - `SENTRY_DSN=<from Sentry project settings>`
    - `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` (from Langfuse dashboard)
-   - `NEXT_PUBLIC_API_URL=https://your-domain.com`
+   - `NEXT_PUBLIC_API_URL=https://<your-trycloudflare-url>` (read from `docker logs equity-data-agent-cloudflared-1` after first `compose up`; rotates on cloudflared restart — runbook in `docs/guides/vercel-deploy.md`)
    - **Never commit `.env` to git** — it's in `.gitignore`
-5. **DNS**: Point `your-domain.com` A record to Hetzner public IP. Caddy needs DNS to resolve before it can issue a Let's Encrypt TLS certificate.
+5. **HTTPS ingress (ADR-018)**: No DNS or Let's Encrypt configuration is required. The `cloudflared` service is part of the `prod` profile — it connects outbound to Cloudflare on first `compose up` and Cloudflare assigns a free `*.trycloudflare.com` hostname. Read the URL from `docker logs equity-data-agent-cloudflared-1`, paste it into the Vercel project's `NEXT_PUBLIC_API_URL` env, redeploy. (For a stable URL on a paid domain, see the dormant `prod-caddy` profile + ADR-018's upgrade path.)
 6. **Start services**: `docker compose --profile prod up -d --build`
 7. **Wait for ClickHouse**: `docker compose exec clickhouse clickhouse-client --query "SELECT 1"` — retry until it responds
 8. **Run migrations**: `make migrate` — creates databases and tables (migrations are idempotent — safe to re-run)
 9. **Backfill data**: Open Dagster UI via SSH tunnel (`ssh -L 3000:localhost:3000 hetzner`), manually materialize all partitions of `ohlcv_raw` with `period="2y"` asset config. Then trigger `fundamentals`, `ohlcv_weekly`, `ohlcv_monthly`, `technical_indicators_*`, and `fundamental_summary` in dependency order.
 10. **Verify**:
-    - `curl https://your-domain.com/api/v1/health` returns `{"status": "ok"}`
-    - `curl https://your-domain.com/api/v1/dashboard/summary` returns 10 tickers
+    - `curl https://<your-trycloudflare-url>/api/v1/health` returns `{"status": "ok"}`
+    - `curl https://<your-trycloudflare-url>/api/v1/dashboard/summary` returns 10 tickers
     - Dagster UI shows all schedules registered and next run times
     - Vercel frontend loads and displays dashboard
 
