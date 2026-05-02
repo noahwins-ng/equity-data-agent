@@ -10,6 +10,7 @@ dependencies = [
     "clickhouse-connect>=0.8.0",
     "qdrant-client>=1.13.0",
     "sentry-sdk[fastapi]>=2.0.0",
+    "slowapi>=0.1.9",
 ]
 
 [build-system]

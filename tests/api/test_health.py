@@ -247,13 +247,20 @@ def test_cors_allows_localhost_3001(client: TestClient, monkeypatch: pytest.Monk
     assert r.headers["access-control-allow-origin"] == "http://localhost:3001"
 
 
-def test_cors_allows_vercel_preview(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cors_disallows_unrelated_vercel_project(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-161: the prior open ``*.vercel.app`` regex was tightened to a
+    project-pinned origin set so a leaked preview URL for an unrelated
+    Vercel project can't drive traffic to this API. Default test config
+    has no regex set, so any vercel.app origin is rejected here. The
+    project-pinned regex behaviour is covered by ``test_security.py``
+    which constructs a fresh app with the regex set.
+    """
     _stub(monkeypatch, ch_ok=True, qdrant_ok=True)
     r = client.get(
         "/api/v1/health",
         headers={"Origin": "https://equity-data-agent-git-feature.vercel.app"},
     )
-    assert (
-        r.headers["access-control-allow-origin"]
-        == "https://equity-data-agent-git-feature.vercel.app"
-    )
+    assert "access-control-allow-origin" not in {k.lower() for k in r.headers}

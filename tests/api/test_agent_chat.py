@@ -899,7 +899,7 @@ async def test_client_disconnect_cancels_runner_task(
     monkeypatch.setattr(asyncio, "create_task", _spy_create_task)
 
     request = chat_module.ChatRequest(ticker="NVDA", message="")
-    gen: AsyncGenerator[str, None] = chat_module._stream(request)  # type: ignore[assignment]
+    gen: AsyncGenerator[str, None] = chat_module._stream(request, "127.0.0.1")  # type: ignore[assignment]
     pull_task: asyncio.Task[str] | None = None
     try:
         # Pull frames until the runner thread is in flight. The drain loop
@@ -1056,11 +1056,18 @@ def test_streaming_race_async_worker_drains_cleanly(
 
 
 def test_cors_post_allowed(client: TestClient) -> None:
-    """CORS preflight for POST must succeed (Vercel → Hetzner cross-origin)."""
+    """CORS preflight for POST must succeed from the dev origin.
+
+    QNT-161: the default CORS allowlist is dev-only (localhost:3001); prod
+    sets ``CORS_ALLOWED_ORIGINS`` and ``CORS_ALLOWED_ORIGIN_REGEX`` to
+    permit specific Vercel deploys. The Vercel-domain regex behaviour is
+    covered by ``test_security.py`` which constructs a fresh app with the
+    pinned regex set; this test just guards the dev path.
+    """
     r = client.options(
         "/api/v1/agent/chat",
         headers={
-            "Origin": "https://equity-data-agent-git-feat.vercel.app",
+            "Origin": "http://localhost:3001",
             "Access-Control-Request-Method": "POST",
             "Access-Control-Request-Headers": "content-type",
         },

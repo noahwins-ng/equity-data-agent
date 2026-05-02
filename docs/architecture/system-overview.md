@@ -88,9 +88,9 @@ All tables use `ReplacingMergeTree` for idempotency. FastAPI queries **must** us
 - `GET /api/v1/health` — service health check
 
 **Agent endpoint**:
-- `POST /api/v1/agent/chat` — stateless single-analysis; request: `{ticker, message}`, SSE events: `tool_call` → `thinking` → `thesis` → `done`
+- `POST /api/v1/agent/chat` — stateless single-analysis; request: `{ticker, message}`, SSE events: `tool_call` → `thinking` → `thesis` → `done`. **Public-facing** — protected by SlowAPI rate limit + per-IP/global Groq token budgets + project-pinned CORS + prompt-injection input filter (QNT-161, ADR-017). See "Public-API Contract & Abuse Controls" below.
 
-**Cross-cutting**: All `{ticker}` endpoints validate against `shared.tickers.TICKERS` and return 404 for unknown tickers. No API authentication in initial scope (read-only public market data).
+**Cross-cutting**: All `{ticker}` endpoints validate against `shared.tickers.TICKERS` and return 404 for unknown tickers. **No API authentication** by design (read-only public market data + a portfolio chat panel that must stay one-click reachable to recruiters). Rate limiting + token budgeting on the LLM-bearing chat endpoint substitutes for auth — see "Public-API Contract & Abuse Controls" and ADR-017 for the full reasoning.
 
 ## The Agentic Boundary
 
@@ -100,6 +100,32 @@ The agent ONLY interacts with FastAPI endpoints via tool calls. It never:
 - Accesses raw data
 
 This boundary is enforced by architecture (no DB credentials in the agent package) and by the system prompt.
+
+## Public-API Contract & Abuse Controls (QNT-161 / ADR-017)
+
+`POST /api/v1/agent/chat` is internet-facing once QNT-75 deploys the Vercel frontend. Auth model is **truly public** — no API key, no signup — because the panel exists to be one-click reachable to recruiters / hiring managers (see ADR-017 for the full reasoning). Defense-in-depth, layered:
+
+| Control | Mechanism | Default | Source |
+|---|---|---|---|
+| Per-IP request rate limit | `slowapi` moving-window | `5/min, 30/hr, 100/day` | `settings.CHAT_RATE_LIMIT` |
+| Per-IP daily token budget | In-memory dict, UTC reset | ~10K tokens / IP / day | `settings.CHAT_TOKENS_PER_IP_PER_DAY` |
+| Global daily Groq TPD breaker | In-memory counter, UTC reset | ~50K tokens / day (~50% of model TPD) | `settings.CHAT_TOKENS_GLOBAL_PER_DAY` |
+| CORS allowlist | Explicit list + project-pinned regex | `localhost:3001` (dev); set per-env in prod | `settings.CORS_ALLOWED_ORIGINS` + `CORS_ALLOWED_ORIGIN_REGEX` |
+| Prompt-injection input filter | Pydantic field validator | Reject control chars (except `\n` / `\t`); reject single tokens > 500 chars | `api.security.validate_chat_message` |
+| Burst alert | Sliding window per IP | Sentry `capture_message` once per 5-min window after `20` 429s | `settings.CHAT_BURST_THRESHOLD` |
+| LLM provider fail-closed | LiteLLM config audit | Free-tier providers only on the chat path | `tests/agent/test_litellm_fail_closed.py` |
+
+**Failure surfaces (what the user sees):**
+
+- **Rate-limit hit** → HTTP 429 with `Retry-After`; chat panel surfaces friendly "demo rate limit" copy that points to the repo.
+- **Per-IP token budget exhausted** → SSE response 200; stream emits a single `intent: conversational` + `conversational` event with the demo-limit redirect; the panel renders the same suggestion card it uses for off-domain questions.
+- **Global TPD breaker tripped** → same SSE shape as per-IP exhaustion, every IP for the rest of the day. Sentry fires a `chat-breaker-tripped` `capture_message` once per day per worker.
+- **Control-char or overlong-token input** → HTTP 422 from the Pydantic validator; the panel shows the message verbatim.
+- **Disallowed CORS origin** → preflight has no `Access-Control-Allow-Origin`; browser blocks the call.
+
+**FAIL CLOSED contract:** `litellm_config.yaml` is audited at test time (`test_litellm_fail_closed.py`) to assert that every reachable alias on the chat path (`equity-agent/default`, `equity-agent/gemini`, and any fallback in their chain) routes to a free-tier provider (Groq / Gemini / Google). A future contributor adding an Anthropic / OpenAI alias as a fallback trips a CI failure, not a billing alert.
+
+**Sentry hooks** are wired ahead of QNT-86's full Sentry integration. With `SENTRY_DSN` unset, alert events log at WARNING; with it set, the SDK is initialised in `api.main` and `capture_message` lands at the configured project.
 
 ## Multi-Timeframe Strategy
 
