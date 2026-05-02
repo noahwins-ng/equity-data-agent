@@ -64,6 +64,17 @@ logger = logging.getLogger(__name__)
 
 ToolFn = Callable[[str], str]
 
+# QNT-159: optional event emitter for streaming intermediate state out of the
+# graph as it runs, NOT after it completes. The classify node fires this with
+# ``("intent", {"intent": <intent>})`` as soon as the classifier resolves so
+# the SSE wrapper can surface the routing decision before the first tool_call
+# event lands. Mirrors the tool-instrumentation pattern in
+# ``api.routers.agent_chat._instrument_tools`` (worker thread → asyncio queue
+# via ``loop.call_soon_threadsafe``); keeping it as a typed alias here makes
+# the SSE adapter's responsibility explicit. None means "no streaming" — the
+# CLI and unit tests don't pass one, the SSE endpoint always does.
+EventEmitter = Callable[[str, dict[str, object]], None]
+
 # Tool registry is canonical in ``agent.prompts.system`` so the citation list
 # in SYSTEM_PROMPT and the dispatch list here can't drift. ``summary`` is
 # intentionally omitted from the trio: plan/gather select from what the thesis
@@ -306,13 +317,26 @@ def _hint_from_intent(intent: Intent) -> str | None:
     return None
 
 
-def build_graph(tools: dict[str, ToolFn]) -> CompiledStateGraph:
-    """Compile the classify -> plan -> gather -> synthesize graph (QNT-149).
+def build_graph(
+    tools: dict[str, ToolFn],
+    *,
+    event_emitter: EventEmitter | None = None,
+) -> CompiledStateGraph:
+    """Compile the classify -> plan -> gather -> synthesize graph (QNT-149, QNT-159).
 
     Tools are a plain ``{name: callable}`` mapping. Callables take a ticker
     string and return a report string. Exceptions are caught and retried;
     optional tools (see ``OPTIONAL_TOOLS``) are silently dropped after retry
     exhaustion, required tools surface in ``state['errors']``.
+
+    ``event_emitter`` is an optional callable for streaming intermediate
+    state to a consumer while the graph runs. Today it's used by the SSE
+    endpoint to surface the ``intent`` event from the classify node BEFORE
+    the first tool_call lands — without it the panel's streaming label
+    would say "streaming thesis…" for the entire tool-gathering phase
+    regardless of which intent the classifier picked (the post-graph
+    intent emission was too late). None is a no-op, used by the CLI and
+    unit tests that read final state directly.
     """
 
     @observe(name="classify")
@@ -332,6 +356,18 @@ def build_graph(tools: dict[str, ToolFn]) -> CompiledStateGraph:
             logger.warning("classify %s: defaulting to thesis: %s", ticker, exc)
             intent = "thesis"
         logger.info("classify %s: intent=%s", ticker, intent)
+        # QNT-159: surface the routing decision BEFORE plan/gather/synthesize
+        # run. The SSE wrapper provides an emitter that posts to its asyncio
+        # queue so the chat panel sees ``intent`` as soon as it's known
+        # (rather than after the whole graph completes — see ``_stream`` in
+        # api.routers.agent_chat for the post-graph fallback emission, kept
+        # as an idempotent safety net for stubbed test graphs that bypass
+        # this node).
+        if event_emitter is not None:
+            try:
+                event_emitter("intent", {"intent": intent})
+            except Exception as exc:  # noqa: BLE001 — never let SSE plumbing crash the graph
+                logger.warning("classify %s: event_emitter failed: %s (continuing)", ticker, exc)
         return {"intent": intent}
 
     @observe(name="plan")
@@ -620,6 +656,7 @@ __all__ = [
     "AgentState",
     "ComparisonAnswer",
     "ConversationalAnswer",
+    "EventEmitter",
     "Intent",
     "QuickFactAnswer",
     "Thesis",

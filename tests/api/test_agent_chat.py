@@ -74,7 +74,7 @@ def stub_graph(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """
     thesis = _stub_thesis()
 
-    def _fake_build(tools: dict[str, Any]) -> Any:
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
         graph = MagicMock()
 
         def invoke(state: dict[str, Any]) -> dict[str, Any]:
@@ -187,7 +187,7 @@ def test_prose_chunks_split_setup_into_clauses(
     render it progressively. Two-sentence setup → two prose_chunk events."""
     thesis = _stub_thesis(setup="First clause. Second clause.")
 
-    def _fake_build(tools: dict[str, Any]) -> Any:
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
         graph = MagicMock()
         graph.invoke.return_value = {
             "ticker": "NVDA",
@@ -225,7 +225,7 @@ def test_thesis_with_empty_bull_emits_full_event(
         verdict_action="Avoid; revisit on quarterly miss (source: fundamental).",
     )
 
-    def _fake_build(tools: dict[str, Any]) -> Any:
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
         graph = MagicMock()
         graph.invoke.return_value = {
             "ticker": "NVDA",
@@ -253,7 +253,7 @@ def test_no_thesis_when_reports_empty_emits_done_with_zero(
 ) -> None:
     """Graph short-circuit (no reports gathered) → no thesis event, done has zeros."""
 
-    def _fake_build(tools: dict[str, Any]) -> Any:
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
         graph = MagicMock()
         graph.invoke.return_value = {
             "ticker": "NVDA",
@@ -287,7 +287,7 @@ def test_agent_crash_emits_error_event(client: TestClient, monkeypatch: pytest.M
     """A graph exception (e.g. LLM provider failure) surfaces as an SSE error
     event followed by done — the panel must not crash on a crashed agent."""
 
-    def _fake_build(tools: dict[str, Any]) -> Any:
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
         graph = MagicMock()
         graph.invoke.side_effect = RuntimeError("boom")
         return graph
@@ -310,7 +310,7 @@ def test_optional_tool_failure_does_not_emit_error_event(
     treats Qdrant/news outages as non-events, and the SSE stream must match."""
     thesis = _stub_thesis()
 
-    def _fake_build(tools: dict[str, Any]) -> Any:
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
         graph = MagicMock()
         graph.invoke.return_value = {
             "ticker": "NVDA",
@@ -341,7 +341,7 @@ def test_tools_disabled_skips_tool_calls(
     stream contains zero tool_call events."""
     thesis = _stub_thesis(setup="Tools-off framing.")
 
-    def _fake_build(tools: dict[str, Any]) -> Any:
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
         # Assert the request really did skip tool registration.
         assert tools == {}
         graph = MagicMock()
@@ -398,7 +398,7 @@ def test_quick_fact_intent_emits_quick_fact_event_not_thesis(
         source="technical",
     )
 
-    def _fake_build(tools: dict[str, Any]) -> Any:
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
         graph = MagicMock()
         graph.invoke.return_value = {
             "ticker": "NVDA",
@@ -459,7 +459,7 @@ def test_quick_fact_failure_emits_conversational_redirect(
         hint="quick_fact",
     )
 
-    def _fake_build(tools: dict[str, Any]) -> Any:
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
         graph = MagicMock()
         graph.invoke.return_value = {
             "ticker": "NVDA",
@@ -538,6 +538,82 @@ def test_message_length_capped_at_validation_layer(client: TestClient) -> None:
     assert r.status_code == 422
 
 
+# ─── QNT-159: intent event ordering (must precede tool_call) ─────────────
+
+
+def test_intent_event_arrives_before_first_tool_call(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QNT-159: classify_node now emits the ``intent`` event via the SSE
+    event_emitter the wrapper provides, so the panel sees the routing
+    decision BEFORE the first tool_call frame. Without this fix, the
+    streaming label flickered "streaming thesis…" for the entire
+    tool-gathering phase regardless of which intent the classifier
+    actually picked.
+
+    The test fakes a build_graph whose invoke calls event_emitter first,
+    then runs the wrapped tools (mirroring the real classify -> plan ->
+    gather order). It asserts the SSE frame index of the first ``intent``
+    event is less than the first ``tool_call`` index.
+    """
+
+    def _fake_build(tools: dict[str, Any], *, event_emitter: Any = None) -> Any:
+        graph = MagicMock()
+
+        def invoke(state: dict[str, Any]) -> dict[str, Any]:
+            ticker = state["ticker"]
+            # Mirror real classify_node behavior: emit intent BEFORE any
+            # tool runs. The SSE wrapper's emitter posts onto the asyncio
+            # queue ahead of the tool-call wrappers' posts.
+            if event_emitter is not None:
+                event_emitter("intent", {"intent": "thesis"})
+            reports = {name: fn(ticker) for name, fn in tools.items()}
+            return {
+                "ticker": ticker,
+                "intent": "thesis",
+                "plan": list(tools.keys()),
+                "reports": reports,
+                "errors": {},
+                "thesis": _stub_thesis(),
+                "quick_fact": None,
+                "comparison": None,
+                "conversational": None,
+                "confidence": 1.0,
+            }
+
+        graph.invoke.side_effect = invoke
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(
+        chat_module,
+        "default_report_tools",
+        lambda: {
+            "technical": lambda t: f"# tech {t}\n",
+            "fundamental": lambda t: f"# fund {t}\n",
+            "news": lambda t: f"# news {t}\n",
+        },
+    )
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "Should I buy NVDA?"})
+    frames = _parse_sse(r.text)
+    events = [name for name, _ in frames]
+
+    intent_indices = [i for i, (name, _) in enumerate(frames) if name == "intent"]
+    tool_call_indices = [i for i, (name, _) in enumerate(frames) if name == "tool_call"]
+
+    assert intent_indices, f"expected an intent event, got {events}"
+    assert tool_call_indices, f"expected a tool_call event, got {events}"
+    # First intent event must precede the first tool_call. The post-graph
+    # safety-net intent emission may add a SECOND intent frame later in the
+    # stream — that's fine; what matters is that the FIRST intent arrives
+    # early so the streaming label is correct from frame 0.
+    assert intent_indices[0] < tool_call_indices[0], (
+        f"intent (index {intent_indices[0]}) must arrive BEFORE first "
+        f"tool_call (index {tool_call_indices[0]}); event order was {events}"
+    )
+
+
 # ─── QNT-156: comparison + conversational SSE events ─────────────────────
 
 
@@ -565,7 +641,7 @@ def test_comparison_intent_emits_comparison_event_not_thesis(
         differences="NVDA carries a richer multiple than AAPL (source: fundamental).",
     )
 
-    def _fake_build(tools: dict[str, Any]) -> Any:  # noqa: ARG001
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:  # noqa: ARG001
         graph = MagicMock()
         graph.invoke.return_value = {
             "ticker": "NVDA",
@@ -626,7 +702,7 @@ def test_conversational_intent_emits_conversational_event(
         ],
     )
 
-    def _fake_build(tools: dict[str, Any]) -> Any:  # noqa: ARG001
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:  # noqa: ARG001
         graph = MagicMock()
         graph.invoke.return_value = {
             "ticker": "NVDA",
@@ -684,7 +760,7 @@ def test_thesis_failure_falls_back_to_conversational_redirect(
         hint="thesis",
     )
 
-    def _fake_build(tools: dict[str, Any]) -> Any:  # noqa: ARG001
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:  # noqa: ARG001
         graph = MagicMock()
         graph.invoke.return_value = {
             "ticker": "NVDA",

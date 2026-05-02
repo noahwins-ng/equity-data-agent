@@ -314,9 +314,19 @@ async def _stream(request: ChatRequest) -> AsyncIterator[str]:
     queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
     loop = asyncio.get_running_loop()
 
+    # QNT-159: hand the graph an event emitter so the classify node can post
+    # the ``intent`` event onto our queue as soon as it resolves — BEFORE the
+    # plan/gather LLM calls fire and BEFORE any tool_call event lands. Same
+    # mechanism the tool wrappers use (worker thread → loop.call_soon_threadsafe
+    # → asyncio queue → drained by the SSE generator). Without this, the
+    # streaming label said "streaming thesis…" for the entire tool-gathering
+    # phase regardless of which intent the classifier actually picked.
+    def _emit(event: str, data: dict[str, object]) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, (event, dict(data)))
+
     base_tools = default_report_tools() if request.tools_enabled else {}
     instrumented = _instrument_tools(base_tools, queue, loop, ticker)
-    graph = build_graph(instrumented)
+    graph = build_graph(instrumented, event_emitter=_emit)
 
     final_state_holder: dict[str, Any] = {}
 
@@ -366,11 +376,15 @@ async def _stream(request: ChatRequest) -> AsyncIterator[str]:
     errors = state.get("errors") or {} if isinstance(state, dict) else {}
     reports = state.get("reports") or {} if isinstance(state, dict) else {}
 
-    # Tell the panel which shape is coming so it can pre-empt layout (hide
-    # the thesis card slot for quick-fact intents). Emitted whenever the
-    # graph produced an ``intent`` field, regardless of whether synthesize
-    # ultimately returned a payload — the panel uses it as a lightweight
-    # routing signal, not the data itself.
+    # QNT-159: classify_node already streamed the ``intent`` event via the
+    # queue-based emitter (so the panel saw it before the first tool_call).
+    # This post-graph yield is now an idempotent safety net for two cases:
+    # (1) the emitter raised silently and the early frame never made it onto
+    # the queue, and (2) stubbed test graphs that bypass classify_node and
+    # return a canned final state directly. The panel's ``updateRun(intent)``
+    # is idempotent — duplicate frames overwrite ``run.intent`` with the
+    # same value, so the cost of leaving this safety net in is one extra
+    # SSE frame per real request.
     if isinstance(state, dict) and "intent" in state:
         yield _sse("intent", {"intent": intent})
 
