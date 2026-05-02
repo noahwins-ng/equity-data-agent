@@ -36,18 +36,26 @@ gh pr create --title "QNT-75: ..." --body "Closes QNT-75"
 
 Track CD: `gh run list --branch main --limit 3` should show the deploy completing in ~1-2 min.
 
-### 2. Read the tunnel hostname from cloudflared logs
+### 2. One-time cleanup of the orphaned `caddy` container
 
-After CD is green (it removes the orphaned `caddy` container automatically via `--remove-orphans`), read the cloudflared URL:
+Pre-QNT-75, `caddy` ran under the `prod` profile. ADR-018 moves it to a dormant `prod-caddy` profile. `docker compose up --remove-orphans` only removes containers whose service is *undefined* in compose; a service that's defined but excluded by profile is preserved by design. So the existing caddy container survives the deploy and keeps holding ports 80/443 + ~256 MB of RAM until you stop it manually:
 
 ```bash
-ssh hetzner "docker logs cloudflared 2>&1 | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | head -1"
+ssh hetzner "docker stop caddy && docker rm -f caddy"
+```
+
+One-time only — once removed, future deploys won't recreate it (caddy is no longer in the active profile).
+
+### 3. Read the tunnel hostname from cloudflared logs
+
+```bash
+ssh hetzner "docker logs equity-data-agent-cloudflared-1 2>&1 | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | head -1"
 # → https://random-words-here.trycloudflare.com
 ```
 
-Save that URL — it's what Vercel will call.
+Save that URL — it's what Vercel will call AND what UptimeRobot will probe (see step 5).
 
-### 3. Verify the tunnel works
+### 4. Verify the tunnel works
 
 From your laptop (no SSH tunnel needed — it's now public via Cloudflare):
 
@@ -58,7 +66,21 @@ curl -sf https://random-words-here.trycloudflare.com/api/v1/health | jq .status
 
 If this returns `ok`, the tunnel is live and the API is reachable.
 
-### 4. Update prod CORS allowlist
+### 5. Update UptimeRobot probe URL
+
+Pre-QNT-75 the external uptime probe pointed at `http://<hetzner-ip>:8000/api/v1/health`. That endpoint is now unreachable (api is bound to loopback) — UptimeRobot will start firing DOWN alerts within a check interval if not updated.
+
+In the UptimeRobot dashboard → your monitor → **Edit** → swap the URL to:
+
+```
+https://<your-trycloudflare-url>/api/v1/health
+```
+
+Save. The probe should go green within one check interval.
+
+When the trycloudflare URL rotates (see "When the trycloudflare URL rotates" below), update UptimeRobot at the same time as Vercel — both reference the same hostname.
+
+### 6. Update prod CORS allowlist
 
 The FastAPI CORS middleware (QNT-161) only allows origins listed in `CORS_ALLOWED_ORIGINS`. Add the Vercel project domain.
 
@@ -79,7 +101,7 @@ The regex matches Vercel preview deploys for *this* project only — leaked prev
 
 Commit, push, and let CD pick it up — the deploy workflow decrypts `.env.sops` and writes it to the Hetzner host as `.env` before `docker compose up`.
 
-### 5. Link the Vercel project
+### 7. Link the Vercel project
 
 From your laptop:
 
@@ -97,7 +119,7 @@ Follow the prompts:
 
 This creates `frontend/.vercel/project.json` (gitignored).
 
-### 6. Configure Vercel env vars
+### 8. Configure Vercel env vars
 
 In the Vercel dashboard → your project → **Settings → Environment Variables**, add:
 
@@ -107,11 +129,11 @@ In the Vercel dashboard → your project → **Settings → Environment Variable
 
 The `NEXT_PUBLIC_` prefix exposes it to the browser bundle — this is intentional, the browser needs to know the API URL to fetch from. No other env vars are needed; everything else is server-side and stays on Hetzner.
 
-### 7. Configure repo root
+### 9. Configure repo root
 
 In **Settings → General → Root Directory**, set to `frontend`. Vercel runs `npm install` and `next build` from that directory.
 
-### 8. First deploy
+### 10. First deploy
 
 Push to `main` or trigger a preview deploy:
 
@@ -127,7 +149,7 @@ Or deploy production directly:
 cd frontend && npx vercel --prod
 ```
 
-### 9. Verify
+### 11. Verify
 
 - Open `https://<your-vercel-project>.vercel.app` in a browser.
 - Watchlist should load (server-side fetch from Hetzner via the tunnel).
