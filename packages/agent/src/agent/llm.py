@@ -36,4 +36,7 @@ def get_llm(temperature: float = 0.2) -> ChatOpenAI:
         base_url=settings.LITELLM_BASE_URL,
         api_key="litellm-proxy",  # pyright: ignore[reportArgumentType]  # proxy ignores; real keys server-side
         temperature=temperature,
+        # QNT-150: bound every LLM call so a hung LiteLLM proxy / stalled
+        # provider can't keep an SSE chat connection open forever.
+        timeout=settings.LLM_REQUEST_TIMEOUT,
     )

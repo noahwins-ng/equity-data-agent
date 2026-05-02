@@ -281,6 +281,15 @@ const STANCE_PILL: Record<ThesisPayload["verdict_stance"], string> = {
   mixed: "border-zinc-700 bg-zinc-900/40 text-zinc-300",
 };
 
+// QNT-150: defensive lookup for the verdict-stance pill className. The
+// ``verdict_stance`` field is bounded by Pydantic on the server, but a
+// hallucinated/unknown stance from a misbehaving provider would otherwise
+// resolve to ``undefined`` and render a pill with no className. Fall back to
+// the neutral ``mixed`` palette so the card still renders cleanly.
+function stancePillClass(stance: ThesisPayload["verdict_stance"]): string {
+  return STANCE_PILL[stance] ?? STANCE_PILL.mixed;
+}
+
 function ThesisCard({
   ticker,
   thesis,
@@ -351,7 +360,7 @@ function ThesisCard({
               Verdict
             </span>
             <span
-              className={`rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider ${STANCE_PILL[thesis.verdict_stance]}`}
+              className={`rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider ${stancePillClass(thesis.verdict_stance)}`}
             >
               {thesis.verdict_stance}
             </span>
