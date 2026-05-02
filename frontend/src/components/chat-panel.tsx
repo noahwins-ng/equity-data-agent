@@ -692,6 +692,15 @@ function useHealthSources(): string[] {
 
 // ─── SSE consumption ──────────────────────────────────────────────────────
 
+// QNT-161: friendly fallback when the backend returns a non-2xx that the
+// server side wasn't able to dress up as a conversational redirect (e.g.
+// SlowAPI 429 — issued before the SSE generator gets to run). The chat
+// panel surfaces this as the user-facing detail in the run's error rail.
+const RATE_LIMIT_REDIRECT =
+  "You've hit the demo rate limit on this IP. The portfolio runs on a free " +
+  "LLM tier; the cap protects daily uptime for other visitors. Try again in " +
+  "a moment, or fork the repo to run the agent against your own keys.";
+
 async function consumeChatStream(
   body: { ticker: string; message: string; tools_enabled: boolean; cite_sources: boolean },
   onEvent: (event: string, data: unknown) => void,
@@ -708,6 +717,22 @@ async function consumeChatStream(
     signal,
   });
   if (!response.ok) {
+    // QNT-161: 429 from the SlowAPI rate limiter ships a JSON body with a
+    // friendly detail string. Surface it AS-IS so the panel shows the
+    // server's chosen copy (and a Retry-After hint when present); other
+    // non-2xxs fall back to a generic transport error.
+    if (response.status === 429) {
+      let detail = RATE_LIMIT_REDIRECT;
+      let retryHint = "";
+      try {
+        const body = (await response.json()) as { detail?: string; retry_after?: string };
+        if (typeof body.detail === "string" && body.detail.length > 0) detail = body.detail;
+        if (typeof body.retry_after === "string") retryHint = ` (try again in ${body.retry_after}s)`;
+      } catch {
+        // Body wasn't JSON — keep the default.
+      }
+      throw new Error(`${detail}${retryHint}`);
+    }
     const text = await response.text().catch(() => "");
     throw new Error(`HTTP ${response.status}: ${text || "request failed"}`);
   }
@@ -891,17 +916,29 @@ export function ChatPanel() {
       aria-label="Agent chat"
       className="flex h-full flex-col border-l border-zinc-800 bg-zinc-950 text-zinc-100"
     >
-      <header className="flex items-baseline justify-between border-b border-zinc-800 px-4 py-3 font-mono text-[10px] uppercase tracking-wider">
-        <span className="text-zinc-300">
-          Analyst · {ticker ?? "session"}
-        </span>
-        <span className="flex gap-1">
-          <span className="rounded border border-zinc-700 bg-zinc-900/60 px-1 py-0.5 text-zinc-400">
-            LangGraph
+      <header className="flex flex-col gap-1 border-b border-zinc-800 px-4 py-3 font-mono text-[10px] uppercase tracking-wider">
+        <div className="flex items-baseline justify-between">
+          <span className="text-zinc-300">
+            Analyst · {ticker ?? "session"}
           </span>
-          <span className="rounded border border-zinc-700 bg-zinc-900/60 px-1 py-0.5 text-zinc-400">
-            Cited
+          <span className="flex gap-1">
+            <span className="rounded border border-zinc-700 bg-zinc-900/60 px-1 py-0.5 text-zinc-400">
+              LangGraph
+            </span>
+            <span className="rounded border border-zinc-700 bg-zinc-900/60 px-1 py-0.5 text-zinc-400">
+              Cited
+            </span>
           </span>
+        </div>
+        {/* QNT-161: demo-limits hint. Sets expectations BEFORE the user
+            hits a 429 — recruiters see the cap is intentional, not a
+            broken endpoint, and the bounce-rate stays low. The exact
+            numbers come from packages/shared/src/shared/config.py
+            (CHAT_RATE_LIMIT) — keep them aligned by hand for now;
+            QNT-86 / a future "/api/v1/limits" endpoint can drive this
+            from the server. */}
+        <span className="text-[9px] normal-case tracking-normal text-zinc-500">
+          demo: ~30 queries/hour per visitor · powered by Groq free tier
         </span>
       </header>
 

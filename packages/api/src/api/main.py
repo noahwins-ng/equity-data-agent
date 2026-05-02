@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from functools import lru_cache
@@ -28,6 +29,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from shared.config import settings
+from slowapi.errors import RateLimitExceeded
 
 from api.clickhouse import get_client
 from api.routers import (
@@ -39,6 +41,13 @@ from api.routers import (
     tickers_router,
 )
 from api.routers.logos import prewarm_logo_cache
+from api.security import (
+    client_ip,
+    cors_allow_origin_regex,
+    cors_allow_origins,
+    limiter,
+    record_burst_alert,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -226,11 +235,68 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — allow local dev, Vercel preview deploys, and (future) prod domain.
+# QNT-161: minimal Sentry init guarded by SENTRY_DSN. The full integration
+# (FastAPI middleware, performance tracing, scoped tags) ships under QNT-86
+# — this init exists so the burst + breaker capture_message hooks in
+# api.security have somewhere to land the moment the env var is set in prod.
+# Init failures are tolerated: a Sentry outage must not block the API.
+if settings.SENTRY_DSN:
+    try:
+        import sentry_sdk
+
+        sentry_sdk.init(
+            dsn=settings.SENTRY_DSN,
+            environment=settings.ENV,
+            traces_sample_rate=0.0,  # left to QNT-86 to enable performance
+        )
+    except Exception as exc:  # noqa: BLE001 — Sentry init must not block startup
+        logger.warning("sentry init failed (continuing without): %s", exc)
+
+# QNT-161: SlowAPI rate limiter — applied per-route via @limiter.limit on the
+# chat endpoint. ``state.limiter`` and the RateLimitExceeded handler are the
+# integration shape SlowAPI documents; the handler here both serves the 429
+# and records the event for the burst alerter.
+app.state.limiter = limiter
+
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_exceeded_handler(
+    request: Request,
+    exc: RateLimitExceeded,
+) -> JSONResponse:
+    """QNT-161: 429 handler with Retry-After + burst-alert hook.
+
+    The detail string is intentionally friendly — the chat panel reads the
+    body and surfaces a "demo limit" card that points the user to the repo.
+    Retry-After is sourced from the SlowAPI exception (in seconds) so the
+    panel can display "try again in N seconds".
+    """
+    record_burst_alert(client_ip(request), time.monotonic())
+    retry_after = str(int(getattr(exc, "retry_after", 60) or 60))
+    return JSONResponse(
+        status_code=429,
+        content={
+            "detail": (
+                "You've hit the demo rate limit for this IP. This portfolio "
+                "demo runs on a free LLM tier; the limit protects daily uptime "
+                "for other visitors. Try again in a moment, or fork the repo "
+                "to run the agent against your own keys."
+            ),
+            "code": "rate-limited",
+            "retry_after": retry_after,
+        },
+        headers={"Retry-After": retry_after},
+    )
+
+
+# QNT-161: CORS — explicit allowlist + project-pinned Vercel preview regex.
+# Defaults are dev-only (localhost:3001); prod sets CORS_ALLOWED_ORIGINS and
+# CORS_ALLOWED_ORIGIN_REGEX so leaked Vercel previews for unrelated projects
+# can't drive traffic to this API.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3001"],
-    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_origins=list(cors_allow_origins()),
+    allow_origin_regex=cors_allow_origin_regex(),
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )

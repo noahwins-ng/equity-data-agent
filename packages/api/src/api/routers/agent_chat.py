@@ -81,19 +81,33 @@ import logging
 import re
 import time
 from collections.abc import AsyncIterator
+from datetime import UTC
 from typing import Any
 
 from agent.comparison import ComparisonAnswer
-from agent.conversational import ConversationalAnswer
+from agent.conversational import ConversationalAnswer, domain_redirect
 from agent.graph import OPTIONAL_TOOLS, build_graph
+from agent.llm import (
+    TokenUsageTracker,
+    reset_token_tracker,
+    set_token_tracker,
+)
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 from agent.tools import default_report_tools
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from shared.config import settings
 from shared.tickers import TICKERS
+
+from api.security import (
+    budget,
+    client_ip,
+    limiter,
+    record_breaker_trip,
+    validate_chat_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +129,16 @@ class ChatRequest(BaseModel):
     message: str = Field(default="", max_length=_MESSAGE_MAX_LEN)
     tools_enabled: bool = True
     cite_sources: bool = True
+
+    @field_validator("message")
+    @classmethod
+    def _filter_message(cls, v: str) -> str:
+        """QNT-161: reject control chars + overlong tokens BEFORE the prompt
+        ever reaches the LLM. The 4000-char Field cap handles bulk; this
+        catches the narrow exfil-shaped inputs (zero-width joins, base64
+        blobs, embedded shell control sequences) that pass length but
+        shouldn't be rendered into the synthesize prompt verbatim."""
+        return validate_chat_message(v)
 
 
 # ─── Tool labels (human-friendly names for the UI) ──────────────────────────
@@ -319,13 +343,63 @@ _DONE_FAILURE_PAYLOAD = {
 _ERROR_DETAIL_AGENT_FAILED = "Agent run failed. Try again or rephrase."
 _ERROR_DETAIL_AGENT_TIMEOUT = "Agent run timed out. Try again in a moment."
 
+# QNT-161: friendly redirect copy when the per-IP daily token budget OR the
+# global daily Groq TPD breaker has been exhausted. The conversational card
+# renders this prose + the same suggestion list ``domain_redirect`` produces,
+# so the panel surface is identical to "I don't know what you asked" — no
+# scary error text, no exposed internals. Each reason is digit-free so the
+# QNT-156 ``has_numeric_claims`` guardrail accepts it.
+_BUDGET_REDIRECT_PER_IP = (
+    "You've hit today's per-visitor demo limit. This portfolio site runs on a "
+    "free LLM tier; the cap protects daily uptime for other visitors. Try "
+    "again tomorrow, or fork the repo to run the agent against your own keys."
+)
+_BUDGET_REDIRECT_GLOBAL = (
+    "Today's shared demo budget is exhausted. This portfolio site runs on a "
+    "free LLM tier with a hard daily ceiling; the cap resets overnight. Try "
+    "again tomorrow, or fork the repo to run the agent against your own keys."
+)
 
-async def _stream(request: ChatRequest) -> AsyncIterator[str]:
+# QNT-161: track whether we've fired the breaker-trip Sentry alert for the
+# current UTC day so a stream of post-trip requests doesn't produce a stream
+# of duplicate Sentry events. Reset semantics: the value is the date string
+# the trip was alerted for; a new day naturally re-arms the alert.
+_BREAKER_ALERTED_DATE: str | None = None
+_BREAKER_LOCK = asyncio.Lock()
+
+
+async def _maybe_alert_breaker_once() -> None:
+    """Fire ``record_breaker_trip`` at most once per UTC day.
+
+    Called from the global-budget redirect path. The dedup is per-process —
+    on a multi-worker uvicorn each worker may fire once, which is fine: the
+    Sentry payload carries enough context (timestamp, server hostname) to
+    coalesce visually.
+    """
+    global _BREAKER_ALERTED_DATE
+    from datetime import datetime
+
+    today = datetime.now(UTC).date().isoformat()
+    async with _BREAKER_LOCK:
+        if _BREAKER_ALERTED_DATE == today:
+            return
+        _BREAKER_ALERTED_DATE = today
+    record_breaker_trip("global TPD ceiling reached")
+
+
+async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
     """Yield SSE frames for one chat request.
 
     Validation failures yield a single ``error`` event followed by ``done``;
     success yields the canonical ``tool_call`` → ``tool_result`` → ``prose_chunk``
     → ``thesis`` → ``done`` sequence.
+
+    QNT-161: ``client_ip`` drives the per-IP daily token budget. Both the
+    per-IP and global TPD breakers are checked BEFORE the graph runs; on
+    exhaustion we emit a deterministic conversational redirect (no graph
+    invocation, no LLM cost) and the panel renders the same redirect card it
+    uses for off-domain questions. The agent never reaches a paid provider
+    in either branch — see ADR-017.
     """
     ticker = request.ticker.upper()
     if ticker not in TICKERS:
@@ -336,49 +410,94 @@ async def _stream(request: ChatRequest) -> AsyncIterator[str]:
         yield _sse("done", _DONE_FAILURE_PAYLOAD)
         return
 
-    queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
-    loop = asyncio.get_running_loop()
+    # QNT-161: budget gate. Cheap O(1) check before we instantiate any
+    # graph machinery; on exhaustion the client gets the friendly redirect
+    # card instead of an HTTP error. ``conversational`` shape keeps the
+    # event sequence identical to a normal off-domain run, so the panel
+    # never branches on a special "budget" state.
+    allowed, reason = budget.can_serve(client_ip)
+    if not allowed:
+        if reason == "global":
+            await _maybe_alert_breaker_once()
+        redirect_reason = _BUDGET_REDIRECT_GLOBAL if reason == "global" else _BUDGET_REDIRECT_PER_IP
+        fallback = domain_redirect(
+            reason=redirect_reason,
+            tickers=TICKERS,
+            hint="thesis",
+        )
+        yield _sse("intent", {"intent": "conversational"})
+        for chunk in _split_prose(fallback.answer):
+            yield _sse("prose_chunk", {"delta": chunk + " "})
+            await asyncio.sleep(0)
+        yield _sse("conversational", fallback.model_dump())
+        yield _sse(
+            "done",
+            {
+                "tools_count": 0,
+                "citations_count": 0,
+                "confidence": 0.0,
+                "intent": "conversational",
+            },
+        )
+        return
 
-    # QNT-159: hand the graph an event emitter so the classify node can post
-    # the ``intent`` event onto our queue as soon as it resolves — BEFORE the
-    # plan/gather LLM calls fire and BEFORE any tool_call event lands. Same
-    # mechanism the tool wrappers use (worker thread → loop.call_soon_threadsafe
-    # → asyncio queue → drained by the SSE generator). Without this, the
-    # streaming label said "streaming thesis…" for the entire tool-gathering
-    # phase regardless of which intent the classifier actually picked.
-    def _emit(event: str, data: dict[str, object]) -> None:
-        loop.call_soon_threadsafe(queue.put_nowait, (event, dict(data)))
-
-    base_tools = default_report_tools() if request.tools_enabled else {}
-    instrumented = _instrument_tools(base_tools, queue, loop, ticker)
-    graph = build_graph(instrumented, event_emitter=_emit)
-
+    # QNT-161: bind a per-request token tracker so every LLM call inside the
+    # graph (classify / plan / synthesize) charges into the same accumulator.
+    # Read once at the end and debit the per-IP + global budgets in one shot.
+    # contextvars propagates through ``asyncio.to_thread`` automatically, so
+    # the worker thread sees the same tracker.
+    #
+    # The contextvar must be reset on EVERY exit path — including failures
+    # in graph construction (build_graph / _instrument_tools / asyncio.Queue
+    # creation). Set it inside the try so the outer finally always reaches
+    # ``reset_token_tracker``; otherwise a build_graph crash leaves a stale
+    # tracker bound to the request task and the next request inherits it.
+    tracker = TokenUsageTracker()
+    tracker_token = set_token_tracker(tracker)
+    runner_task: asyncio.Task[Any] | None = None
     final_state_holder: dict[str, Any] = {}
-
-    def _runner() -> None:
-        # Run the graph in a worker thread; emitted events have already been
-        # routed onto the queue via ``call_soon_threadsafe``. The final state
-        # is captured for post-run prose / thesis / done events.
-        try:
-            final_state_holder["state"] = graph.invoke(
-                {"ticker": ticker, "question": request.message}
-            )
-        except Exception as exc:  # noqa: BLE001 — surfaced as SSE error
-            logger.exception("agent graph failed for %s", ticker)
-            final_state_holder["error"] = exc
-
-    runner_task = asyncio.create_task(asyncio.to_thread(_runner))
-    run_deadline = loop.time() + settings.CHAT_RUN_TIMEOUT
     timed_out = False
-
-    # QNT-150: wrap the entire drain + post-graph phase in try/finally so a
-    # client disconnect (FastAPI raises GeneratorExit into this coroutine)
-    # always cancels the runner task and shields its teardown. Without this
-    # the worker keeps running, burning LLM quota and a thread-pool slot
-    # until the graph naturally finishes. asyncio.to_thread can't actually
-    # kill the thread, but cancelling the asyncio task releases the queue
-    # and stops further emit callbacks.
+    spent = 0
     try:
+        queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        # QNT-159: hand the graph an event emitter so the classify node can post
+        # the ``intent`` event onto our queue as soon as it resolves — BEFORE the
+        # plan/gather LLM calls fire and BEFORE any tool_call event lands. Same
+        # mechanism the tool wrappers use (worker thread → loop.call_soon_threadsafe
+        # → asyncio queue → drained by the SSE generator). Without this, the
+        # streaming label said "streaming thesis…" for the entire tool-gathering
+        # phase regardless of which intent the classifier actually picked.
+        def _emit(event: str, data: dict[str, object]) -> None:
+            loop.call_soon_threadsafe(queue.put_nowait, (event, dict(data)))
+
+        base_tools = default_report_tools() if request.tools_enabled else {}
+        instrumented = _instrument_tools(base_tools, queue, loop, ticker)
+        graph = build_graph(instrumented, event_emitter=_emit)
+
+        def _runner() -> None:
+            # Run the graph in a worker thread; emitted events have already been
+            # routed onto the queue via ``call_soon_threadsafe``. The final state
+            # is captured for post-run prose / thesis / done events.
+            try:
+                final_state_holder["state"] = graph.invoke(
+                    {"ticker": ticker, "question": request.message}
+                )
+            except Exception as exc:  # noqa: BLE001 — surfaced as SSE error
+                logger.exception("agent graph failed for %s", ticker)
+                final_state_holder["error"] = exc
+
+        runner_task = asyncio.create_task(asyncio.to_thread(_runner))
+        run_deadline = loop.time() + settings.CHAT_RUN_TIMEOUT
+
+        # QNT-150: wrap the entire drain + post-graph phase in try/finally so a
+        # client disconnect (FastAPI raises GeneratorExit into this coroutine)
+        # always cancels the runner task and shields its teardown. Without this
+        # the worker keeps running, burning LLM quota and a thread-pool slot
+        # until the graph naturally finishes. asyncio.to_thread can't actually
+        # kill the thread, but cancelling the asyncio task releases the queue
+        # and stops further emit callbacks.
         # Drain queue while the graph is running. ``runner_task.done()``
         # flips only after the worker thread completes; until then we await
         # the next queued event with a short timeout so the loop stays
@@ -538,26 +657,50 @@ async def _stream(request: ChatRequest) -> AsyncIterator[str]:
             },
         )
     finally:
-        # QNT-150: ensure the runner task is cancelled on every exit path —
-        # client disconnect (GeneratorExit), timeout, or normal completion.
-        # ``asyncio.to_thread`` cannot terminate the underlying thread, but
-        # cancelling the asyncio task releases the queue + emitter so no
-        # further frames pile up after the SSE consumer is gone. We shield
-        # the await so an outer cancellation doesn't interrupt the cleanup
-        # itself.
-        if not runner_task.done():
-            runner_task.cancel()
-        # ``_runner`` already swallows ``Exception`` internally and stores
-        # the failure in ``final_state_holder``, so the only thing the
-        # await raises here is ``CancelledError`` (when we cancelled it
-        # above, or when an outer cancellation reaches the shield).
-        with contextlib.suppress(asyncio.CancelledError):
-            await asyncio.shield(runner_task)
+        # QNT-150 + QNT-161: cleanup must run on EVERY exit path —
+        #   client disconnect (GeneratorExit), timeout, normal completion,
+        #   AND the new failure mode where build_graph / _instrument_tools
+        #   crashed BEFORE runner_task was assigned. Hence the None guards
+        #   on runner_task and the inner try/finally so reset_token_tracker
+        #   always runs even if the budget bookkeeping itself raises.
+        if runner_task is not None:
+            if not runner_task.done():
+                runner_task.cancel()
+            # ``_runner`` already swallows ``Exception`` internally and stores
+            # the failure in ``final_state_holder``, so the only thing the
+            # await raises here is ``CancelledError`` (when we cancelled it
+            # above, or when an outer cancellation reaches the shield).
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.shield(runner_task)
+        # QNT-161: charge the per-IP + global daily token budgets with what
+        # the LangChain callback observed during this run. Done in finally
+        # so a graph crash, a client disconnect, or a timeout still books
+        # the spend (the LLM calls already happened upstream of the
+        # exception). Fires the breaker-tripped Sentry alert when this
+        # request is the one that crossed the global ceiling so the alert
+        # lands at the moment of trip, not on subsequent requests.
+        try:
+            spent = tracker.total
+            budget.record(client_ip, spent)
+            if spent > 0:
+                snap = budget.snapshot()
+                if snap["global"] >= snap["global_cap"]:
+                    await _maybe_alert_breaker_once()
+                logger.info(
+                    "chat token spend: ip=%s tokens=%d global=%d/%d",
+                    client_ip,
+                    spent,
+                    snap["global"],
+                    snap["global_cap"],
+                )
+        finally:
+            reset_token_tracker(tracker_token)
 
 
 @router.post("/chat")
-async def agent_chat(request: ChatRequest) -> StreamingResponse:
-    """Stream the agent's response to ``request`` as Server-Sent Events.
+@limiter.limit(settings.CHAT_RATE_LIMIT)
+async def agent_chat(request: Request, body: ChatRequest) -> StreamingResponse:
+    """Stream the agent's response to ``body`` as Server-Sent Events.
 
     Response media type is ``text/event-stream``; the body is a sequence of
     ``event: <name>\\ndata: <json>\\n\\n`` frames per the contract above.
@@ -565,9 +708,16 @@ async def agent_chat(request: ChatRequest) -> StreamingResponse:
     ``X-Accel-Buffering: no`` is set so any reverse proxy (Caddy, nginx)
     relays the body without buffering — without it the client wouldn't see a
     single event until the full agent run finished, defeating the streaming.
+
+    QNT-161: ``request`` (the bare FastAPI Request) is required by SlowAPI
+    to extract the client IP for the rate-limit key; the parsed body lives
+    in ``body``. The ``@limiter.limit`` decorator enforces the per-IP
+    request quota; per-IP / global token budgets are enforced inside
+    ``_stream`` so the friendly redirect is delivered as a normal SSE
+    stream rather than an HTTP error.
     """
     return StreamingResponse(
-        _stream(request),
+        _stream(body, client_ip(request)),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
