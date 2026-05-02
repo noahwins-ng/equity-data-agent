@@ -144,8 +144,6 @@ See [`docs/architecture/system-overview.md`](docs/architecture/system-overview.m
 
 ![Dagster lineage](docs/screenshots/dagster-lineage.svg)
 
-Capture recipe + re-shoot cadence: [`docs/screenshots/README.md`](docs/screenshots/README.md).
-
 ---
 
 ## Stack
