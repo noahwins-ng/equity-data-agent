@@ -112,7 +112,11 @@ jobs:
             # running the expected commit" (QNT-51 — the runtime counterpart to
             # the CD SHA gate in QNT-88).
             export GIT_SHA
-            docker compose --profile prod up -d --build
+            # --remove-orphans drops containers from services no longer in the
+            # active profile — e.g. the QNT-75 move of `caddy` to the dormant
+            # `prod-caddy` profile. Without this, the orphaned container keeps
+            # running and holding ports until manual cleanup.
+            docker compose --profile prod up -d --build --remove-orphans
 
       - name: Run ClickHouse migrations
         uses: appleboy/ssh-action@v1
@@ -199,7 +203,13 @@ jobs:
             restart_if_changed "litellm_config.yaml" litellm
             restart_if_changed "dagster.yaml" dagster dagster-code-server dagster-daemon
             restart_if_changed "workspace.yaml" dagster dagster-daemon
-            restart_if_changed "Caddyfile" caddy
+            # NOTE: Caddyfile restart is intentionally omitted while caddy lives
+            # in the dormant `prod-caddy` profile (QNT-75 / ADR-018). The
+            # `--profile prod restart caddy` call would silently no-op because
+            # compose with `--profile prod` doesn't see `prod-caddy` services,
+            # masking a real Caddyfile change. Re-add this line (with the
+            # appropriate profile flag) when the caddy + custom-domain upgrade
+            # path is activated.
 
             if [ "$restarted_any" = 0 ]; then
               echo "[QNT-124] no bind-mounted config files changed — no restarts needed"
