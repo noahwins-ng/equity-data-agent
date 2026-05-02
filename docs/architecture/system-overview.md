@@ -160,9 +160,9 @@ LiteLLM proxy (v1.81.14-stable, pinned) routes model requests (see ADR-011):
 ## Infrastructure
 
 - **Dev**: MacBook M4 → SSH tunnel → Hetzner ClickHouse (port 8123); LiteLLM on localhost:4000 (from Phase 5); Next.js on localhost:3001
-- **Prod Backend**: Hetzner CX41 (16GB) → Docker Compose (ClickHouse 4GB + Dagster/FastAPI/Caddy/LiteLLM 12GB — no local model inference; LLM calls go to Groq / Gemini via LiteLLM)
-- **Prod Frontend**: Vercel (Next.js 15, free tier) → calls FastAPI over HTTPS
-- **HTTPS**: Caddy service in Docker Compose handles TLS termination (auto HTTPS via Let's Encrypt)
+- **Prod Backend**: Hetzner CX41 (16GB) → Docker Compose (ClickHouse 4GB + Dagster/FastAPI/cloudflared/LiteLLM 12GB — no local model inference; LLM calls go to Groq / Gemini via LiteLLM). FastAPI port :8000 is bound to loopback only — no public ingress.
+- **Prod Frontend**: Vercel (Next.js 15, free tier) → calls FastAPI over HTTPS via the Cloudflare tunnel hostname (set as `NEXT_PUBLIC_API_URL`).
+- **HTTPS Ingress (QNT-75 / ADR-018)**: `cloudflared` quick-tunnel exposes `api:8000` at a free `*.trycloudflare.com` hostname. End-to-end HTTPS, free Cloudflare WAF + DDoS protection, no domain registration. Trade-off: hostname rotates on cloudflared restart (rare; recovery runbook in `docs/guides/vercel-deploy.md`). Caddy + custom domain remains pre-wired under the `prod-caddy` profile for future upgrade.
 - **CI/CD**: GitHub Actions → backend: SSH → git pull → docker compose up → apply `migrations/*.sql` over HTTP (idempotent, QNT-146), then two hard gates (QNT-88/89): assert `git rev-parse HEAD` equals the merged commit SHA and assert the Dagster definitions module loads with the expected asset/check/schedule counts. Frontend: Vercel auto-deploy on push to main.
 - **Rollback**: `make rollback` — SSHs to Hetzner, checks out `HEAD~1`, rebuilds Docker, verifies health (60s timeout with retries)
 - **Health Monitoring**: `scripts/health-monitor.sh` runs every 15 min on Hetzner via cron — checks API `/health` + Docker service status, logs failures to `health-monitor.log`. Session-start hook reads this log and warns on failures. Install: `make monitor-install`. Check: `make monitor-log`.

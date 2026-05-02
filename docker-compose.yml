@@ -200,7 +200,11 @@ services:
       - GIT_SHA=${GIT_SHA:-unknown}
     depends_on: [clickhouse]
     ports:
-      - "8000:8000"  # direct access until domain + Caddy added in Phase 6
+      # QNT-75: bound to loopback only — public ingress is via cloudflared (see
+      # `cloudflared` service below). Localhost binding keeps the host-side
+      # health monitor (scripts/health-monitor.sh) working without exposing
+      # :8000 to the internet.
+      - "127.0.0.1:8000:8000"
     mem_limit: 1g
     mem_reservation: 256m
     cpus: 0.5
@@ -233,6 +237,38 @@ services:
       start_period: 60s
     profiles: [prod]
 
+  # QNT-75 / ADR-018: Cloudflare quick tunnel — public HTTPS ingress for the
+  # FastAPI service without buying a domain. Connects outbound to Cloudflare
+  # and exposes the API at a `*.trycloudflare.com` URL that prints to logs on
+  # startup. Frontend (Vercel) reads that URL via NEXT_PUBLIC_API_URL.
+  #
+  # Trade-off vs. a named tunnel: the trycloudflare hostname rotates on every
+  # cloudflared restart. With `restart: unless-stopped` and Hetzner stability
+  # this is rare (kernel reboots / crashes). When it rotates, refresh the
+  # Vercel env var per docs/guides/vercel-deploy.md.
+  cloudflared:
+    # Pin to a specific version (matches the litellm pin pattern in this file).
+    # Floating `latest` means every `docker compose up -d --build` may pull a
+    # new binary and recreate the container, which rotates the trycloudflare
+    # hostname unnecessarily. Bump deliberately by editing this tag.
+    image: cloudflare/cloudflared:2026.3.0
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    mem_limit: 64m
+    mem_reservation: 16m
+    cpus: 0.05
+    logging: *default-logging
+    profiles: [prod]
+
+  # Caddy is retained for the future "named tunnel + own domain" path
+  # (ADR-018 lists it as an upgrade option). Inactive under the default `prod`
+  # profile — once a domain is registered and Caddyfile is updated from
+  # `your-domain.com`, start with both profiles:
+  #   docker compose --profile prod --profile prod-caddy up -d
+  # (caddy depends on `api` which lives in the `prod` profile.)
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -254,7 +290,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-    profiles: [prod]
+    profiles: [prod-caddy]
 
 volumes:
   clickhouse_data:  # persists ClickHouse data — NEVER omit this volume
