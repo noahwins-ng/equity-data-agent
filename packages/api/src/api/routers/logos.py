@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 import threading
 import time
 from urllib.parse import urlparse
@@ -53,12 +54,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["logos"])
 
 _FINNHUB_PROFILE2_URL = "https://finnhub.io/api/v1/stock/profile2"
-# Logo bytes always come from this CDN host. Validate before we GET the URL
+# Logo bytes come from a Finnhub CDN host. Validate before we GET the URL
 # returned by /stock/profile2 — the JSON value is technically attacker-
 # controlled (a compromised or spoofed Finnhub response could redirect us
 # to an internal endpoint), and the cost of a strict allowlist is one
-# host comparison per ticker per pod lifetime.
-_FINNHUB_CDN_HOST = "static.finnhub.io"
+# regex match per ticker per pod lifetime.
+#
+# QNT-163: Finnhub sharded the CDN; URLs now arrive at static2.finnhub.io
+# (and presumably will at static3, static4, ... as load grows). The pattern
+# accepts ``static.finnhub.io`` plus any ``staticN.finnhub.io`` for N >= 0,
+# and rejects everything else (subdomain spoofing like
+# ``static.finnhub.io.evil.com``, suffixes like ``static.finnhub.io2``,
+# unrelated hosts). ``fullmatch`` anchors implicitly so a partial match
+# can't slip through.
+_FINNHUB_CDN_HOST_PATTERN = re.compile(r"^static\d*\.finnhub\.io$")
 _REQUEST_TIMEOUT_SECONDS = 5.0
 # Free-tier Finnhub allows 60 RPM on /stock/profile2; 1s spacing keeps us
 # well below the limit even on cold start. The CDN host (static.finnhub.io)
@@ -115,7 +124,8 @@ def _fetch_logo_data_url(ticker: str, client: httpx.Client) -> str | None:
     # only thing telling us where to fetch the bytes, and a bad value
     # would otherwise let us reach arbitrary network destinations.
     parsed = urlparse(url)
-    if parsed.scheme != "https" or parsed.hostname != _FINNHUB_CDN_HOST:
+    hostname = parsed.hostname or ""
+    if parsed.scheme != "https" or not _FINNHUB_CDN_HOST_PATTERN.fullmatch(hostname):
         logger.warning("finnhub logo URL host mismatch for %s: %r", ticker, parsed.hostname)
         return None
 
