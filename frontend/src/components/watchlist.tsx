@@ -21,6 +21,14 @@ import Link from "next/link";
 import { apiFetch } from "@/lib/api";
 
 import { Sparkline } from "./sparkline";
+import { TickerLogo } from "./ticker-logo";
+
+// Logos basically never change for established public companies; the API
+// caches per-process anyway, so a long Data Cache TTL keeps Finnhub usage
+// near zero (one fetch per pod lifetime per ticker).
+const LOGO_REVALIDATE_SECONDS = 86_400;
+
+type LogosResponse = Record<string, string | null>;
 
 type DashboardRow = {
   ticker: string;
@@ -116,10 +124,23 @@ async function loadNextIngestLabel(): Promise<string> {
   }
 }
 
+async function loadLogos(): Promise<LogosResponse> {
+  try {
+    return await apiFetch<LogosResponse>("/api/v1/logos", {
+      revalidate: LOGO_REVALIDATE_SECONDS,
+    });
+  } catch {
+    // Soft-fail: an empty map renders the initials fallback for every
+    // ticker, no broken-image icons.
+    return {};
+  }
+}
+
 export async function Watchlist() {
-  const [{ rows, tickers, error }, nextIngest] = await Promise.all([
+  const [{ rows, tickers, error }, nextIngest, logos] = await Promise.all([
     loadWatchlistData(),
     loadNextIngestLabel(),
+    loadLogos(),
   ]);
 
   return (
@@ -127,6 +148,19 @@ export async function Watchlist() {
       aria-label="Watchlist"
       className="flex h-full flex-col border-r border-zinc-800 bg-zinc-950 text-zinc-100"
     >
+      {/* Bloomberg-style stacked title — branding inside the working UI
+          without a description blurb. Monospace + tight tracking on line 1
+          keeps "Equity Data Agent" on a single line at the 17rem rail
+          width; line 2 takes the wide-tracked TERMINAL stamp. */}
+      <div className="border-b border-zinc-800 px-4 py-4">
+        <div className="font-mono text-[11px] font-medium uppercase tracking-tight text-zinc-400">
+          Equity Data Agent
+        </div>
+        <div className="font-mono text-2xl font-bold uppercase leading-none tracking-[0.2em] text-zinc-100">
+          TERMINAL
+        </div>
+      </div>
+
       <header className="flex items-baseline justify-between border-b border-zinc-800 px-4 py-3">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-300">
           Watchlist · {tickers.length}
@@ -145,23 +179,25 @@ export async function Watchlist() {
                 href={`/ticker/${row.ticker}`}
                 className="flex items-center gap-3 px-4 py-2 transition hover:bg-zinc-900 focus:bg-zinc-900 focus:outline-none"
               >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline justify-between gap-2">
-                    <span className="font-mono text-sm font-semibold text-zinc-100">
-                      {row.ticker}
-                    </span>
-                    <span
-                      className={`font-mono text-xs tabular-nums ${changeColorClass(row.daily_change_pct)}`}
-                    >
-                      {formatChange(row.daily_change_pct)}
-                    </span>
-                  </div>
-                  <div className="flex items-baseline justify-between gap-2 text-xs text-zinc-500">
-                    <span className="truncate">{row.name}</span>
-                    <span className="font-mono tabular-nums text-zinc-400">
-                      {Number.isFinite(row.price) ? formatPrice(row.price) : "—"}
-                    </span>
-                  </div>
+                <TickerLogo ticker={row.ticker} logoUrl={logos[row.ticker] ?? null} />
+                {/* Two-column row: ticker (centered vertically alongside the
+                    logo) on the left, price-over-change on the right. The
+                    long company name is intentionally omitted — the logo
+                    carries the recognition cue, and stacking price/change
+                    on the right uses the row height the sparkline already
+                    sets. */}
+                <span className="font-mono text-sm font-semibold text-zinc-100">
+                  {row.ticker}
+                </span>
+                <div className="ml-auto flex flex-col items-end leading-tight">
+                  <span className="font-mono text-sm tabular-nums text-zinc-100">
+                    {Number.isFinite(row.price) ? formatPrice(row.price) : "—"}
+                  </span>
+                  <span
+                    className={`font-mono text-xs tabular-nums ${changeColorClass(row.daily_change_pct)}`}
+                  >
+                    {formatChange(row.daily_change_pct)}
+                  </span>
                 </div>
                 <Sparkline
                   values={row.sparkline}

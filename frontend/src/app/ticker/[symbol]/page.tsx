@@ -83,16 +83,31 @@ async function loadProvenance(): Promise<HealthResponse["provenance"] | null> {
   }
 }
 
+async function loadLogo(ticker: string): Promise<string | null> {
+  // The logos endpoint returns the full ticker→URL map; the watchlist
+  // already fetches it on every navigation so this hits the same Next
+  // Data Cache key (24h TTL) — no extra API roundtrip in steady state.
+  try {
+    const logos = await apiFetch<Record<string, string | null>>("/api/v1/logos", {
+      revalidate: 86_400,
+    });
+    return logos[ticker] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 type Params = Promise<{ symbol: string }>;
 
 export default async function TickerDetailPage({ params }: { params: Params }) {
   const { symbol } = await params;
   const ticker = symbol.toUpperCase();
 
-  const [quote, news, provenance] = await Promise.all([
+  const [quote, news, provenance, logoUrl] = await Promise.all([
     loadQuote(ticker),
     loadNews(ticker),
     loadProvenance(),
+    loadLogo(ticker),
   ]);
 
   // Quote 404 → unknown ticker. Treat anything else (e.g. transient API
@@ -104,7 +119,7 @@ export default async function TickerDetailPage({ params }: { params: Params }) {
 
   return (
     <div className="flex h-full flex-col">
-      <QuoteHeader quote={quote} />
+      <QuoteHeader quote={quote} logoUrl={logoUrl} />
       <PriceChart ticker={ticker} />
       {/*
         The 3-card row fills whatever vertical space is left below the chart

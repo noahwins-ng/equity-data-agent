@@ -22,6 +22,7 @@ import {
   formatSignedPct,
 } from "@/lib/format";
 import type { QuoteResponse } from "@/lib/api";
+import { TickerLogo } from "@/components/ticker-logo";
 
 const CAP_TIER = (cap: number | null): string | null => {
   if (cap === null) return null;
@@ -32,7 +33,13 @@ const CAP_TIER = (cap: number | null): string | null => {
   return "Micro-cap";
 };
 
-export function QuoteHeader({ quote }: { quote: QuoteResponse }) {
+export function QuoteHeader({
+  quote,
+  logoUrl,
+}: {
+  quote: QuoteResponse;
+  logoUrl: string | null;
+}) {
   const change =
     quote.price !== null && quote.prev_close !== null && quote.prev_close !== 0
       ? quote.price - quote.prev_close
@@ -52,7 +59,8 @@ export function QuoteHeader({ quote }: { quote: QuoteResponse }) {
       className="border-b border-zinc-800 bg-zinc-950 px-6 py-1.5"
     >
       <div className="flex items-center justify-between gap-4">
-        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <TickerLogo ticker={quote.ticker} logoUrl={logoUrl} size={28} />
           <h1 className="font-mono text-xl font-semibold tracking-tight text-zinc-50">
             {quote.ticker}
           </h1>
