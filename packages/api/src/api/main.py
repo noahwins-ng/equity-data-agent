@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime
 from functools import lru_cache
@@ -32,10 +33,12 @@ from api.clickhouse import get_client
 from api.routers import (
     agent_chat_router,
     data_router,
+    logos_router,
     reports_router,
     search_router,
     tickers_router,
 )
+from api.routers.logos import prewarm_logo_cache
 
 logger = logging.getLogger(__name__)
 
@@ -197,13 +200,18 @@ def _health_payload(response: Response) -> dict[str, Any]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: ARG001 — signature required by FastAPI
-    """Warm the ClickHouse client + Dagster count cache on startup."""
+    """Warm the ClickHouse client + Dagster count cache + logo cache on startup."""
     try:
         get_client().query("SELECT 1")
     except Exception:
         # /health will report the outage; don't block app startup
         logger.warning("ClickHouse unreachable at startup")
     _dagster_counts()  # cache the Dagster import cost before the first request
+    # Pre-warm the logo cache in a daemon thread so the first /api/v1/logos
+    # request lands on a populated cache. Daemon=True so a stuck Finnhub
+    # call can't block process shutdown — the request path falls back to
+    # an inline fetch if the thread hasn't finished by then.
+    threading.Thread(target=prewarm_logo_cache, daemon=True).start()
     yield
     get_client.cache_clear()
 
@@ -231,6 +239,7 @@ app.include_router(reports_router)
 app.include_router(data_router)
 app.include_router(search_router)
 app.include_router(tickers_router)
+app.include_router(logos_router)
 app.include_router(agent_chat_router)
 
 

@@ -1,5 +1,6 @@
 from api.routers.agent_chat import router as agent_chat_router
 from api.routers.data import router as data_router
+from api.routers.logos import router as logos_router
 from api.routers.reports import router as reports_router
 from api.routers.search import router as search_router
 from api.routers.tickers import router as tickers_router
@@ -7,6 +8,7 @@ from api.routers.tickers import router as tickers_router
 __all__ = [
     "agent_chat_router",
     "data_router",
+    "logos_router",
     "reports_router",
     "search_router",
     "tickers_router",
