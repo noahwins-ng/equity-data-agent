@@ -746,6 +746,73 @@ def test_conversational_intent_skips_plan_and_gather_llm_calls(
     assert stub_llm.structured_invoke.call_count == 1
 
 
+# ─── QNT-159: classify_node emits intent via event_emitter ───────────────
+
+
+def test_classify_node_calls_event_emitter_with_intent_decision(
+    stub_llm: _StructuredLLM,
+) -> None:
+    """QNT-159: classify_node MUST call the event_emitter (when supplied)
+    with the resolved intent BEFORE plan/gather/synthesize run. The SSE
+    wrapper relies on this to surface the routing decision before the
+    first tool_call frame lands; without it, the panel's streaming label
+    flickers "streaming thesis…" for the entire tool-gathering phase
+    regardless of which intent the classifier picked.
+
+    Reviewer-flagged regression guard (QNT-159 review): the SSE-side
+    ordering test in tests/api/test_agent_chat.py uses a stubbed
+    build_graph that calls event_emitter itself, so a regression where
+    the real classify_node stops calling the emitter would leave that
+    test green. This test pins the production code path directly."""
+    stub_llm.invoke.return_value = AIMessage(content="technical")
+    emitted: list[tuple[str, dict[str, object]]] = []
+
+    def emit(event: str, data: dict[str, object]) -> None:
+        emitted.append((event, dict(data)))
+
+    graph = build_graph({"technical": _mock_tool("tech")}, event_emitter=emit)
+    # Default question heuristic-classifies as thesis (no LLM classifier call).
+    _run(graph)
+
+    # The emitter MUST have been called with an intent event during classify.
+    intent_calls = [(e, d) for e, d in emitted if e == "intent"]
+    assert intent_calls, f"classify_node must emit ('intent', ...); got {emitted}"
+    assert intent_calls[0][1] == {"intent": "thesis"}
+
+
+def test_classify_node_swallows_event_emitter_exceptions(
+    stub_llm: _StructuredLLM,
+) -> None:
+    """QNT-159: a misbehaving event_emitter (SSE wrapper bug, closed event
+    loop on client disconnect, etc.) MUST NOT crash the graph. The
+    classify_node wraps the emit call in BLE001 so the safety-net
+    post-graph intent yield in agent_chat.py still gets a chance to
+    fire."""
+    stub_llm.invoke.return_value = AIMessage(content="technical")
+
+    def broken_emit(_event: str, _data: dict[str, object]) -> None:
+        raise RuntimeError("Event loop is closed")
+
+    graph = build_graph({"technical": _mock_tool("tech")}, event_emitter=broken_emit)
+    # Must not raise — graph completes despite the broken emitter.
+    result = _run(graph)
+    assert result["intent"] == "thesis"
+
+
+def test_build_graph_without_event_emitter_remains_no_op(
+    stub_llm: _StructuredLLM,
+) -> None:
+    """QNT-159 backwards compat: callers that don't supply an event_emitter
+    (CLI, eval harness, all existing tests) must see no behavior change.
+    Default is None, which means no emit call fires from classify_node."""
+    stub_llm.invoke.return_value = AIMessage(content="technical")
+    # No event_emitter kwarg.
+    graph = build_graph({"technical": _mock_tool("tech")})
+    result = _run(graph)
+    assert result["intent"] == "thesis"
+    assert isinstance(result["thesis"], Thesis)
+
+
 def test_conversational_answer_rejects_digits_in_answer() -> None:
     """QNT-156 guardrail: ``ConversationalAnswer.has_numeric_claims`` flags
     any digit so the hallucination scorer can treat numbers in
