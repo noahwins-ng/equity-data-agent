@@ -36,6 +36,9 @@ Architecture Decision Records (ADRs). Read these to understand **why** we chose 
 - [013-stay-on-bespoke-compose-not-coolify.md](decisions/013-stay-on-bespoke-compose-not-coolify.md)
 - [014-nextjs-rendering-mode-per-page.md](decisions/014-nextjs-rendering-mode-per-page.md)
 - [015-news-source-and-sentiment-topology.md](decisions/015-news-source-and-sentiment-topology.md)
+- [016-news-publisher-canonicalisation-and-cross-ticker-storage.md](decisions/016-news-publisher-canonicalisation-and-cross-ticker-storage.md)
+- [017-public-chat-truly-public-no-auth.md](decisions/017-public-chat-truly-public-no-auth.md)
+- [018-cloudflare-quick-tunnel-for-https-ingress.md](decisions/018-cloudflare-quick-tunnel-for-https-ingress.md)
 
 ### [guides/](guides/)
 How to do common tasks. Operational runbooks.
@@ -45,6 +48,8 @@ How to do common tasks. Operational runbooks.
 - [hetzner-bootstrap.md](guides/hetzner-bootstrap.md) — One-time production server setup on Hetzner CX41
 - [project-setup-playbook.md](guides/project-setup-playbook.md) — Reusable checklist for bootstrapping new projects
 - [ops-runbook.md](guides/ops-runbook.md) — Failure-mode catalog: symptoms, diagnosis, response, prevention (check here first when prod breaks)
+- [vercel-deploy.md](guides/vercel-deploy.md) — Phase 6 deploy runbook: cloudflared quick-tunnel ingress + Vercel project link + CORS allowlist edit + URL-rotation recovery
+- [uptime-monitoring.md](guides/uptime-monitoring.md) — UptimeRobot probe + Healthchecks.io heartbeat setup against the trycloudflare API URL
 
 ### [retros/](retros/)
 End-of-phase retrospectives. What shipped, what was hard, lessons learned.
@@ -56,6 +61,8 @@ End-of-phase retrospectives. What shipped, what was hard, lessons learned.
 - [phase-3-api-layer.md](retros/phase-3-api-layer.md) — API layer: report and data endpoints, asset checks, OpenAPI contract
 - [phase-4-narrative-data.md](retros/phase-4-narrative-data.md) — Narrative data: news ingestion, embeddings, Qdrant, semantic search
 - [phase-4-asset-check-audit.md](retros/phase-4-asset-check-audit.md) — Asset-check composite-key aggregation audit (QNT-122 follow-up)
+- [phase-5-agent-layer.md](retros/phase-5-agent-layer.md) — Agent layer: LangGraph 3-node graph, LiteLLM routing, Langfuse tracing, hallucination eval harness
+- [phase-6-frontend.md](retros/phase-6-frontend.md) — Frontend: Next.js + TradingView Lightweight Charts + SSE chat panel + Vercel deploy via Cloudflare quick tunnel
 
 ### [design/](design/)
 Canonical visual references for the Phase 6 frontend (TERMINAL/NINE mock + iteration history).

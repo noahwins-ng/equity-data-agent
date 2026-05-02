@@ -10,7 +10,7 @@
 | Serving | Turns DB rows into reports + JSON arrays; trivial presentation arithmetic (daily change %, RSI categories, trend labels) | FastAPI | `packages/api/` |
 | Reasoning | Interprets reports, writes theses | LangGraph | `packages/agent/` |
 | Shared | Schemas, config, ticker registry | Pydantic | `packages/shared/` |
-| Presentation | Charts, agent chat UI | Next.js 15 | `frontend/` |
+| Presentation | Charts, agent chat UI | Next.js 16 | `frontend/` |
 
 ## Package Dependencies
 
@@ -161,7 +161,7 @@ LiteLLM proxy (v1.81.14-stable, pinned) routes model requests (see ADR-011):
 
 - **Dev**: MacBook M4 → SSH tunnel → Hetzner ClickHouse (port 8123); LiteLLM on localhost:4000 (from Phase 5); Next.js on localhost:3001
 - **Prod Backend**: Hetzner CX41 (16GB) → Docker Compose (ClickHouse 4GB + Dagster/FastAPI/cloudflared/LiteLLM 12GB — no local model inference; LLM calls go to Groq / Gemini via LiteLLM). FastAPI port :8000 is bound to loopback only — no public ingress.
-- **Prod Frontend**: Vercel (Next.js 15, free tier) → calls FastAPI over HTTPS via the Cloudflare tunnel hostname (set as `NEXT_PUBLIC_API_URL`).
+- **Prod Frontend**: Vercel (Next.js 16, free tier) → calls FastAPI over HTTPS via the Cloudflare tunnel hostname (set as `NEXT_PUBLIC_API_URL`).
 - **HTTPS Ingress (QNT-75 / ADR-018)**: `cloudflared` quick-tunnel exposes `api:8000` at a free `*.trycloudflare.com` hostname. End-to-end HTTPS, free Cloudflare WAF + DDoS protection, no domain registration. Trade-off: hostname rotates on cloudflared restart (rare; recovery runbook in `docs/guides/vercel-deploy.md`). Caddy + custom domain remains pre-wired under the `prod-caddy` profile for future upgrade.
 - **CI/CD**: GitHub Actions → backend: SSH → git pull → docker compose up → apply `migrations/*.sql` over HTTP (idempotent, QNT-146), then two hard gates (QNT-88/89): assert `git rev-parse HEAD` equals the merged commit SHA and assert the Dagster definitions module loads with the expected asset/check/schedule counts. Frontend: Vercel auto-deploy on push to main.
 - **Rollback**: `make rollback` — SSHs to Hetzner, checks out `HEAD~1`, rebuilds Docker, verifies health (60s timeout with retries)
