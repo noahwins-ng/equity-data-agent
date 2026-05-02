@@ -20,6 +20,7 @@ import Link from "next/link";
 
 import { apiFetch } from "@/lib/api";
 
+import { ChartDataIcon } from "./icons/chart-data";
 import { Sparkline } from "./sparkline";
 import { TickerLogo } from "./ticker-logo";
 
@@ -152,12 +153,15 @@ export async function Watchlist() {
           without a description blurb. Monospace + tight tracking on line 1
           keeps "Equity Data Agent" on a single line at the 17rem rail
           width; line 2 takes the wide-tracked TERMINAL stamp. */}
-      <div className="border-b border-zinc-800 px-4 py-4">
-        <div className="font-mono text-[11px] font-medium uppercase tracking-tight text-zinc-400">
-          Equity Data Agent
-        </div>
-        <div className="font-mono text-2xl font-bold uppercase leading-none tracking-[0.2em] text-zinc-100">
-          TERMINAL
+      <div className="flex items-center gap-2.5 border-b border-zinc-800 px-4 py-4">
+        <ChartDataIcon className="h-6 w-6 flex-shrink-0 text-emerald-400" />
+        <div className="min-w-0">
+          <div className="font-mono text-[11px] font-medium uppercase tracking-tight text-zinc-400">
+            Equity Data Agent
+          </div>
+          <div className="font-mono text-2xl font-bold uppercase leading-none tracking-[0.2em] text-zinc-100">
+            TERMINAL
+          </div>
         </div>
       </div>
 
