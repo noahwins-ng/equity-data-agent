@@ -47,12 +47,22 @@ Event contract
                     (QNT-149). Lets the panel preempt its layout while
                     tools are still running.
 
-``done``          — ``{tools_count, citations_count, confidence, errors}``
-                    final stats. ``citations_count`` is the number of inline
-                    ``(source: …)`` cites the structured thesis carries.
+``done``          — ``{tools_count, citations_count, confidence}``;
+                    ``intent`` is added once the classify node has run.
+                    Pre-classify failures (unknown ticker, agent crash before
+                    routing, run-budget timeout) emit ``done`` without
+                    ``intent`` — matches the ``intent?: Intent`` optional in
+                    the TypeScript ``DoneEvent``. ``citations_count`` is the
+                    number of inline ``(source: …)`` cites the structured
+                    thesis carries. Per-tool errors are surfaced as separate
+                    ``error`` events earlier in the stream, not bundled into
+                    ``done``.
 
-``error``         — ``{detail}`` terminal failure event (validation, agent
-                    crash). Frontend should surface and stop reading.
+``error``         — ``{detail, code}`` terminal failure event. ``detail`` is a
+                    stable user-facing string; raw exception details are
+                    logged server-side only so internal LiteLLM auth errors,
+                    URLs, and stack context don't leak to the SSE client.
+                    Frontend should surface ``detail`` and stop reading.
 
 The graph itself is synchronous (Python LangGraph, sync ``invoke``). To stream
 incrementally we wrap each tool with an instrumented adapter that posts
@@ -65,6 +75,7 @@ arrive. After the graph completes, the post-run events (``prose_chunk``,
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -81,6 +92,7 @@ from agent.tools import default_report_tools
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from shared.config import settings
 from shared.tickers import TICKERS
 
 logger = logging.getLogger(__name__)
@@ -295,6 +307,19 @@ def _instrument_tools(
 # ─── Streaming generator ────────────────────────────────────────────────────
 
 
+_DONE_FAILURE_PAYLOAD = {
+    "tools_count": 0,
+    "citations_count": 0,
+    "confidence": 0.0,
+}
+
+
+# QNT-150: stable user-facing strings for SSE error events. Raw exception
+# detail is logged server-side; the client only ever sees these.
+_ERROR_DETAIL_AGENT_FAILED = "Agent run failed. Try again or rephrase."
+_ERROR_DETAIL_AGENT_TIMEOUT = "Agent run timed out. Try again in a moment."
+
+
 async def _stream(request: ChatRequest) -> AsyncIterator[str]:
     """Yield SSE frames for one chat request.
 
@@ -308,7 +333,7 @@ async def _stream(request: ChatRequest) -> AsyncIterator[str]:
             "error",
             {"detail": f"Unknown ticker: {ticker}", "code": "unknown-ticker"},
         )
-        yield _sse("done", {"tools_count": 0, "citations_count": 0, "confidence": 0.0})
+        yield _sse("done", _DONE_FAILURE_PAYLOAD)
         return
 
     queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
@@ -343,131 +368,191 @@ async def _stream(request: ChatRequest) -> AsyncIterator[str]:
             final_state_holder["error"] = exc
 
     runner_task = asyncio.create_task(asyncio.to_thread(_runner))
+    run_deadline = loop.time() + settings.CHAT_RUN_TIMEOUT
+    timed_out = False
 
-    # Drain queue while the graph is running. ``runner_task.done()`` flips
-    # only after the worker thread completes; until then we await the next
-    # queued event with a short timeout so the loop stays responsive.
-    while not runner_task.done() or not queue.empty():
-        try:
-            event, data = await asyncio.wait_for(queue.get(), timeout=0.1)
-        except TimeoutError:
-            continue
-        yield _sse(event, data)
+    # QNT-150: wrap the entire drain + post-graph phase in try/finally so a
+    # client disconnect (FastAPI raises GeneratorExit into this coroutine)
+    # always cancels the runner task and shields its teardown. Without this
+    # the worker keeps running, burning LLM quota and a thread-pool slot
+    # until the graph naturally finishes. asyncio.to_thread can't actually
+    # kill the thread, but cancelling the asyncio task releases the queue
+    # and stops further emit callbacks.
+    try:
+        # Drain queue while the graph is running. ``runner_task.done()``
+        # flips only after the worker thread completes; until then we await
+        # the next queued event with a short timeout so the loop stays
+        # responsive. ``run_deadline`` enforces the top-level CHAT_RUN_TIMEOUT
+        # budget regardless of whether any single LLM call exceeded its own
+        # per-call timeout — protects against retry loops in the proxy.
+        while not runner_task.done() or not queue.empty():
+            remaining = run_deadline - loop.time()
+            if remaining <= 0:
+                timed_out = True
+                break
+            try:
+                event, data = await asyncio.wait_for(queue.get(), timeout=min(0.1, remaining))
+            except TimeoutError:
+                continue
+            yield _sse(event, data)
 
-    if "error" in final_state_holder:
-        exc = final_state_holder["error"]
+        if timed_out:
+            logger.warning(
+                "agent run exceeded CHAT_RUN_TIMEOUT (%.1fs) for %s",
+                settings.CHAT_RUN_TIMEOUT,
+                ticker,
+            )
+            yield _sse(
+                "error",
+                {"detail": _ERROR_DETAIL_AGENT_TIMEOUT, "code": "agent-timeout"},
+            )
+            yield _sse("done", _DONE_FAILURE_PAYLOAD)
+            return
+
+        if "error" in final_state_holder:
+            # Internal exception detail is already logged via ``logger.exception``
+            # in ``_runner``. Surface only a stable, user-facing string here so
+            # internal LiteLLM auth errors, URLs, and stack context never leak
+            # to the SSE client.
+            yield _sse(
+                "error",
+                {"detail": _ERROR_DETAIL_AGENT_FAILED, "code": "agent-failed"},
+            )
+            yield _sse("done", _DONE_FAILURE_PAYLOAD)
+            return
+
+        state = final_state_holder.get("state") or {}
+        thesis = state.get("thesis") if isinstance(state, dict) else None
+        quick_fact = state.get("quick_fact") if isinstance(state, dict) else None
+        comparison = state.get("comparison") if isinstance(state, dict) else None
+        conversational = state.get("conversational") if isinstance(state, dict) else None
+        intent = state.get("intent", "thesis") if isinstance(state, dict) else "thesis"
+        confidence = float(state.get("confidence", 0.0)) if isinstance(state, dict) else 0.0
+        errors = state.get("errors") or {} if isinstance(state, dict) else {}
+        reports = state.get("reports") or {} if isinstance(state, dict) else {}
+
+        # QNT-159: classify_node already streamed the ``intent`` event via the
+        # queue-based emitter (so the panel saw it before the first tool_call).
+        # This post-graph yield is now an idempotent safety net for two cases:
+        # (1) the emitter raised silently and the early frame never made it onto
+        # the queue, and (2) stubbed test graphs that bypass classify_node and
+        # return a canned final state directly. The panel's ``updateRun(intent)``
+        # is idempotent — duplicate frames overwrite ``run.intent`` with the
+        # same value, so the cost of leaving this safety net in is one extra
+        # SSE frame per real request.
+        if isinstance(state, dict) and "intent" in state:
+            yield _sse("intent", {"intent": intent})
+
+        # Surface required-tool failures the graph recorded so the panel can
+        # indicate gaps (optional tools like ``news`` are silently dropped per
+        # OPTIONAL_TOOLS contract — those don't reach this dict). For comparison
+        # runs the keys are namespaced ``ticker.tool``; strip the prefix so the
+        # tool-name check still works.
+        #
+        # QNT-150: ``detail`` is graph-recorded and can contain raw upstream
+        # error strings (HTTP error bodies, internal URLs) from agent.tools'
+        # ``[error] kind: detail`` format. Don't surface that to the SSE
+        # client — the panel only needs to know which tool failed. The raw
+        # detail is logged at WARNING for server-side debuggability.
+        for name, detail in errors.items():
+            bare_tool = name.rsplit(".", 1)[-1]
+            if bare_tool in OPTIONAL_TOOLS:
+                continue
+            logger.warning(
+                "required tool failure surfaced to SSE client: tool=%s detail=%s",
+                bare_tool,
+                detail,
+            )
+            yield _sse(
+                "error",
+                {
+                    "detail": f"{_tool_label(bare_tool)} failed.",
+                    "code": "tool-failed",
+                },
+            )
+
+        # QNT-156: branch on intent. Each shape emits its own structured event;
+        # the deterministic conversational redirect (any synthesize-path
+        # failure) is also delivered through the conversational event so the
+        # panel always renders SOMETHING in-domain.
+        if intent == "conversational" and isinstance(conversational, ConversationalAnswer):
+            for chunk in _split_prose(conversational.answer):
+                yield _sse("prose_chunk", {"delta": chunk + " "})
+                await asyncio.sleep(0)
+            yield _sse("conversational", conversational.model_dump())
+        elif intent == "comparison" and isinstance(comparison, ComparisonAnswer):
+            # Stream the differences paragraph as prose so the panel has
+            # something to show before the full card lands.
+            for chunk in _split_prose(comparison.differences):
+                yield _sse("prose_chunk", {"delta": chunk + " "})
+                await asyncio.sleep(0)
+            yield _sse("comparison", comparison.model_dump())
+        elif intent == "quick_fact" and isinstance(quick_fact, QuickFactAnswer):
+            for chunk in _split_prose(quick_fact.answer):
+                yield _sse("prose_chunk", {"delta": chunk + " "})
+                await asyncio.sleep(0)
+            yield _sse("quick_fact", quick_fact.model_dump())
+        elif isinstance(thesis, Thesis):
+            # Stream prose. The structured-output runnable returns the entire
+            # setup paragraph at once, so we re-chunk it client-side. A future
+            # revision could thread an LLM token stream into this slot.
+            for chunk in _split_prose(thesis.setup):
+                yield _sse("prose_chunk", {"delta": chunk + " "})
+                await asyncio.sleep(0)  # cooperative yield so the body flushes
+            yield _sse("thesis", thesis.model_dump())
+        elif isinstance(conversational, ConversationalAnswer):
+            # Fallback redirect from a non-conversational intent that failed
+            # mid-synthesize (no reports gathered, structured-output crash, etc).
+            # The graph already populated ``conversational`` with a
+            # ``domain_redirect`` payload — surface it the same way the
+            # conversational intent does, so the panel renders the suggestion
+            # card instead of an error.
+            for chunk in _split_prose(conversational.answer):
+                yield _sse("prose_chunk", {"delta": chunk + " "})
+                await asyncio.sleep(0)
+            yield _sse("conversational", conversational.model_dump())
+
+        if intent == "comparison":
+            citations_count = _count_comparison_citations(
+                comparison if isinstance(comparison, ComparisonAnswer) else None
+            )
+        elif intent == "quick_fact":
+            citations_count = _count_quick_fact_citations(
+                quick_fact if isinstance(quick_fact, QuickFactAnswer) else None
+            )
+        elif intent == "conversational":
+            # Conversational answers carry no citations by design — the
+            # hallucination scorer rejects any digit, and there are no reports
+            # to cite either.
+            citations_count = 0
+        else:
+            citations_count = _count_citations(thesis if isinstance(thesis, Thesis) else None)
+
         yield _sse(
-            "error",
+            "done",
             {
-                "detail": f"agent error: {type(exc).__name__}: {exc}",
-                "code": "agent-failed",
+                "tools_count": len(reports),
+                "citations_count": citations_count,
+                "confidence": confidence,
+                "intent": intent,
             },
         )
-        yield _sse("done", {"tools_count": 0, "citations_count": 0, "confidence": 0.0})
-        return
-
-    state = final_state_holder.get("state") or {}
-    thesis = state.get("thesis") if isinstance(state, dict) else None
-    quick_fact = state.get("quick_fact") if isinstance(state, dict) else None
-    comparison = state.get("comparison") if isinstance(state, dict) else None
-    conversational = state.get("conversational") if isinstance(state, dict) else None
-    intent = state.get("intent", "thesis") if isinstance(state, dict) else "thesis"
-    confidence = float(state.get("confidence", 0.0)) if isinstance(state, dict) else 0.0
-    errors = state.get("errors") or {} if isinstance(state, dict) else {}
-    reports = state.get("reports") or {} if isinstance(state, dict) else {}
-
-    # QNT-159: classify_node already streamed the ``intent`` event via the
-    # queue-based emitter (so the panel saw it before the first tool_call).
-    # This post-graph yield is now an idempotent safety net for two cases:
-    # (1) the emitter raised silently and the early frame never made it onto
-    # the queue, and (2) stubbed test graphs that bypass classify_node and
-    # return a canned final state directly. The panel's ``updateRun(intent)``
-    # is idempotent — duplicate frames overwrite ``run.intent`` with the
-    # same value, so the cost of leaving this safety net in is one extra
-    # SSE frame per real request.
-    if isinstance(state, dict) and "intent" in state:
-        yield _sse("intent", {"intent": intent})
-
-    # Surface required-tool failures the graph recorded so the panel can
-    # indicate gaps (optional tools like ``news`` are silently dropped per
-    # OPTIONAL_TOOLS contract — those don't reach this dict). For comparison
-    # runs the keys are namespaced ``ticker.tool``; strip the prefix so the
-    # tool-name check still works.
-    for name, detail in errors.items():
-        bare_tool = name.rsplit(".", 1)[-1]
-        if bare_tool in OPTIONAL_TOOLS:
-            continue
-        yield _sse(
-            "error",
-            {"detail": f"{_tool_label(bare_tool)} failed: {detail}", "code": "tool-failed"},
-        )
-
-    # QNT-156: branch on intent. Each shape emits its own structured event;
-    # the deterministic conversational redirect (any synthesize-path
-    # failure) is also delivered through the conversational event so the
-    # panel always renders SOMETHING in-domain.
-    if intent == "conversational" and isinstance(conversational, ConversationalAnswer):
-        for chunk in _split_prose(conversational.answer):
-            yield _sse("prose_chunk", {"delta": chunk + " "})
-            await asyncio.sleep(0)
-        yield _sse("conversational", conversational.model_dump())
-    elif intent == "comparison" and isinstance(comparison, ComparisonAnswer):
-        # Stream the differences paragraph as prose so the panel has
-        # something to show before the full card lands.
-        for chunk in _split_prose(comparison.differences):
-            yield _sse("prose_chunk", {"delta": chunk + " "})
-            await asyncio.sleep(0)
-        yield _sse("comparison", comparison.model_dump())
-    elif intent == "quick_fact" and isinstance(quick_fact, QuickFactAnswer):
-        for chunk in _split_prose(quick_fact.answer):
-            yield _sse("prose_chunk", {"delta": chunk + " "})
-            await asyncio.sleep(0)
-        yield _sse("quick_fact", quick_fact.model_dump())
-    elif isinstance(thesis, Thesis):
-        # Stream prose. The structured-output runnable returns the entire
-        # setup paragraph at once, so we re-chunk it client-side. A future
-        # revision could thread an LLM token stream into this slot.
-        for chunk in _split_prose(thesis.setup):
-            yield _sse("prose_chunk", {"delta": chunk + " "})
-            await asyncio.sleep(0)  # cooperative yield so the body flushes
-        yield _sse("thesis", thesis.model_dump())
-    elif isinstance(conversational, ConversationalAnswer):
-        # Fallback redirect from a non-conversational intent that failed
-        # mid-synthesize (no reports gathered, structured-output crash, etc).
-        # The graph already populated ``conversational`` with a
-        # ``domain_redirect`` payload — surface it the same way the
-        # conversational intent does, so the panel renders the suggestion
-        # card instead of an error.
-        for chunk in _split_prose(conversational.answer):
-            yield _sse("prose_chunk", {"delta": chunk + " "})
-            await asyncio.sleep(0)
-        yield _sse("conversational", conversational.model_dump())
-
-    if intent == "comparison":
-        citations_count = _count_comparison_citations(
-            comparison if isinstance(comparison, ComparisonAnswer) else None
-        )
-    elif intent == "quick_fact":
-        citations_count = _count_quick_fact_citations(
-            quick_fact if isinstance(quick_fact, QuickFactAnswer) else None
-        )
-    elif intent == "conversational":
-        # Conversational answers carry no citations by design — the
-        # hallucination scorer rejects any digit, and there are no reports
-        # to cite either.
-        citations_count = 0
-    else:
-        citations_count = _count_citations(thesis if isinstance(thesis, Thesis) else None)
-
-    yield _sse(
-        "done",
-        {
-            "tools_count": len(reports),
-            "citations_count": citations_count,
-            "confidence": confidence,
-            "intent": intent,
-        },
-    )
+    finally:
+        # QNT-150: ensure the runner task is cancelled on every exit path —
+        # client disconnect (GeneratorExit), timeout, or normal completion.
+        # ``asyncio.to_thread`` cannot terminate the underlying thread, but
+        # cancelling the asyncio task releases the queue + emitter so no
+        # further frames pile up after the SSE consumer is gone. We shield
+        # the await so an outer cancellation doesn't interrupt the cleanup
+        # itself.
+        if not runner_task.done():
+            runner_task.cancel()
+        # ``_runner`` already swallows ``Exception`` internally and stores
+        # the failure in ``final_state_holder``, so the only thing the
+        # await raises here is ``CancelledError`` (when we cancelled it
+        # above, or when an outer cancellation reaches the shield).
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.shield(runner_task)
 
 
 @router.post("/chat")

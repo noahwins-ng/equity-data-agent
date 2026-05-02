@@ -27,6 +27,19 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str = ""
     GEMINI_API_KEY: str = ""
     EQUITY_AGENT_PROVIDER: str = "groq"  # "groq" | "gemini"
+    # Per-LLM-call request timeout in seconds. Bound for any single
+    # ChatOpenAI request (plan / synthesize / structured-output) so a hung
+    # LiteLLM proxy or stalled provider can never stall the SSE chat
+    # connection forever (QNT-150). Free-tier providers (Groq, Gemini) take
+    # under 10s on the happy path; 60s is loose enough to absorb the slow
+    # tail without leaving SSE clients hanging indefinitely.
+    LLM_REQUEST_TIMEOUT: float = 60.0
+    # Top-level budget for an entire chat-SSE run. asyncio.wait_for around
+    # the graph runner enforces this regardless of internal LLM-level
+    # timeouts (a misbehaving proxy could retry past the per-call cap).
+    # Default = 4× per-call timeout, matching the worst-case classify +
+    # plan + synthesize + safety margin.
+    CHAT_RUN_TIMEOUT: float = 240.0
 
     # Langfuse
     LANGFUSE_PUBLIC_KEY: str = ""

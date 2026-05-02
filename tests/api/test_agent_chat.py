@@ -15,8 +15,12 @@ Each TestClient call buffers the full streaming body, so we re-parse the
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
-from collections.abc import Iterable
+import threading
+import time
+from collections.abc import AsyncGenerator, Iterable
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -249,9 +253,20 @@ def test_thesis_with_empty_bull_emits_full_event(
 
 
 def test_no_thesis_when_reports_empty_emits_done_with_zero(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Graph short-circuit (no reports gathered) → no thesis event, done has zeros."""
+    """Graph short-circuit (no reports gathered) → no thesis event, done has zeros.
+
+    QNT-150: also asserts the surfaced ``tool-failed`` error carries a
+    stable user-facing string (no raw graph-recorded detail) — the
+    in-memory ``errors`` dict can hold arbitrary upstream strings (HTTP
+    error bodies, internal URLs from agent.tools' ``[error] kind: detail``
+    format) that must never reach the SSE client.
+    """
+
+    leaky_detail = "[error] http: 500 internal server error at http://api.internal:8000/v1/reports/technical/NVDA"
 
     def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
         graph = MagicMock()
@@ -260,7 +275,7 @@ def test_no_thesis_when_reports_empty_emits_done_with_zero(
             "intent": "thesis",
             "plan": [],
             "reports": {},
-            "errors": {"technical": "tool-not-registered"},
+            "errors": {"technical": leaky_detail},
             "thesis": None,
             "quick_fact": None,
             "confidence": 0.0,
@@ -270,12 +285,22 @@ def test_no_thesis_when_reports_empty_emits_done_with_zero(
     monkeypatch.setattr(chat_module, "build_graph", _fake_build)
     monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
 
-    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": ""})
+    with caplog.at_level("WARNING", logger=chat_module.__name__):
+        r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": ""})
     frames = _parse_sse(r.text)
     events = [name for name, _ in frames]
     # Required-tool failure surfaces as an error event before done.
     assert "error" in events
     assert "thesis" not in events
+    # The error event detail is a stable user-facing string — the leaky
+    # internal URL never reaches the SSE client.
+    err = next(data for name, data in frames if name == "error")
+    assert err["code"] == "tool-failed"
+    assert "api.internal" not in err["detail"]
+    assert "[error]" not in err["detail"]
+    assert err["detail"] == "Reading technicals failed."
+    # Server-side log captured the raw detail for debuggability.
+    assert "api.internal" in caplog.text
     done_data = frames[-1][1]
     assert events[-1] == "done"
     assert done_data["tools_count"] == 0
@@ -283,23 +308,43 @@ def test_no_thesis_when_reports_empty_emits_done_with_zero(
     assert done_data["confidence"] == 0.0
 
 
-def test_agent_crash_emits_error_event(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A graph exception (e.g. LLM provider failure) surfaces as an SSE error
-    event followed by done — the panel must not crash on a crashed agent."""
+def test_agent_crash_emits_sanitized_error_event(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """QNT-150: a graph exception surfaces a stable user-facing string;
+    raw exception details (class name, message, stack) only appear in
+    server logs. The panel must not see internal LiteLLM auth tokens,
+    URLs, or stack context that the SDK might attach to the exception."""
 
     def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
         graph = MagicMock()
-        graph.invoke.side_effect = RuntimeError("boom")
+        # Realistic-looking sensitive content that must NOT leak to the SSE
+        # client: API key tokens, internal hostnames, full traceback hints.
+        graph.invoke.side_effect = RuntimeError(
+            "401 Unauthorized; api_key=sk-secret-XYZ; "
+            "url=http://litellm.internal:4000/v1/chat/completions"
+        )
         return graph
 
     monkeypatch.setattr(chat_module, "build_graph", _fake_build)
     monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
 
-    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": ""})
+    with caplog.at_level("ERROR", logger=chat_module.__name__):
+        r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": ""})
     frames = _parse_sse(r.text)
     err = next(data for name, data in frames if name == "error")
     assert err["code"] == "agent-failed"
-    assert "boom" in err["detail"]
+    # User-facing detail is the stable sanitized string — no exception
+    # class name, no token, no internal URL.
+    assert err["detail"] == chat_module._ERROR_DETAIL_AGENT_FAILED
+    assert "sk-secret" not in err["detail"]
+    assert "litellm.internal" not in err["detail"]
+    assert "RuntimeError" not in err["detail"]
+    # Server-side log captured the full detail for debuggability —
+    # ``logger.exception`` formats the traceback into ``caplog.text``.
+    assert "sk-secret" in caplog.text
     assert frames[-1][0] == "done"
 
 
@@ -791,6 +836,223 @@ def test_thesis_failure_falls_back_to_conversational_redirect(
     payload = next(data for name, data in frames if name == "conversational")
     assert payload["answer"]
     assert len(payload["suggestions"]) == 3
+
+
+# ─── QNT-150: production-hardening (disconnect, timeout, race) ────────────
+
+
+async def test_client_disconnect_cancels_runner_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-150: when the SSE consumer disconnects mid-stream, the
+    generator's finally clause must cancel the runner_task so the worker
+    coroutine is released. ``asyncio.to_thread`` cannot kill the
+    underlying thread, but cancelling the asyncio task releases the queue
+    + emitter callbacks so no further frames pile up.
+
+    Test strategy: drive the async generator directly. Use a slow ``invoke``
+    that blocks on a threading.Event so the runner task is still running
+    when we ``aclose()`` the generator. Capture the task via a helper that
+    overrides ``asyncio.create_task`` for the duration of the test.
+    """
+    invoke_started = threading.Event()
+    invoke_unblock = threading.Event()
+
+    def _slow_invoke(state: dict[str, Any]) -> dict[str, Any]:
+        invoke_started.set()
+        # Block until either the test releases us or 5s elapses (failsafe).
+        # If the runner_task is properly cancelled, the asyncio side stops
+        # waiting for us; the thread eventually exits via the timeout.
+        invoke_unblock.wait(timeout=5)
+        return {
+            "ticker": state["ticker"],
+            "intent": "thesis",
+            "plan": [],
+            "reports": {},
+            "errors": {},
+            "thesis": None,
+            "quick_fact": None,
+            "comparison": None,
+            "conversational": None,
+            "confidence": 0.0,
+        }
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
+        graph = MagicMock()
+        graph.invoke.side_effect = _slow_invoke
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    # Capture the runner_task by intercepting asyncio.create_task while the
+    # _stream coroutine runs. The test reads the captured handle to assert
+    # the task was cancelled.
+    captured: list[asyncio.Task[Any]] = []
+    real_create_task = asyncio.create_task
+
+    def _spy_create_task(coro: Any, **kw: Any) -> asyncio.Task[Any]:
+        task = real_create_task(coro, **kw)
+        captured.append(task)
+        return task
+
+    monkeypatch.setattr(asyncio, "create_task", _spy_create_task)
+
+    request = chat_module.ChatRequest(ticker="NVDA", message="")
+    gen: AsyncGenerator[str, None] = chat_module._stream(request)  # type: ignore[assignment]
+    pull_task: asyncio.Task[str] | None = None
+    try:
+        # Pull frames until the runner thread is in flight. The drain loop
+        # times out every 100ms, so we won't wait forever for a frame.
+        pull_task = asyncio.create_task(gen.__anext__())
+        # Wait for the worker thread to start (so the runner_task is "live").
+        for _ in range(50):
+            if invoke_started.is_set():
+                break
+            await asyncio.sleep(0.02)
+        assert invoke_started.is_set(), "runner thread never started"
+    finally:
+        # Disconnect: close the generator. This raises GeneratorExit into
+        # the drain loop, which must hit the finally clause and cancel the
+        # runner_task.
+        if pull_task is not None:
+            pull_task.cancel()
+            with contextlib.suppress(BaseException):
+                await pull_task
+        await gen.aclose()
+        invoke_unblock.set()  # release the worker thread so pytest can shut down
+
+    # The runner_task must have been cancelled (or completed). If the
+    # finally clause never ran, the task would still be pending.
+    runner_task = next(
+        (t for t in captured if t is not pull_task and "to_thread" in repr(t.get_coro())),
+        None,
+    )
+    assert runner_task is not None, "did not capture a runner_task"
+    # Allow a brief moment for cancellation to land
+    for _ in range(20):
+        if runner_task.cancelled() or runner_task.done():
+            break
+        await asyncio.sleep(0.05)
+    assert runner_task.cancelled() or runner_task.done(), (
+        "runner_task was not cancelled / completed after generator close — "
+        "the finally cleanup did not run"
+    )
+
+
+async def test_run_timeout_emits_agent_timeout_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-150: when the graph exceeds CHAT_RUN_TIMEOUT, the SSE stream
+    surfaces a stable user-facing timeout error and a done frame, then
+    cleanly tears down — without leaking the underlying exception."""
+    from shared.config import settings
+
+    # Override timeout to a short window so the test finishes fast — keep
+    # comfortably above the drain loop's 0.1s queue.get cycle so the
+    # deadline check fires reliably under load (CI box, GIL contention).
+    monkeypatch.setattr(settings, "CHAT_RUN_TIMEOUT", 1.0)
+
+    invoke_unblock = threading.Event()
+
+    def _slow_invoke(state: dict[str, Any]) -> dict[str, Any]:
+        # Block past CHAT_RUN_TIMEOUT
+        invoke_unblock.wait(timeout=3)
+        return {
+            "ticker": state["ticker"],
+            "intent": "thesis",
+            "plan": [],
+            "reports": {},
+            "errors": {},
+            "thesis": None,
+            "quick_fact": None,
+            "comparison": None,
+            "conversational": None,
+            "confidence": 0.0,
+        }
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
+        graph = MagicMock()
+        graph.invoke.side_effect = _slow_invoke
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    with TestClient(main_module.app) as c:
+        try:
+            r = c.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": ""})
+        finally:
+            invoke_unblock.set()
+
+    frames = _parse_sse(r.text)
+    err = next((data for name, data in frames if name == "error"), None)
+    assert err is not None, f"expected an error frame, got events {[n for n, _ in frames]}"
+    assert err["code"] == "agent-timeout"
+    assert err["detail"] == chat_module._ERROR_DETAIL_AGENT_TIMEOUT
+    assert frames[-1][0] == "done"
+
+
+def test_streaming_race_async_worker_drains_cleanly(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QNT-150 AC6: introduce a small delay inside the worker between
+    posting a tool_call and the tool_result. The drain loop's
+    ``runner_task.done()`` check must NOT exit before the loop has
+    drained the queue, otherwise late tool_result events would be lost.
+
+    Without the ``or not queue.empty()`` clause in the drain condition,
+    or with a worker that posts after ``runner_task`` is done, the race
+    drops events. This test asserts both tool_call and tool_result land
+    even when the worker posts the result after a small sleep.
+    """
+
+    def _delaying_tool(_t: str) -> str:
+        # Force the wrapped tool to take measurable time so the
+        # tool_result event lands after a non-trivial delay. The drain
+        # loop must absorb this and still emit the result frame.
+        time.sleep(0.05)
+        return "## technical NVDA\nline\n"
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
+        graph = MagicMock()
+
+        def invoke(state: dict[str, Any]) -> dict[str, Any]:
+            ticker = state["ticker"]
+            reports = {name: fn(ticker) for name, fn in tools.items()}
+            return {
+                "ticker": ticker,
+                "intent": "thesis",
+                "plan": list(tools.keys()),
+                "reports": reports,
+                "errors": {},
+                "thesis": _stub_thesis(),
+                "quick_fact": None,
+                "comparison": None,
+                "conversational": None,
+                "confidence": 1.0,
+            }
+
+        graph.invoke.side_effect = invoke
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(
+        chat_module,
+        "default_report_tools",
+        lambda: {"technical": _delaying_tool},
+    )
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": ""})
+    frames = _parse_sse(r.text)
+    events = [name for name, _ in frames]
+    # Both tool_call and tool_result must land; the drain loop's
+    # ``or not queue.empty()`` clause is what guarantees this in the
+    # current implementation, even when the result post races with
+    # ``runner_task.done()``.
+    assert events.count("tool_call") == 1
+    assert events.count("tool_result") == 1
+    assert events[-1] == "done"
 
 
 def test_cors_post_allowed(client: TestClient) -> None:
