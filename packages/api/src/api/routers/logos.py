@@ -73,10 +73,15 @@ _REQUEST_TIMEOUT_SECONDS = 5.0
 # well below the limit even on cold start. The CDN host (static.finnhub.io)
 # is unmetered so we don't space those out.
 _INTER_PROFILE_REQUEST_SECONDS = 1.0
-# Hard cap on a single decoded logo. Real Finnhub PNGs come in around 5-15
-# KB; anything materially larger is almost certainly a parse error or a
-# misrouted asset, and we'd rather skip it than bloat every JSON response.
-_MAX_LOGO_BYTES = 64 * 1024
+# Hard cap on a single decoded logo. QNT-163 raised this from 64 KB to
+# 128 KB after observing JPM's Finnhub PNG at 83 KB — the original cap
+# was set on a "Real Finnhub PNGs come in around 5-15 KB" assumption that
+# turned out wrong for the larger-cap-icon brands (banks, healthcare).
+# 128 KB still cleanly rejects misrouted assets (an HTML error page, a
+# multi-MB stock photo) without trimming legitimate logos. Worst-case the
+# 10-ticker JSON response grows to ~1.3 MB pre-gzip (~400 KB gzipped),
+# amortised by the frontend's 24h Next Data Cache TTL.
+_MAX_LOGO_BYTES = 128 * 1024
 # Bounded wait the request handler is willing to spend on a still-warming
 # cache. Pre-warm typically completes in <15s for 10 tickers; 30s is the
 # soft ceiling that prevents a stuck Finnhub from indefinitely tying up a

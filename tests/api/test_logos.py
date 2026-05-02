@@ -60,3 +60,23 @@ def test_finnhub_cdn_pattern_rejects_lookalikes(host: str) -> None:
     domains. The cost of a false negative here is reaching an internal
     or attacker-controlled endpoint with a Finnhub-shaped URL."""
     assert _FINNHUB_CDN_HOST_PATTERN.fullmatch(host) is None
+
+
+def test_max_logo_bytes_accommodates_observed_real_logos() -> None:
+    """QNT-163 follow-up: the byte cap must accept the largest real
+    Finnhub logo we've observed (JPM at ~83 KB) plus headroom. The
+    original 64 KB cap from QNT-162 was set on a 5-15 KB assumption that
+    turned out wrong for the bank / healthcare brands; this test pins the
+    cap so a future "let's tighten it back to 64 KB" sweep doesn't
+    silently re-break JPM-class logos.
+    """
+    from api.routers.logos import _MAX_LOGO_BYTES
+
+    # Observed largest legitimate logo (JPM, May 2026): 83397 bytes.
+    largest_observed = 83397
+    headroom_factor = 1.5  # absorb a future bank with a slightly bigger PNG
+    assert _MAX_LOGO_BYTES >= int(largest_observed * headroom_factor), (
+        f"_MAX_LOGO_BYTES={_MAX_LOGO_BYTES} too tight; needs to accept "
+        f"observed {largest_observed} bytes with headroom for future "
+        f"larger logos (recommended >= {int(largest_observed * headroom_factor)})"
+    )
