@@ -1,4 +1,8 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
+import json
+from typing import Annotated
+
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -57,7 +61,11 @@ class Settings(BaseSettings):
     # Provenance strip values surfaced by /api/v1/health (QNT-132).
     # Single source of truth for the data-driven UI bottom strip — vendor swap
     # or schedule shift updates the API, frontend re-renders without a deploy.
-    PROVENANCE_SOURCES: list[str] = ["yfinance", "Finnhub", "Qdrant"]
+    PROVENANCE_SOURCES: Annotated[list[str], NoDecode] = [
+        "yfinance",
+        "Finnhub",
+        "Qdrant",
+    ]
     # Static fallback when Dagster schedule introspection fails (e.g. a future
     # api-only image without dagster_pipelines installed). Format mirrors what
     # the introspected path emits so the frontend never sees a shape change.
@@ -71,7 +79,7 @@ class Settings(BaseSettings):
     # An origin regex is supported for the Vercel preview-domain pattern; pin
     # it to ONE project (the substring before .vercel.app) so leaked previews
     # for unrelated projects can't drive traffic to this API.
-    CORS_ALLOWED_ORIGINS: list[str] = ["http://localhost:3001"]
+    CORS_ALLOWED_ORIGINS: Annotated[list[str], NoDecode] = ["http://localhost:3001"]
     # Project-pinned Vercel preview regex. Empty string = no preview origins.
     # Example for project "equity-data-agent":
     #   ^https://equity-data-agent(-[a-z0-9-]+)?\.vercel\.app$
@@ -113,6 +121,22 @@ class Settings(BaseSettings):
     @property
     def clickhouse_url(self) -> str:
         return f"http://{self.CLICKHOUSE_HOST}:{self.CLICKHOUSE_PORT}"
+
+    # pydantic-settings v2 only parses list[str] env values as JSON by default
+    # (e.g. CORS_ALLOWED_ORIGINS=["a","b"]). The .env.example comments and the
+    # deploy guide document the friendlier comma-separated form
+    # (CORS_ALLOWED_ORIGINS=a,b) which crashes EnvSettingsSource without a
+    # parser. The 2026-05-02 outage hit prod because of this mismatch — this
+    # validator accepts both forms so the documented format actually works.
+    @field_validator("CORS_ALLOWED_ORIGINS", "PROVENANCE_SOURCES", mode="before")
+    @classmethod
+    def _split_comma_list(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        if stripped.startswith("["):
+            return json.loads(stripped)
+        return [item.strip() for item in stripped.split(",") if item.strip()]
 
 
 settings = Settings()
