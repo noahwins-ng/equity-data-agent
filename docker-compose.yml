@@ -358,6 +358,25 @@ services:
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.49.1
     restart: unless-stopped
+    # QNT-103: without explicit flags cAdvisor enumerates every cgroup slice
+    # (systemd, init.scope, /system.slice/*.service, etc.) and tries to read
+    # docker layer metadata via /rootfs/var/lib/docker, which collides with
+    # the rootfs RO mount and silently fails — Containers Overview dashboard
+    # ends up empty and per-container alert rules never fire.
+    #   --docker_only=true            restrict to Docker containers; cAdvisor
+    #                                 uses the Docker API (/var/run/docker.sock)
+    #                                 for discovery, which populates the `name`
+    #                                 and `image` labels alert rules + dashboards
+    #                                 query on.
+    #   --store_container_labels=false control label cardinality: don't expose
+    #                                 every Docker label as a Prometheus label.
+    #   --disable_metrics=disk        disk metrics rely on layerdb introspection
+    #                                 (the failing /rootfs/var/lib/docker path);
+    #                                 we don't graph per-container disk anyway.
+    command:
+      - '--docker_only=true'
+      - '--store_container_labels=false'
+      - '--disable_metrics=disk'
     # `privileged` is required on Ubuntu hosts (Hetzner CX41) so cAdvisor can
     # read cgroup memory accounting from /sys/fs/cgroup. Less-privileged
     # alternatives exist but trip on per-container memory limits.
