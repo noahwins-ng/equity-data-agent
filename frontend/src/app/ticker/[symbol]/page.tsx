@@ -4,12 +4,11 @@
  * Per ADR-014 §3:
  *   - ISR via `generateStaticParams()` reading `/api/v1/tickers` at build time
  *     — no hardcoded universe (Anti-pattern §3).
- *   - `revalidate: 3600` on every server fetch — data is EOD-cadence
- *     (02:00 ET Dagster ingest), so a 1-hour TTL still surfaces fresh data
- *     within the freshness budget while keeping ISR Writes proportional to
- *     the daily change rate (QNT-166). Sub-hour freshness on interactive
- *     surfaces (chart range, indicator timeframe, fundamentals period tabs)
- *     comes from `cache: "no-store"` on those client fetches.
+ *   - `revalidate: 86_400` on every server fetch — data is EOD-cadence
+ *     (02:00 ET Dagster ingest), so a 24 h TTL is the semantic ceiling
+ *     and gives ~1 regeneration/page/day (QNT-166). Sub-hour freshness on
+ *     interactive surfaces (chart range, indicator timeframe, fundamentals
+ *     period tabs) comes from `cache: "no-store"` on those client fetches.
  *   - 200-with-empty is rendered the same as service-down (Anti-pattern §5).
  */
 
@@ -31,10 +30,10 @@ import {
 } from "@/lib/api";
 
 // ISR window for the route segment — same value as the cached fetches inside.
-// 1 hour matches the EOD freshness budget (data updates once per day at
-// 02:00 ET) and prevents ISR Writes from outpacing the underlying change
-// rate. See QNT-166 for the prior 60 s overrun.
-export const revalidate = 3600;
+// 24 h is the semantic ceiling for EOD-cadence data (Dagster ingest at 02:00
+// ET); any TTL below that regenerates more often than the data changes and
+// is wasted ISR Writes. QNT-166 trace: 60 s -> 3600 s -> 86_400 s.
+export const revalidate = 86_400;
 // `dynamicParams = false` would 404 any ticker not enumerated in
 // `generateStaticParams`; we want graceful 404s for typos but allow new
 // tickers to render lazily on the first request after a registry change.
