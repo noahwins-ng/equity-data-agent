@@ -200,9 +200,29 @@ jobs:
               fi
             }
 
+            # QNT-103: prefix matcher for directory-rooted bind mounts (e.g. all
+            # of observability/grafana/provisioning/* maps to /etc/grafana/
+            # provisioning inside grafana). Restarts when ANY file under the
+            # prefix changed — Grafana only reads provisioning YAML at startup.
+            restart_if_prefix_changed() {
+              local prefix="$1"; shift
+              local -a services=("$@")
+              if printf '%s\n' "$CHANGED" | grep -qE "^${prefix}"; then
+                echo "[QNT-124] files under $prefix changed — docker compose restart ${services[*]}"
+                docker compose --profile prod restart "${services[@]}"
+                restarted_any=1
+              fi
+            }
+
             restart_if_changed "litellm_config.yaml" litellm
             restart_if_changed "dagster.yaml" dagster dagster-code-server dagster-daemon
             restart_if_changed "workspace.yaml" dagster dagster-daemon
+            # QNT-103: Grafana provisioning files (datasources / dashboards /
+            # alerting/*.yml) are only re-read on startup. Prometheus's
+            # prometheus.yml is similar (--web.enable-lifecycle would let us
+            # POST /-/reload but we don't enable it). Restart on any change.
+            restart_if_prefix_changed "observability/grafana/" grafana
+            restart_if_prefix_changed "observability/prometheus/" prometheus
             # NOTE: Caddyfile restart is intentionally omitted while caddy lives
             # in the dormant `prod-caddy` profile (QNT-75 / ADR-018). The
             # `--profile prod restart caddy` call would silently no-op because
