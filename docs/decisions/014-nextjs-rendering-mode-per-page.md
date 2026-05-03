@@ -42,9 +42,9 @@ The app shell (per design v2) has four data surfaces. For each, name (1) renderi
 | Field | Value |
 |---|---|
 | Surface | Persistent server component inside the root layout — visible on every route. |
-| Rendering | Server Component with cached `fetch` (Next.js Data Cache, 60 s TTL). Note: this is the Data Cache, not "ISR" in the route-segment sense -- ISR is a property of `page.tsx` / `route.ts`, not a layout-level fetch. |
-| Data fetch | Server `fetch(NEXT_PUBLIC_API_URL + "/api/v1/dashboard/summary", { next: { revalidate: 60 } })` |
-| Cache | `revalidate: 60`. Underlying data is daily-cadence (Dagster ingest at `02:00 ET`), so any TTL up to ~24 h is equally fresh; 60 s is chosen to collate concurrent requests during a navigation burst and bound debug-feedback latency when iterating, not to track ingest. Explicit, because Next.js 15 dropped default `fetch` caching. |
+| Rendering | Server Component with cached `fetch` (Next.js Data Cache, 1 h TTL -- see Cache row). Note: this is the Data Cache, not "ISR" in the route-segment sense -- ISR is a property of `page.tsx` / `route.ts`, not a layout-level fetch. |
+| Data fetch | Server `fetch(NEXT_PUBLIC_API_URL + "/api/v1/dashboard/summary", { next: { revalidate: 3600 } })` |
+| Cache | `revalidate: 3600` (the `DEFAULT_REVALIDATE_SECONDS` in `lib/api.ts`). Underlying data is daily-cadence (Dagster ingest at `02:00 ET`), so any TTL up to ~24 h is equally fresh; 1 h is chosen to keep ISR Writes proportional to the daily change rate while still collating concurrent requests during a navigation burst. Originally 60 s -- corrected post-incident under QNT-166 when the 1440x mismatch between TTL and ingest cadence burned ~78 % of the Vercel free-tier ISR Writes budget in 30 days. Explicit, because Next.js 15 dropped default `fetch` caching. |
 | Failure mode | `fetch` rejects -> RSC throws -> nearest `error.tsx` boundary renders fallback ("watchlist unavailable"). Never block route render on a watchlist failure. |
 | Identity | upstream: `/dashboard/summary` rows keyed by `ticker` -> downstream: React `<li>` keyed by `ticker`. The full ticker set (10 portfolio + SPY benchmark) comes from `/api/v1/tickers` -- never hardcoded. Pre-condition: SPY must be added to `packages/shared/src/shared/tickers.py` (tracked under QNT-134, "Add SPY to `shared.tickers` for benchmark overlay"); until that lands, `/api/v1/tickers` returns 10 and the SPY benchmark row is absent rather than synthesised. |
 
@@ -64,9 +64,9 @@ The app shell (per design v2) has four data surfaces. For each, name (1) renderi
 | Field | Value |
 |---|---|
 | Surface | `app/ticker/[symbol]/page.tsx` |
-| Rendering | ISR (route-segment). `generateStaticParams()` reads `/api/v1/tickers` at build time -- single source, no hardcoded augmentation. The endpoint returns 10 today and 11 once QNT-134 adds SPY to `shared.tickers`; either way the frontend code is unchanged. `revalidate = 60` keeps each page warm without thundering FastAPI. |
+| Rendering | ISR (route-segment). `generateStaticParams()` reads `/api/v1/tickers` at build time -- single source, no hardcoded augmentation. The endpoint returns 10 today and 11 once QNT-134 adds SPY to `shared.tickers`; either way the frontend code is unchanged. `revalidate = 3600` keeps each page warm without thundering FastAPI or burning ISR Writes against EOD-cadence data. |
 | Data fetch | Server component fetches the four reports in parallel via `Promise.all`: `/reports/summary`, `/reports/technical`, `/reports/fundamental`, `/reports/news`. Provenance strip fetches `/api/v1/health` with `revalidate: 300` (changes only on backend deploys). |
-| Cache | All server fetches use `next: { revalidate: 60 }`. The chart and indicator-aggregation toggles are client-side (see below) and bypass the server cache. |
+| Cache | All server fetches use `next: { revalidate: 3600 }`. The chart and indicator-aggregation toggles are client-side (see below) and bypass the server cache. |
 | Failure mode | Per QNT-55 lesson: any single report endpoint that 200s with empty data renders the same empty state as "service down" (`N/A`, "no recent news"). A `fetch` rejection bubbles to `error.tsx`. Per-card boundaries are an iteration target, not v1. |
 | Identity | upstream: `(ticker)` from URL param `symbol` -> downstream: each report keyed by `ticker`. Normalize to upper-case before fetch (URL is case-permissive, ClickHouse `ticker` is upper-case). |
 
@@ -101,7 +101,7 @@ Active ticker is read from `usePathname()` -- the panel observes the route, neve
 
 **Vercel AI SDK `useChat` for the chat panel.** Already covered by ADR-008. Mentioning here only because the chat-panel decision is the place a future contributor would re-ask the question. The agent runs in Python behind a FastAPI SSE endpoint; `useChat` assumes the LLM is callable from a Next.js route handler. Wrapping the Python endpoint in the SDK's transport adapter is fighting the framework. *Rejected (per ADR-008).*
 
-**Cache reports in Vercel KV / Edge Config.** Overkill for our scale. ISR with `revalidate: 60` on the same Vercel runtime gets 99 % of the win without adding a state store to operate. *Out of scope; revisit if `revalidate` proves insufficient.*
+**Cache reports in Vercel KV / Edge Config.** Overkill for our scale. ISR with `revalidate: 3600` on the same Vercel runtime gets 99 % of the win without adding a state store to operate. *Out of scope; revisit if `revalidate` proves insufficient.*
 
 **Server Actions for the agent chat.** Idiomatic React 19. But Server Actions tie streaming to a single server-component lifecycle; we need fine-grained event types (`tool_call`, `prose_chunk`, `thesis`, `done`) rendered differently. ADR-008 already dispositions this. *Rejected (per ADR-008).*
 
@@ -126,7 +126,7 @@ These are the specific traps this ADR prevents -- name them so a future contribu
 **Easier:**
 
 - **Single source of truth per surface.** Each route / panel has exactly one rendering mode + cache directive named in code, matching this ADR by section. New contributors don't choose; they look up.
-- **Free-tier-friendly.** ISR + `revalidate: 60` means Vercel caches the rendered HTML and re-uses it across the visitor population. FastAPI sees ~1 request per ticker per minute, not per navigation. Fits inside Hetzner CX41 + Vercel hobby tier comfortably.
+- **Free-tier-friendly.** ISR + `revalidate: 3600` means Vercel caches the rendered HTML and re-uses it across the visitor population. FastAPI sees ~1 request per ticker per hour, not per navigation. Fits inside Hetzner CX41 + Vercel hobby tier comfortably -- and stays well under the Vercel free-tier ISR Writes cap, which the original 60 s value did not (QNT-166).
 - **The eval harness (QNT-67) and the chat panel hit the same SSE contract.** No frontend-specific transport, no SDK lock-in. Per ADR-008.
 - **`generateStaticParams` from `/api/v1/tickers`.** When QNT-134 / future work adds a ticker, the build regenerates the static set automatically -- no frontend code change.
 - **Anti-patterns section gives reviewers a checklist.** Phase-6 PRs can grep this list before merging.
@@ -146,7 +146,7 @@ Reopen this ADR if any of these fire:
 - A new surface lands that has per-request data (auth-gated user view, real-time intraday) -- that is force-dynamic territory; document it as a §5 addition rather than amending the existing rules.
 - Real-time / intraday tick stream is added (out of scope per `docs/design-frontend-plan.md`) -- forces a CSR-with-WebSocket surface.
 - We add an authentication layer -- the watchlist + ticker page may move from ISR to SSR (per-user data).
-- FastAPI proves to be the bottleneck even with `revalidate: 60` -- step up to Vercel KV / Edge Config caching.
+- FastAPI proves to be the bottleneck even with `revalidate: 3600` -- step up to Vercel KV / Edge Config caching.
 - The `/api/v1/health` provenance shape changes (QNT-132) -- the ticker page provenance strip and the chat panel composer placeholder both consume it; coordinate the change.
 
 ## References
