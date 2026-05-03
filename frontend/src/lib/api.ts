@@ -22,11 +22,20 @@
 // NEXT_PUBLIC_API_URL in any prod / preview deploy where the API lives off-host.
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 
-/** Default revalidation window for daily-cadence data (60 s — see ADR-014 §1). */
-export const DEFAULT_REVALIDATE_SECONDS = 60;
+/**
+ * Default revalidation window for daily-cadence data.
+ *
+ * Underlying data is EOD-cadence (02:00 ET Dagster ingest), so a 1-hour TTL
+ * still surfaces fresh data within the freshness budget while keeping ISR
+ * Writes proportional to the daily change rate. The earlier 60 s default
+ * burned ~150K Vercel ISR Writes/30d (QNT-166) for data that changes once
+ * per day. Pages that need sub-hour freshness (charts, technicals timeframe
+ * toggles) bypass this via `cache: "no-store"`.
+ */
+export const DEFAULT_REVALIDATE_SECONDS = 3600;
 
 export type ApiFetchOptions = Omit<RequestInit, "cache"> & {
-  /** ISR / Data Cache TTL in seconds. Defaults to 60. Mutually exclusive with `cache`. */
+  /** ISR / Data Cache TTL in seconds. Defaults to DEFAULT_REVALIDATE_SECONDS (1 hour). Mutually exclusive with `cache`. */
   revalidate?: number;
   /** Override Next's data cache (e.g. "no-store" for SSE). Mutually exclusive with `revalidate`. */
   cache?: RequestCache;
