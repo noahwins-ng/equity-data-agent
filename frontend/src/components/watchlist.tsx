@@ -4,8 +4,8 @@
  * Per ADR-014 §1:
  *   - Lives in `app/layout.tsx`, not in any single page.
  *   - Server fetch via Next.js Data Cache, default `revalidate` from
- *     `lib/api.ts` (1 hour — matches the EOD freshness budget; QNT-166
- *     for the rationale behind the change from the original 60 s).
+ *     `lib/api.ts` (24 h — matches the EOD ingest cadence; see QNT-166
+ *     for the trace from 60 s through 3600 s to the 86_400 s ceiling).
  *   - Ticker universe comes from `/api/v1/tickers` only — never hardcoded,
  *     never augmented client-side (Anti-pattern #3).
  *   - Both endpoints fail soft: a network error renders a "watchlist
