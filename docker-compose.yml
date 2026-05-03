@@ -312,8 +312,12 @@ services:
     ports:
       # Loopback only — same auth model as dagster (SSH tunnel = auth boundary).
       - "127.0.0.1:8082:8080"
-    mem_limit: 64m
-    mem_reservation: 16m
+    # QNT-164: 64m -> 192m. Dozzle v8 reactively replays tail logs from every
+    # container on UI connect; with 13 prod containers the spike from idle
+    # (~39 MiB) past 64 MiB OOM-killed dozzle on first connect post-QNT-103
+    # deploy. 192m gives ~5x idle headroom for the connect-time burst.
+    mem_limit: 192m
+    mem_reservation: 32m
     cpus: 0.05
     logging: *default-logging
     healthcheck:

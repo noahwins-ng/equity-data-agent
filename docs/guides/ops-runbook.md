@@ -608,14 +608,14 @@ Open all observability tunnels with `make tunnel` (forwards 8123, 3100, 8082, 90
 
 | Service | mem_limit | Typical RSS | Notes |
 |---|---|---|---|
-| dozzle | 64 MiB | ~30 MiB | Stateless, log streaming only. |
+| dozzle | 192 MiB | ~40 MiB idle | v8 reactively replays per-container tail logs on connect (QNT-164 bump from 64m after first-connect OOM). |
 | node_exporter | 64 MiB | ~20 MiB | Host metrics, no state. |
 | cadvisor | 256 MiB | ~120 MiB | Privileged; reads cgroup accounting. |
 | prometheus | 384 MiB | ~180 MiB | TSDB grows with retention (15 d cap). |
 | grafana | 256 MiB | ~110 MiB | UI + alert rule evaluation. |
-| **Total observability** | **1024 MiB** | **~460 MiB** | Within "<1 GiB" budget from QNT-103. |
+| **Total observability** | **1152 MiB** | **~470 MiB** | Slightly over the original "<1 GiB" budget after QNT-164 dozzle bump; still well under host headroom. |
 
-CX41 totals: 16 GiB RAM. Pre-QNT-103 mem_limit allocation was 13.06 GiB (clickhouse 8 GiB + dagster trio 3.5 GiB + api 1 GiB + litellm 0.5 GiB + cloudflared 64 MiB); post-QNT-103 it's 14.06 GiB. Leaves ~1.94 GiB host headroom outside cgroups, plus mem_limit is a hard ceiling (typical RSS sits well below it) and reservations are softer than limits, so realised free memory under typical load should remain above the 3 GiB AC threshold. Verify post-deploy via `make obs-status`.
+CX41 totals: 16 GiB RAM. Pre-QNT-103 mem_limit allocation was 13.06 GiB (clickhouse 8 GiB + dagster trio 3.5 GiB + api 1 GiB + litellm 0.5 GiB + cloudflared 64 MiB); post-QNT-103 + QNT-164 it's 14.19 GiB. Leaves ~1.81 GiB host headroom outside cgroups, plus mem_limit is a hard ceiling (typical RSS sits well below it) and reservations are softer than limits, so realised free memory under typical load should remain above the 3 GiB AC threshold. Verify post-deploy via `make obs-status`.
 
 ---
 
