@@ -590,6 +590,56 @@ ssh hetzner 'curl -sf -u admin:<password> http://localhost:3030/api/v1/provision
 
 ---
 
+### Disk usage climbing on prod (`HostDiskHigh` alert, /dev/sda1 > 80%)
+
+**Symptoms**:
+
+- Discord `HostDiskHigh` alert fires (rule lives in `observability/grafana/provisioning/alerting/rules.yaml`, threshold 80% on `/`).
+- *Host Overview* Grafana dashboard "Disk usage %" panel red.
+- `docker system df` on prod shows hundreds-to-thousands of `Containers` rows under TOTAL with very few ACTIVE (1080 / 16 was the QNT-167 baseline), or many GB of `Build Cache` unreferenced by any tagged image.
+
+**Diagnosis**:
+
+```bash
+# 1. Confirm host-level pressure
+ssh hetzner 'df -h /'
+
+# 2. Break down where the GB live (containers, images, volumes, build cache)
+ssh hetzner 'docker system df'
+
+# 3. If Containers is the culprit, who left them behind?
+#    Run-worker containers from DockerRunLauncher should auto-remove (QNT-167);
+#    if you see Exited equity-data-agent-dagster:latest containers, auto_remove
+#    is missing from dagster.yaml or didn't reach the daemon (named-volume
+#    shadowing — see "dagster.yaml config change didn't activate").
+ssh hetzner 'docker ps -a --filter ancestor=equity-data-agent-dagster:latest --format "{{.Names}}\t{{.Status}}" | head -20'
+```
+
+**Response**:
+
+```bash
+# Stopped containers + dangling images + unreferenced build cache. Running
+# services and named volumes are NOT touched. Safe to run during business hours.
+ssh hetzner '
+  docker container prune -f
+  docker builder prune -f --filter unused-for=24h
+  docker image prune -f
+'
+
+# Verify disk dropped
+make obs-status
+```
+
+**Prevention**:
+
+- [QNT-167](https://linear.app/noahwins/issue/QNT-167) — `auto_remove: true` on `DockerRunLauncher.container_kwargs` in `dagster.yaml`. Every run-worker container is removed by Docker the moment it exits, eliminating the accumulation at the source. Logs + event log are persisted in the SQLite store on the `dagster_home` volume, so removing the container loses no debugging signal.
+- [QNT-167](https://linear.app/noahwins/issue/QNT-167) — `make prune-build-cache-install` lays down a weekly cron (Sun 04:00 UTC) that runs `docker builder prune --filter unused-for=168h`. Build cache grows ~1-2 GB per CD `--build`; weekly hygiene keeps it bounded.
+- [QNT-103](https://linear.app/noahwins/issue/QNT-103) — `HostDiskHigh` Grafana alert (>80% for 10 min) gives early warning long before the kernel ENOSPCs writes.
+
+**Last occurred**: 2026-05-03 — surfaced by `HostDiskHigh` after QNT-103 landed; 1080 stopped run-worker containers + 53 GB build cache, /dev/sda1 at 85%.
+
+---
+
 ### Where are the logs / dashboards?
 
 | What | URL (via SSH tunnel) | Auth | Purpose |

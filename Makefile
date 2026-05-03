@@ -1,4 +1,4 @@
-.PHONY: setup dev-dagster dev-api dev-frontend dev-litellm test test-integration lint format migrate seed tunnel issue pr build check-prod rollback monitor-install monitor-log events-notify-install events-notify-status events-notify-test obs-status obs-alert-test sops-edit sops-encrypt sops-decrypt sops-rotate-keys help
+.PHONY: setup dev-dagster dev-api dev-frontend dev-litellm test test-integration lint format migrate seed tunnel issue pr build check-prod rollback monitor-install monitor-log events-notify-install events-notify-status events-notify-test obs-status obs-alert-test prune-build-cache prune-build-cache-install sops-edit sops-encrypt sops-decrypt sops-rotate-keys help
 
 # ─── Setup ────────────────────────────────────────────────────
 
@@ -107,6 +107,19 @@ events-notify-test: ## Kill litellm to fire a Discord notification (then bring i
 	@echo "Discord alert should land. The container will NOT auto-recover — Docker treats"
 	@echo "docker kill as 'manually stopped' and skips the restart: unless-stopped policy."
 	@echo "Restart with: ssh hetzner 'cd /opt/equity-data-agent && docker compose --profile prod up -d litellm'"
+
+prune-build-cache: ## Reclaim Docker build cache older than 7 days on prod (one-shot)
+	@echo "=== Before ==="
+	@ssh hetzner "docker system df"
+	@ssh hetzner "docker builder prune -f --filter unused-for=168h"
+	@echo ""
+	@echo "=== After ==="
+	@ssh hetzner "docker system df"
+
+prune-build-cache-install: ## Install weekly build-cache prune cron on Hetzner (Sundays 04:00 UTC)
+	ssh hetzner '(crontab -l 2>/dev/null | grep -v "docker builder prune"; echo "0 4 * * 0 /usr/bin/docker builder prune -f --filter unused-for=168h >> /var/log/docker-builder-prune.log 2>&1") | crontab -'
+	@echo "Build-cache prune installed — runs weekly at Sun 04:00 UTC."
+	@echo "Inspect log: ssh hetzner 'tail /var/log/docker-builder-prune.log'"
 
 # ─── Observability (QNT-103) ─────────────────────────────────
 
