@@ -705,3 +705,47 @@ def test_sentry_capture_invokes_sdk_when_dsn_set(monkeypatch: pytest.MonkeyPatch
     with patch.dict("sys.modules", {"sentry_sdk": fake_sdk}):
         security_module._sentry_capture("hello", level="error")
     fake_sdk.capture_message.assert_called_once_with("hello", level="error")
+
+
+def test_sentry_capture_exception_no_op_when_dsn_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No SENTRY_DSN → ``sentry_capture_exception`` must NOT call the SDK
+    (and must not crash). Caller-side ``logger.exception`` already covers
+    the dev path."""
+    monkeypatch.setattr(security_module.settings, "SENTRY_DSN", "")
+    fake_sdk = MagicMock()
+    with patch.dict("sys.modules", {"sentry_sdk": fake_sdk}):
+        security_module.sentry_capture_exception(RuntimeError("boom"))
+    fake_sdk.capture_exception.assert_not_called()
+
+
+def test_sentry_capture_exception_invokes_sdk_when_dsn_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SENTRY_DSN set → ``sentry_capture_exception`` forwards the original
+    exception to ``sentry_sdk.capture_exception``. Preserving the
+    exception object (not just its message) is what lets the Sentry
+    dashboard render the real stack trace."""
+    monkeypatch.setattr(security_module.settings, "SENTRY_DSN", "https://test@example/1")
+    fake_sdk = MagicMock()
+    err = RuntimeError("graph crashed mid-classify")
+    with patch.dict("sys.modules", {"sentry_sdk": fake_sdk}):
+        security_module.sentry_capture_exception(err)
+    fake_sdk.capture_exception.assert_called_once_with(err)
+
+
+def test_sentry_capture_exception_swallows_sdk_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Even if the Sentry SDK itself raises (network, import, etc.), the
+    capture call must NOT propagate — alerting is best-effort and may
+    never break the request that's already failing."""
+    monkeypatch.setattr(security_module.settings, "SENTRY_DSN", "https://test@example/1")
+    fake_sdk = MagicMock()
+    fake_sdk.capture_exception.side_effect = ConnectionError("sentry down")
+    with caplog.at_level("WARNING"):
+        with patch.dict("sys.modules", {"sentry_sdk": fake_sdk}):
+            security_module.sentry_capture_exception(RuntimeError("boom"))
+    assert "sentry exception capture failed" in caplog.text

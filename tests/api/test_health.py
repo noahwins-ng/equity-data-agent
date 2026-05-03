@@ -31,7 +31,7 @@ def client() -> Iterable[TestClient]:
 
 @pytest.fixture(autouse=True)
 def _fixed_git_sha(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("GIT_SHA", "test-sha-abc1234")
+    monkeypatch.setattr(main_module.settings, "GIT_SHA", "test-sha-abc1234")
 
 
 def _stub(monkeypatch: pytest.MonkeyPatch, *, ch_ok: bool, qdrant_ok: bool) -> None:
@@ -93,7 +93,7 @@ def test_health_payload_includes_deploy_identity(
 def test_git_sha_falls_back_to_unknown_without_env(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("GIT_SHA", raising=False)
+    monkeypatch.setattr(main_module.settings, "GIT_SHA", "")
     _stub(monkeypatch, ch_ok=True, qdrant_ok=True)
     r = client.get("/api/v1/health")
     assert r.json()["deploy"]["git_sha"] == "unknown"

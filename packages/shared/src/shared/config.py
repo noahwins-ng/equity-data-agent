@@ -52,6 +52,14 @@ class Settings(BaseSettings):
 
     # Sentry
     SENTRY_DSN: str = ""
+    # Populated by the deploy pipeline via ``docker run --env GIT_SHA=$(git rev-parse HEAD)``;
+    # surfaces as the Sentry release tag and as ``deploy.git_sha`` in /health. Empty in
+    # local dev runs that don't bother propagating the env var.
+    GIT_SHA: str = ""
+    # One-shot prod toggle for ``/api/v1/_debug/sentry``. Default off so a scraper
+    # looping on the path can't burn the Sentry monthly quota; flip to True for a
+    # single deploy when verifying Sentry wiring end-to-end, then revert.
+    ENABLE_SENTRY_TEST: bool = False
 
     # Finnhub /company-news (ADR-015): per-ticker headlines + publisher + image.
     # Free tier — register at https://finnhub.io/register. Empty in dev when news

@@ -106,6 +106,7 @@ from api.security import (
     client_ip,
     limiter,
     record_breaker_trip,
+    sentry_capture_exception,
     validate_chat_message,
 )
 
@@ -521,6 +522,21 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
                 settings.CHAT_RUN_TIMEOUT,
                 ticker,
             )
+            # QNT-86: surface timeout patterns in the same Sentry dashboard
+            # as graph crashes by capturing a synthetic ``TimeoutError``. The
+            # frame attached is just this callsite — the worker-thread stack
+            # is gone by the time we get here (asyncio.wait_for abandoned the
+            # graph rather than killing it with an exception). That's
+            # acceptable: timeouts cluster on the budget breach, not on the
+            # internal LLM call that happened to be running, so a single
+            # frame keyed by ticker + budget is the right grouping.
+            try:
+                raise TimeoutError(
+                    f"agent run exceeded CHAT_RUN_TIMEOUT "
+                    f"({settings.CHAT_RUN_TIMEOUT:.1f}s) for ticker={ticker}"
+                )
+            except TimeoutError as exc:
+                sentry_capture_exception(exc)
             yield _sse(
                 "error",
                 {"detail": _ERROR_DETAIL_AGENT_TIMEOUT, "code": "agent-timeout"},
@@ -533,6 +549,13 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
             # in ``_runner``. Surface only a stable, user-facing string here so
             # internal LiteLLM auth errors, URLs, and stack context never leak
             # to the SSE client.
+            #
+            # QNT-86: graph crashes happen in a worker thread (asyncio.to_thread),
+            # so the FastAPI integration's auto-capture middleware never sees
+            # them. Forward the original exception explicitly — Sentry's
+            # fingerprint preserves the in-thread stack so the dashboard shows
+            # where the graph actually broke.
+            sentry_capture_exception(final_state_holder["error"])
             yield _sse(
                 "error",
                 {"detail": _ERROR_DETAIL_AGENT_FAILED, "code": "agent-failed"},

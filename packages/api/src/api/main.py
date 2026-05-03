@@ -16,7 +16,6 @@ into the runtime surface.
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -47,6 +46,7 @@ from api.security import (
     cors_allow_origins,
     limiter,
     record_burst_alert,
+    sentry_capture_exception,
 )
 
 logger = logging.getLogger(__name__)
@@ -199,7 +199,7 @@ def _health_payload(response: Response) -> dict[str, Any]:
         "status": status,
         "services": {"clickhouse": clickhouse, "qdrant": qdrant},
         "deploy": {
-            "git_sha": os.environ.get("GIT_SHA", "unknown"),
+            "git_sha": settings.GIT_SHA or "unknown",
             "dagster_assets": assets,
             "dagster_checks": checks,
         },
@@ -235,11 +235,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# QNT-161: minimal Sentry init guarded by SENTRY_DSN. The full integration
-# (FastAPI middleware, performance tracing, scoped tags) ships under QNT-86
-# — this init exists so the burst + breaker capture_message hooks in
-# api.security have somewhere to land the moment the env var is set in prod.
-# Init failures are tolerated: a Sentry outage must not block the API.
+# QNT-86: Sentry init guarded by SENTRY_DSN. Builds on the QNT-161 hook
+# scaffolding (record_burst_alert, record_breaker_trip in api.security) by
+# adding release tagging via GIT_SHA, a starter performance sample rate,
+# session tracking for release health, and explicit PII scrubbing. The
+# FastAPI integration auto-installs from sentry-sdk[fastapi] — unhandled
+# exceptions are captured before our cors_aware_exception_handler converts
+# them to 500 responses. Init failures are tolerated: a Sentry outage
+# must not block the API.
 if settings.SENTRY_DSN:
     try:
         import sentry_sdk
@@ -247,7 +250,10 @@ if settings.SENTRY_DSN:
         sentry_sdk.init(
             dsn=settings.SENTRY_DSN,
             environment=settings.ENV,
-            traces_sample_rate=0.0,  # left to QNT-86 to enable performance
+            release=settings.GIT_SHA or None,
+            traces_sample_rate=0.1,
+            auto_session_tracking=True,
+            send_default_pii=False,
         )
     except Exception as exc:  # noqa: BLE001 — Sentry init must not block startup
         logger.warning("sentry init failed (continuing without): %s", exc)
@@ -327,8 +333,17 @@ async def cors_aware_exception_handler(
     ``ExceptionMiddleware`` so the CORS layer still adds its headers on the
     way out. The error body is intentionally generic — the underlying
     exception is logged by Starlette before this fires.
+
+    QNT-86: explicitly forward the exception to Sentry. The FastAPI
+    integration auto-captures unhandled exceptions before user handlers
+    run, but registering a handler for ``Exception`` can short-circuit
+    that path on some sentry-sdk paths (the integration treats a handled
+    exception as "expected"); explicit capture is the documented
+    workaround. Sentry deduplicates by stack-trace fingerprint so a
+    redundant call is harmless. No-op when ``SENTRY_DSN`` is unset.
     """
     logger.exception("unhandled exception on %s %s", request.method, request.url.path)
+    sentry_capture_exception(_exc)
     return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
 
@@ -354,3 +369,20 @@ def health_legacy(response: Response) -> dict[str, Any]:
     /api/v1/health — consumers checking only HTTP status continue to work.
     """
     return _health_payload(response)
+
+
+@app.get("/api/v1/_debug/sentry", include_in_schema=False)
+def debug_sentry() -> None:
+    """QNT-86: force a synthetic exception so Sentry receives a verification
+    event with full stack trace + request URL + git_sha release tag.
+
+    Gated in prod: returns 404 unless ``ENABLE_SENTRY_TEST=1`` is set in the
+    environment. Without the gate a scraper hitting this path in a loop
+    would burn the Sentry monthly quota (free tier: 5k errors/mo). In dev
+    the route always raises so a developer can verify wiring locally.
+    """
+    if settings.is_prod and not settings.ENABLE_SENTRY_TEST:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail="Not Found")
+    raise RuntimeError("QNT-86 Sentry verification — synthetic exception")
