@@ -552,6 +552,73 @@ gh api /repos/noahwins-ng/equity-data-agent/actions/runs --jq '.workflow_runs[0:
 
 ---
 
+### Slow memory leak suspected (climbing RSS, no immediate OOM)
+
+**Symptoms**:
+
+- Discord `[OOM KILL]` alerts firing sporadically on the same service over days, with growing intervals between healthy periods.
+- Container restarts in the per-container restart panel of the *Containers Overview* Grafana dashboard, but no obvious crash cause in `docker logs` (the killer is the kernel cgroup OOM, not the app).
+- `make obs-status` host headroom drops below 3 GiB during normal load (CX41 has 16 GiB total).
+
+**Diagnosis**:
+
+```bash
+# 1. Identify the leaking service: open Grafana → "Containers Overview" → "Memory % of mem_limit per container",
+#    extend range to "Last 7 days". A leaking service is a sloped-up line; a healthy one is flat-with-noise.
+make tunnel  # then visit http://localhost:3030
+
+# 2. Confirm via PromQL directly (no UI tunnel needed)
+ssh hetzner 'curl -sf "http://localhost:9090/api/v1/query?query=container_memory_working_set_bytes%7Bname%3D~%22equity-data-agent-.%2B%22%7D" | python3 -m json.tool'
+
+# 3. Check current Grafana alert state
+ssh hetzner 'curl -sf -u admin:<password> http://localhost:3030/api/v1/provisioning/alert-rules | python3 -m json.tool | head -40'
+```
+
+**Response**:
+
+1. **Identify leak class**: unbounded in-process cache, leaked client connection, unclosed file/socket handle. `docker exec equity-data-agent-<svc>-1 sh -c 'ls /proc/1/fd/ | wc -l'` → if growing day-over-day, it's an FD leak.
+2. **Patch in code, ship via CD** (never `scp`-hotfix — `feedback_prod_hotfix_scp.md`).
+3. **Short-term mitigation if patch isn't immediate**: schedule a daily `docker compose --profile prod restart <svc>` via cron until the leak is fixed. Document the workaround in this runbook.
+4. **Verify post-fix**: leave Grafana's per-container memory panel open for 48 h after the deploy — flat line confirms the leak is closed.
+
+**Prevention**:
+
+- [QNT-103](https://linear.app/noahwins/issue/QNT-103) — Prometheus + cAdvisor scrape every 30 s with 15 d retention; the *Containers Overview* dashboard is the canonical view of long-window memory trends. The `ContainerMemoryHigh` alert fires Discord at >80% of mem_limit for 5 min, well before the kernel OOM-kills the container at 100%.
+- `mem_limit` per service in `docker-compose.yml` is the safety net — leaks crash the offending container, not its neighbours.
+
+**Last occurred**: not yet occurred — preventative (capability landed with QNT-103).
+
+---
+
+### Where are the logs / dashboards?
+
+| What | URL (via SSH tunnel) | Auth | Purpose |
+|---|---|---|---|
+| Dozzle | `http://localhost:8082` | SSH tunnel only | Tail any compose container's logs without `ssh hetzner`. |
+| Grafana | `http://localhost:3030` | `admin` / `admin` on first launch only — Grafana forces a password change at first login; the chosen password persists in `grafana_data` named volume across restarts. Store the new password in your password manager. To rotate later: `ssh hetzner 'docker exec equity-data-agent-grafana-1 grafana cli admin reset-admin-password <new>'`. | Host + per-container metrics, alert rules, alert history. |
+| Prometheus | `http://localhost:9090` | SSH tunnel only | Raw PromQL access, scrape target health (`/targets`). |
+| Dagster UI | `http://localhost:3100` | SSH tunnel only | Asset graph, run history, sensor ticks. |
+| ClickHouse Play | `http://localhost:8123/play` | SSH tunnel only | Ad-hoc SQL against the warehouse. |
+
+Open all observability tunnels with `make tunnel` (forwards 8123, 3100, 8082, 9090, 3030 in one process). Quick health snapshot without opening UIs: `make obs-status`.
+
+**Synthetic alert verification** (run when wiring or rotating the Discord webhook): `make obs-alert-test` spins up `equity-data-agent-stress` with a 64 MiB mem_limit and stress-ng eating 90% of it for 360 s. Wait ~5 min — the `ContainerMemoryHigh` rule should transition to `Alerting` and post to Discord. Cleanup: `ssh hetzner 'docker stop equity-data-agent-stress'`.
+
+**Resource footprint** (measured on CX41, idle stack — verify after first deploy with `make obs-status`):
+
+| Service | mem_limit | Typical RSS | Notes |
+|---|---|---|---|
+| dozzle | 64 MiB | ~30 MiB | Stateless, log streaming only. |
+| node_exporter | 64 MiB | ~20 MiB | Host metrics, no state. |
+| cadvisor | 256 MiB | ~120 MiB | Privileged; reads cgroup accounting. |
+| prometheus | 384 MiB | ~180 MiB | TSDB grows with retention (15 d cap). |
+| grafana | 256 MiB | ~110 MiB | UI + alert rule evaluation. |
+| **Total observability** | **1024 MiB** | **~460 MiB** | Within "<1 GiB" budget from QNT-103. |
+
+CX41 totals: 16 GiB RAM. Pre-QNT-103 mem_limit allocation was 13.06 GiB (clickhouse 8 GiB + dagster trio 3.5 GiB + api 1 GiB + litellm 0.5 GiB + cloudflared 64 MiB); post-QNT-103 it's 14.06 GiB. Leaves ~1.94 GiB host headroom outside cgroups, plus mem_limit is a hard ceiling (typical RSS sits well below it) and reservations are softer than limits, so realised free memory under typical load should remain above the 3 GiB AC threshold. Verify post-deploy via `make obs-status`.
+
+---
+
 ## Security notes
 
 ### Docker socket bind-mount on `dagster-daemon` (QNT-116)

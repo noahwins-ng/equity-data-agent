@@ -100,6 +100,8 @@ When making a significant architectural decision, create a new ADR using `docs/d
 - **Sentry**: FastAPI error tracking in production
 - **Health Monitor**: Cron on Hetzner (every 15 min) — checks API `/health` + Docker services, logs failures. `make monitor-log` to check. Session-start hook auto-warns on failures.
 - **Alerting**: Two independent channels (QNT-101) — external uptime probe on `/api/v1/health` (UptimeRobot or equivalent, native Discord on free tier) + `docker-events-notify.service` on Hetzner streaming die/kill/oom/restart to a Discord webhook (alerts ≤30 s). Setup: `docs/guides/uptime-monitoring.md`. Self-monitored via heartbeat file + optional external heartbeat URL (Healthchecks.io free tier). Install: `make events-notify-install`. Test: `make events-notify-test`.
+- **Logs UI**: Dozzle (QNT-103) tails every compose container at `http://localhost:8082` via SSH tunnel — replaces the `ssh hetzner "docker compose logs <svc>"` workflow.
+- **Metrics & Trends**: Prometheus (15d retention) + Grafana dashboards (QNT-103) — host CPU/mem/disk via node_exporter, per-container metrics via cAdvisor. Reach Grafana at `http://localhost:3030` via SSH tunnel (admin/admin on first boot only — UI forces a password change on first login and the new password persists in the `grafana_data` volume). Alert rules (memory >80% per container, host mem >90%, restart loop, disk >80%) route to the same Discord webhook as QNT-101. Status: `make obs-status`. Synthetic alert test: `make obs-alert-test`.
 - **Ops Runbook**: `docs/guides/ops-runbook.md` — failure-mode catalog with symptoms, diagnosis, response, and prevention. Grep this first when prod breaks; every Ops & Reliability ticket extends it.
 - **ClickHouse Play**: `http://localhost:8123/play` — SQL editor for data exploration (via SSH tunnel)
 - **Dagster UI**: `http://localhost:3000` — asset lineage, run history, sensor status
@@ -127,6 +129,8 @@ make monitor-log                    # Show recent prod health failures
 make events-notify-install          # Install docker-events → Discord notifier on Hetzner (QNT-101)
 make events-notify-status           # Show notifier systemd status + last heartbeat
 make events-notify-test             # Kill litellm to verify the Discord webhook path end-to-end
+make obs-status                     # Observability stack health: prom targets + grafana ping + host headroom (QNT-103)
+make obs-alert-test                 # Synthetic memory spike to verify Grafana → Discord alert routing (QNT-103)
 make issue QNT=34                   # Checkout branch for Linear issue
 make pr QNT=34 TITLE="description"  # Push + create PR
 ```

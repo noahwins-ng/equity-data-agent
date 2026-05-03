@@ -1,0 +1,107 @@
+{
+  "uid": "containers-overview",
+  "title": "Containers Overview (equity-data-agent)",
+  "tags": ["equity-data-agent", "containers"],
+  "schemaVersion": 38,
+  "version": 1,
+  "editable": true,
+  "time": {"from": "now-6h", "to": "now"},
+  "refresh": "30s",
+  "timezone": "browser",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Memory used (MiB) per container",
+      "gridPos": {"h": 10, "w": 12, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "container_memory_working_set_bytes{name=~\"equity-data-agent-.+\"} / 1024 / 1024",
+          "legendFormat": "{{name}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "decmbytes"}}
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Memory % of mem_limit per container",
+      "gridPos": {"h": 10, "w": 12, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(container_memory_working_set_bytes{name=~\"equity-data-agent-.+\"} / container_spec_memory_limit_bytes{name=~\"equity-data-agent-.+\"}) * 100",
+          "legendFormat": "{{name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 70},
+              {"color": "red", "value": 80}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "CPU usage (cores) per container",
+      "gridPos": {"h": 10, "w": 12, "x": 0, "y": 10},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(container_cpu_usage_seconds_total{name=~\"equity-data-agent-.+\"}[5m])",
+          "legendFormat": "{{name}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "none"}}
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Network I/O per container (bytes/s)",
+      "gridPos": {"h": 10, "w": 12, "x": 12, "y": 10},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(container_network_receive_bytes_total{name=~\"equity-data-agent-.+\"}[5m])",
+          "legendFormat": "rx {{name}}"
+        },
+        {
+          "refId": "B",
+          "expr": "-rate(container_network_transmit_bytes_total{name=~\"equity-data-agent-.+\"}[5m])",
+          "legendFormat": "tx {{name}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "Bps"}}
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Restart count per container (15m window)",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 20},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "changes(container_start_time_seconds{name=~\"equity-data-agent-.+\"}[15m])",
+          "legendFormat": "{{name}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "none"}}
+    }
+  ]
+}

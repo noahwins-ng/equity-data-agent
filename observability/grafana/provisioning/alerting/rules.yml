@@ -1,0 +1,233 @@
+# Grafana provisioning: alert rules.
+#
+# Four rules covering the failure modes from QNT-103 / Apr-19 retro:
+#   1. ContainerMemoryHigh   — leaking caches / connections in any compose service
+#   2. HostMemoryHigh        — host RAM saturated (CX41 has 16 GiB; trips at >90%)
+#   3. ContainerRestartLoop  — > 3 restarts in 15 min on any compose container
+#   4. HostDiskHigh          — root filesystem >80% full
+#
+# All rules query the Prometheus datasource (uid: prometheus). Alerts route
+# through the default `discord` notification policy → DISCORD_WEBHOOK_URL,
+# the same webhook used by docker-events-notify (QNT-101).
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: equity_data_agent
+    folder: Alerts
+    interval: 1m
+    rules:
+      - uid: container_memory_high
+        title: ContainerMemoryHigh
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: warning
+        annotations:
+          summary: '{{ $labels.name }} memory > 80% of its compose mem_limit for 5m'
+          runbook: 'docs/guides/ops-runbook.md → Slow memory leak suspected'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              datasource:
+                type: prometheus
+                uid: prometheus
+              expr: |
+                (container_memory_working_set_bytes{name=~"equity-data-agent-.+"}
+                 / container_spec_memory_limit_bytes{name=~"equity-data-agent-.+"}) * 100
+              instant: false
+              range: true
+              intervalMs: 30000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              datasource:
+                type: __expr__
+                uid: __expr__
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [80]
+              datasource:
+                type: __expr__
+                uid: __expr__
+
+      - uid: host_memory_high
+        title: HostMemoryHigh
+        condition: C
+        for: 2m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: 'Hetzner host memory > 90% for 2m'
+          runbook: 'docs/guides/ops-runbook.md → Slow memory leak suspected'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              datasource:
+                type: prometheus
+                uid: prometheus
+              expr: '(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100'
+              instant: false
+              range: true
+              intervalMs: 30000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              datasource:
+                type: __expr__
+                uid: __expr__
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [90]
+              datasource:
+                type: __expr__
+                uid: __expr__
+
+      - uid: container_restart_loop
+        title: ContainerRestartLoop
+        condition: C
+        # for: 2m gives normal CD deploys (rolling recreate) time to settle —
+        # a clean `docker compose up -d` may briefly register a single restart
+        # event on each recreated service, but the count won't exceed 3 for
+        # a sustained 2 min unless something is actually loop-restarting.
+        for: 2m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: warning
+        annotations:
+          summary: '{{ $labels.name }} restarted > 3 times in 15m'
+          runbook: 'docs/guides/ops-runbook.md → Container crash loop'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              datasource:
+                type: prometheus
+                uid: prometheus
+              # changes() over container_start_time_seconds counts container
+              # restarts within the window; cAdvisor exposes this metric per
+              # name= label so the alert fires per-service.
+              expr: 'changes(container_start_time_seconds{name=~"equity-data-agent-.+"}[15m])'
+              instant: false
+              range: true
+              intervalMs: 30000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: max
+              datasource:
+                type: __expr__
+                uid: __expr__
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [3]
+              datasource:
+                type: __expr__
+                uid: __expr__
+
+      - uid: host_disk_high
+        title: HostDiskHigh
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Hetzner host root filesystem > 80% used'
+          runbook: 'docs/guides/ops-runbook.md (file a follow-up if uncatalogued)'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              datasource:
+                type: prometheus
+                uid: prometheus
+              expr: |
+                (1 - (node_filesystem_avail_bytes{mountpoint="/rootfs",fstype!~"tmpfs|overlay"}
+                      / node_filesystem_size_bytes{mountpoint="/rootfs",fstype!~"tmpfs|overlay"})) * 100
+              instant: false
+              range: true
+              intervalMs: 30000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              datasource:
+                type: __expr__
+                uid: __expr__
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [80]
+              datasource:
+                type: __expr__
+                uid: __expr__
