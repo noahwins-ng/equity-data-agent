@@ -356,15 +356,16 @@ services:
     profiles: [prod]
 
   cadvisor:
-    # v0.56.2 (Jan 2026) — bumped from v0.49.1 because the older release
+    # v0.55.1 (Dec 2025) — bumped from v0.49.1 because the older release
     # hardcoded the legacy `overlay2` storage-driver path layout. Modern
     # Docker (27+) on Ubuntu uses the new `overlayfs` driver; v0.49 fell
     # back to traversing /rootfs/var/lib/docker/image/overlay2/... which
     # didn't exist, errored on every container with "failed to identify
     # the read-write layer ID", and produced metrics with no `name` /
-    # `image` labels. v0.56.2 release notes: "docker: fix nil pointer
-    # dereference when GraphDriver is nil" (PR #3816) — same code path.
-    image: gcr.io/cadvisor/cadvisor:v0.56.2
+    # `image` labels. v0.56.x exists upstream but isn't published to the
+    # gcr.io/cadvisor registry yet (last pushed tag is v0.55.1); pin to
+    # the highest tag that actually exists in the registry we use.
+    image: gcr.io/cadvisor/cadvisor:v0.55.1
     restart: unless-stopped
     # QNT-103: without explicit flags cAdvisor enumerates every cgroup slice
     # (systemd, init.scope, /system.slice/*.service, etc.) and tries to read
