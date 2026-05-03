@@ -321,7 +321,11 @@ services:
     cpus: 0.05
     logging: *default-logging
     healthcheck:
-      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:8080/healthcheck"]
+      # QNT-165: dozzle's distroless image has no /bin/sh, so CMD-SHELL fails
+      # with "exec: /bin/sh: no such file or directory" on every check. The
+      # binary ships its own healthcheck subcommand that hits /healthcheck
+      # over HTTP and exits 0 on 200; use that with CMD exec-form (no shell).
+      test: ["CMD", "/dozzle", "healthcheck"]
       interval: 30s
       timeout: 5s
       retries: 3
