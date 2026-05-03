@@ -201,9 +201,14 @@ groups:
               datasource:
                 type: prometheus
                 uid: prometheus
+              # `--path.rootfs=/rootfs` is a path-translation hint for node_exporter
+              # to read host files; it does NOT rewrite the `mountpoint` label.
+              # Host's "/" is reported as mountpoint="/", not "/rootfs". The
+              # original ship used "/rootfs" and silently returned NoData on
+              # both this rule and the dashboard (panel id 3).
               expr: |
-                (1 - (node_filesystem_avail_bytes{mountpoint="/rootfs",fstype!~"tmpfs|overlay"}
-                      / node_filesystem_size_bytes{mountpoint="/rootfs",fstype!~"tmpfs|overlay"})) * 100
+                (1 - (node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}
+                      / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"})) * 100
               instant: false
               range: true
               intervalMs: 30000

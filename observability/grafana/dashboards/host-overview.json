@@ -72,7 +72,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(1 - (node_filesystem_avail_bytes{mountpoint=\"/rootfs\",fstype!~\"tmpfs|overlay\"} / node_filesystem_size_bytes{mountpoint=\"/rootfs\",fstype!~\"tmpfs|overlay\"})) * 100",
+          "expr": "(1 - (node_filesystem_avail_bytes{mountpoint=\"/\",fstype!~\"tmpfs|overlay\"} / node_filesystem_size_bytes{mountpoint=\"/\",fstype!~\"tmpfs|overlay\"})) * 100",
           "legendFormat": "disk"
         }
       ],
