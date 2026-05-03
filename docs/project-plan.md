@@ -459,7 +459,7 @@ Updated automatically by `/ship` and `/sync-docs`.
 ### Phase 7 — Observability & Polish
 **Scope**: Tracing, alerting, and production hardening.
 
-- [ ] Observability stack: Dozzle logs UI + Prometheus/Grafana/cAdvisor metrics — QNT-103 **[unified log/metrics dashboards on top of the per-IP rate-limit and breaker-trip alerting that QNT-161 already wired in Phase 6; QNT-86 (Sentry) lands first — see Phase 6 retro phase-review notes for the dependency ordering]**
+- [x] Observability stack: Dozzle logs UI + Prometheus/Grafana/cAdvisor metrics — QNT-103 **[unified log/metrics dashboards on top of the per-IP rate-limit and breaker-trip alerting that QNT-161 already wired in Phase 6; QNT-86 (Sentry) lands first — see Phase 6 retro phase-review notes for the dependency ordering]**
     - **Triggered by**: Apr 19 2026 retro — unified logs UI + resource trend visibility are the observability surfaces missing from the current setup. Enables diagnosing slow leaks before they become outages.
 - [ ] Integrate Sentry for FastAPI error tracking (`sentry-sdk[fastapi]`, uses `SENTRY_DSN` from `.env`) — QNT-86
 - [ ] Add Dagster alerting on asset materialization failures — QNT-62

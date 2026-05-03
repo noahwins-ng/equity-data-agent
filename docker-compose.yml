@@ -292,8 +292,160 @@ services:
       start_period: 60s
     profiles: [prod-caddy]
 
+  # ── Observability stack (QNT-103) ───────────────────────────────────────────
+  # Five services for unified-logs UI + per-container/host metrics + alerting.
+  # All admin UIs bound to loopback only — public ingress is via SSH tunnel,
+  # same pattern as dagster-webserver (no domain post-QNT-75 / ADR-018).
+  # Pre-built dashboards + alert rules are provisioned from ./observability/.
+
+  dozzle:
+    image: amir20/dozzle:v8.13.13
+    restart: unless-stopped
+    volumes:
+      # Read-only docker.sock binding — Dozzle only needs read access to tail
+      # logs and list containers. NOT mounted rw to keep the trust boundary
+      # tight (no container start/stop/exec from the logs UI).
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - DOZZLE_NO_ANALYTICS=true
+      - DOZZLE_HOSTNAME=equity-data-agent
+    ports:
+      # Loopback only — same auth model as dagster (SSH tunnel = auth boundary).
+      - "127.0.0.1:8082:8080"
+    mem_limit: 64m
+    mem_reservation: 16m
+    cpus: 0.05
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:8080/healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    profiles: [prod]
+
+  node_exporter:
+    image: prom/node-exporter:v1.8.2
+    restart: unless-stopped
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      # Exclude virtual/container filesystems from disk metrics — keeps
+      # Grafana panels and HostDiskHigh alert focused on real volumes.
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc|var/lib/docker)($$|/)'
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro,rslave
+    pid: host
+    # Scraped via internal compose network (prometheus → node_exporter:9100).
+    # Port not exposed on host; reach via SSH tunnel only if needed for debugging.
+    mem_limit: 64m
+    mem_reservation: 16m
+    cpus: 0.05
+    logging: *default-logging
+    profiles: [prod]
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    restart: unless-stopped
+    # `privileged` is required on Ubuntu hosts (Hetzner CX41) so cAdvisor can
+    # read cgroup memory accounting from /sys/fs/cgroup. Less-privileged
+    # alternatives exist but trip on per-container memory limits.
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    # Scraped via internal compose network (prometheus → cadvisor:8080).
+    # Port not exposed on host; reach via SSH tunnel only if needed for debugging.
+    mem_limit: 256m
+    mem_reservation: 64m
+    cpus: 0.2
+    logging: *default-logging
+    profiles: [prod]
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'  # AC: "retains 15d of time-series"
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - cadvisor
+      - node_exporter
+    mem_limit: 384m
+    mem_reservation: 128m
+    cpus: 0.25
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    profiles: [prod]
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    restart: unless-stopped
+    env_file: .env  # supplies DISCORD_WEBHOOK_URL for alerting contact-point provisioning
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      # Intentionally NOT setting GF_SECURITY_ADMIN_PASSWORD — Grafana
+      # initialises a fresh DB with admin/admin and forces a password change
+      # on first login. Setting the env var here would re-apply on every
+      # `docker compose up -d`, silently blowing away whatever password the
+      # operator set. To rotate, use the UI or `grafana cli admin
+      # reset-admin-password` inside the container.
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_USERS_ALLOW_ORG_CREATE=false
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+      - GF_NEWS_NEWS_FEED_ENABLED=false
+      # Single-host loopback bind — Grafana doesn't need to know about a
+      # public root URL; the SSH-tunnelled access on localhost:3030 works
+      # with default settings.
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      # Loopback only — port 3030 (3000 is dev-dagster, 3001 is dev-frontend
+      # in dev; in prod the only thing on 3000 is dagster-webserver).
+      - "127.0.0.1:3030:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    mem_limit: 256m
+    mem_reservation: 96m
+    cpus: 0.25
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    profiles: [prod]
+
 volumes:
   clickhouse_data:  # persists ClickHouse data — NEVER omit this volume
   caddy_data:       # persists TLS certificates across restarts
+  prometheus_data:  # 15d of TSDB metrics
+  grafana_data:     # Grafana state (changed admin password, modified dashboards)
   dagster_home:     # persists Dagster run history + schedule/sensor cursors across rebuilds;
                     # shared between dagster and dagster-daemon so they see the same state

@@ -1,4 +1,4 @@
-.PHONY: setup dev-dagster dev-api dev-frontend dev-litellm test test-integration lint format migrate seed tunnel issue pr build check-prod rollback monitor-install monitor-log events-notify-install events-notify-status events-notify-test sops-edit sops-encrypt sops-decrypt sops-rotate-keys help
+.PHONY: setup dev-dagster dev-api dev-frontend dev-litellm test test-integration lint format migrate seed tunnel issue pr build check-prod rollback monitor-install monitor-log events-notify-install events-notify-status events-notify-test obs-status obs-alert-test sops-edit sops-encrypt sops-decrypt sops-rotate-keys help
 
 # ─── Setup ────────────────────────────────────────────────────
 
@@ -30,11 +30,20 @@ dev-litellm: ## Start LiteLLM proxy on localhost:4000 (reads GROQ_API_KEY / GEMI
 		-v $(CURDIR)/litellm_config.yaml:/app/config.yaml \
 		litellm/litellm:v1.81.14-stable --config /app/config.yaml --port 4000
 
-tunnel: ## Open SSH tunnel to Hetzner: ClickHouse (8123) + prod Dagster UI on :3100
+tunnel: ## Open SSH tunnel to Hetzner: ClickHouse + prod Dagster + observability stack (QNT-103)
 	@echo "Opening SSH tunnel:"
 	@echo "  localhost:8123 → ClickHouse"
 	@echo "  localhost:3100 → prod Dagster UI (local dev Dagster stays on :3000)"
-	ssh -N -L 8123:localhost:8123 -L 3100:localhost:3000 hetzner
+	@echo "  localhost:8082 → Dozzle (logs)             [QNT-103]"
+	@echo "  localhost:9090 → Prometheus               [QNT-103]"
+	@echo "  localhost:3030 → Grafana (admin/admin)    [QNT-103]"
+	ssh -N \
+		-L 8123:localhost:8123 \
+		-L 3100:localhost:3000 \
+		-L 8082:localhost:8082 \
+		-L 9090:localhost:9090 \
+		-L 3030:localhost:3030 \
+		hetzner
 
 # ─── Docker ───────────────────────────────────────────────────
 
@@ -98,6 +107,28 @@ events-notify-test: ## Kill litellm to fire a Discord notification (then bring i
 	@echo "Discord alert should land. The container will NOT auto-recover — Docker treats"
 	@echo "docker kill as 'manually stopped' and skips the restart: unless-stopped policy."
 	@echo "Restart with: ssh hetzner 'cd /opt/equity-data-agent && docker compose --profile prod up -d litellm'"
+
+# ─── Observability (QNT-103) ─────────────────────────────────
+
+obs-status: ## Show observability stack health: prom targets + grafana ping + container memory headroom
+	@scp -q scripts/obs-status.sh hetzner:/opt/equity-data-agent/scripts/obs-status.sh
+	@ssh hetzner "chmod +x /opt/equity-data-agent/scripts/obs-status.sh"
+	@echo "=== Container status ==="
+	@ssh hetzner "cd /opt/equity-data-agent && docker compose --profile prod ps prometheus grafana cadvisor node_exporter dozzle"
+	@echo ""
+	@ssh hetzner "/opt/equity-data-agent/scripts/obs-status.sh"
+	@echo ""
+	@echo "Tunnel to UIs: make tunnel  →  http://localhost:3030 (Grafana)  http://localhost:8082 (Dozzle)  http://localhost:9090 (Prometheus)"
+
+obs-alert-test: ## Spike a synthetic container above 80% mem_limit for ~6m to fire ContainerMemoryHigh -> Discord
+	@echo "Launching equity-data-agent-stress with 64m mem_limit and stress allocating 56 MiB (~88%) for 360s."
+	@echo "Expect the 'ContainerMemoryHigh' Grafana alert to fire ~5 min in -> Discord webhook."
+	@# polinux/stress is a small (~38 MB) pre-built image — avoids the apk-add
+	@# runtime install we previously used, which silently failed if the Alpine
+	@# CDN was unreachable mid-test.
+	@ssh hetzner "docker run -d --rm --name equity-data-agent-stress --memory=64m polinux/stress stress --vm 1 --vm-bytes 56M --vm-hang 0 --timeout 360s"
+	@echo "Container running. Watch Grafana -> Alerting -> Active alerts for ContainerMemoryHigh."
+	@echo "Stop early with: ssh hetzner 'docker stop equity-data-agent-stress'"
 
 # ─── Secrets (SOPS) ───────────────────────────────────────────
 

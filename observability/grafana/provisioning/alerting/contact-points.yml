@@ -1,0 +1,16 @@
+# Grafana provisioning: contact points.
+# Env var $DISCORD_WEBHOOK_URL is interpolated at startup (Grafana provisioning
+# auto-expands `$VAR` references). Same webhook used by docker-events-notify
+# (QNT-101) so all prod alerts land in the same Discord channel.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: discord
+    receivers:
+      - uid: discord-default
+        type: discord
+        disableResolveMessage: false
+        settings:
+          url: $DISCORD_WEBHOOK_URL
+          use_discord_username: false
