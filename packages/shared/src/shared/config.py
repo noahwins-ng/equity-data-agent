@@ -79,6 +79,20 @@ class Settings(BaseSettings):
     # the introspected path emits so the frontend never sees a shape change.
     PROVENANCE_NEXT_INGEST_FALLBACK: str = "17:00 ET"
 
+    # ─── QNT-168: Vercel Deploy Hook (SSG freshness driver) ──────────────
+    #
+    # /ticker/[symbol] and / are statically rendered at build time. After
+    # each Dagster ingest cycle (ohlcv weekday EOD, news daily 02:00 ET,
+    # fundamentals Sunday) a Dagster schedule POSTs this URL so Vercel
+    # rebuilds the frontend with the freshly ingested data. The hook URL
+    # itself is the authentication token -- there is no secret to share
+    # across two control planes.
+    #
+    # Empty in dev unless the developer is wiring the webhook end-to-end;
+    # the op logs a warning and skips when unset. Generate at:
+    #   Vercel project → Settings → Git → Deploy Hooks → Create Hook.
+    VERCEL_DEPLOY_HOOK_URL: str = ""
+
     # ─── QNT-161: public-chat abuse controls ──────────────────────────────
     #
     # CORS allowlist for the public chat panel. Default is dev-only — prod

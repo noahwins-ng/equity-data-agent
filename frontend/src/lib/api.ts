@@ -5,15 +5,21 @@
  * directive. Bare fetch(URL) is forbidden — Next.js 15+ dropped default
  * caching, so an unannotated fetch re-hits the API on every navigation.
  *
+ * QNT-168: the default for server-side fetches is now `cache: "force-cache"`
+ * because /ticker/[symbol] is statically rendered and Dagster triggers a
+ * Vercel Deploy Hook on every successful ingest cycle (see
+ * dagster_pipelines.vercel_deploy). Build time = freshness time. ISR is
+ * gone; `next: { revalidate }` is no longer used here.
+ *
  * Usage:
  *   const data = await apiFetch<DashboardSummary>("/api/v1/dashboard/summary");
- *   // SSE: use apiFetchRaw to keep the Response body as a ReadableStream.
+ *   // SSE / per-request: opt out with `cache: "no-store"`.
  *   const res = await apiFetchRaw("/api/v1/agent/chat", { cache: "no-store", method: "POST", body });
  *
  * Cache vocabulary:
- *   - revalidate: number  → ISR / Data Cache TTL in seconds (default for daily data)
- *   - cache: "no-store"   → opt out (SSE, per-request data, client toggles)
- *   - cache: "force-cache" → cache indefinitely (rare)
+ *   - (default)            → cache: "force-cache" (build-time pin, deploy-hook driven)
+ *   - cache: "no-store"    → per-request (SSE, status indicators, client toggles)
+ *   - cache: "force-cache" → explicit form of the default
  */
 
 // Default to 127.0.0.1 (not "localhost") so browser fetches reach the API
@@ -22,27 +28,9 @@
 // NEXT_PUBLIC_API_URL in any prod / preview deploy where the API lives off-host.
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 
-/**
- * Default revalidation window for daily-cadence data.
- *
- * Underlying data is EOD-cadence (02:00 ET Dagster ingest), so the TTL is
- * pinned at 24 h — the highest value that's still semantically equivalent
- * to "as fresh as the data can possibly be." The original 60 s default
- * burned ~150K Vercel ISR Writes/30d (QNT-166) for data that changes once
- * per day; an interim 1 h fix cut the rate ~60x but still allowed ~24
- * regenerations/day. Pinning at 24 h matches the existing logos endpoint
- * and gives ~1 regeneration/page/day. Pages that need sub-hour freshness
- * (charts, technicals timeframe toggles) bypass this via `cache: "no-store"`.
- */
-export const DEFAULT_REVALIDATE_SECONDS = 86_400;
-
 export type ApiFetchOptions = Omit<RequestInit, "cache"> & {
-  /** ISR / Data Cache TTL in seconds. Defaults to DEFAULT_REVALIDATE_SECONDS (24 hours). Mutually exclusive with `cache`. */
-  revalidate?: number;
-  /** Override Next's data cache (e.g. "no-store" for SSE). Mutually exclusive with `revalidate`. */
+  /** Override Next's data cache (e.g. "no-store" for SSE / per-request data). */
   cache?: RequestCache;
-  /** Cache tags for on-demand revalidation via revalidateTag(). */
-  tags?: string[];
 };
 
 export class ApiError extends Error {
@@ -80,25 +68,8 @@ export async function apiFetchRaw(
   path: string,
   options: ApiFetchOptions = {},
 ): Promise<Response> {
-  const { revalidate, cache, tags, ...rest } = options;
-
-  if (revalidate !== undefined && cache !== undefined) {
-    throw new Error(
-      "apiFetch: pass either `revalidate` or `cache`, not both — they conflict.",
-    );
-  }
-
-  const init: RequestInit = { ...rest };
-
-  if (cache !== undefined) {
-    init.cache = cache;
-  } else {
-    init.next = {
-      revalidate: revalidate ?? DEFAULT_REVALIDATE_SECONDS,
-      ...(tags ? { tags } : {}),
-    };
-  }
-
+  const { cache, ...rest } = options;
+  const init: RequestInit = { ...rest, cache: cache ?? "force-cache" };
   return fetch(`${API_BASE_URL}${path}`, init);
 }
 

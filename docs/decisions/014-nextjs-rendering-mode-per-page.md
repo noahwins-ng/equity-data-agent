@@ -1,7 +1,34 @@
 # ADR-014: Next.js rendering mode per page (SSG / SSR / CSR / ISR) + cache strategy
 
 **Date**: 2026-04-27
-**Status**: Accepted
+**Status**: Accepted (revised 2026-05-04 -- §1 Watchlist cache + §3 `/ticker/[symbol]` rendering mode superseded by QNT-168; see Revisions)
+
+## Revisions
+
+### 2026-05-04 -- QNT-168: ISR -> SSG + Vercel Deploy Hook
+
+Sections 1 (Watchlist cache row) and 3 (`/ticker/[symbol]` rendering mode) originally specified ISR with `revalidate: 86_400`. After QNT-166 ratcheted the TTL three times (60 s -> 3600 s -> 86 400 s) without solving the underlying ISR-Writes pressure, QNT-168 reframed the problem: ISR is for "data changes on an unknown schedule, regenerate on a TTL." Our data mutates exactly once per ingest cycle (17:00 ET weekdays / 02:00 ET daily / Sun 22:00 ET), in a known window, by a system we control. The right pattern is SSG with build-on-data-change.
+
+What changed:
+
+- `/ticker/[symbol]` is now `dynamic = "force-static"`. No `revalidate` export. Every server fetch uses `cache: "force-cache"` (the new apiFetch default in `lib/api.ts`).
+- Watchlist server fetches likewise drop `revalidate` and use the `force-cache` default.
+- Three Dagster schedules in `dagster_pipelines.vercel_deploy` POST a Vercel Deploy Hook URL ~35 min after each ingest cron, triggering a fresh build with the latest data. The hook URL itself is the auth -- no shared secret across two control planes.
+- The original anti-pattern #4 ("`force-dynamic` on daily-cadence data") still holds; this revision tightens "ISR on daily-cadence data" into the same anti-pattern. ISR is for unknown-cadence content, not deterministic-cadence pipelines.
+
+What this supersedes vs preserves from the original sections:
+
+| Aspect | Original (ISR) | Revised (SSG + Deploy Hook) |
+|---|---|---|
+| Page directive on `/ticker/[symbol]` | `export const revalidate = 86_400` | `export const dynamic = "force-static"` |
+| Server fetch default | `next: { revalidate: 86_400 }` | `cache: "force-cache"` |
+| Freshness driver | TTL expiry + first-after-expiry request | Dagster -> Vercel Deploy Hook -> rebuild |
+| `/api/v1/health` (status indicators) | Server fetch with `revalidate: 300` | Client component, `cache: "no-store"` |
+| `generateStaticParams` from `/api/v1/tickers` | Unchanged | Unchanged |
+| Chat panel (CSR / SSE) | Unchanged | Unchanged |
+| Failure-mode rules (anti-pattern #5, error.tsx fallback) | Unchanged | Unchanged |
+
+Status indicators (provenance strip, watchlist next-ingest label) were detached from server fetches in the same change -- they are per-request status, not first-paint-critical content, and fit client components with `cache: "no-store"`.
 
 ## Context
 
