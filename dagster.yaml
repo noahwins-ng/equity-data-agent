@@ -69,7 +69,29 @@ run_launcher:
     # run-launcher or run-monitoring daemons. Dagster's default instance
     # config (sqlite at DAGSTER_HOME) matches what this file configures for
     # storage, so the worker's view of storage is consistent with the daemon's.
+    #
+    # QNT-167: auto_remove deletes the run-worker container at exit. Without
+    # this, every materialisation leaves an Exited container behind — 1080
+    # accumulated on prod between QNT-116 (May 1) and QNT-167 (May 3),
+    # consuming 52 GB and pushing /dev/sda1 over the HostDiskHigh 80% alert.
+    #
+    # Race with run_monitoring (poll_interval_seconds=120, max_resume=0): when
+    # a worker exits and Docker auto-removes the container, the daemon's next
+    # check_run_worker_health() returns NOT_FOUND. monitor_started_run handles
+    # this at dagster/_daemon/monitoring/run_monitoring.py:125 — it re-fetches
+    # the run state and bails ("disregarding for now") if the worker already
+    # transitioned to SUCCESS. So a successful run is NOT mismarked FAILED.
+    #
+    # What IS lost on auto_remove: container-level forensic state (the
+    # State.OOMKilled flag, exit code, last container logs as captured by
+    # `docker inspect`). Logs themselves are preserved in Dagster's SQLite
+    # event log on the dagster_home volume, kernel-OOM events are still
+    # captured by QNT-101 docker-events-notify, and per-container memory is
+    # in cAdvisor (QNT-103). The lossy bit is the post-mortem `docker
+    # inspect` path — acceptable trade for not flooding the host with
+    # 1000+ Exited containers.
     container_kwargs:
+      auto_remove: true
       volumes:
         - equity-data-agent_dagster_home:/dagster_home
 
