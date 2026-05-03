@@ -120,13 +120,18 @@ obs-status: ## Show observability stack health: prom targets + grafana ping + co
 	@echo ""
 	@echo "Tunnel to UIs: make tunnel  →  http://localhost:3030 (Grafana)  http://localhost:8082 (Dozzle)  http://localhost:9090 (Prometheus)"
 
-obs-alert-test: ## Spike a synthetic container above 80% mem_limit for ~6m to fire ContainerMemoryHigh -> Discord
-	@echo "Launching equity-data-agent-stress with 64m mem_limit and stress allocating 56 MiB (~88%) for 360s."
-	@echo "Expect the 'ContainerMemoryHigh' Grafana alert to fire ~5 min in -> Discord webhook."
+obs-alert-test: ## Spike a synthetic container above 80% mem_limit for ~9m to fire ContainerMemoryHigh -> Discord
+	@echo "Launching equity-data-agent-stress with 64m mem_limit and stress allocating 56 MiB (~88%) for 540s."
+	@echo "Expect the 'ContainerMemoryHigh' Grafana alert to fire ~5 min in -> Discord webhook ~6 min in."
 	@# polinux/stress is a small (~38 MB) pre-built image — avoids the apk-add
 	@# runtime install we previously used, which silently failed if the Alpine
 	@# CDN was unreachable mid-test.
-	@ssh hetzner "docker run -d --rm --name equity-data-agent-stress --memory=64m polinux/stress stress --vm 1 --vm-bytes 56M --vm-hang 0 --timeout 360s"
+	@# QNT-165: timeout bumped 360s -> 540s. The Grafana rule has `for: 5m`
+	@# plus a 1m group eval interval; with a 6m stress window cAdvisor stops
+	@# emitting the metric the moment the container exits, the noDataState=OK
+	@# path kicks in, and the rule never reaches Alerting. 540s gives 4 eval
+	@# cycles after the breach window completes — definitively fires.
+	@ssh hetzner "docker run -d --rm --name equity-data-agent-stress --memory=64m polinux/stress stress --vm 1 --vm-bytes 56M --vm-hang 0 --timeout 540s"
 	@echo "Container running. Watch Grafana -> Alerting -> Active alerts for ContainerMemoryHigh."
 	@echo "Stop early with: ssh hetzner 'docker stop equity-data-agent-stress'"
 
