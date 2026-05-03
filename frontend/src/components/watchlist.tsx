@@ -1,20 +1,21 @@
 /**
  * Left-rail watchlist (server component, persistent across all routes).
  *
- * Per ADR-014 §1:
+ * Per ADR-014 §1 (revised QNT-168):
  *   - Lives in `app/layout.tsx`, not in any single page.
- *   - Server fetch via Next.js Data Cache, default `revalidate` from
- *     `lib/api.ts` (24 h — matches the EOD ingest cadence; see QNT-166
- *     for the trace from 60 s through 3600 s to the 86_400 s ceiling).
+ *   - Statically rendered. Every server fetch uses the apiFetch default
+ *     (`cache: "force-cache"`) so summary + tickers + logos pin into the
+ *     build output. Freshness is driven by Vercel Deploy Hook calls from
+ *     dagster_pipelines.vercel_deploy after each ingest cycle.
  *   - Ticker universe comes from `/api/v1/tickers` only — never hardcoded,
  *     never augmented client-side (Anti-pattern #3).
  *   - Both endpoints fail soft: a network error renders a "watchlist
  *     unavailable" banner rather than tearing down the layout.
  *
  * The status footer reads `/api/v1/health` provenance (QNT-132) so the
- * `EOD · 02:00 ET` line tracks the actual Dagster schedule. If `/health`
- * is down the footer falls back to a static "EOD" label rather than
- * blocking render.
+ * `EOD · 02:00 ET` line tracks the actual Dagster schedule. The fetch
+ * lives in <WatchlistNextIngest />, a client component using
+ * `cache: "no-store"` so it never participates in build-time caching.
  */
 
 import Link from "next/link";
@@ -24,11 +25,7 @@ import { apiFetch } from "@/lib/api";
 import { ChartDataIcon } from "./icons/chart-data";
 import { Sparkline } from "./sparkline";
 import { TickerLogo } from "./ticker-logo";
-
-// Logos basically never change for established public companies; the API
-// caches per-process anyway, so a long Data Cache TTL keeps Finnhub usage
-// near zero (one fetch per pod lifetime per ticker).
-const LOGO_REVALIDATE_SECONDS = 86_400;
+import { WatchlistNextIngest } from "./watchlist-next-ingest";
 
 type LogosResponse = Record<string, string | null>;
 
@@ -41,16 +38,6 @@ type DashboardRow = {
   rsi_signal: string;
   trend_status: string;
   sparkline: number[];
-};
-
-type HealthProvenance = {
-  jobs?: {
-    next_ingest_local?: string;
-  };
-};
-
-type HealthResponse = {
-  provenance?: HealthProvenance;
 };
 
 const POSITIVE_STROKE = "#22c55e"; // tailwind emerald-500
@@ -115,22 +102,9 @@ async function loadWatchlistData(): Promise<{
   }
 }
 
-async function loadNextIngestLabel(): Promise<string> {
-  try {
-    const health = await apiFetch<HealthResponse>("/api/v1/health", {
-      revalidate: 300,
-    });
-    return health.provenance?.jobs?.next_ingest_local ?? "—";
-  } catch {
-    return "—";
-  }
-}
-
 async function loadLogos(): Promise<LogosResponse> {
   try {
-    return await apiFetch<LogosResponse>("/api/v1/logos", {
-      revalidate: LOGO_REVALIDATE_SECONDS,
-    });
+    return await apiFetch<LogosResponse>("/api/v1/logos");
   } catch {
     // Soft-fail: an empty map renders the initials fallback for every
     // ticker, no broken-image icons.
@@ -139,9 +113,8 @@ async function loadLogos(): Promise<LogosResponse> {
 }
 
 export async function Watchlist() {
-  const [{ rows, tickers, error }, nextIngest, logos] = await Promise.all([
+  const [{ rows, tickers, error }, logos] = await Promise.all([
     loadWatchlistData(),
-    loadNextIngestLabel(),
     loadLogos(),
   ]);
 
@@ -216,7 +189,7 @@ export async function Watchlist() {
       )}
 
       <footer className="border-t border-zinc-800 px-4 py-2 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
-        EOD · {nextIngest}
+        <WatchlistNextIngest />
       </footer>
     </aside>
   );

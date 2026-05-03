@@ -1,14 +1,17 @@
 /**
  * Ticker detail page (`/ticker/[symbol]`) — middle pane of the design v2 shell.
  *
- * Per ADR-014 §3:
- *   - ISR via `generateStaticParams()` reading `/api/v1/tickers` at build time
- *     — no hardcoded universe (Anti-pattern §3).
- *   - `revalidate: 86_400` on every server fetch — data is EOD-cadence
- *     (02:00 ET Dagster ingest), so a 24 h TTL is the semantic ceiling
- *     and gives ~1 regeneration/page/day (QNT-166). Sub-hour freshness on
- *     interactive surfaces (chart range, indicator timeframe, fundamentals
- *     period tabs) comes from `cache: "no-store"` on those client fetches.
+ * Per ADR-014 §3 (revised QNT-168):
+ *   - Statically rendered at build time. `dynamic = "force-static"` makes the
+ *     intent explicit; every server fetch below uses the apiFetch default
+ *     (`cache: "force-cache"`) so the responses are pinned into the build
+ *     output. Freshness is driven by Vercel Deploy Hook calls from
+ *     dagster_pipelines.vercel_deploy after each ingest cycle, not by ISR.
+ *   - `generateStaticParams()` reads `/api/v1/tickers` at build time so the
+ *     ticker universe is canonical (Anti-pattern §3, no hardcoded list).
+ *   - Sub-deploy-cycle freshness on interactive surfaces (chart range,
+ *     indicator timeframe, fundamentals period tabs) still comes from
+ *     `cache: "no-store"` on those client fetches.
  *   - 200-with-empty is rendered the same as service-down (Anti-pattern §5).
  */
 
@@ -24,20 +27,18 @@ import {
   API_BASE_URL,
   IS_PRERENDER,
   apiFetch,
-  type HealthResponse,
   type NewsRow,
   type QuoteResponse,
 } from "@/lib/api";
 
-// ISR window for the route segment — same value as the cached fetches inside.
-// 24 h is the semantic ceiling for EOD-cadence data (Dagster ingest at 02:00
-// ET); any TTL below that regenerates more often than the data changes and
-// is wasted ISR Writes. QNT-166 trace: 60 s -> 3600 s -> 86_400 s.
-export const revalidate = 86_400;
-// `dynamicParams = false` would 404 any ticker not enumerated in
-// `generateStaticParams`; we want graceful 404s for typos but allow new
-// tickers to render lazily on the first request after a registry change.
-// Defaulting to `true` (Next.js default) achieves both.
+export const dynamic = "force-static";
+// `dynamicParams = false` is required under SSG: with `force-static` the
+// page cannot do request-time rendering, so leaving `dynamicParams` at its
+// `true` default would error on unknown slugs instead of returning 404.
+// New tickers become available on the next deploy after Dagster ingests
+// them — same data-availability point as every other surface in the
+// SSG + Vercel Deploy Hook model (QNT-168).
+export const dynamicParams = false;
 
 export async function generateStaticParams(): Promise<{ symbol: string }[]> {
   // Build-time fetch of the canonical universe from the API. If the API is
@@ -45,7 +46,7 @@ export async function generateStaticParams(): Promise<{ symbol: string }[]> {
   // an empty array — Next.js then renders pages on demand.
   try {
     const res = await fetch(`${API_BASE_URL}/api/v1/tickers`, {
-      next: { revalidate },
+      cache: "force-cache",
     });
     if (!res.ok) return [];
     const tickers = (await res.json()) as string[];
@@ -58,7 +59,7 @@ export async function generateStaticParams(): Promise<{ symbol: string }[]> {
 
 async function loadQuote(ticker: string): Promise<QuoteResponse | null> {
   try {
-    return await apiFetch<QuoteResponse>(`/api/v1/quote/${ticker}`, { revalidate });
+    return await apiFetch<QuoteResponse>(`/api/v1/quote/${ticker}`);
   } catch {
     return null;
   }
@@ -66,33 +67,18 @@ async function loadQuote(ticker: string): Promise<QuoteResponse | null> {
 
 async function loadNews(ticker: string): Promise<NewsRow[]> {
   try {
-    return await apiFetch<NewsRow[]>(`/api/v1/news/${ticker}?days=7&limit=25`, {
-      revalidate,
-    });
+    return await apiFetch<NewsRow[]>(`/api/v1/news/${ticker}?days=7&limit=25`);
   } catch {
     return [];
-  }
-}
-
-async function loadProvenance(): Promise<HealthResponse["provenance"] | null> {
-  try {
-    const health = await apiFetch<HealthResponse>("/api/v1/health", {
-      revalidate: 300,
-    });
-    return health.provenance ?? null;
-  } catch {
-    return null;
   }
 }
 
 async function loadLogo(ticker: string): Promise<string | null> {
   // The logos endpoint returns the full ticker→URL map; the watchlist
   // already fetches it on every navigation so this hits the same Next
-  // Data Cache key (24h TTL) — no extra API roundtrip in steady state.
+  // Data Cache key (force-cache) — no extra API roundtrip per build.
   try {
-    const logos = await apiFetch<Record<string, string | null>>("/api/v1/logos", {
-      revalidate: 86_400,
-    });
+    const logos = await apiFetch<Record<string, string | null>>("/api/v1/logos");
     return logos[ticker] ?? null;
   } catch {
     return null;
@@ -105,10 +91,9 @@ export default async function TickerDetailPage({ params }: { params: Params }) {
   const { symbol } = await params;
   const ticker = symbol.toUpperCase();
 
-  const [quote, news, provenance, logoUrl] = await Promise.all([
+  const [quote, news, logoUrl] = await Promise.all([
     loadQuote(ticker),
     loadNews(ticker),
-    loadProvenance(),
     loadLogo(ticker),
   ]);
 
@@ -136,7 +121,7 @@ export default async function TickerDetailPage({ params }: { params: Params }) {
         <FundamentalsCard ticker={ticker} currentPrice={quote.price} />
         <NewsCard items={news} />
       </div>
-      <ProvenanceStrip provenance={provenance ?? null} />
+      <ProvenanceStrip />
     </div>
   );
 }

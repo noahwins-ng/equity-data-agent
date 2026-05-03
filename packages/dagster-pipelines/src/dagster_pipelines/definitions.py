@@ -30,6 +30,12 @@ from dagster_pipelines.sensors import (
     ohlcv_downstream_job,
     ohlcv_raw_sensor,
 )
+from dagster_pipelines.vercel_deploy import (
+    vercel_deploy_after_fundamentals,
+    vercel_deploy_after_news,
+    vercel_deploy_after_ohlcv,
+    vercel_deploy_job,
+)
 
 defs = Definitions(
     assets=[
@@ -52,8 +58,16 @@ defs = Definitions(
         ohlcv_downstream_job,
         fundamentals_downstream_job,
         news_downstream_job,
+        vercel_deploy_job,
     ],
-    schedules=[ohlcv_daily_schedule, fundamentals_weekly_schedule, news_raw_schedule],
+    schedules=[
+        ohlcv_daily_schedule,
+        fundamentals_weekly_schedule,
+        news_raw_schedule,
+        vercel_deploy_after_ohlcv,
+        vercel_deploy_after_news,
+        vercel_deploy_after_fundamentals,
+    ],
     sensors=[ohlcv_raw_sensor, fundamentals_sensor, news_raw_sensor],
     resources={
         "clickhouse": ClickHouseResource(),
