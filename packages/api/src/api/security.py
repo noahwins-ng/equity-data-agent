@@ -256,9 +256,9 @@ burst_alerter = BurstAlerter(
 
 def _sentry_capture(message: str, level: SentryLevel = "warning") -> None:
     """Best-effort Sentry alert. Falls back to ``logger.warning`` when the
-    SDK is missing or ``SENTRY_DSN`` is unset — QNT-86 will complete the
-    wiring; this module just exposes the hook ahead of time so the alert
-    surfaces start collecting traffic the moment the SDK initialises.
+    SDK is missing or ``SENTRY_DSN`` is unset — the hook surfaces alerts
+    the moment Sentry init lands (QNT-86 completed the wiring; this hook
+    is the surface the burst / breaker callsites already use).
     """
     if not settings.SENTRY_DSN:
         logger.warning("[burst-alert] %s", message)
@@ -269,6 +269,28 @@ def _sentry_capture(message: str, level: SentryLevel = "warning") -> None:
         sentry_sdk.capture_message(message, level=level)
     except Exception as exc:  # noqa: BLE001 — alerting must never crash the request
         logger.warning("[burst-alert] sentry capture failed (%s): %s", exc, message)
+
+
+def sentry_capture_exception(exc: BaseException) -> None:
+    """Best-effort Sentry exception capture (QNT-86).
+
+    Used by the chat SSE error paths to surface graph crashes that happen
+    in a worker thread (where Sentry's auto-capture middleware can't see
+    them) and by the global exception handler as defensive insurance.
+
+    No-op when ``SENTRY_DSN`` is unset — the caller already logs via
+    ``logger.exception`` so dev runs aren't silent. Sentry deduplicates by
+    stack-trace fingerprint, so a double-fire when both this hook and the
+    FastAPI integration's auto-capture run is harmless.
+    """
+    if not settings.SENTRY_DSN:
+        return
+    try:
+        import sentry_sdk
+
+        sentry_sdk.capture_exception(exc)
+    except Exception as inner:  # noqa: BLE001 — capture must never crash the request
+        logger.warning("sentry exception capture failed (%s)", inner)
 
 
 def record_burst_alert(ip: str, now_monotonic: float) -> None:
@@ -355,5 +377,6 @@ __all__ = [
     "limiter",
     "record_breaker_trip",
     "record_burst_alert",
+    "sentry_capture_exception",
     "validate_chat_message",
 ]

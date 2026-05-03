@@ -308,6 +308,99 @@ def test_no_thesis_when_reports_empty_emits_done_with_zero(
     assert done_data["confidence"] == 0.0
 
 
+def test_agent_crash_forwards_exception_to_sentry(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-86: graph crashes happen in a worker thread (asyncio.to_thread),
+    which sentry-sdk's FastAPI auto-capture middleware never sees. The
+    explicit ``sentry_capture_exception`` forward in the SSE error path
+    is what gets the exception to Sentry — assert the original exception
+    object is forwarded so the dashboard renders the in-thread stack."""
+    sentinel = RuntimeError("graph blew up in classify")
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
+        graph = MagicMock()
+        graph.invoke.side_effect = sentinel
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+    capture_spy = MagicMock()
+    monkeypatch.setattr(chat_module, "sentry_capture_exception", capture_spy)
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": ""})
+    assert r.status_code == 200
+
+    # The sanitised user-facing error event still fires; the Sentry forward
+    # is in addition, not in replacement.
+    frames = _parse_sse(r.text)
+    err = next(data for name, data in frames if name == "error")
+    assert err["code"] == "agent-failed"
+
+    capture_spy.assert_called_once()
+    forwarded = capture_spy.call_args.args[0]
+    assert forwarded is sentinel  # the SAME exception object, not a wrapper
+
+
+def test_agent_timeout_forwards_synthetic_exception_to_sentry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-86: timeouts aren't real Python exceptions — the run was
+    abandoned by ``asyncio.wait_for``, not killed by an exception. To
+    surface timeout patterns in the same Sentry dashboard as graph
+    crashes, the SSE handler raises a synthetic ``TimeoutError`` and
+    forwards it. The SDK call must happen with a real TimeoutError
+    instance (not just a string) so the dashboard groups them into one
+    issue."""
+    from shared.config import settings
+
+    monkeypatch.setattr(settings, "CHAT_RUN_TIMEOUT", 1.0)
+
+    invoke_unblock = threading.Event()
+
+    def _slow_invoke(state: dict[str, Any]) -> dict[str, Any]:
+        invoke_unblock.wait(timeout=3)
+        return {
+            "ticker": state["ticker"],
+            "intent": "thesis",
+            "plan": [],
+            "reports": {},
+            "errors": {},
+            "thesis": None,
+            "quick_fact": None,
+            "comparison": None,
+            "conversational": None,
+            "confidence": 0.0,
+        }
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
+        graph = MagicMock()
+        graph.invoke.side_effect = _slow_invoke
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+    capture_spy = MagicMock()
+    monkeypatch.setattr(chat_module, "sentry_capture_exception", capture_spy)
+
+    with TestClient(main_module.app) as c:
+        try:
+            r = c.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": ""})
+        finally:
+            invoke_unblock.set()
+
+    frames = _parse_sse(r.text)
+    err = next(data for name, data in frames if name == "error")
+    assert err["code"] == "agent-timeout"
+
+    capture_spy.assert_called_once()
+    forwarded = capture_spy.call_args.args[0]
+    assert isinstance(forwarded, TimeoutError)
+    assert "CHAT_RUN_TIMEOUT" in str(forwarded)
+    assert "NVDA" in str(forwarded)
+
+
 def test_agent_crash_emits_sanitized_error_event(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
