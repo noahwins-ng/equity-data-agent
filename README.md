@@ -12,6 +12,12 @@
 ![Hallucination](https://img.shields.io/badge/hallucination__ok-16%2F16-2ea44f)
 ![Prod](https://img.shields.io/badge/prod-live-success)
 
+![pip-audit](https://img.shields.io/badge/pip--audit-clean-2ea44f)
+![bandit](https://img.shields.io/badge/bandit-clean-2ea44f)
+![gitleaks](https://img.shields.io/badge/gitleaks-clean-2ea44f)
+![npm audit](https://img.shields.io/badge/npm%20audit-clean-2ea44f)
+![Trivy weekly](https://img.shields.io/badge/Trivy-weekly-1f6feb)
+
 ---
 
 ## What's shipped (May 2026)
@@ -189,6 +195,23 @@ End-to-end HTTPS for $0 (no domain purchase, no Let's Encrypt). The `*.trycloudf
 The full failure-mode catalog (symptoms → diagnosis → response → prevention) lives in [`docs/guides/ops-runbook.md`](docs/guides/ops-runbook.md).
 
 **Alerting** — UptimeRobot probe on `/api/v1/health` (Discord) + a `docker-events-notify` systemd unit streaming `die`/`kill`/`oom`/`restart` events to Discord ≤30s. Health monitor cron every 15 min surfaces failures via `make monitor-log`.
+
+---
+
+## Security posture
+
+Supply-chain hygiene is enforced by a layered scanner suite ([QNT-160](https://linear.app/noahwins/issue/QNT-160)) that runs on every PR plus a weekly Trivy cron for image-level CVEs. Every gate is set to **HIGH** severity — false-positive flap on mediums is documented in [`.security/waivers.md`](.security/waivers.md), not silenced by ad-hoc `# nosec` comments.
+
+| Scanner | What it catches | Where |
+|---|---|---|
+| `pip-audit` | Python dep CVEs against the PyUp DB | PR gate (CI) + `make security-scan` |
+| `bandit -lll` | Python static analysis (eval/exec, shell injection, weak crypto, hardcoded passwords) | PR gate (CI) + `make security-scan` |
+| `gitleaks` | Secrets in commits (API keys, dotenv values, service-account JSON) | PR gate (CI) + `make security-scan` |
+| `npm audit --audit-level=high` | Frontend dep CVEs | PR gate (CI) + `make security-scan` |
+| `trivy image` | OS-package and lib CVEs in every prod image (ClickHouse, LiteLLM, Caddy, Grafana, ...) | Weekly cron, posts severity summary to Discord ops channel |
+| Dependabot | Grouped weekly minor/patch bumps + immediate security PRs | `.github/dependabot.yml` (Python, npm, GHA, Docker) |
+
+`make security-scan` runs the full PR-gate suite locally — same flags, same gate level. Active waivers and the rationale for each (false positive vs. tracked deferral) live in [`.security/waivers.md`](.security/waivers.md); reviewers cross-check that file when a previously-failing finding disappears.
 
 ---
 

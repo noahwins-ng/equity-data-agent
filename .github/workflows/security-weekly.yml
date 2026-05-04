@@ -1,0 +1,144 @@
+name: Weekly image scan
+
+# QNT-160 — Trivy scans every prod image in docker-compose.yml once a week
+# and posts a severity table to the Discord ops webhook. Advisory-only: a
+# finding here doesn't block any merge or deploy. Humans triage and file
+# follow-up tickets when warranted (see docs/guides/ops-runbook.md).
+#
+# Runs Sunday 04:00 UTC (low-traffic window; deploy.yml fires on push to
+# main and the weekly cron is not in the deploy critical path).
+
+on:
+  schedule:
+    - cron: "0 4 * * 0"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  trivy-image-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # Mirrors the `image:` lines in docker-compose.yml. The `dagster`
+        # image is built locally from packages/dagster-pipelines/Dockerfile
+        # and pushed only to the host's local docker daemon, so we scan its
+        # base image instead — that's where 99% of the CVE surface lives.
+        image:
+          - clickhouse/clickhouse-server:24-alpine
+          - litellm/litellm:v1.81.14-stable
+          - cloudflare/cloudflared:2026.3.0
+          - caddy:2-alpine
+          - amir20/dozzle:v8.13.13
+          - prom/node-exporter:v1.8.2
+          - gcr.io/cadvisor/cadvisor:v0.55.1
+          - prom/prometheus:v2.55.1
+          - grafana/grafana:11.3.0
+          - python:3.12-slim
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Slugify image name
+        id: slug
+        # Turn "gcr.io/cadvisor/cadvisor:v0.55.1" into "gcr-io-cadvisor-..."
+        # so artifact names are human-readable when triaging Discord alerts.
+        run: |
+          slug=$(echo "${{ matrix.image }}" | tr '/:.' '-')
+          echo "slug=${slug}" >> "$GITHUB_OUTPUT"
+
+      - name: Run Trivy scan (JSON for parsing)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ matrix.image }}
+          format: json
+          # JSON parses cleanly with jq regardless of Trivy's table-format
+          # tweaks. exit-code 0 keeps the matrix advisory-only.
+          exit-code: 0
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          output: trivy-${{ steps.slug.outputs.slug }}.json
+
+      - name: Summarise findings
+        id: summary
+        env:
+          IMAGE: ${{ matrix.image }}
+          REPORT: trivy-${{ steps.slug.outputs.slug }}.json
+        run: |
+          set -euo pipefail
+          # Trivy produces an empty `{}` (no Results key) for clean images;
+          # missing file = pull failed (action would have errored before
+          # reaching here, but be defensive). jq's `// empty` and `// 0`
+          # idioms handle both shapes.
+          if [ ! -s "$REPORT" ]; then
+            echo "::warning::Trivy report missing or empty for $IMAGE — image pull may have failed"
+            echo "high=PULLFAIL" >> "$GITHUB_OUTPUT"
+            echo "critical=PULLFAIL" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          highs=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' "$REPORT")
+          crits=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' "$REPORT")
+          echo "high=${highs}" >> "$GITHUB_OUTPUT"
+          echo "critical=${crits}" >> "$GITHUB_OUTPUT"
+          echo "Image: $IMAGE  HIGH=${highs} CRITICAL=${crits}"
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-${{ steps.slug.outputs.slug }}
+          path: trivy-${{ steps.slug.outputs.slug }}.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+  notify-discord:
+    needs: trivy-image-scan
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: reports
+          merge-multiple: true
+
+      - name: Post summary to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
+            echo "::warning::DISCORD_WEBHOOK_URL not set — skipping notification"
+            exit 0
+          fi
+          # Walk every JSON report and tally HIGH/CRITICAL across the matrix.
+          # Each file is named trivy-<slug>.json and the `ArtifactName` field
+          # inside echoes the original image:tag for human-readable rows.
+          summary="**Weekly Trivy image scan** — $(date -u +%Y-%m-%d)\n\n"
+          total_high=0
+          total_crit=0
+          flagged_rows=""
+          for f in reports/*.json; do
+            [ -f "$f" ] || continue
+            highs=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' "$f")
+            crits=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' "$f")
+            image=$(jq -r '.ArtifactName // "unknown"' "$f")
+            total_high=$((total_high + highs))
+            total_crit=$((total_crit + crits))
+            if [ "$highs" -gt 0 ] || [ "$crits" -gt 0 ]; then
+              flagged_rows="${flagged_rows}\`${image}\` — HIGH=${highs} CRITICAL=${crits}\n"
+            fi
+          done
+          if [ "$total_high" -eq 0 ] && [ "$total_crit" -eq 0 ]; then
+            summary="**Weekly Trivy image scan** — $(date -u +%Y-%m-%d)\n\nAll prod images clean (HIGH+CRITICAL = 0). :shield:"
+          else
+            summary="${summary}${flagged_rows}\n**Totals**: HIGH=${total_high} CRITICAL=${total_crit}"
+          fi
+          # Discord caps content at 2000 chars; truncate defensively.
+          payload=$(jq -n --arg c "$(printf '%b' "${summary}" | head -c 1900)" '{content: $c}')
+          curl -sS -X POST "$DISCORD_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            --data "$payload"

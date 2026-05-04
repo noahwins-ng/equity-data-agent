@@ -1,0 +1,27 @@
+#!/bin/sh
+#
+# QNT-160 — runs gitleaks on staged changes before each commit. Fails the
+# commit if a secret is detected. The same scan runs in CI on PR diff, so
+# this hook is best-effort: missing gitleaks locally only logs a warning.
+#
+# Bypass with `git commit --no-verify` if you need to commit a deliberately
+# placeholder credential (e.g., adding to .gitleaks.toml allowlist) — but
+# CI will still catch it on the PR if the allowlist isn't updated.
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+    echo "gitleaks not installed locally — skipping secret scan."
+    echo "  Install: brew install gitleaks  (or see https://github.com/gitleaks/gitleaks)"
+    echo "  CI will run the same scan on PR diff."
+    exit 0
+fi
+
+# `gitleaks protect --staged` scans the staging area only — fast, doesn't
+# walk git history. Repo-root config (.gitleaks.toml) is auto-discovered.
+if ! gitleaks protect --staged --no-banner --redact 2>&1; then
+    echo ""
+    echo "ERROR: gitleaks found a potential secret in staged changes."
+    echo "  Review the finding above. If it's a false positive, add to"
+    echo "  .gitleaks.toml allowlist and document in .security/waivers.md."
+    echo "  Bypass (only if intentional): git commit --no-verify"
+    exit 1
+fi

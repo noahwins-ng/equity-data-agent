@@ -4,6 +4,12 @@ on:
   pull_request:
     branches: [main]
 
+# Default-deny GITHUB_TOKEN scopes; individual jobs opt into more if needed.
+# QNT-160 — hardens the security-secrets job against a compromised gitleaks
+# action (same posture every public OSS repo should have post-2024).
+permissions:
+  contents: read
+
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
@@ -49,3 +55,86 @@ jobs:
         env:
           CLICKHOUSE_HOST: localhost
           CLICKHOUSE_PORT: 8123
+
+  # QNT-160 — security scanner suite. Parallel jobs so total CI runtime grows
+  # only by the slowest scanner job (~60s, dominated by uv sync), not the sum.
+  # Gate is set to HIGH severity / HIGH critical so the suite catches real
+  # exploitable findings without false-positive flap. Mediums (e.g. bandit
+  # B608 hardcoded-SQL on internal table-name interpolation) are reported but
+  # do not block — see .security/waivers.md for the active exception list.
+
+  security-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --all-packages
+
+      - name: pip-audit (CVE scan against PyUp DB)
+        # --skip-editable: skip the four workspace packages (agent, api,
+        # dagster-pipelines, shared) — they aren't published to PyPI so
+        # pip-audit can't resolve them. We only care about third-party deps.
+        # Vuln waivers go via --ignore-vuln <GHSA-id>; document each in
+        # .security/waivers.md before adding here. (Don't add --strict: it
+        # treats the editable-skip as an error.)
+        run: uv run pip-audit --skip-editable
+
+      - name: bandit (Python static analysis)
+        # -lll = HIGH severity gate. Mediums are tracked but not blocking;
+        # see .security/waivers.md for the rationale.
+        run: uv run bandit -lll -r packages/ -c pyproject.toml
+
+  security-secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks-action needs full history to scan the diff between PR
+          # base and head. Fetch-depth 0 = unshallowed clone.
+          fetch-depth: 0
+
+      - name: gitleaks (secret scan on PR diff)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          # GITHUB_TOKEN auto-provided by Actions; no PAT required for OSS.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Config lives at repo root (.gitleaks.toml) — picked up automatically.
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
+          # Summary disabled: posting a step summary requires
+          # `pull-requests: write`, which the default GITHUB_TOKEN doesn't
+          # carry. The exit code on findings is the actual gate; the action
+          # log already surfaces leak details inline on failure.
+          GITLEAKS_ENABLE_SUMMARY: false
+
+  security-frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: npm audit (high+ severity gate)
+        # --audit-level=high: mediums and lows are reported but exit 0; only
+        # high/critical findings fail the build. Waivers via per-package
+        # `overrides` in package.json or documented in .security/waivers.md.
+        run: npm audit --audit-level=high

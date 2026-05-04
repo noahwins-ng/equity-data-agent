@@ -1,0 +1,29 @@
+# gitleaks config — QNT-160
+# Extends the upstream default ruleset and adds project-scoped allowlists for
+# false-positive paths (documentation examples with placeholder credentials,
+# encrypted-at-rest secret stores, build artifacts).
+#
+# Waivers are documented in .security/waivers.md — keep that file in sync with
+# any allowlist entry below.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documentation examples + encrypted-at-rest stores + build artifacts"
+paths = [
+    # Claude Code agent skill markdown — contains placeholder curl examples
+    # ("your-password", "your-token") that look like auth headers. These are
+    # documentation, not real credentials.
+    '''\.claude/skills/.*\.md''',
+    # SOPS-encrypted dotenv: the *file* is the secret store, but every value
+    # is age-encrypted ciphertext. The plaintext .env is gitignored.
+    '''\.env\.sops''',
+    # Next.js build output — preview/encryption keys regenerate per build,
+    # path is gitignored (.next/ in .gitignore) but added here belt-and-
+    # braces for `gitleaks detect --no-git` filesystem scans.
+    '''frontend/\.next/.*''',
+    # node_modules package internals occasionally trip generic-api-key with
+    # fixture/test data; we don't ship vendor code, so ignore.
+    '''.*node_modules/.*''',
+]

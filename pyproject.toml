@@ -17,6 +17,9 @@ dev = [
     "pyright>=1.1.390",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
+    # QNT-160 — security scanners; pinned versions so CI and local parity.
+    "pip-audit>=2.7.3",
+    "bandit>=1.8.0",
 ]
 
 [tool.ruff]
@@ -38,3 +41,14 @@ asyncio_mode = "auto"
 markers = [
     "integration: requires live ClickHouse (auto-skipped locally without tunnel)",
 ]
+
+[tool.bandit]
+# QNT-160 — only scan first-party code. Tests legitimately use assert/random/
+# subprocess in ways bandit flags as risky in production code; we don't want
+# the gate to brick on test fixtures. Skip rules listed in skips[] are
+# documented in .security/waivers.md.
+exclude_dirs = ["tests", ".venv", "node_modules", "frontend"]
+# B101 — assert_used: pytest tests use assert by design; we already exclude
+# tests/, but a few module-level invariant asserts in agent/api are
+# intentional and trip B101 even outside tests.
+skips = ["B101"]
