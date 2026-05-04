@@ -155,6 +155,7 @@ export async function Watchlist() {
             <li key={row.ticker}>
               <Link
                 href={`/ticker/${row.ticker}`}
+                prefetch={false}
                 className="flex items-center gap-3 px-4 py-2 transition hover:bg-zinc-900 focus:bg-zinc-900 focus:outline-none"
               >
                 <TickerLogo ticker={row.ticker} logoUrl={logos[row.ticker] ?? null} />
