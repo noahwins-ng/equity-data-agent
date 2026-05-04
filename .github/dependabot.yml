@@ -1,0 +1,84 @@
+# QNT-160 — Dependabot config.
+#
+# Goals:
+#   * Group weekly non-security bumps into ONE PR per ecosystem so review
+#     overhead stays low (this repo is solo-maintained).
+#   * Surface security advisories immediately as separate PRs (un-grouped),
+#     since those need to ship faster than weekly.
+#   * Cover every ecosystem present in the repo: Python (uv-managed), Node
+#     (frontend), GitHub Actions, and Docker base images.
+
+version: 2
+updates:
+  # ── Python (uv) ───────────────────────────────────────────────
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "python"]
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      python-deps:
+        patterns: ["*"]
+        # Group major bumps separately so a breaking dagster bump doesn't
+        # block a fastapi patch in the same PR.
+        update-types: ["minor", "patch"]
+
+  # ── Frontend (npm) ────────────────────────────────────────────
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "frontend"]
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      frontend-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ── GitHub Actions ────────────────────────────────────────────
+  # Keep CI action versions fresh; pinning by SHA is overkill here, but we
+  # do want patch bumps for security fixes (e.g. trivy-action, gitleaks).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "ci"]
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      gha-deps:
+        patterns: ["*"]
+
+  # ── Docker base images ────────────────────────────────────────
+  # Watches FROM lines in Dockerfiles. compose-pinned image: tags are
+  # tracked separately (manual bump) since they're not in a Dockerfile.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "docker"]
+    commit-message:
+      prefix: "chore"
+      include: "scope"

@@ -1,4 +1,4 @@
-.PHONY: setup dev-dagster dev-api dev-frontend dev-litellm test test-integration lint format migrate seed tunnel issue pr build check-prod rollback monitor-install monitor-log events-notify-install events-notify-status events-notify-test obs-status obs-alert-test prune-build-cache prune-build-cache-install sops-edit sops-encrypt sops-decrypt sops-rotate-keys help
+.PHONY: setup dev-dagster dev-api dev-frontend dev-litellm test test-integration lint format migrate seed tunnel issue pr build check-prod rollback monitor-install monitor-log events-notify-install events-notify-status events-notify-test obs-status obs-alert-test prune-build-cache prune-build-cache-install sops-edit sops-encrypt sops-decrypt sops-rotate-keys security-scan help
 
 # ─── Setup ────────────────────────────────────────────────────
 
@@ -189,6 +189,26 @@ lint: ## Run linter + type checker
 format: ## Auto-format code
 	uv run ruff format .
 	uv run ruff check --fix .
+
+security-scan: ## Run the QNT-160 scanner suite locally (mirror of CI security-* jobs)
+	@echo "=== pip-audit (Python CVE scan) ==="
+	@uv run pip-audit --skip-editable
+	@echo ""
+	@echo "=== bandit (Python static analysis, HIGH gate) ==="
+	@uv run bandit -lll -r packages/ -c pyproject.toml
+	@echo ""
+	@echo "=== gitleaks (secret scan, git history) ==="
+	@command -v gitleaks >/dev/null 2>&1 || { echo "gitleaks not installed — brew install gitleaks"; exit 1; }
+	@# Local scan walks full git history (catches anything ever committed);
+	@# CI scopes to the PR diff via gitleaks-action; pre-commit hook scans
+	@# only staged changes. All three use .gitleaks.toml so allowlists are
+	@# consistent — the scopes differ on purpose.
+	@gitleaks detect --source=. --config=.gitleaks.toml --no-banner --redact
+	@echo ""
+	@echo "=== npm audit (frontend, HIGH gate) ==="
+	@npm --prefix frontend audit --audit-level=high
+	@echo ""
+	@echo "All scanners passed at the HIGH-severity gate."
 
 # ─── Database ─────────────────────────────────────────────────
 
