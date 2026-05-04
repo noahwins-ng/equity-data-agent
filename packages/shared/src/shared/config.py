@@ -50,6 +50,19 @@ class Settings(BaseSettings):
     LANGFUSE_SECRET_KEY: str = ""
     LANGFUSE_BASE_URL: str = "https://us.cloud.langfuse.com"
 
+    # ─── Alerting (QNT-62 + QNT-101) ─────────────────────────────────────
+    # Discord webhook used by docker-events-notify.sh (container die/kill/oom)
+    # and dagster_run_failure_alert_sensor (asset materialization failures).
+    # Create at: Discord server → Server Settings → Integrations → Webhooks.
+    # Empty in dev unless wiring the alert path end-to-end; the sensor logs and
+    # skips when unset so test runs / local dev never POST anywhere.
+    DISCORD_WEBHOOK_URL: str = ""
+    # Base URL of the Dagster webserver, used to build clickable run links in
+    # Discord messages. Local dev / prod-via-tunnel both reach the UI at
+    # http://localhost:3000 (the prod webserver is not exposed publicly —
+    # operator follows the SSH tunnel to view the run).
+    DAGSTER_BASE_URL: str = "http://localhost:3000"
+
     # Sentry
     SENTRY_DSN: str = ""
     # Populated by the deploy pipeline via ``docker run --env GIT_SHA=$(git rev-parse HEAD)``;
