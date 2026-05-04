@@ -14,6 +14,7 @@ from dagster_pipelines.assets.news_raw import news_raw
 from dagster_pipelines.assets.ohlcv_raw import ohlcv_raw
 from dagster_pipelines.resources.clickhouse import ClickHouseResource
 from dagster_pipelines.resources.qdrant import QdrantResource
+from dagster_pipelines.run_failure_alert import dagster_run_failure_alert_sensor
 from dagster_pipelines.schedules import (
     fundamentals_weekly_job,
     fundamentals_weekly_schedule,
@@ -68,7 +69,12 @@ defs = Definitions(
         vercel_deploy_after_news,
         vercel_deploy_after_fundamentals,
     ],
-    sensors=[ohlcv_raw_sensor, fundamentals_sensor, news_raw_sensor],
+    sensors=[
+        ohlcv_raw_sensor,
+        fundamentals_sensor,
+        news_raw_sensor,
+        dagster_run_failure_alert_sensor,
+    ],
     resources={
         "clickhouse": ClickHouseResource(),
         "qdrant": QdrantResource(),
