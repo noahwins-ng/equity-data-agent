@@ -40,7 +40,7 @@ jobs:
           - grafana/grafana:11.3.0
           - python:3.12-slim
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Slugify image name
         id: slug
@@ -86,7 +86,7 @@ jobs:
           echo "Image: $IMAGE  HIGH=${highs} CRITICAL=${crits}"
 
       - name: Upload report artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: trivy-${{ steps.slug.outputs.slug }}
           path: trivy-${{ steps.slug.outputs.slug }}.json
@@ -100,7 +100,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: reports
           merge-multiple: true
