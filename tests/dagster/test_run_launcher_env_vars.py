@@ -46,6 +46,14 @@ ASSET_REQUIRED_SETTINGS = frozenset(
         "FINNHUB_API_KEY",
         "QDRANT_API_KEY",
         "QDRANT_URL",
+        # Read by dagster_pipelines.vercel_deploy.trigger_vercel_deploy. Until
+        # 2026-05-05 this was a Settings field but missing from env_vars; the
+        # scheduled vercel_deploy_after_* runs went through DockerRunLauncher,
+        # which dropped the env var, and the op silently no-op'd ("URL not set;
+        # skipping deploy trigger") for ~5 days. The frontend served its last
+        # successful build (May 1) over that window even though OHLCV/news
+        # ingestion was healthy. Same shape as QNT-141/144 (FINNHUB_API_KEY).
+        "VERCEL_DEPLOY_HOOK_URL",
     }
 )
 
