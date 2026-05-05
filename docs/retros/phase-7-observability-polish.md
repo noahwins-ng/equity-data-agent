@@ -1,7 +1,7 @@
 # Retrospective: Phase 7 — Observability & Polish
 
 **Timeline:** 2026-04-12 → 2026-05-05 (backlog queued Apr 12; 4-day burndown May 2 → May 5 immediately after Phase 6 closed)
-**Shipped:** 6 issues, 13 PRs merged, 0 rollovers, 2 administrative cancellations (QNT-164/165 absorbed into QNT-103 follow-ups)
+**Shipped:** 6 issues, 14 PRs merged (11 QNT-tagged + #205 .env.sops chore + #195/#196 absorbed-then-cancelled QNT-164/165), 0 rollovers
 **Velocity:** ~1.5 tickets/day during the burndown — above the 0.5–1.0/day Phase 6 baseline
 
 ## Six tickets shipped
@@ -9,7 +9,7 @@
 | Ticket | Title | PRs | Notes |
 |---|---|---|---|
 | QNT-86 | Integrate Sentry for FastAPI error tracking | #204 (+ #205 .env.sops) | Reviewer caught raw `os.environ` violating "all config via Settings" rule |
-| QNT-103 | Observability stack: Dozzle + Prometheus + Grafana + cAdvisor + node_exporter | #194, 195, 196, 197, 198, 199, 200, 201 | 7-PR rework arc — see "harder than expected" below |
+| QNT-103 | Observability stack: Dozzle + Prometheus + Grafana + cAdvisor + node_exporter | #194, 195, 196, 197, 198, 199, 200, 201 | 8-PR arc (1 initial + 7 follow-ups, including QNT-164/165 absorbed) — see "harder than expected" below |
 | QNT-62 | Dagster alerting on materialization failures | #222 | Reviewer flagged (asset, partition) vs (job, partition) scope drift; bumped query limit from 10 → 100 |
 | QNT-63 | Retry logic for external API calls | #223 | RFC 9110 §10.2.3 Retry-After parser + intra-attempt finnhub loop + jittered RetryPolicy on 3 assets |
 | QNT-64 | Integration tests: end-to-end critical paths | #221 | Real ClickHouse, 35 new tests in 11.7s, closes QNT-148 mock-only gap |
@@ -25,7 +25,7 @@
 
 ## What was harder than expected
 
-- **QNT-103 needed 7 PRs to land cleanly** (1 initial + 6 follow-ups). Each follow-up was a silent NoData / empty-panel / never-fires class that no unit test could catch by design:
+- **QNT-103 needed 8 PRs to land cleanly** (1 initial + 7 follow-ups, two of which were filed as separate QNT-164/165 tickets and later cancelled once their PRs merged). Each follow-up was a silent NoData / empty-panel / never-fires class that no unit test could catch by design:
   - PR #197: cAdvisor `--docker_only` flag missing → Containers dashboard empty + per-container alerts never fire
   - PR #198/199: cAdvisor v0.49.1 → v0.56.2 (overlayfs), then v0.56.x not in the `gcr.io/cadvisor` registry; pinned v0.55.1
   - PR #200: node_exporter mountpoint label `/rootfs` vs `/` → Disk usage panel + HostDiskHigh alert returned NoData
@@ -36,9 +36,11 @@
 
 ## Lessons saved to memory
 
-- [`feedback_obs_stack_followup_prs.md`](../../memory/feedback_obs_stack_followup_prs.md) — multi-collector / multi-dashboard infra integrations need a pre-prod smoke that exercises every panel, alert, healthcheck, and CD-mounted-config restart. Treat the smoke as a hard gate, not an advisory. Same shape as `feedback_reactive_sizing_trap.md` and `feedback_vendor_prod_docs.md`.
-- [`feedback_triple_rescope_means_cut.md`](../../memory/feedback_triple_rescope_means_cut.md) — when drafting a third re-scope of the same ticket, audit which AC items have been silently subsumed by other tickets that shipped in between. Cut the subsumed items entirely with a doc pointer; don't try to preserve them in a new shape.
-- [`feedback_phase_end_burndown_window.md`](../../memory/feedback_phase_end_burndown_window.md) — concentrate phase-tail execution post-milestone-close while calibration context is fresh; the marginal cost of shipping the next ticket is much lower than after a context switch.
+Saved under the auto-memory store (outside the repo tree, so links aren't repo-relative — names below match the file basenames in `~/.claude/projects/-Users-noahwinston-Dev-equity-data-agent/memory/`):
+
+- `feedback_obs_stack_followup_prs.md` — multi-collector / multi-dashboard infra integrations need a pre-prod smoke that exercises every panel, alert, healthcheck, and CD-mounted-config restart. Treat the smoke as a hard gate, not an advisory. Same shape as `feedback_reactive_sizing_trap.md` and `feedback_vendor_prod_docs.md`.
+- `feedback_triple_rescope_means_cut.md` — when drafting a third re-scope of the same ticket, audit which AC items have been silently subsumed by other tickets that shipped in between. Cut the subsumed items entirely with a doc pointer; don't try to preserve them in a new shape.
+- `feedback_phase_end_burndown_window.md` — concentrate phase-tail execution post-milestone-close while calibration context is fresh; the marginal cost of shipping the next ticket is much lower than after a context switch.
 
 ## Invariant guards
 
