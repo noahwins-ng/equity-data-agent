@@ -8,6 +8,7 @@ from dagster import (
     AssetExecutionContext,
     Backoff,
     Config,
+    Jitter,
     RetryPolicy,
     StaticPartitionsDefinition,
     asset,
@@ -15,6 +16,7 @@ from dagster import (
 from shared.tickers import ALL_OHLCV_TICKERS
 
 from dagster_pipelines.resources.clickhouse import ClickHouseResource
+from dagster_pipelines.retry_helpers import retry_after_seconds_from_exception
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +31,12 @@ class OHLCVConfig(Config):
 
 @asset(
     partitions_def=ohlcv_partitions,
-    retry_policy=RetryPolicy(max_retries=3, delay=30, backoff=Backoff.EXPONENTIAL),
+    retry_policy=RetryPolicy(
+        max_retries=3,
+        delay=30,
+        backoff=Backoff.EXPONENTIAL,
+        jitter=Jitter.PLUS_MINUS,
+    ),
     group_name="ingestion",
 )
 def ohlcv_raw(
@@ -51,7 +58,21 @@ def ohlcv_raw(
     except Exception as exc:
         msg = str(exc).lower()
         if "429" in msg or "too many requests" in msg or "rate limit" in msg:
-            raise  # bubble up to trigger Dagster retry with exponential backoff
+            # Honor server-suggested wait when the upstream attaches a
+            # Retry-After header (delta-seconds or HTTP-date). yfinance's
+            # YFRateLimitError discards the response so this is a no-op
+            # there, but any future yfinance version (or a custom session)
+            # that surfaces the header will start being honored without
+            # further code changes.
+            wait = retry_after_seconds_from_exception(exc)
+            if wait is not None and wait > 0:
+                context.log.info(
+                    "yfinance 429 for %s — Retry-After=%.1fs; sleeping before re-raising",
+                    ticker,
+                    wait,
+                )
+                time.sleep(wait)
+            raise  # bubble up to trigger Dagster retry with jittered backoff
         context.log.warning("yfinance fetch failed for %s: %s — skipping", ticker, exc)
         return
 

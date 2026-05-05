@@ -29,6 +29,8 @@ from urllib.parse import urlparse
 import httpx
 from shared.config import settings
 
+from dagster_pipelines.retry_helpers import retry_after_seconds_from_exception
+
 logger = logging.getLogger(__name__)
 
 FINNHUB_BASE_URL = "https://finnhub.io/api/v1"
@@ -38,6 +40,17 @@ COMPANY_NEWS_PATH = "/company-news"
 # transient slowdown doesn't false-fail the asset. Retries are owned by the
 # Dagster RetryPolicy on news_raw, not the HTTP client.
 _REQUEST_TIMEOUT_SECONDS = 30.0
+
+# Intra-attempt retry budget for /company-news (QNT-63). A single transient
+# 5xx (or a 429 with a Retry-After) should not burn an entire asset retry
+# slot — that policy waits 30s+ and re-launches the whole op. Two extra
+# in-process tries (3 total) absorbs typical Finnhub blips while still
+# bubbling persistent 5xx so the asset-level RetryPolicy can engage.
+_INTRA_ATTEMPT_MAX_RETRIES = 2
+# Conservative base for exponential in-attempt backoff. Finnhub's free tier
+# is 60 RPM (~1 RPS); 1s → 2s pauses keep us inside the bucket while still
+# absorbing the transient blip. Skipped when Retry-After is provided.
+_INTRA_ATTEMPT_BASE_DELAY_SECONDS = 1.0
 
 # Publisher-resolution timeout. Tighter than the API call — we'd rather give
 # up and store '' than have one slow outlet stall the per-partition run.
@@ -90,6 +103,65 @@ class FinnhubAPIKeyMissing(RuntimeError):
     failure mode is "loud and obvious" rather than "silent empty insert"."""
 
 
+def _is_retriable_status_error(exc: httpx.HTTPStatusError) -> bool:
+    """5xx and 429 are transient; 4xx auth / bad-symbol errors are not.
+
+    Splitting this out makes the retry loop's intent obvious and gives the
+    test a single seam — flip a 503 to a 401 and the retry budget should
+    not engage.
+    """
+    code = exc.response.status_code
+    return code == 429 or 500 <= code < 600
+
+
+def _fetch_with_intra_attempt_retry(
+    http: httpx.Client,
+    url: str,
+    params: dict[str, Any],
+    ticker: str,
+) -> Any:
+    """GET ``url`` with a small intra-attempt retry budget on 5xx / 429.
+
+    Honors the response's ``Retry-After`` header when present (delta-seconds
+    or HTTP-date, parsed by ``retry_helpers``); otherwise applies a short
+    exponential backoff (1s, 2s, …) bounded by ``_INTRA_ATTEMPT_MAX_RETRIES``.
+
+    Persistent 4xx (auth / bad symbol) and persistent 5xx still raise
+    ``httpx.HTTPStatusError`` so the asset-level Dagster RetryPolicy can
+    re-launch the run. Non-list payloads are surfaced to the caller via
+    the existing ``payload`` check there.
+    """
+    last_exc: httpx.HTTPStatusError | None = None
+    for attempt in range(_INTRA_ATTEMPT_MAX_RETRIES + 1):
+        try:
+            response = http.get(url, params=params)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as exc:
+            if not _is_retriable_status_error(exc):
+                raise
+            last_exc = exc
+            if attempt == _INTRA_ATTEMPT_MAX_RETRIES:
+                # Budget exhausted — bubble so the asset RetryPolicy gets
+                # a chance to re-launch the whole op with jittered backoff.
+                raise
+            wait = retry_after_seconds_from_exception(exc)
+            if wait is None or wait <= 0:
+                wait = _INTRA_ATTEMPT_BASE_DELAY_SECONDS * (2**attempt)
+            logger.warning(
+                "Finnhub /company-news %s for %s — retry %d/%d in %.1fs",
+                exc.response.status_code,
+                ticker,
+                attempt + 1,
+                _INTRA_ATTEMPT_MAX_RETRIES,
+                wait,
+            )
+            time.sleep(wait)
+    # Unreachable: the loop either returns or raises. Guard for type-checker.
+    assert last_exc is not None
+    raise last_exc
+
+
 def fetch_company_news(
     ticker: str,
     *,
@@ -111,7 +183,8 @@ def fetch_company_news(
 
     Raises:
         FinnhubAPIKeyMissing: If ``settings.FINNHUB_API_KEY`` is empty.
-        httpx.HTTPStatusError: For non-2xx responses (4xx auth, 429 rate limit, 5xx).
+        httpx.HTTPStatusError: For persistent non-2xx (4xx auth, 4xx rate
+            limit, or 5xx that survives the intra-attempt retry budget).
     """
     api_key = settings.FINNHUB_API_KEY
     if not api_key:
@@ -130,9 +203,12 @@ def fetch_company_news(
     owns_client = client is None
     http = client or httpx.Client(timeout=_REQUEST_TIMEOUT_SECONDS)
     try:
-        response = http.get(f"{FINNHUB_BASE_URL}{COMPANY_NEWS_PATH}", params=params)
-        response.raise_for_status()
-        payload = response.json()
+        payload = _fetch_with_intra_attempt_retry(
+            http,
+            f"{FINNHUB_BASE_URL}{COMPANY_NEWS_PATH}",
+            params,
+            ticker,
+        )
     finally:
         if owns_client:
             http.close()

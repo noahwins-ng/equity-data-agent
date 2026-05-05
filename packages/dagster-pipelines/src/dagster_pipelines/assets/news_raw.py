@@ -28,6 +28,7 @@ from dagster import (
     AssetExecutionContext,
     Backoff,
     Config,
+    Jitter,
     RetryPolicy,
     StaticPartitionsDefinition,
     asset,
@@ -135,7 +136,12 @@ def _article_to_row(
 
 @asset(
     partitions_def=news_partitions,
-    retry_policy=RetryPolicy(max_retries=3, delay=30, backoff=Backoff.EXPONENTIAL),
+    retry_policy=RetryPolicy(
+        max_retries=3,
+        delay=30,
+        backoff=Backoff.EXPONENTIAL,
+        jitter=Jitter.PLUS_MINUS,
+    ),
     group_name="ingestion",
 )
 def news_raw(
