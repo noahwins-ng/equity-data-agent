@@ -52,6 +52,7 @@ run_launcher:
       - LANGFUSE_BASE_URL
       - SENTRY_DSN
       - FINNHUB_API_KEY
+      - VERCEL_DEPLOY_HOOK_URL
     # Run-worker containers must see the SAME SQLite-backed run storage the
     # daemon wrote to, or `dagster api execute_run` errors with
     # `Run with id '<x>' not found for run execution` (observed on dev smoke
