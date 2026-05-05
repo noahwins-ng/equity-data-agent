@@ -125,7 +125,7 @@ This boundary is enforced by architecture (no DB credentials in the agent packag
 
 **FAIL CLOSED contract:** `litellm_config.yaml` is audited at test time (`test_litellm_fail_closed.py`) to assert that every reachable alias on the chat path (`equity-agent/default`, `equity-agent/gemini`, and any fallback in their chain) routes to a free-tier provider (Groq / Gemini / Google). A future contributor adding an Anthropic / OpenAI alias as a fallback trips a CI failure, not a billing alert.
 
-**Sentry hooks** are wired ahead of QNT-86's full Sentry integration. With `SENTRY_DSN` unset, alert events log at WARNING; with it set, the SDK is initialised in `api.main` and `capture_message` lands at the configured project.
+**Sentry integration** (QNT-86): `sentry-sdk[fastapi]` initialised in `api.main` with `release=settings.GIT_SHA`, `traces_sample_rate=0.1`, `auto_session_tracking=True`, `send_default_pii=False`. With `SENTRY_DSN` unset, `_sentry_capture_message` and `_sentry_capture_exception` fall back to WARNING-level logs. The `cors_aware_exception_handler` forwards to Sentry explicitly because a registered `Exception` handler can short-circuit FastAPIIntegration's auto-capture; Sentry dedups by stack-trace fingerprint so the redundant call is harmless. Chat SSE error paths capture the original worker-thread exception (preserving traceback) and synthetic `TimeoutError` for budget overruns. Verification endpoint `/api/v1/_debug/sentry` is gated on `settings.ENABLE_SENTRY_TEST`.
 
 ## Multi-Timeframe Strategy
 
@@ -167,3 +167,25 @@ LiteLLM proxy (v1.81.14-stable, pinned) routes model requests (see ADR-011):
 - **Rollback**: `make rollback` — SSHs to Hetzner, checks out `HEAD~1`, rebuilds Docker, verifies health (60s timeout with retries)
 - **Health Monitoring**: `scripts/health-monitor.sh` runs every 15 min on Hetzner via cron — checks API `/health` + Docker service status, logs failures to `health-monitor.log`. Session-start hook reads this log and warns on failures. Install: `make monitor-install`. Check: `make monitor-log`.
 - **Dagster UI**: Internal only in prod — access via SSH tunnel (`ssh -L 3000:localhost:3000 hetzner`), no auth configured
+
+## Observability (Phase 7)
+
+Three independent layers run in prod, each answering a different question:
+
+| Layer | Question answered | Stack | Access (via SSH tunnel) |
+|---|---|---|---|
+| **Logs** | "What did the container print?" | Dozzle (QNT-103) tails every compose container | `http://localhost:8082` |
+| **Metrics & dashboards** | "How is host / per-container resource use trending?" | Prometheus (15d retention) + Grafana, scraped by node_exporter (host) + cAdvisor (per-container) | Grafana `http://localhost:3030`, Prometheus `http://localhost:9090` |
+| **Traces & errors** | "Why did this user's request fail?" | Sentry (QNT-86) for FastAPI errors + chat SSE worker-thread exceptions; Langfuse for agent LLM/tool spans | Sentry / Langfuse SaaS dashboards |
+
+Alerting fans into one Discord channel from three sources:
+- **External `/health` probe** (UptimeRobot or BetterStack, QNT-101) — fires when prod is unreachable.
+- **`docker-events-notify.service`** (QNT-101) — streams die / kill / oom / restart events from `docker events` ≤30 s.
+- **Grafana alert rules** (QNT-103) — memory >80% per container, host mem >90%, restart loop, disk >80%.
+- **Dagster `run_failure_sensor`** (QNT-62) — fires once per terminal RUN_FAILURE with `(job, partition)` dedup; `DEPLOY_WINDOW_RETRY` and run-level retry tags absorb intermediate retries before reaching the sensor.
+
+Status: `make obs-status` (asserts Prometheus targets + Grafana ping + host headroom). Synthetic alert test: `make obs-alert-test`. Endpoint baseline: `scripts/load_test_baseline.py` + `docs/guides/load-test-baseline.md` (QNT-65).
+
+## Resilience (Phase 7)
+
+External-fetch retry policy: `Backoff.EXPONENTIAL + Jitter.PLUS_MINUS` on every yfinance / Finnhub / fundamentals asset (QNT-63). 429 / 5xx responses honor `Retry-After` (RFC 9110 §10.2.3 — both delta-seconds and HTTP-date forms parsed, clamped to a 300s ceiling so a hostile header can't stall an asset for hours). Finnhub news fetch has an intra-attempt retry loop (3 total tries per asset op) so a transient 5xx doesn't burn an asset retry slot; 4xx auth/bad-symbol errors bubble immediately. yfinance's `YFRateLimitError` discards the response object so the existing fixed-delay fallback still applies there.
