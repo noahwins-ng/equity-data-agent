@@ -7,6 +7,7 @@ import yfinance as yf
 from dagster import (
     AssetExecutionContext,
     Backoff,
+    Jitter,
     RetryPolicy,
     StaticPartitionsDefinition,
     asset,
@@ -14,6 +15,7 @@ from dagster import (
 from shared.tickers import TICKERS
 
 from dagster_pipelines.resources.clickhouse import ClickHouseResource
+from dagster_pipelines.retry_helpers import retry_after_seconds_from_exception
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +93,12 @@ def _safe_get(df: pd.DataFrame, field: str, column: object) -> float:
 
 @asset(
     partitions_def=fundamentals_partitions,
-    retry_policy=RetryPolicy(max_retries=3, delay=30, backoff=Backoff.EXPONENTIAL),
+    retry_policy=RetryPolicy(
+        max_retries=3,
+        delay=30,
+        backoff=Backoff.EXPONENTIAL,
+        jitter=Jitter.PLUS_MINUS,
+    ),
     group_name="ingestion",
 )
 def fundamentals(
@@ -113,6 +120,17 @@ def fundamentals(
     except Exception as exc:
         msg = str(exc).lower()
         if "429" in msg or "too many requests" in msg or "rate limit" in msg:
+            # See ohlcv_raw for the rationale; same Retry-After handling
+            # so the two yfinance call sites behave identically when
+            # Yahoo gets specific about the back-off it wants.
+            wait = retry_after_seconds_from_exception(exc)
+            if wait is not None and wait > 0:
+                context.log.info(
+                    "yfinance 429 for %s — Retry-After=%.1fs; sleeping before re-raising",
+                    ticker,
+                    wait,
+                )
+                time.sleep(wait)
             raise
         context.log.warning("yfinance Ticker(%s) failed: %s — skipping", ticker, exc)
         return
