@@ -6,8 +6,8 @@
 
 > An AI research system for US equities where **the LLM never does math.** Every number in every thesis is pre-computed by Dagster, served as a human-readable report by FastAPI, and only *interpreted* by the LangGraph agent. Hallucinated financials are architecturally impossible.
 
-![Phases](https://img.shields.io/badge/phases-6%2F7%20complete-2ea44f)
-![Tests](https://img.shields.io/badge/tests-536%20passing-2ea44f)
+![Phases](https://img.shields.io/badge/phases-7%2F7%20complete-2ea44f)
+![Tests](https://img.shields.io/badge/tests-640%20passing-2ea44f)
 ![ADRs](https://img.shields.io/badge/ADRs-18-1f6feb)
 ![Hallucination](https://img.shields.io/badge/hallucination__ok-16%2F16-2ea44f)
 ![Prod](https://img.shields.io/badge/prod-live-success)
@@ -22,13 +22,14 @@
 
 ## What's shipped (May 2026)
 
+All 7 planned phases are complete. Remaining work lives in a perpetual **Ops & Reliability** queue.
+
 - **Live frontend** at [equity-data-agent-ynr2.vercel.app](https://equity-data-agent-ynr2.vercel.app) — Next.js 16 + TradingView Lightweight Charts v5 + SSE chat panel
 - **Public chat agent** — rate-limited (5/min, 30/hr, 100/day per IP), per-IP daily Groq-token budget, fail-closed circuit breaker (no paid-provider fallback)
 - **10-ticker universe** — NVDA, AAPL, MSFT, GOOGL, AMZN, META, TSLA, JPM, V, UNH; daily Dagster ingest at 17:00 ET
 - **8 Dagster assets, 17 asset checks, 2 schedules** in production (gated at every CD run)
 - **16/16 hallucination_ok** on the QNT-67 golden set (Llama-4-Scout-17B via Groq free tier)
-
-Phase 7 in flight: Sentry integration, real-SQL integration tests per router, Groq-TPD load test.
+- **Phase 7 closeout**: Sentry FastAPI error tracking, Discord alerting on Dagster materialization failures, RFC 9110 `Retry-After` honoring on all ingest assets, real-ClickHouse integration tests per router (640 tests total), endpoint p50/p95/p99 baseline + Prometheus/Grafana/cAdvisor/node_exporter/Dozzle observability stack
 
 ---
 
@@ -277,7 +278,7 @@ The repo's "shared brain" is under [`docs/`](docs/INDEX.md):
 - [`docs/INDEX.md`](docs/INDEX.md) — entry point
 - [`docs/architecture/system-overview.md`](docs/architecture/system-overview.md) — how the system works (data flow, package boundaries, prod infra)
 - [`docs/decisions/`](docs/decisions/) — **18 ADRs** documenting every non-obvious choice (storage, orchestration, agent shape, LLM routing, deploy ingress)
-- [`docs/retros/`](docs/retros/) — phase retrospectives ([Phase 0](docs/retros/phase-0-foundation.md) · [Phase 1](docs/retros/phase-1-data-ingestion.md) · [Phase 2](docs/retros/phase-2-calculation-layer.md) · [Phase 3](docs/retros/phase-3-api-layer.md) · [Phase 4](docs/retros/phase-4-narrative-data.md) · [Phase 5](docs/retros/phase-5-agent-layer.md) · [Phase 6](docs/retros/phase-6-frontend.md))
+- [`docs/retros/`](docs/retros/) — phase retrospectives ([Phase 0](docs/retros/phase-0-foundation.md) · [Phase 1](docs/retros/phase-1-data-ingestion.md) · [Phase 2](docs/retros/phase-2-calculation-layer.md) · [Phase 3](docs/retros/phase-3-api-layer.md) · [Phase 4](docs/retros/phase-4-narrative-data.md) · [Phase 5](docs/retros/phase-5-agent-layer.md) · [Phase 6](docs/retros/phase-6-frontend.md) · [Phase 7](docs/retros/phase-7-observability-polish.md))
 - [`docs/patterns.md`](docs/patterns.md) — established code recipes
 - [`docs/guides/ops-runbook.md`](docs/guides/ops-runbook.md) — failure-mode catalog (symptoms → diagnosis → response → prevention)
 - [`docs/guides/vercel-deploy.md`](docs/guides/vercel-deploy.md) — Phase 6 deploy + rotation runbook
