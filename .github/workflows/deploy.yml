@@ -4,6 +4,17 @@ on:
   push:
     branches: [main]
 
+# QNT-170: serialize prod deploys against the single Hetzner host. Back-to-back
+# merges (e.g. a feature PR + a Dependabot burst) collapse into one deploy at
+# the latest SHA — earlier in-flight runs are canceled. Without this, parallel
+# CD runs raced over /tmp/equity-data-agent-prev-sha and the third merge in a
+# batch failed at the bind-mount-restart step (2026-05-04 incident).
+# cancel-in-progress is correct here: a queued-but-not-started run would only
+# deploy a stale SHA that the next run would immediately overwrite.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -81,11 +92,12 @@ jobs:
         uses: appleboy/ssh-action@v1
         env:
           GIT_SHA: ${{ github.sha }}
+          PREV_SHA_FILE: /tmp/equity-data-agent-prev-sha-${{ github.run_id }}
         with:
           host: ${{ secrets.HETZNER_HOST }}
           username: ${{ secrets.HETZNER_USER }}
           key: ${{ secrets.HETZNER_SSH_KEY }}
-          envs: GIT_SHA
+          envs: GIT_SHA,PREV_SHA_FILE
           script: |
             set -euo pipefail
             cd /opt/equity-data-agent
@@ -105,7 +117,11 @@ jobs:
             # is in flight). HEAD~1..HEAD would silently skip the older commits'
             # config changes — the same class of latent stale-deploy bug this
             # ticket exists to close.
-            git rev-parse HEAD > /tmp/equity-data-agent-prev-sha
+            #
+            # QNT-170: namespace the temp file by github.run_id so concurrent CD
+            # runs (the concurrency group should prevent this, but defense in
+            # depth) can't clobber each other's state.
+            git rev-parse HEAD > "$PREV_SHA_FILE"
             git pull origin main
             # GIT_SHA is read by the api service in docker-compose.yml and surfaced
             # on /health so external monitoring can distinguish "up" from "up and
@@ -164,10 +180,13 @@ jobs:
 
       - name: Restart services with changed bind-mounted configs
         uses: appleboy/ssh-action@v1
+        env:
+          PREV_SHA_FILE: /tmp/equity-data-agent-prev-sha-${{ github.run_id }}
         with:
           host: ${{ secrets.HETZNER_HOST }}
           username: ${{ secrets.HETZNER_USER }}
           key: ${{ secrets.HETZNER_SSH_KEY }}
+          envs: PREV_SHA_FILE
           script: |
             set -euo pipefail
             cd /opt/equity-data-agent
@@ -181,12 +200,15 @@ jobs:
             # config change).
             #
             # PREV_SHA is captured in the Deploy step BEFORE `git pull origin
-            # main` (see /tmp/equity-data-agent-prev-sha) so the diff window is
-            # correct even if the pull brought in multiple commits at once
-            # (back-to-back merges with deploys queued). HEAD~1..HEAD would only
-            # see the most recent commit and silently miss the rest.
-            PREV_SHA=$(cat /tmp/equity-data-agent-prev-sha)
-            rm -f /tmp/equity-data-agent-prev-sha
+            # main` (see $PREV_SHA_FILE) so the diff window is correct even if
+            # the pull brought in multiple commits at once (back-to-back merges
+            # with deploys queued). HEAD~1..HEAD would only see the most recent
+            # commit and silently miss the rest.
+            #
+            # QNT-170: $PREV_SHA_FILE is per-run (github.run_id) so concurrent
+            # CD runs can't clobber each other.
+            PREV_SHA=$(cat "$PREV_SHA_FILE")
+            rm -f "$PREV_SHA_FILE"
             CHANGED=$(git diff --name-only "$PREV_SHA" HEAD)
 
             restarted_any=0
