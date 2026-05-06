@@ -1,4 +1,4 @@
-.PHONY: setup dev-dagster dev-api dev-frontend dev-litellm test test-integration lint format migrate seed tunnel issue pr build check-prod rollback monitor-install monitor-log events-notify-install events-notify-status events-notify-test obs-status obs-alert-test prune-build-cache prune-build-cache-install sops-edit sops-encrypt sops-decrypt sops-rotate-keys security-scan help
+.PHONY: setup dev-dagster dev-api dev-frontend dev-litellm test test-integration lint format migrate seed tunnel issue pr build check-prod rollback monitor-install monitor-log events-notify-install events-notify-status events-notify-test obs-status obs-alert-test obs-smoke prune-build-cache prune-build-cache-install sops-edit sops-encrypt sops-decrypt sops-rotate-keys security-scan help
 
 # ─── Setup ────────────────────────────────────────────────────
 
@@ -147,6 +147,20 @@ obs-alert-test: ## Spike a synthetic container above 80% mem_limit for ~9m to fi
 	@ssh hetzner "docker run -d --rm --name equity-data-agent-stress --memory=64m polinux/stress stress --vm 1 --vm-bytes 56M --vm-hang 0 --timeout 540s"
 	@echo "Container running. Watch Grafana -> Alerting -> Active alerts for ContainerMemoryHigh."
 	@echo "Stop early with: ssh hetzner 'docker stop equity-data-agent-stress'"
+
+obs-smoke: ## Pre-prod gate: prom targets up + every panel/alert has data + every config mount has a CD restart entry (QNT-172)
+	@# Runs the smoke script inside a one-shot container joined to the compose
+	@# network, so prometheus:9090 and grafana:3000 resolve via service name.
+	@# The repo is bind-mounted read-only so the wiring check sees the live
+	@# docker-compose.yml + .github/workflows/deploy.yml.
+	@ssh hetzner "cd /opt/equity-data-agent && docker run --rm \
+		--network equity-data-agent_default \
+		-v /opt/equity-data-agent:/work:ro \
+		-w /work \
+		-e PROM_URL=http://prometheus:9090 \
+		-e GRAFANA_URL=http://grafana:3000 \
+		equity-data-agent-dagster:latest \
+		python /work/scripts/obs_smoke.py"
 
 # ─── Secrets (SOPS) ───────────────────────────────────────────
 

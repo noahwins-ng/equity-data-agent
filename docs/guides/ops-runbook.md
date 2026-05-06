@@ -695,6 +695,8 @@ Open all observability tunnels with `make tunnel` (forwards 8123, 3100, 8082, 90
 
 **Synthetic alert verification** (run when wiring or rotating the Discord webhook): `make obs-alert-test` spins up `equity-data-agent-stress` with a 64 MiB mem_limit and stress-ng eating 90% of it for 360 s. Wait ~5 min — the `ContainerMemoryHigh` rule should transition to `Alerting` and post to Discord. Cleanup: `ssh hetzner 'docker stop equity-data-agent-stress'`.
 
+**Did the obs stack actually wire up?** `make obs-smoke` is the authoritative answer (QNT-172). It asserts every Prometheus scrape target is healthy, every Grafana dashboard panel returns at least one series, every alert rule's underlying PromQL has data (so the rule isn't permanently NoData), and every bind-mounted config in `docker-compose.yml` has a matching `restart_if_(prefix_)changed` entry in `.github/workflows/deploy.yml`. CD runs the same script after `docker compose up -d` (using a one-shot container joined to `equity-data-agent_default`) and rolls back to the previous SHA on failure. This is the gate that catches the silent-NoData / empty-panel / never-fires class of regression that QNT-103 hit five times in 24 hours after ship — every signal said green while panels were empty (PR #197 cAdvisor `--docker_only`, PR #200 node_exporter mountpoint, PR #201 missing CD restart for `observability/`). Unit tests cannot catch these by design; if you change anything in `observability/` or in the deploy workflow, run `make obs-smoke` before merging.
+
 **Resource footprint** (measured on CX41, idle stack — verify after first deploy with `make obs-status`):
 
 | Service | mem_limit | Typical RSS | Notes |
