@@ -44,7 +44,7 @@ All 7 planned phases are complete. Remaining work lives in a perpetual **Ops & R
 - **Public chat agent** — rate-limited (5/min, 30/hr, 100/day per IP), per-IP daily Groq-token budget, fail-closed circuit breaker (no paid-provider fallback)
 - **10-ticker universe** — NVDA, AAPL, MSFT, GOOGL, AMZN, META, TSLA, JPM, V, UNH; daily Dagster ingest at 17:00 ET
 - **8 Dagster assets, 17 asset checks, 2 schedules** in production (gated at every CD run)
-- **16/16 hallucination_ok** on the QNT-67 golden set (Llama-4-Scout-17B via Groq free tier)
+- **16/16 hallucination_ok** on the 16-question golden eval set (Llama-4-Scout-17B via Groq free tier)
 - **Phase 7 closeout**: Sentry FastAPI error tracking, Discord alerting on Dagster materialization failures, RFC 9110 `Retry-After` honoring on all ingest assets, real-ClickHouse integration tests per router (640 tests total), endpoint p50/p95/p99 baseline + Prometheus/Grafana/cAdvisor/node_exporter/Dozzle observability stack
 
 ---
@@ -190,11 +190,11 @@ See [`docs/architecture/system-overview.md`](docs/architecture/system-overview.m
 Deployment isn't `git push` and pray. Each merge to `main` runs a series of explicit gates designed by every prior outage:
 
 1. **SOPS decrypt** — age-encrypted `.env.sops` decrypted in CI, never written to prod disk
-2. **SHA gate** ([QNT-88](docs/retros/phase-3-api-layer.md)) — `git rev-parse HEAD` on prod must match the merged commit. Catches the "deploy succeeded but code is 17 commits behind" outage class.
-3. **Dagster load gate** ([QNT-89](docs/retros/phase-3-api-layer.md)) — definitions module imports cleanly with `≥8 assets`, `≥17 checks`, `≥2 schedules`. Catches the silent "code-server up but graph broken" class.
+2. **SHA gate** — `git rev-parse HEAD` on prod must match the merged commit. Catches the "deploy succeeded but code is 17 commits behind" outage class. ([retro](docs/retros/phase-3-api-layer.md))
+3. **Dagster load gate** — definitions module imports cleanly with `≥8 assets`, `≥17 checks`, `≥2 schedules`. Catches the silent "code-server up but graph broken" class. ([retro](docs/retros/phase-3-api-layer.md))
 4. **Health-check loop** — 60s timeout retries on `/health`; deploy fails if API doesn't come up.
-5. **Idempotent ClickHouse migrations** ([QNT-146](docs/retros/phase-2-calculation-layer.md)) — re-applied every deploy.
-6. **Bind-mount config detection** ([QNT-124](docs/retros/phase-3-api-layer.md)) — changes to `litellm_config.yaml` / `dagster.yaml` / `workspace.yaml` trigger explicit `docker compose restart` (catches stale-config-on-disk class).
+5. **Idempotent ClickHouse migrations** — re-applied every deploy. ([retro](docs/retros/phase-2-calculation-layer.md))
+6. **Bind-mount config detection** — changes to `litellm_config.yaml` / `dagster.yaml` / `workspace.yaml` trigger explicit `docker compose restart` (catches stale-config-on-disk class). ([retro](docs/retros/phase-3-api-layer.md))
 
 Ingress topology ([ADR-018](docs/decisions/018-cloudflare-quick-tunnel-for-https-ingress.md)):
 
@@ -217,7 +217,7 @@ The full failure-mode catalog (symptoms → diagnosis → response → preventio
 
 ## Security posture
 
-Supply-chain hygiene is enforced by a layered scanner suite ([QNT-160](https://linear.app/noahwins/issue/QNT-160)) that runs on every PR plus a weekly Trivy cron for image-level CVEs. Every gate is set to **HIGH** severity — false-positive flap on mediums is documented in [`.security/waivers.md`](.security/waivers.md), not silenced by ad-hoc `# nosec` comments.
+Supply-chain hygiene is enforced by a layered scanner suite that runs on every PR plus a weekly Trivy cron for image-level CVEs. Every gate is set to **HIGH** severity — false-positive flap on mediums is documented in [`.security/waivers.md`](.security/waivers.md), not silenced by ad-hoc `# nosec` comments.
 
 | Scanner | What it catches | Where |
 |---|---|---|
