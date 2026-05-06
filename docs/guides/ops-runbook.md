@@ -701,7 +701,7 @@ ssh hetzner 'docker exec equity-data-agent-clickhouse-1 clickhouse-client --quer
 "'
 
 # 2. Confirm whether TTL is set on the noisy tables (post-fix this should
-#    show "TTL event_date + toIntervalDay(7)" on all four).
+#    show "TTL event_date + toIntervalDay(30)" on all four).
 ssh hetzner 'docker exec equity-data-agent-clickhouse-1 clickhouse-client --query "
   SELECT name, engine_full FROM system.tables
   WHERE database = '\''system'\'' AND name IN ('\''text_log'\'','\''trace_log'\'','\''metric_log'\'','\''asynchronous_metric_log'\'')
@@ -724,11 +724,11 @@ ssh hetzner 'docker exec equity-data-agent-clickhouse-1 clickhouse-client --quer
      ssh hetzner "docker exec equity-data-agent-clickhouse-1 clickhouse-client --query \"DROP TABLE IF EXISTS system.$t SYNC\""
    done
    ```
-4. **Verify**: row counts on the new tables should stay within the 7-day window. After 24 h of production, run the diagnosis query #1 again — `text_log` should sit at 1-2 days of inserts (≈ 1M rows for this load), not the multi-million-row baseline. `clickhouse-1` CPU baseline should return to ~0.05 cores once the renamed-table backlog is dropped.
+4. **Verify**: row counts on the new tables should stay within the 30-day window. After 24 h of production, run the diagnosis query #1 again — `text_log` should sit at 1-2 days of inserts (≈ 1M rows for this load), and after 30 days steady-state should plateau around ~30 days × 30-40k rows/hr (a few million rows). `clickhouse-1` CPU baseline should return to ~0.05 cores once the renamed-table backlog is dropped.
 
 **Prevention**:
 
-- [QNT-169](https://linear.app/noahwins/issue/QNT-169) — `clickhouse/config.d/system-log-ttl.xml` mounted into the `clickhouse` service. Sets `partition_by event_date` + `TTL event_date + INTERVAL 7 DAY DELETE` on all four tables, so ClickHouse drops whole daily parts as they age past the retention window.
+- [QNT-169](https://linear.app/noahwins/issue/QNT-169) — `clickhouse/config.d/system-log-ttl.xml` mounted into the `clickhouse` service. Sets `partition_by event_date` + `TTL event_date + INTERVAL 30 DAY DELETE` on all four tables (matches ClickHouse Cloud default), so ClickHouse drops whole daily parts as they age past the retention window.
 - The same volume mount is wired in `docker-compose.yml`; if a future ClickHouse upgrade changes the default config schema, the override survives because `config.d/` files are loaded after and merged on top of the base `config.xml`.
 
 **Last occurred**: 2026-05-04 — surfaced by Grafana CPU panel; triaged but not yet remediated until QNT-169 (this entry).

@@ -8,11 +8,16 @@
   monotonic CPU climb on clickhouse-1 (0.07 → 0.18 cores over 5.5h, peaking
   at 72% during a merge burst).
 
-  Approach: 7-day retention via TTL DELETE, partitioned daily so each day's
+  Approach: 30-day retention via TTL DELETE, partitioned daily so each day's
   rows live in a single part that gets dropped cleanly when its TTL fires.
   ClickHouse default is monthly partitions, which keeps a full month's worth
   of rows in one part and forces row-level TTL deletes — daily partitions let
   the merger drop whole parts instead.
+
+  30-day window matches the ClickHouse Cloud default. At our prod insert rate
+  (~125 MiB/day across all four tables) steady-state retention is ~3.75 GiB
+  on a 150 GB host — bounded growth, with retro-debugging headroom that 7d
+  doesn't give (e.g. investigating an incident a week or two after the fact).
 
   Caveat: changing partition_by/ttl is a schema change, so on first restart
   ClickHouse renames the existing tables (text_log → text_log_0, etc.) and
@@ -26,27 +31,27 @@
         <database>system</database>
         <table>text_log</table>
         <partition_by>event_date</partition_by>
-        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+        <ttl>event_date + INTERVAL 30 DAY DELETE</ttl>
     </text_log>
 
     <trace_log>
         <database>system</database>
         <table>trace_log</table>
         <partition_by>event_date</partition_by>
-        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+        <ttl>event_date + INTERVAL 30 DAY DELETE</ttl>
     </trace_log>
 
     <metric_log>
         <database>system</database>
         <table>metric_log</table>
         <partition_by>event_date</partition_by>
-        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+        <ttl>event_date + INTERVAL 30 DAY DELETE</ttl>
     </metric_log>
 
     <asynchronous_metric_log>
         <database>system</database>
         <table>asynchronous_metric_log</table>
         <partition_by>event_date</partition_by>
-        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+        <ttl>event_date + INTERVAL 30 DAY DELETE</ttl>
     </asynchronous_metric_log>
 </clickhouse>
