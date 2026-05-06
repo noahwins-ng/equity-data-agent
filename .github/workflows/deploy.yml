@@ -207,8 +207,11 @@ jobs:
             #
             # QNT-170: $PREV_SHA_FILE is per-run (github.run_id) so concurrent
             # CD runs can't clobber each other.
+            # QNT-172: do NOT delete $PREV_SHA_FILE here — the obs-smoke step
+            # below needs it to roll back if the new release's observability
+            # stack is silently broken. The "Close deploy window" cleanup step
+            # at the end of the workflow removes the file unconditionally.
             PREV_SHA=$(cat "$PREV_SHA_FILE")
-            rm -f "$PREV_SHA_FILE"
             CHANGED=$(git diff --name-only "$PREV_SHA" HEAD)
 
             restarted_any=0
@@ -256,6 +259,76 @@ jobs:
             if [ "$restarted_any" = 0 ]; then
               echo "[QNT-124] no bind-mounted config files changed — no restarts needed"
             fi
+
+      - name: obs-smoke (pre-prod observability assertion, rolls back on failure)
+        uses: appleboy/ssh-action@v1
+        env:
+          PREV_SHA_FILE: /tmp/equity-data-agent-prev-sha-${{ github.run_id }}
+        with:
+          host: ${{ secrets.HETZNER_HOST }}
+          username: ${{ secrets.HETZNER_USER }}
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          envs: PREV_SHA_FILE
+          script: |
+            # QNT-172: assert that every Prometheus scrape target is up, every
+            # Grafana panel returns data, every alert rule's underlying data
+            # exists, and every bind-mounted config in compose has a matching
+            # restart_if_(prefix_)changed entry in deploy.yml. These are the
+            # silent-NoData / never-fires failure modes that QNT-103 hit five
+            # times in 24h and unit tests cannot catch by design (Phase 7
+            # retro). Failure here is fail-loud — we roll back to the previous
+            # SHA so prod stops bleeding.
+            set -uo pipefail
+            cd /opt/equity-data-agent
+
+            # Wait for prometheus to complete at least two scrape cycles after
+            # any container recreate (scrape_interval=30s; obs-smoke fails on
+            # lastScrape > 120s). The deploy + restart steps above can recreate
+            # cAdvisor / node_exporter / prometheus itself; 60s gives headroom.
+            sleep 60
+
+            # One-shot container joined to the compose network so prometheus:
+            # 9090 / grafana:3000 resolve via service name. Repo bind-mounted
+            # read-only so the wiring check sees docker-compose.yml + this
+            # workflow file (.github/ is in .dockerignore, so it isn't baked
+            # into the image).
+            if docker run --rm \
+                --network equity-data-agent_default \
+                -v /opt/equity-data-agent:/work:ro \
+                -w /work \
+                -e PROM_URL=http://prometheus:9090 \
+                -e GRAFANA_URL=http://grafana:3000 \
+                equity-data-agent-dagster:latest \
+                python /work/scripts/obs_smoke.py; then
+              echo "obs-smoke passed"
+              exit 0
+            fi
+
+            # Roll back: $PREV_SHA_FILE was preserved by the restart step
+            # (QNT-172 amend) for exactly this scenario. We restore the prior
+            # commit and rebuild so the new (broken) image is replaced.
+            #
+            # If the file is missing/empty (e.g., deploy step failed before
+            # writing it), bail loud rather than `git checkout ""` which is a
+            # silent no-op under `set -uo pipefail` and would leave prod on
+            # the broken commit pretending the rollback succeeded.
+            PREV_SHA=$(cat "$PREV_SHA_FILE" 2>/dev/null || true)
+            if [ -z "$PREV_SHA" ]; then
+              echo "::error::obs-smoke failed AND $PREV_SHA_FILE is empty/missing — cannot auto-rollback. Run 'make rollback' manually."
+              exit 1
+            fi
+            echo "::error::obs-smoke failed — rolling back to $PREV_SHA"
+            # `git checkout <sha>` produces a detached HEAD, which breaks the
+            # next CD run's `git pull origin main` ("not on a branch"). Move
+            # the local main branch back to PREV_SHA instead so the working
+            # tree stays on a branch and `git pull` can fast-forward future
+            # deploys.
+            git checkout main && git reset --hard "$PREV_SHA" || {
+              echo "::error::rollback git operation failed — prod may be in inconsistent state. Run 'make rollback' manually."
+              exit 1
+            }
+            docker compose --profile prod up -d --build --remove-orphans
+            exit 1
 
       - name: Verify prod SHA matches merged commit
         uses: appleboy/ssh-action@v1
@@ -327,3 +400,7 @@ jobs:
             # If this step is skipped entirely, the notifier's stale-sentinel
             # check (>10 min = fail-open) ensures alerts resume automatically.
             rm -f /opt/equity-data-agent/.deploy-in-progress
+            # QNT-172: PREV_SHA_FILE was preserved through the obs-smoke
+            # rollback path; clean up here so /tmp doesn't accumulate one
+            # stale file per deploy.
+            rm -f "/tmp/equity-data-agent-prev-sha-${{ github.run_id }}"
