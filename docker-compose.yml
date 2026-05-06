@@ -25,6 +25,10 @@ services:
     restart: unless-stopped
     volumes:
       - clickhouse_data:/var/lib/clickhouse
+      # QNT-169: cap retention on system.text_log / trace_log / metric_log /
+      # asynchronous_metric_log to 7d. Without this, system tables grow
+      # unbounded and background merges dominate clickhouse-1 CPU.
+      - ./clickhouse/config.d/system-log-ttl.xml:/etc/clickhouse-server/config.d/system-log-ttl.xml:ro
     ports:
       - "8123:8123"  # exposed for local dev; blocked by Hetzner firewall in prod
     mem_limit: 8g
