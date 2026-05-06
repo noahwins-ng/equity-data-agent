@@ -92,10 +92,14 @@ def test_article_to_row_skips_when_datetime_invalid() -> None:
 
 
 def test_article_to_row_handles_missing_image_and_summary() -> None:
-    """Empty image + empty summary are valid — design v2 renders placeholder."""
+    """Empty image + empty summary are valid — design v2 renders placeholder.
+
+    Default fixture headline mentions NVDA, so the ticker must match for the
+    QNT-173 relevance gate to keep the row; this test isn't about the gate.
+    """
     row = _article_to_row(
         _finnhub_article(image="", summary=""),
-        ticker="AAPL",
+        ticker="NVDA",
     )
     assert row is not None
     assert row["image_url"] == ""
@@ -103,10 +107,17 @@ def test_article_to_row_handles_missing_image_and_summary() -> None:
 
 
 def test_article_to_row_strips_whitespace() -> None:
+    """Whitespace stripping is the unit under test; the headline mentions Apple
+    so the QNT-173 relevance gate keeps the row for ticker AAPL.
+
+    The fixture pads every string field with two leading and two trailing
+    spaces so each .strip() call has something to remove — without the
+    padding, the stripper could be deleted and the test would still pass.
+    """
     row = _article_to_row(
         _finnhub_article(
-            headline="  Headline with whitespace  ",
-            summary="  body  ",
+            headline="  Apple ships record iPhone numbers  ",
+            summary="  body text  ",
             url="  https://example.com/x  ",
             source="  Reuters  ",
             image="  https://i.example.com/x.jpg  ",
@@ -114,11 +125,139 @@ def test_article_to_row_strips_whitespace() -> None:
         ticker="AAPL",
     )
     assert row is not None
-    assert row["headline"] == "Headline with whitespace"
-    assert row["body"] == "body"
+    assert row["headline"] == "Apple ships record iPhone numbers"
+    assert row["body"] == "body text"
     assert row["url"] == "https://example.com/x"
     assert row["publisher_name"] == "Reuters"
     assert row["image_url"] == "https://i.example.com/x.jpg"
+
+
+# ── Per-ticker relevance gate (QNT-173) ───────────────────────────────────────
+#
+# The gate runs after the existing url/headline/datetime checks and drops
+# articles where no per-ticker alias matches the configured scope. Each
+# tickers.NEWS_RELEVANCE entry declares aliases plus a scope flag; these
+# tests cover the keep/drop matrix and the two trickier scope decisions
+# (META headline-only, V no-lone-letter).
+
+
+def test_article_to_row_keeps_when_alias_matches_in_headline() -> None:
+    """Default fixture headline mentions NVDA -> kept for ticker NVDA."""
+    row = _article_to_row(_finnhub_article(), ticker="NVDA")
+    assert row is not None
+
+
+def test_article_to_row_keeps_when_alias_matches_in_body_for_any_scope() -> None:
+    """NVDA scope=any: headline lacks any alias, but body says GeForce -> keep."""
+    row = _article_to_row(
+        _finnhub_article(
+            headline="AMD beats earnings on data-center revenue",
+            summary="Channel checks point to a soft GeForce refresh cycle.",
+        ),
+        ticker="NVDA",
+    )
+    assert row is not None
+
+
+def test_article_to_row_drops_when_no_alias_anywhere() -> None:
+    """Sector-roundup piece tagged NVDA by Finnhub but never mentioning it."""
+    assert (
+        _article_to_row(
+            _finnhub_article(
+                headline="AMD beats earnings on data-center revenue",
+                summary="TSMC outlook strong; Intel guides cautious.",
+            ),
+            ticker="NVDA",
+        )
+        is None
+    )
+
+
+def test_article_to_row_drops_meta_when_only_body_matches() -> None:
+    """META scope=headline: body-only matches must not keep the row.
+
+    Belt-and-suspenders: even if the body said the literal word "Meta",
+    headline-only scope ignores it. Word-boundary regex separately blocks
+    META from matching "metadata" inside the headline (covered below).
+    """
+    assert (
+        _article_to_row(
+            _finnhub_article(
+                headline="Apple ships record iPhone numbers",
+                summary="His metadata work at Meta predates the rebrand.",
+            ),
+            ticker="META",
+        )
+        is None
+    )
+
+
+def test_article_to_row_meta_word_boundary_blocks_metadata_in_headline() -> None:
+    """META scope=headline + strict boundary: 'metadata' in the headline is
+    not a match, so the row drops. Without the boundary, case-insensitive
+    'meta' would falsely match and keep noise."""
+    assert (
+        _article_to_row(
+            _finnhub_article(
+                headline="Schema metadata standards advance at IETF",
+                summary="",
+            ),
+            ticker="META",
+        )
+        is None
+    )
+
+
+def test_article_to_row_meta_strict_boundary_blocks_hyphenated_meta() -> None:
+    """`\\b` alone fires on hyphens, so a naive boundary would accept
+    "meta-analysis" as a Meta hit. The strict (?<![-\\w]) lookaround used by
+    _RELEVANCE_PATTERNS treats hyphens as word-character extensions, so
+    hyphenated compounds drop. Drives the QNT-173 review fix; without it
+    medical-research headlines would surface under META."""
+    assert (
+        _article_to_row(
+            _finnhub_article(
+                headline="Meta-analysis of cardiology trials reshapes guidance",
+                summary="",
+            ),
+            ticker="META",
+        )
+        is None
+    )
+
+
+def test_article_to_row_meta_keeps_possessive_form() -> None:
+    """Apostrophes are neither word chars nor hyphens, so 'Meta's' still
+    matches the 'Meta' alias under the strict boundary. Real-world headline
+    pattern; the test pins it so a future boundary tweak can't silently
+    regress."""
+    row = _article_to_row(
+        _finnhub_article(headline="Meta's quarterly ad revenue beats consensus"),
+        ticker="META",
+    )
+    assert row is not None
+
+
+def test_article_to_row_v_drops_lone_letter_keeps_visa() -> None:
+    """V aliases: 'Visa' and 'Visa Inc' only — never the bare 'V'.
+
+    First call: headline has lone 'V' -> drop. Second call: headline names
+    Visa Inc -> keep. Both rely on word-boundary matching.
+    """
+    drop = _article_to_row(
+        _finnhub_article(
+            headline="Vitamin C and Mr. V supplements gain shelf space",
+            summary="Niche category roundup.",
+        ),
+        ticker="V",
+    )
+    assert drop is None
+
+    keep = _article_to_row(
+        _finnhub_article(headline="Visa Inc raises quarterly dividend"),
+        ticker="V",
+    )
+    assert keep is not None
 
 
 def test_url_hash_is_deterministic_and_per_url() -> None:
@@ -423,7 +562,7 @@ def test_article_to_row_populates_resolved_host_for_finnhub_redirect() -> None:
     with _stub_resolver_client(handler) as client:
         row = _article_to_row(
             _finnhub_article(url="https://finnhub.io/api/news?id=999"),
-            ticker="MSFT",
+            ticker="NVDA",
             resolver_client=client,
         )
 

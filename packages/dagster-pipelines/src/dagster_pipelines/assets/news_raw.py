@@ -18,6 +18,7 @@ in ohlcv_raw.py).
 
 import hashlib
 import logging
+import re
 import time
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -33,7 +34,7 @@ from dagster import (
     StaticPartitionsDefinition,
     asset,
 )
-from shared.tickers import TICKERS
+from shared.tickers import NEWS_RELEVANCE, TICKERS
 
 from dagster_pipelines.news_feeds import (
     fetch_company_news,
@@ -83,6 +84,36 @@ def _url_hash(url: str) -> int:
     return int(hashlib.blake2b(url.encode("utf-8"), digest_size=8).hexdigest(), 16)
 
 
+# Compiled once at import. The boundary `(?<![-\w])` / `(?![-\w])` is stricter
+# than `\b` because `\b` treats hyphens as boundaries — so a naive `\bMeta\b`
+# pattern matches "meta-analysis" and "meta-study", which would let academic-
+# jargon headlines slip through META's headline-only filter. Treating both
+# word characters AND hyphens as boundary-blocking keeps "Meta's earnings"
+# matchable (apostrophe is neither word char nor hyphen) while rejecting
+# hyphenated compounds. Per-ticker scope ("any" vs "headline") is read
+# alongside the pattern in `_passes_relevance`; see shared.tickers
+# NEWS_RELEVANCE for the curation contract.
+_RELEVANCE_PATTERNS: dict[str, re.Pattern[str]] = {
+    ticker: re.compile(
+        "|".join(
+            rf"(?<![-\w]){re.escape(str(alias))}(?![-\w])"
+            for alias in cfg["aliases"]  # type: ignore[union-attr]
+        ),
+        re.IGNORECASE,
+    )
+    for ticker, cfg in NEWS_RELEVANCE.items()
+}
+
+
+def _passes_relevance(ticker: str, headline: str, body: str) -> bool:
+    """Per-ticker keep/drop gate. See shared.tickers.NEWS_RELEVANCE."""
+    pattern = _RELEVANCE_PATTERNS[ticker]
+    scope = NEWS_RELEVANCE[ticker]["scope"]
+    if scope == "headline":
+        return pattern.search(headline) is not None
+    return pattern.search(headline) is not None or pattern.search(body) is not None
+
+
 def _article_to_row(
     article: dict[str, Any],
     ticker: str,
@@ -110,11 +141,15 @@ def _article_to_row(
         return None
     published_at = datetime.fromtimestamp(epoch, tz=UTC).replace(tzinfo=None)
 
+    body = (article.get("summary") or "").strip()
+    if not _passes_relevance(ticker, headline, body):
+        return None
+
     return {
         "id": _url_hash(url),
         "ticker": ticker,
         "headline": headline,
-        "body": (article.get("summary") or "").strip(),
+        "body": body,
         # Ingest provenance: identifies which fetch path produced this row,
         # not the originating outlet. The latter lives in publisher_name.
         "source": "finnhub",
@@ -194,9 +229,18 @@ def news_raw(
     finally:
         resolver_client.close()
 
+    dropped = len(articles) - len(rows)
+    context.log.info(
+        "news_raw[%s]: kept %d / %d articles (dropped %d below relevance threshold or unusable)",
+        ticker,
+        len(rows),
+        len(articles),
+        dropped,
+    )
+
     if not rows:
         context.log.warning(
-            "All %d articles for %s were unusable (missing url/headline/datetime) — skipping",
+            "All %d articles for %s were unusable or below relevance threshold — skipping",
             len(articles),
             ticker,
         )
