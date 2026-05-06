@@ -331,22 +331,38 @@ make events-notify-status
 
 ---
 
-### Container wedged but still "up" (healthcheck unhealthy, no crash)
+### Sick but still up containers (healthcheck unhealthy, no crash)
 
 **Symptoms**:
 
 - `docker compose ps` or `make check-prod` shows the container `Up`, but users see persistent HTTP 500s, stale data, or extremely slow responses.
 - `/health` (API) may return 503 or time out, while the container process stays alive.
-- No OOM kill, no container exit — the process is running but wedged (deadlock, blocked on I/O, exhausted worker pool).
+- No OOM kill, no container exit — the process is running but wedged (deadlock, blocked on I/O, exhausted worker pool, zombie httpx pool, stuck event loop).
+
+**What handles this automatically**:
+
+[QNT-104](https://linear.app/noahwins/issue/QNT-104) deploys the `willfarrell/autoheal` sidecar on the prod compose stack. It polls Docker's healthcheck status every 10 s and issues `POST /containers/{id}/kill` on any container labeled `autoheal=true` whose state is `unhealthy`. Combined with `restart: unless-stopped`, this auto-recovers within roughly **healthcheck-interval × healthcheck-retries + autoheal-interval** (≈ 30 s × 3 + 10 s = ~100 s) of the first unhealthy probe.
+
+Services covered by the sidecar (label `autoheal=true` in `docker-compose.yml`): `api`, `dagster-code-server`, `dagster-daemon`, `dagster`, `litellm`. Run-worker containers (DockerRunLauncher, ADR-010) are **not** in this set — they get their own per-run health check via Dagster's `supports_check_run_worker_health = True`, with ~2 min STARTED-orphan recovery.
+
+Services intentionally **not** labeled (and why):
+- `clickhouse` — natural unhealthy windows under heavy merge load; killing it during a merge would orphan the merge and force re-execution. Healthcheck remains as a detector.
+- `observability` stack (`prometheus`, `grafana`, `cadvisor`, `dozzle`) — secondary infra; if they wedge, page a human, don't loop-restart against an unknown failure.
+- `cloudflared` — would rotate the trycloudflare hostname, breaking the frontend's `NEXT_PUBLIC_API_URL` until manual rotation. Healthcheck remains as a detector.
 
 **Diagnosis**:
 
 ```bash
-# Check healthcheck status — expect "healthy"; wedged containers report "unhealthy"
+# Healthcheck state on the suspected service — expect "healthy"; wedged → "unhealthy"
 ssh hetzner 'docker inspect equity-data-agent-api-1 --format "{{.State.Health.Status}}"'
 
-# Last few healthcheck probes (shows what the check actually returned)
+# Recent healthcheck probes (what the check actually returned)
 ssh hetzner 'docker inspect equity-data-agent-api-1 --format "{{json .State.Health.Log}}" | jq .'
+
+# Verify autoheal itself is up and watching
+ssh hetzner 'docker compose -f /opt/equity-data-agent/docker-compose.yml ps autoheal'
+ssh hetzner 'docker logs equity-data-agent-autoheal-1 --tail 20'
+# Expect log lines like: "Container /equity-data-agent-... is unhealthy" → "Restarting container..."
 
 # Resource pressure — near-limit memory or CPU suggests leaking / saturated service
 ssh hetzner 'docker stats --no-stream equity-data-agent-api-1'
@@ -354,20 +370,45 @@ ssh hetzner 'docker stats --no-stream equity-data-agent-api-1'
 
 **Response**:
 
-1. Manual restart to clear the wedged state:
+1. **First, wait ~100 s.** Autoheal should have killed the wedged container by now and `restart: unless-stopped` should have brought it back. Re-run `make check-prod`.
+2. If still unhealthy after 2 minutes, autoheal itself may be down. Bring it back:
    ```bash
-   ssh hetzner 'docker restart equity-data-agent-<service>-1'
+   ssh hetzner 'cd /opt/equity-data-agent && docker compose --profile prod up -d autoheal'
    ```
-2. Wait ~30s, then `make check-prod` to confirm recovery.
-3. Inspect logs for the window before the wedge to find the root cause:
+3. If autoheal is up but the target container is in a kill-restart loop (autoheal kills it, it boots, fails healthcheck, autoheal kills it again), the wedge is now a startup failure — fall through to **Container crash loop** above. Inspect logs for the window before the first wedge:
    ```bash
    ssh hetzner 'docker compose -f /opt/equity-data-agent/docker-compose.yml logs <service> --since 10m --tail 200'
    ```
+4. If the service must NOT be auto-killed (e.g. mid-debugging a wedge), pause the autoheal sidecar instead — Docker labels are immutable on a running container, so the supported way to disable autoheal for a debug window is to stop autoheal itself, not to mutate the target's labels:
+   ```bash
+   # Pause autoheal (SIGSTOP — preserves state for resume; no restart needed)
+   ssh hetzner 'docker pause equity-data-agent-autoheal-1'
+   # …debug freely; the wedged container will not be killed…
+   ssh hetzner 'docker unpause equity-data-agent-autoheal-1'
+   ```
+   If you need to *permanently* exempt a service, edit `docker-compose.yml` to remove its `autoheal: "true"` label, then `docker compose --profile prod up -d <service>` to recreate without the label.
+
+**Common false-positive scenarios**:
+
+- **Cold start after deploy** — Docker reports `starting` until `healthcheck.start_period` elapses; autoheal does not act on `starting`, only on `unhealthy`. So a slow-booting service is safe.
+- **Brief healthcheck flap during heavy GC / batch import** — the healthcheck has `retries: 3`, so it must miss 3 consecutive probes (~90 s) before the container is marked unhealthy. Autoheal then kills within 10 s. Total: ~100 s. Brief saturation does not trigger.
+- **CD restart of a service** — `docker compose --profile prod restart <svc>` deliberately stops the container; the QNT-109 deploy-window suppresses the kill event from the Discord alerter, but does **not** prevent autoheal from restarting the service afterwards (it just doesn't shout about it).
+
+**Verifying autoheal end-to-end** (post-deploy check):
+
+```bash
+# 1. Pick a labeled service (api is cheapest to restart)
+ssh hetzner 'docker exec equity-data-agent-api-1 sh -c "kill -STOP 1"'  # halt PID 1
+# 2. Wait ~100 s, then verify the container was killed and replaced:
+ssh hetzner 'docker ps --filter name=equity-data-agent-api-1 --format "{{.Status}}"'
+# Expected: "Up <Ns>" (low number = recently restarted by autoheal)
+# 3. Confirm the kill fired the docker-events-notify Discord alert (QNT-101).
+```
 
 **Prevention**:
 
-- [QNT-100](https://linear.app/noahwins/issue/QNT-100) — compose-level HEALTHCHECK on every service surfaces the wedged state in `docker inspect` + `docker compose ps` + log UIs. Detection only; manual restart required.
-- [QNT-104](https://linear.app/noahwins/issue/QNT-104) *(pending)* — adds an `autoheal` sidecar that watches healthcheck status and kills unhealthy containers so `restart: unless-stopped` picks them up. Auto-recovery within ~90s of going unhealthy.
+- [QNT-100](https://linear.app/noahwins/issue/QNT-100) — compose-level HEALTHCHECK on every service surfaces the wedged state in `docker inspect` + `docker compose ps` + log UIs.
+- [QNT-104](https://linear.app/noahwins/issue/QNT-104) — autoheal sidecar closes the loop: detection → kill → restart, no human in the path. Auto-recovery within ~100 s of going unhealthy.
 
 **Last occurred**: not yet occurred — preventative
 
@@ -684,3 +725,19 @@ CX41 totals: 16 GiB RAM. Pre-QNT-103 mem_limit allocation was 13.06 GiB (clickho
 - `.env` is mode 0600, root:root on the host; even via the docker socket, extracting secrets requires privileged container access.
 
 **Do not**: bind-mount `/var/run/docker.sock` into `dagster-code-server` or into ephemeral run workers. Only the daemon needs it.
+
+### Docker socket bind-mount on `autoheal` (QNT-104)
+
+**Context**: `willfarrell/autoheal` polls Docker's container-state API and issues `POST /containers/{id}/kill` on services labeled `autoheal=true` whose healthcheck transitions to `unhealthy`. It therefore has `/var/run/docker.sock` bind-mounted.
+
+**Mount mode**: `:ro` is set on the bind. Note that this is a **socket-file-mode flag, not an API capability**: a process inside the container can still issue write commands (kill / start / stop) over the socket, because the Docker daemon authenticates the request at the socket-protocol layer — not via the read-only flag on the bind-mount inode. The `:ro` is defence-in-depth against the in-container process trying to `chmod` the socket inode itself; it is not a containment boundary.
+
+**Trust boundary**: same class as the dagster-daemon mount above. Anyone with code execution inside the autoheal container has full Docker API control on the host.
+
+**Mitigations in place**:
+- Image is the upstream `willfarrell/autoheal:1.2.0` pinned tag (no `latest`). The container shell is the autoheal binary's `autoheal` script + `curl`; no Python interpreter, no compiler, no SSH client. RCE surface is the autoheal script itself + the libcurl version in the image.
+- Container has no listening ports — it cannot be reached from inside the compose network or from the host.
+- `restart: unless-stopped` will recreate the autoheal container from the pinned image on any kill, so a transient compromise does not persist beyond the next restart.
+- Memory-limited to 32 MiB — cannot host a substantial implant in-process.
+
+**Do not**: change the image to a `:latest` tag. The trust delta from a published image we audited (1.2.0) to a future floating tag is large enough to deserve an explicit upgrade ticket.

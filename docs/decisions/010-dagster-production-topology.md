@@ -70,7 +70,12 @@ Phase 1 (code-server split + `workspace.yaml`) and Phase 2 (DockerRunLauncher) s
 
 **Migrate to Kubernetes + `K8sRunLauncher`.** Gives the same ephemeral-container isolation plus autoscaling. Disproportionate for a single-VPS deployment that runs 10 tickers × minute-scale workloads. *Out of scope; Kubernetes is overkill until we have a real reason to leave single-VPS.*
 
-**Autoheal sidecar + resource-limit tightening.** [QNT-104](https://linear.app/noahwins/issue/QNT-104) owns this track. Complementary — an autoheal sidecar catches wedged-but-not-crashed containers; this ADR catches the "crash propagates because it's in the wrong cgroup" failure mode. The two ship independently. *Kept; not an alternative, a co-ingredient.*
+**Autoheal sidecar + resource-limit tightening.** [QNT-104](https://linear.app/noahwins/issue/QNT-104) owns this track. Complementary coverage split:
+
+- **Run-worker containers (this ADR)** are covered by `DockerRunLauncher`'s `supports_check_run_worker_health = True`: Dagster's daemon polls each ephemeral run worker's Docker health state, and STARTED-orphans are reaped within ~2 minutes.
+- **Long-running services (QNT-104)** — `api`, `dagster-code-server`, `dagster-daemon`, `dagster` (webserver), `litellm` — are covered by the `willfarrell/autoheal` sidecar: any service labeled `autoheal=true` whose HEALTHCHECK transitions to `unhealthy` is killed by `POST /containers/{id}/kill` and replaced via `restart: unless-stopped`.
+
+Together, every container with a HEALTHCHECK in the prod profile has a closed-loop recovery path. The two ship independently. *Kept; not an alternative, a co-ingredient.*
 
 ## Consequences
 

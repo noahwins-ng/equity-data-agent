@@ -55,6 +55,11 @@ services:
       target: dagster
     image: equity-data-agent-dagster:latest
     restart: unless-stopped
+    # QNT-104: opt into autoheal sidecar — this is a long-running service with
+    # a HEALTHCHECK whose process can wedge without crashing. autoheal kills
+    # the container on `unhealthy` and `restart: unless-stopped` brings it back.
+    labels:
+      autoheal: "true"
     command: /app/.venv/bin/dagster code-server start -h 0.0.0.0 -p 4000 -m dagster_pipelines.definitions
     env_file: .env
     environment:
@@ -92,6 +97,8 @@ services:
       target: dagster
     image: equity-data-agent-dagster:latest
     restart: unless-stopped
+    labels:
+      autoheal: "true"  # QNT-104
     # QNT-116: drop -m (no longer loads user code in-process); read the
     # workspace file to reach the code server via gRPC.
     command: /app/.venv/bin/dagster-webserver -w /app/workspace.yaml -h 0.0.0.0 -p 3000
@@ -144,6 +151,8 @@ services:
       target: dagster
     image: equity-data-agent-dagster:latest
     restart: unless-stopped
+    labels:
+      autoheal: "true"  # QNT-104
     # QNT-116: drop -m; read workspace.yaml to reach code-server over gRPC.
     command: /app/.venv/bin/dagster-daemon run -w /app/workspace.yaml
     env_file: .env
@@ -191,6 +200,8 @@ services:
       context: .
       target: api
     restart: unless-stopped
+    labels:
+      autoheal: "true"  # QNT-104
     command: /app/.venv/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000
     env_file: .env
     environment:
@@ -220,6 +231,8 @@ services:
   litellm:
     image: litellm/litellm:v1.81.14-stable
     restart: unless-stopped
+    labels:
+      autoheal: "true"  # QNT-104
     command: --config /app/config.yaml --port 4000
     env_file: .env
     volumes:
@@ -235,6 +248,51 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    profiles: [prod]
+
+  # QNT-104: autoheal sidecar — watches every container labeled `autoheal=true`
+  # and issues a Docker `kill` on its main process when its HEALTHCHECK
+  # transitions to `unhealthy`. Combined with `restart: unless-stopped` on the
+  # target service, this closes the "sick but still up" gap: a deadlocked or
+  # stuck process that fails healthchecks but never exits would otherwise sit
+  # in the unhealthy state forever — `restart: unless-stopped` only fires on
+  # non-zero container exit, never on a HEALTHCHECK reporting `unhealthy`.
+  #
+  # Coverage split with QNT-116 / ADR-010:
+  #   * Run-worker containers (DockerRunLauncher) → covered by Dagster's own
+  #     per-run health check (~2 min STARTED-orphan recovery via
+  #     supports_check_run_worker_health = True).
+  #   * Long-running services (api, dagster-code-server, dagster-daemon,
+  #     dagster, litellm) → covered by this sidecar.
+  #
+  # Trust boundary: same class as the `dagster-daemon` docker.sock mount —
+  # documented under "Security notes" in `docs/guides/ops-runbook.md`.
+  # `:ro` is socket-file-mode only; the autoheal container can still issue
+  # POST /containers/{id}/kill over the socket. The `:ro` is defence-in-depth
+  # against the in-container process trying to chmod the socket inode.
+  autoheal:
+    image: willfarrell/autoheal:1.2.0
+    restart: unless-stopped
+    environment:
+      # Default-named label the autoheal binary watches: `autoheal=true`.
+      # Setting this to a non-`all` value scopes the monitor to opted-in
+      # services only, so e.g. clickhouse / observability containers (which
+      # have HEALTHCHECKs but a long natural unhealthy → healthy transition
+      # under load) are not subject to kill.
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      # Poll cadence — every healthcheck on the stack is 30s, so polling
+      # more frequently than ~10s burns CPU without surfacing kills sooner.
+      - AUTOHEAL_INTERVAL=10
+      # SIGTERM grace before SIGKILL. Keep short — the container is wedged;
+      # we want it gone so `restart: unless-stopped` can bring it back.
+      - AUTOHEAL_DEFAULT_STOP_TIMEOUT=10
+      - TZ=UTC
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    mem_limit: 32m
+    mem_reservation: 8m
+    cpus: 0.05
+    logging: *default-logging
     profiles: [prod]
 
   # QNT-75 / ADR-018: Cloudflare quick tunnel — public HTTPS ingress for the
