@@ -157,8 +157,7 @@ export function TechnicalsCard({ ticker }: { ticker: string }) {
     >
       <div className="flex shrink-0 items-baseline justify-between border-b border-zinc-800 px-4 py-3">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-200">
-          <span className="2xl:hidden">Tech</span>
-          <span className="hidden 2xl:inline">Technicals</span>
+          Technicals
         </h2>
         <div
           role="tablist"
