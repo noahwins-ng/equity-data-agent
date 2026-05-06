@@ -116,7 +116,7 @@ export default async function TickerDetailPage({ params }: { params: Params }) {
         than the viewport, which is exactly the awkward scrolling we want to
         avoid.
       */}
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-hidden px-6 py-2 lg:grid-cols-3">
+      <div className="grid min-h-0 flex-1 grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-3 overflow-hidden px-6 py-2">
         <TechnicalsCard ticker={ticker} />
         <FundamentalsCard ticker={ticker} currentPrice={quote.price} />
         <NewsCard items={news} />
