@@ -4,7 +4,9 @@
 
 ![Equity Data Agent — live terminal](docs/screenshots/terminal-live.png)
 
-> An AI research system for US equities where **the LLM never does math.** Every number in every thesis is pre-computed by Dagster, served as a human-readable report by FastAPI, and only *interpreted* by the LangGraph agent. Hallucinated financials are architecturally impossible.
+> Production AI research tool for US equities, deployed live at **[equity-data-agent-ynr2.vercel.app](https://equity-data-agent-ynr2.vercel.app)**. Solo portfolio build — 227 merged PRs, 18 ADRs, 640 tests, 7 shipped phases — designed to demonstrate end-to-end ownership of a non-trivial AI system: data engineering, LLM safety, agent design, frontend, and production ops.
+>
+> Product claim: **the LLM never does math.** Every number in every thesis is pre-computed by Dagster, served as a human-readable report by FastAPI, and only *interpreted* by the LangGraph agent — so hallucinated financials are architecturally impossible. [→ how](#hallucination-resistance)
 
 ![Phases](https://img.shields.io/badge/phases-7%2F7%20complete-2ea44f)
 ![Tests](https://img.shields.io/badge/tests-640%20passing-2ea44f)
@@ -17,6 +19,20 @@
 ![gitleaks](https://img.shields.io/badge/gitleaks-clean-2ea44f)
 ![npm audit](https://img.shields.io/badge/npm%20audit-clean-2ea44f)
 ![Trivy weekly](https://img.shields.io/badge/Trivy-weekly-1f6feb)
+
+---
+
+## Highlights
+
+| Area | What's demonstrated |
+|---|---|
+| **Full-stack** | Next.js 16 (App Router, SSG/ISR, SSE chat) · FastAPI (async, OpenAPI, per-IP rate-limit + token budget) · TypeScript types auto-generated from the OpenAPI schema |
+| **LLM engineering** | LangGraph agent (3-node `plan → gather → synthesize` graph) · LiteLLM routing across Groq + Gemini with a free-tier-first policy · Hallucination eval harness (regex-verified, **16/16 pass** on the 16-question golden set) · Cross-model bench with `git`-tracked history |
+| **Data engineering** | Dagster asset graph (8 assets, **17 domain-bounded asset checks**, 2 schedules) · ClickHouse + Qdrant Cloud · Idempotent migrations re-applied every deploy · Multi-timeframe aggregation (daily → weekly → monthly) |
+| **System design** | **18 ADRs** documenting every non-obvious choice (storage, agent shape, LLM routing, deploy ingress, public-chat threat model) — not retrofitted, written at decision time |
+| **Production ops** | Bespoke Docker Compose on a Hetzner VPS · 7 phase retros + a living failure-mode runbook · Multi-layer observability (Sentry + Langfuse + Prometheus + Grafana + cAdvisor + node_exporter + Dozzle) · Discord alerting on Dagster materialization failures and Docker container events ≤30s |
+| **CI/CD + security** | SOPS-encrypted secrets · SHA-identity gate + Dagster-load gate on every deploy · Layered scanner suite (pip-audit + bandit + gitleaks + npm audit + weekly Trivy image CVE scan) · Dependabot with grouped bumps + a waivers file with rationale |
+| **Testing** | **640 pytest tests** (unit + real-ClickHouse integration) · Endpoint p50/p95/p99 latency baseline with error-rate gate · Asset-check domain bounds that have caught real arithmetic bugs that passed code review |
 
 ---
 
@@ -239,7 +255,10 @@ uv run python -m agent analyze NVDA
 
 ---
 
-## Development workflow
+<details>
+<summary><strong>Development workflow</strong> — for engineers reviewing the repo (click to expand)</summary>
+
+&nbsp;
 
 The repo is built around a tight inner loop: every issue gets its own branch, its own PR, and squash-merges to `main`. Slash-command shortcuts (Claude Code) glue Linear status, branch state, and CI together so context-switching is cheap.
 
@@ -268,6 +287,8 @@ make pr    QNT=66 TITLE="..."       # push + open PR with `Closes QNT-XX` so Lin
 ```
 
 Slash commands (`/pick`, `/implement`, `/sanity-check`, `/review`, `/ship`, `/go`) drive the issue → PR → merge → deploy pipeline; `/server-audit` and `/retro` cover the ops + end-of-phase rituals. Full reference: [`docs/guides/dev-workflow.md`](docs/guides/dev-workflow.md). Project conventions (commit format, branching, MCP server setup, hooks) live in [`CLAUDE.md`](CLAUDE.md).
+
+</details>
 
 ---
 
