@@ -681,6 +681,60 @@ make obs-status
 
 ---
 
+### ClickHouse system-log creep (text_log/trace_log/metric_log/async_metric_log unbounded growth)
+
+**Symptoms**:
+
+- `clickhouse-1` CPU climbing monotonically over hours/days (e.g. 0.07 → 0.18 cores over 5.5 h on 2026-05-04, peaking at 72% during merge bursts) with no corresponding user-query load.
+- `equity_raw` / `equity_derived` tables look healthy (row counts and sizes consistent with retention); cost-of-merge is dominated by `system.*_log` tables instead.
+- Disk usage on `clickhouse_data` volume creeps up day-over-day even on idle prod.
+
+**Diagnosis**:
+
+```bash
+# 1. Confirm the climb is system-table merges, not user data. ProfileEvent_MergeTotalMilliseconds
+#    should show monotonic increase keyed to system tables.
+ssh hetzner 'docker exec equity-data-agent-clickhouse-1 clickhouse-client --query "
+  SELECT table, sum(rows) AS rows, formatReadableSize(sum(bytes_on_disk)) AS bytes
+  FROM system.parts WHERE database = '\''system'\'' AND active
+  GROUP BY table ORDER BY sum(bytes_on_disk) DESC LIMIT 10
+"'
+
+# 2. Confirm whether TTL is set on the noisy tables (post-fix this should
+#    show "TTL event_date + toIntervalDay(7)" on all four).
+ssh hetzner 'docker exec equity-data-agent-clickhouse-1 clickhouse-client --query "
+  SELECT name, engine_full FROM system.tables
+  WHERE database = '\''system'\'' AND name IN ('\''text_log'\'','\''trace_log'\'','\''metric_log'\'','\''asynchronous_metric_log'\'')
+"'
+
+# 3. Are there leftover renamed tables from a prior schema change?
+ssh hetzner 'docker exec equity-data-agent-clickhouse-1 clickhouse-client --query "
+  SELECT name, total_rows, formatReadableSize(total_bytes) FROM system.tables
+  WHERE database = '\''system'\'' AND name LIKE '\''%_log_%'\''
+"'
+```
+
+**Response** (assumes the TTL config from QNT-169 is already in `clickhouse/config.d/system-log-ttl.xml` and merged):
+
+1. **Deploy the config** (CD via merge to main, or manual `docker compose --profile prod up -d clickhouse` after pulling). ClickHouse must restart to pick up `/etc/clickhouse-server/config.d/system-log-ttl.xml`.
+2. **Restart renames the existing tables.** Because partition_by changes from monthly to daily, ClickHouse will move `system.text_log` (etc.) to `system.text_log_0` and create fresh tables with the new schema + TTL. The renamed tables retain all historical rows and are NOT covered by the new TTL.
+3. **Drop the renamed tables** to free disk and stop their merge cost. List them first via the diagnosis query #3 above (`SELECT name FROM system.tables WHERE database='system' AND name LIKE '%_log_%'`) — ClickHouse increments the rename suffix (`_0`, `_1`, …) on every schema change, so don't assume `_0`. Drop each one explicitly (one `--query` per statement; safest across CH versions):
+   ```bash
+   for t in text_log_0 trace_log_0 metric_log_0 asynchronous_metric_log_0; do
+     ssh hetzner "docker exec equity-data-agent-clickhouse-1 clickhouse-client --query \"DROP TABLE IF EXISTS system.$t SYNC\""
+   done
+   ```
+4. **Verify**: row counts on the new tables should stay within the 7-day window. After 24 h of production, run the diagnosis query #1 again — `text_log` should sit at 1-2 days of inserts (≈ 1M rows for this load), not the multi-million-row baseline. `clickhouse-1` CPU baseline should return to ~0.05 cores once the renamed-table backlog is dropped.
+
+**Prevention**:
+
+- [QNT-169](https://linear.app/noahwins/issue/QNT-169) — `clickhouse/config.d/system-log-ttl.xml` mounted into the `clickhouse` service. Sets `partition_by event_date` + `TTL event_date + INTERVAL 7 DAY DELETE` on all four tables, so ClickHouse drops whole daily parts as they age past the retention window.
+- The same volume mount is wired in `docker-compose.yml`; if a future ClickHouse upgrade changes the default config schema, the override survives because `config.d/` files are loaded after and merged on top of the base `config.xml`.
+
+**Last occurred**: 2026-05-04 — surfaced by Grafana CPU panel; triaged but not yet remediated until QNT-169 (this entry).
+
+---
+
 ### Where are the logs / dashboards?
 
 | What | URL (via SSH tunnel) | Auth | Purpose |

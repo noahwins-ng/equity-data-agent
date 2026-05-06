@@ -248,6 +248,9 @@ jobs:
             # POST /-/reload but we don't enable it). Restart on any change.
             restart_if_prefix_changed "observability/grafana/" grafana
             restart_if_prefix_changed "observability/prometheus/" prometheus
+            # QNT-169: ClickHouse only reads /etc/clickhouse-server/config.d/*.xml
+            # at startup; system-log TTL changes need a restart to take effect.
+            restart_if_prefix_changed "clickhouse/config.d/" clickhouse
             # NOTE: Caddyfile restart is intentionally omitted while caddy lives
             # in the dormant `prod-caddy` profile (QNT-75 / ADR-018). The
             # `--profile prod restart caddy` call would silently no-op because
