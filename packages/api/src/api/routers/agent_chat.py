@@ -95,6 +95,7 @@ from agent.llm import (
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 from agent.tools import default_report_tools
+from agent.tracing import observe
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
@@ -478,10 +479,19 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
         instrumented = _instrument_tools(base_tools, queue, loop, ticker)
         graph = build_graph(instrumented, event_emitter=_emit)
 
+        @observe(name="agent-chat")
         def _runner() -> None:
             # Run the graph in a worker thread; emitted events have already been
             # routed onto the queue via ``call_soon_threadsafe``. The final state
             # is captured for post-run prose / thesis / done events.
+            #
+            # ``@observe(name="agent-chat")`` opens a parent observation so the
+            # four node-level @observe spans (classify / plan / gather /
+            # synthesize) and the per-tool spans nest under one trace in
+            # Langfuse — matches the CLI's ``agent.__main__.analyze`` topology.
+            # Without this wrapper, langfuse-python's contextvar-based parent
+            # tracking can't see a parent and each node opens its own root
+            # trace.
             try:
                 final_state_holder["state"] = graph.invoke(
                     {"ticker": ticker, "question": request.message}
