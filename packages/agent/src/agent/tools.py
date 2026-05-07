@@ -141,6 +141,12 @@ def get_news_report(ticker: str) -> str:
     return _report_tool("news", ticker)
 
 
+@observe(name="get_company_report")
+def get_company_report(ticker: str) -> str:
+    """Static company business profile: description, competitors, risks, watch."""
+    return _report_tool("company", ticker)
+
+
 @observe(name="search_news")
 def search_news(ticker: str, query: str) -> str:
     """Semantic news search against Qdrant, returned as pretty JSON.
@@ -190,13 +196,19 @@ def search_news(ticker: str, query: str) -> str:
 def default_report_tools() -> dict[str, Callable[[str], str]]:
     """REPORT_TOOLS-shaped tool map for ``agent.graph.build_graph``.
 
-    Only the three planable tools from ADR-007 / QNT-56 are wired here —
+    QNT-175 adds ``company`` — a static business-profile tool that grounds
+    every thesis in the company's actual operating model (description, key
+    competitors, key risks, watch metrics). Unlike the other three, the
+    company endpoint never queries the warehouse, so the tool stays
+    available even when ClickHouse is unreachable.
+
     ``get_summary_report`` and ``search_news`` are exported for direct use
     (e.g. QNT-60's CLI / SSE endpoint) but intentionally not added to the
     plan surface. Widening the plan is a QNT-67-evidenced call, not a
     drive-by change.
     """
     return {
+        "company": get_company_report,
         "technical": get_technical_report,
         "fundamental": get_fundamental_report,
         "news": get_news_report,
@@ -205,6 +217,7 @@ def default_report_tools() -> dict[str, Callable[[str], str]]:
 
 __all__ = [
     "default_report_tools",
+    "get_company_report",
     "get_fundamental_report",
     "get_news_report",
     "get_summary_report",

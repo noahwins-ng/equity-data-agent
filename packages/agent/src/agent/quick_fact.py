@@ -27,7 +27,14 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-QuickFactSource = Literal["technical", "fundamental", "news"]
+# QNT-175: kept aligned with ``REPORT_TOOLS`` (which now includes ``company``)
+# so the Pydantic boundary is the superset, not a subset of the runtime tool
+# registry. The plan layer strips ``company`` for quick-fact intent, so the
+# LLM should never see a company report here in practice — but the schema
+# matching the tool registry protects against future plumbing changes that
+# might pass company through, and against any structured-output retry that
+# routes a thesis-shaped citation into a quick-fact field.
+QuickFactSource = Literal["company", "technical", "fundamental", "news"]
 
 
 class QuickFactAnswer(BaseModel):

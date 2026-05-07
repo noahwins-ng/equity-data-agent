@@ -147,7 +147,9 @@ def test_full_flow_produces_thesis_and_confidence(stub_llm: _StructuredLLM) -> N
 
     assert result["thesis"] is expected
     assert result["confidence"] == 1.0
-    assert set(result["reports"]) == {"technical", "fundamental", "news"}
+    # QNT-175: ``company`` is force-included on the thesis path even when the
+    # plan LLM omits it, so the gathered set covers every REPORT_TOOLS entry.
+    assert set(result["reports"]) == set(REPORT_TOOLS)
     assert result["errors"] == {}
 
 
@@ -398,6 +400,43 @@ def test_parse_plan_preserves_available_order() -> None:
     ]
 
 
+def test_parse_plan_force_includes_company_for_thesis() -> None:
+    """QNT-175: thesis intent always pulls ``company`` even when the plan LLM
+    omits it. The plan-prompt bias is enforced as code so a misbehaving LLM
+    can't strand the synthesize step without business context."""
+    plan = _parse_plan(
+        "technical, fundamental",
+        ["company", "technical", "fundamental", "news"],
+        intent="thesis",
+    )
+    assert "company" in plan
+    # Order follows ``available`` so company appears at the head.
+    assert plan == ["company", "technical", "fundamental"]
+
+
+def test_parse_plan_drops_company_for_quick_fact() -> None:
+    """QNT-175: quick_fact intent never fetches the static company report —
+    a single-metric ask doesn't benefit from the description / competitor list."""
+    plan = _parse_plan(
+        "company, technical",
+        ["company", "technical", "fundamental", "news"],
+        intent="quick_fact",
+    )
+    assert plan == ["technical"]
+
+
+def test_parse_plan_force_includes_company_for_comparison() -> None:
+    """QNT-175: comparison intent shares the thesis bias — the static profile
+    grounds qualitative contrasts (segment mix, competitive overlap)."""
+    plan = _parse_plan(
+        "fundamental",
+        ["company", "technical", "fundamental", "news"],
+        intent="comparison",
+    )
+    assert "company" in plan
+    assert plan == ["company", "fundamental"]
+
+
 def test_confidence_full_coverage() -> None:
     assert _confidence_from_reports({"a": "", "b": "", "c": ""}, ["a", "b", "c"]) == 1.0
 
@@ -434,7 +473,8 @@ def test_optional_tools_constant_includes_news() -> None:
 
 def test_report_tools_constant_is_stable() -> None:
     # Freeze the tool contract — adding a tool is a deliberate ADR-007 call.
-    assert REPORT_TOOLS == ("technical", "fundamental", "news")
+    # QNT-175 added ``company`` (static business profile) at the head of the tuple.
+    assert REPORT_TOOLS == ("company", "technical", "fundamental", "news")
 
 
 def test_build_graph_is_deterministic_across_calls() -> None:

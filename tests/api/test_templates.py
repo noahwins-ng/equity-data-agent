@@ -9,7 +9,7 @@ the live SSH tunnel and run in CI. The shape of the query result matches what
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 import pytest
@@ -362,6 +362,127 @@ def test_news_unknown_ticker_404() -> None:
     with pytest.raises(HTTPException) as exc:
         build_news_report("BOGUS")
     assert exc.value.status_code == 404
+
+
+_NEWS_COLS = ("published_at", "source", "headline", "sentiment_label", "body_snippet")
+
+
+def _news_row(
+    *,
+    published: datetime,
+    source: str = "finnhub",
+    headline: str = "headline",
+    sentiment_label: str = "pending",
+    body_snippet: str = "",
+) -> tuple[Any, ...]:
+    return (published, source, headline, sentiment_label, body_snippet)
+
+
+def test_news_renders_sentiment_and_body_snippet_per_article(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-175 AC #1/#2: each headline carries its body snippet + sentiment
+    label, and the SIGNAL section reports the real distribution rather than
+    the legacy 'Phase 4 pending' placeholder."""
+    rows = [
+        _news_row(
+            published=datetime(2026, 4, 16, tzinfo=UTC),
+            source="finnhub",
+            headline="NVDA hits new high",
+            sentiment_label="positive",
+            body_snippet="Earnings blew past estimates as data centre",
+        ),
+        _news_row(
+            published=datetime(2026, 4, 15, tzinfo=UTC),
+            source="finnhub",
+            headline="Analyst flags margin risk",
+            sentiment_label="negative",
+            body_snippet="Bears pointed to compressing margins on",
+        ),
+        _news_row(
+            published=datetime(2026, 4, 14, tzinfo=UTC),
+            source="finnhub",
+            headline="Sector roundup",
+            sentiment_label="neutral",
+            body_snippet="Chip names traded mixed against the index",
+        ),
+    ]
+    _install_fake(monkeypatch, {"news_raw": _FakeResult(_NEWS_COLS, rows)})
+    report = build_news_report("NVDA")
+
+    assert "Earnings blew past estimates as data centre" in report
+    assert "Sentiment: Positive" in report
+    assert "Sentiment: Negative" in report
+    assert "Sentiment: Neutral" in report
+    assert "## SIGNAL" in report
+    # Distribution must be the real count, not the placeholder.
+    assert "1 bullish / 1 neutral / 1 bearish" in report
+    assert "balanced" in report
+    assert "Phase 4" not in report
+
+
+def test_news_pending_sentiment_renders_as_na(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QNT-175 AC #3: legacy rows whose sentiment_label is ``pending`` (the
+    Phase 4 default for un-scored articles) render as ``Sentiment: N/A``."""
+    rows = [
+        _news_row(
+            published=datetime(2026, 4, 16, tzinfo=UTC),
+            source="yahoo_finance",
+            headline="Older yahoo article",
+            sentiment_label="pending",
+            body_snippet="",
+        ),
+    ]
+    _install_fake(monkeypatch, {"news_raw": _FakeResult(_NEWS_COLS, rows)})
+    report = build_news_report("NVDA")
+
+    assert "Sentiment: N/A" in report
+    # The SIGNAL section names the un-scored state explicitly so the agent
+    # doesn't read a single article as "net bullish/bearish".
+    assert "none scored" in report
+
+
+# ---------- company ----------
+
+
+def test_company_report_renders_static_profile() -> None:
+    """QNT-175 AC #4: company endpoint returns a rich static profile (description,
+    competitors, risks, watch metrics) for a covered ticker. No DB query — the
+    report is rebuilt from ``TICKER_METADATA`` on every call."""
+    from api.templates.company import build_company_report
+
+    report = build_company_report("NVDA")
+    assert "# COMPANY REPORT — NVDA" in report
+    assert "## BUSINESS" in report
+    assert "## KEY COMPETITORS" in report
+    assert "## KEY RISKS" in report
+    assert "## WATCH" in report
+    # Spot-check that real editorial content rendered, not just headers.
+    assert "AMD" in report  # NVDA competitor
+    assert "Data Center revenue growth" in report  # NVDA watch metric
+
+
+def test_company_report_unknown_ticker_404() -> None:
+    from api.templates.company import build_company_report
+
+    with pytest.raises(HTTPException) as exc:
+        build_company_report("BOGUS")
+    assert exc.value.status_code == 404
+
+
+def test_company_report_covers_all_tickers() -> None:
+    """QNT-175 AC #4: every covered ticker has a static profile — none falls
+    back to '(none recorded)' bullets, which would mean the metadata extension
+    skipped a ticker."""
+    from api.templates.company import build_company_report
+    from shared.tickers import TICKERS
+
+    for ticker in TICKERS:
+        report = build_company_report(ticker)
+        assert f"# COMPANY REPORT — {ticker}" in report
+        assert "(none recorded)" not in report, (
+            f"{ticker} is missing competitors/risks/watch in TICKER_METADATA"
+        )
 
 
 # ---------- summary ----------

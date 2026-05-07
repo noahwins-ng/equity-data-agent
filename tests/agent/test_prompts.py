@@ -334,6 +334,26 @@ def test_report_tools_is_canonical_to_prompts_module() -> None:
     assert graph_pkg.REPORT_TOOLS is prompts_pkg.REPORT_TOOLS
 
 
+def test_structured_output_source_enums_match_report_tools() -> None:
+    """QNT-175 review fix: every Pydantic ``...Source`` Literal that lives at
+    a ``with_structured_output`` boundary must enumerate every entry in
+    ``REPORT_TOOLS``. The system prompt instructs the LLM to cite
+    ``(source: <name>)`` for any of those names, but Pydantic validates the
+    Literal at parse time — a missing name silently null-coerces or rejects
+    the field, dropping grounding evidence. Adding a tool to ``REPORT_TOOLS``
+    without adding it to these Literals is the bug this test pins.
+    """
+    from typing import get_args
+
+    from agent.comparison import ComparisonSource
+    from agent.graph import REPORT_TOOLS
+    from agent.quick_fact import QuickFactSource
+
+    expected = set(REPORT_TOOLS)
+    assert set(get_args(QuickFactSource)) == expected
+    assert set(get_args(ComparisonSource)) == expected
+
+
 def test_prompts_module_lives_under_agent_package() -> None:
     """AC: 'System prompt stored in `packages/agent/src/agent/prompts/`'.
     Use importlib to locate the spec so the test stays meaningful even if

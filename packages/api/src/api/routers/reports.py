@@ -6,6 +6,7 @@ from fastapi import APIRouter
 from fastapi.responses import PlainTextResponse
 
 from api.templates import (
+    build_company_report,
     build_fundamental_report,
     build_news_report,
     build_summary_report,
@@ -33,3 +34,8 @@ def news_report(ticker: str) -> str:
 @router.get("/summary/{ticker}", response_class=PlainTextResponse)
 def summary_report(ticker: str) -> str:
     return build_summary_report(ticker.upper())
+
+
+@router.get("/company/{ticker}", response_class=PlainTextResponse)
+def company_report(ticker: str) -> str:
+    return build_company_report(ticker.upper())

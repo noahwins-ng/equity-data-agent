@@ -325,9 +325,9 @@ def test_search_news_invalid_query_returns_empty_array(
 
 
 def test_default_report_tools_registers_three_planable_tools() -> None:
-    """ADR-007 / QNT-56 constant REPORT_TOOLS = (technical, fundamental, news).
-    The default tool mapping must cover all three — if it drifts, plan-node
-    surface contracts break."""
+    """The default tool mapping must cover every entry in ``REPORT_TOOLS`` —
+    if it drifts, plan-node surface contracts break. QNT-175 added ``company``
+    on top of the original (technical, fundamental, news) trio."""
     tools = default_report_tools()
     assert set(tools) == set(graph_module.REPORT_TOOLS)
     for tool in tools.values():
@@ -372,7 +372,7 @@ def test_default_report_tools_compose_with_build_graph(
 
             return _StructuredRunnable()
 
-    stub = _StubLLM("technical, fundamental, news", expected_thesis)
+    stub = _StubLLM("company, technical, fundamental, news", expected_thesis)
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: stub)
     monkeypatch.setattr(
         graph_module.langfuse,
@@ -384,7 +384,7 @@ def test_default_report_tools_compose_with_build_graph(
     graph = graph_module.build_graph(default_report_tools())
     result = graph.invoke({"ticker": "NVDA", "question": "Is NVDA a buy?"})
 
-    assert set(result["reports"]) == {"technical", "fundamental", "news"}
+    assert set(result["reports"]) == {"company", "technical", "fundamental", "news"}
     # Each gather call hit the API_BASE_URL + /api/v1/reports/<kind>/NVDA path.
     for kind, body in result["reports"].items():
         assert body.endswith(f"/api/v1/reports/{kind}/NVDA")

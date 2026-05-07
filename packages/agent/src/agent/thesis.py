@@ -46,14 +46,14 @@ class Thesis(BaseModel):
             "One-paragraph framing of the central question for this ticker. "
             "Name what is at stake — the tension that makes this a decision, "
             "not just 'here is NVDA'. Cite the supplied reports for any "
-            "numeric claim using (source: technical|fundamental|news)."
+            "numeric or factual claim using (source: company|technical|fundamental|news)."
         ),
     )
     bull_case: list[str] = Field(
         default_factory=list,
         description=(
             "Supporting points for the bull thesis. Each entry is one bullet "
-            "with an inline citation (source: technical|fundamental|news). "
+            "with an inline citation (source: company|technical|fundamental|news). "
             "Number of points must reflect the actual evidence in the supplied "
             "reports — do not pad. Leave EMPTY if the reports contain no real "
             "bull case rather than inventing one."
