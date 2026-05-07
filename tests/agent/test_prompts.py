@@ -101,6 +101,26 @@ def test_system_prompt_forbids_signal_line_in_bullets() -> None:
     assert "anti-SIGNAL rule" in text
 
 
+def test_system_prompt_encourages_news_citation_when_relevant() -> None:
+    """Without an explicit rule, the LLM cherry-picks fundamental's numerical
+    metrics and skips news entirely (~3 of 5 thesis runs in prod sweep
+    omitted news despite each ticker having 10 fresh headlines). News is
+    catalyst evidence that fundamental + technical can't surface — the
+    prompt must explicitly authorise and encourage citing it.
+
+    Pinned because regressing this would silently re-create the
+    no-news-citation pattern the rule was added to fix.
+    """
+    text = SYSTEM_PROMPT
+    assert "Use news headlines as catalyst evidence" in text
+    # Both directions allowed (bull or bear) so the LLM doesn't force a
+    # bullish-news bullet onto a bearish headline.
+    assert "either bull or bear" in text
+    # The opt-out is named explicitly so a thesis on a ticker with off-topic
+    # headlines can still skip news without the LLM padding to comply.
+    assert "no news headline materially bears on the question" in text
+
+
 def test_system_prompt_requires_decimal_preservation_in_action() -> None:
     """The verdict_action format-preservation rule. Without it the LLM
     drops decimals and renders `187.72` as `18772` — a real prod
