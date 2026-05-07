@@ -439,10 +439,22 @@ def build_graph(
                     comparison_tickers,
                 )
 
-        prompt = _build_plan_prompt(ticker, question, available, intent)
-        response = langfuse.traced_invoke(get_llm(temperature=0.0), prompt, name="plan")
-        content = response.content if hasattr(response, "content") else str(response)
-        plan = _parse_plan(str(content), available, intent)
+        # Thesis + comparison fetch every available tool — the plan-LLM call
+        # was non-deterministic noise (one ticker got all 4 tools, an
+        # adjacent ticker dropped technical for the same prompt) and the
+        # plan-bias text was telling the model "include every report that
+        # is even marginally relevant" anyway. Skipping the LLM here makes
+        # thesis behavior deterministic, drops ~250 tokens per run, and
+        # removes the narrowing failure mode the QNT-175 force-include
+        # already half-fixed for ``company``. Quick_fact keeps the LLM call
+        # because narrowing to the single relevant report IS its purpose.
+        if intent == "quick_fact":
+            prompt = _build_plan_prompt(ticker, question, available, intent)
+            response = langfuse.traced_invoke(get_llm(temperature=0.0), prompt, name="plan")
+            content = response.content if hasattr(response, "content") else str(response)
+            plan = _parse_plan(str(content), available, intent)
+        else:
+            plan = list(available)
         logger.info(
             "plan %s: %s (intent=%s, comparison_tickers=%s)",
             ticker,

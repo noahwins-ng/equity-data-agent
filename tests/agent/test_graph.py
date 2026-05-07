@@ -310,9 +310,11 @@ def test_no_reports_gathered_falls_back_to_conversational_redirect(
     assert result["comparison"] is None
     assert isinstance(result["conversational"], ConversationalAnswer)
     assert result["errors"]["technical"].startswith("RuntimeError")
-    # Plan ran (1 call), synthesize did NOT call the LLM — the fallback is
-    # deterministic, not generated.
-    assert stub_llm.invoke.call_count == 1
+    # Thesis intent skips the plan LLM call entirely (deterministic — fetch
+    # everything available); synthesize did NOT call the LLM either because
+    # gather produced no reports and the fallback is deterministic, not
+    # generated. So the chat-shape stub never sees an invoke.
+    assert stub_llm.invoke.call_count == 0
     assert stub_llm.structured_invoke.call_count == 0
 
 
@@ -358,7 +360,10 @@ def test_llm_calls_go_through_traced_invoke(
     graph = build_graph({"technical": _mock_tool("tech")})
     _run(graph)
 
-    assert calls == ["plan", "synthesize"]
+    # Thesis intent skips the plan LLM call (fetch-everything is deterministic),
+    # so only the synthesize call routes through traced_invoke. quick_fact
+    # would still produce ["plan", "synthesize"] — covered by a separate test.
+    assert calls == ["synthesize"]
 
 
 def test_no_tools_registered_yields_empty_plan(stub_llm: _StructuredLLM) -> None:  # noqa: ARG001
@@ -423,6 +428,70 @@ def test_parse_plan_drops_company_for_quick_fact() -> None:
         intent="quick_fact",
     )
     assert plan == ["technical"]
+
+
+def test_thesis_skips_plan_llm_and_fetches_all_available_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Thesis intent must NOT call the plan LLM — instead it fetches every
+    available tool deterministically. The plan-LLM was non-deterministic
+    noise (one ticker got all 4 tools, an adjacent ticker dropped technical
+    for the same prompt) and the bias text was already telling it to include
+    everything; force-include is the cleaner contract.
+
+    Pinned because regressing this would silently drop tool coverage on
+    arbitrary thesis runs — no unit test would catch it without this
+    explicit no-LLM-call assertion.
+    """
+    llm = _StructuredLLM()
+    plan_call_count = {"n": 0}
+    synth_call_count = {"n": 0}
+
+    def traced(llm_: Any, prompt: object, *, name: str) -> Any:  # noqa: ARG001
+        if name == "plan":
+            plan_call_count["n"] += 1
+        elif name == "synthesize":
+            synth_call_count["n"] += 1
+        return llm_.invoke(prompt)
+
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+    monkeypatch.setattr(graph_module.langfuse, "traced_invoke", traced)
+
+    graph = build_graph({name: _mock_tool(name) for name in REPORT_TOOLS})
+    result = _run(graph)
+
+    # Thesis: zero plan-LLM calls, one synthesize call.
+    assert plan_call_count["n"] == 0
+    assert synth_call_count["n"] == 1
+    # And every available tool was fetched.
+    assert set(result["reports"]) == set(REPORT_TOOLS)
+
+
+def test_quick_fact_still_calls_plan_llm_to_narrow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Counterpart to the thesis-skips-plan test: quick_fact KEEPS the plan
+    LLM call because narrowing to the single relevant report is the whole
+    point of that path. Without this, a future "skip plan everywhere"
+    refactor would silently widen quick_fact to 3-4 reports per single-
+    metric question, burning provider quota and re-creating the over-fetch
+    problem the path was carved out of."""
+    llm = _StructuredLLM()
+    llm.invoke.return_value = AIMessage(content="technical")
+    plan_calls: list[str] = []
+
+    def traced(llm_: Any, prompt: object, *, name: str) -> Any:
+        if name == "plan":
+            plan_calls.append(name)
+        return llm_.invoke(prompt)
+
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+    monkeypatch.setattr(graph_module.langfuse, "traced_invoke", traced)
+
+    graph = build_graph({name: _mock_tool(name) for name in REPORT_TOOLS})
+    graph.invoke({"ticker": "NVDA", "question": "What's NVDA's RSI?"})
+
+    assert plan_calls == ["plan"]
 
 
 def test_parse_plan_force_includes_company_for_comparison() -> None:
