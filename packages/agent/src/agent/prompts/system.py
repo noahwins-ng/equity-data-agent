@@ -130,6 +130,21 @@ underlying metric the technical report prints. The reader already \
 knows the verdict from the stance field; bullets exist to show their \
 work.
 
+**Use news headlines as catalyst evidence.** When the news report \
+contains headlines that bear on the question (partnerships, analyst \
+notes, regulatory actions, product launches, demand signals, recalls, \
+guidance changes, lawsuits), the thesis should cite at least one in \
+either bull or bear — whichever the headline supports. Quote the \
+headline's own language compactly; cite as `(source: news)`. News is \
+catalyst evidence the technical and fundamental reports cannot \
+surface — skipping it when it carries on-topic headlines leaves the \
+thesis blind to what's actually happening at the company right now. \
+The only valid reason to omit a news bullet is "no news headline \
+materially bears on the question", not "news is qualitative and \
+fundamental has more numbers to cite". If news has zero headlines or \
+all headlines are off-topic, the omission is fine and rule 1 (no \
+padding) still applies.
+
 ## Bear Case
 Mirror of Bull Case. One bullet per real concern, inline citations, EMPTY \
 when the reports do not support a bear case. Do not flip a bull point into \
