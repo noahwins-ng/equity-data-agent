@@ -128,18 +128,21 @@ class Settings(BaseSettings):
 
     # Per-IP daily Groq token budget. Soft cap orthogonal to request count —
     # a chatty user can stay under 100 requests/day yet exhaust a model TPD
-    # by triggering many tool runs. Default ~10K is comfortably more than
-    # any single recruiter session (10–15 thesis runs) and well below abuse
-    # thresholds. UTC-midnight reset matches Groq's TPD window.
-    CHAT_TOKENS_PER_IP_PER_DAY: int = 10_000
+    # by triggering many tool runs. Sized for ~7-10 thesis runs/visitor
+    # post-QNT-175 (4 tools instead of 3, ~3.5-4K tokens/run including the
+    # company report). UTC-midnight reset matches Groq's TPD window.
+    CHAT_TOKENS_PER_IP_PER_DAY: int = 30_000
 
     # Global daily Groq token budget — the sum across all IPs. Sized at
-    # ~50% of the Llama-3.3-70B free-tier 100K TPD ceiling so daily ingest
-    # + the user's own dev usage retain headroom. Once exceeded, every
-    # request gets the friendly demo-limit redirect for the rest of the
-    # day (FAIL CLOSED — the LiteLLM config has no paid-provider fallback,
-    # see ADR-017 / litellm_config.yaml).
-    CHAT_TOKENS_GLOBAL_PER_DAY: int = 50_000
+    # ~33% of the combined Groq free-tier ceiling: Llama-3.3-70B (100K TPD)
+    # auto-fails over to Llama-4-Scout (500K TPD) on RPM/TPD exhaustion via
+    # ``fallbacks`` in litellm_config.yaml, so the effective ceiling is
+    # 600K TPD. 200K leaves comfortable headroom for daily ingest + the
+    # user's own dev / eval sweeps. Once exceeded, every request gets the
+    # friendly demo-limit redirect for the rest of the day (FAIL CLOSED —
+    # the LiteLLM config has no paid-provider fallback, see ADR-017 /
+    # litellm_config.yaml).
+    CHAT_TOKENS_GLOBAL_PER_DAY: int = 200_000
 
     # Burst-alert threshold: if a single IP receives N 429s within
     # CHAT_BURST_WINDOW_SECONDS, fire a Sentry capture_message. Defaults are
