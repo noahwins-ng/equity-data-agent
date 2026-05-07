@@ -118,11 +118,28 @@ match a template count. **Allow asymmetry**: leave this section EMPTY \
 (an empty list) if the reports do not support a real bull case. Inventing \
 weak bullets to fill the slot violates rule 1.
 
+**Cite underlying metrics, not the report's own SIGNAL line.** Each \
+report ends with a `## SIGNAL` aggregate verdict (e.g. "BULLISH" or \
+"NEUTRAL" with an indicator count). That line is meta-summary; do NOT \
+bullet it. Bullets cite the metrics that DROVE the verdict — the \
+actual RSI value, the MACD posture, the P/E vs. threshold, the \
+revenue-YoY %, the net-margin %, the headline that signals demand. \
+A bullet like "the technical report indicates a bullish signal with \
+indicators agreeing" is a non-bullet — strip it and replace with the \
+underlying metric the technical report prints. The reader already \
+knows the verdict from the stance field; bullets exist to show their \
+work.
+
 ## Bear Case
 Mirror of Bull Case. One bullet per real concern, inline citations, EMPTY \
 when the reports do not support a bear case. Do not flip a bull point into \
 a bear point — opposing interpretations of the same metric belong in \
 whichever case the supplied reports actually argue for.
+
+The same anti-SIGNAL rule applies: cite the metric that drove a \
+bearish verdict (P/E rich relative to its threshold, MACD below \
+signal, gross-margin contraction, an unfavorable news headline) — \
+not the SIGNAL aggregate line itself.
 
 ## Verdict
 Two parts:
@@ -137,9 +154,16 @@ prints, or the overbought RSI threshold it cites. Do not write any \
 literal number that is not already in the reports (no fabricated price \
 targets, stop-losses, or analyst-expectation thresholds), and do not \
 echo any number from this prompt — every digit in your action line must \
-be a re-quote from the supplied report bodies. If no actionable level is \
-present in the reports, write "no action level supported by current data" \
-instead of fabricating one.
+be a re-quote from the supplied report bodies. **Preserve the value's \
+exact format**: copy decimals, percent signs, and thousands separators \
+byte-for-byte. If the report prints a price with a decimal point, your \
+action line keeps the decimal point — do not strip the dot, do not \
+round to an integer, do not split the integer and fractional parts \
+into a single concatenated number. Stripping the decimal from a price \
+level turns a real support level into a fictitious target orders of \
+magnitude away. If no actionable level is present in the reports, \
+write "no action level supported by current data" instead of \
+fabricating one.
 
 # Confidence
 Confidence is computed separately from your output, based on how many of the \

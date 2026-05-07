@@ -83,6 +83,33 @@ def test_system_prompt_grounds_action_levels_in_real_data() -> None:
     assert "every digit in your action line" in text
 
 
+def test_system_prompt_forbids_signal_line_in_bullets() -> None:
+    """Bull/bear bullets must cite underlying metrics, not the report's own
+    `## SIGNAL` aggregate verdict line. Without this rule the LLM takes the
+    lazy path and writes bullets like "the technical report indicates a
+    bullish signal with 2/3 indicators agreeing" — meta-summary instead of
+    real evidence. The fix surfaces the explicit anti-SIGNAL rule plus a
+    counter-example so a future prompt edit can't quietly drop it."""
+    text = SYSTEM_PROMPT
+    # The literal anti-SIGNAL rule must be on the wire.
+    assert "Cite underlying metrics, not the report's own SIGNAL line" in text
+    # Counter-example must mention what NOT to bullet so the LLM has
+    # something to pattern-match against.
+    assert "non-bullet" in text
+    # Both bull and bear must invoke the rule (bear references it via "same
+    # anti-SIGNAL rule applies").
+    assert "anti-SIGNAL rule" in text
+
+
+def test_system_prompt_requires_decimal_preservation_in_action() -> None:
+    """The verdict_action format-preservation rule. Without it the LLM
+    drops decimals and renders `187.72` as `18772` — a real prod
+    regression seen on the first NVDA thesis after QNT-175 shipped."""
+    text = SYSTEM_PROMPT
+    assert "Preserve the value's exact format" in text
+    assert "do not strip the dot" in text
+
+
 def test_system_prompt_contains_no_multi_digit_literals() -> None:
     """QNT-136 regression guard: multi-digit numbers in the prompt body get
     parroted into theses (the QNT-67 hallucination check then flags them as
