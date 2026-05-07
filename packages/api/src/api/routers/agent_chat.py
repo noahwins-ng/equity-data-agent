@@ -147,6 +147,7 @@ class ChatRequest(BaseModel):
 # Canonical mapping — the UI never sees raw function names. Keep aligned with
 # ``agent.prompts.REPORT_TOOLS`` (sweep would surface a missing entry).
 _TOOL_LABELS: dict[str, str] = {
+    "company": "Reviewing company",
     "technical": "Reading technicals",
     "fundamental": "Checking fundamentals",
     "news": "Scanning news",

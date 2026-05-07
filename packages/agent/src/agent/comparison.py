@@ -27,7 +27,12 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-ComparisonSource = Literal["technical", "fundamental", "news"]
+# QNT-175: ``company`` joins the source enum because the comparison prompt now
+# tells the LLM to cite (source: company) for qualitative business-context
+# claims. Pydantic validates this Literal at structured-output parse time —
+# omitting ``company`` here would null-coerce or reject any company-citing
+# value the LLM emits.
+ComparisonSource = Literal["company", "technical", "fundamental", "news"]
 
 
 class ComparisonValue(BaseModel):
@@ -54,7 +59,9 @@ class ComparisonValue(BaseModel):
         ),
     )
     source: ComparisonSource = Field(
-        description=("Which report the cited value came from — technical, fundamental, or news."),
+        description=(
+            "Which report the cited value came from — company, technical, fundamental, or news."
+        ),
     )
 
 
@@ -71,7 +78,7 @@ class ComparisonSection(BaseModel):
         description=(
             "One- or two-sentence prose summary of this ticker's situation "
             "drawn strictly from its supplied reports. Cite the source "
-            "inline using (source: technical|fundamental|news). No "
+            "inline using (source: company|technical|fundamental|news). No "
             "numbers that do not appear in the reports."
         ),
     )

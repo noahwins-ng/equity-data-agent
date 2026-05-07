@@ -49,8 +49,14 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 # Canonical tool registry. The graph (`agent.graph`) imports this rather than
 # duplicating it; the prompt's citation list and section headings hardcode
-# these three names, so adding a tool requires editing this module anyway.
-REPORT_TOOLS: tuple[str, ...] = ("technical", "fundamental", "news")
+# these names, so adding a tool requires editing this module anyway.
+#
+# QNT-175 added ``company`` — a static business-context report (description,
+# competitors, risks, watch metrics). It is treated like the data-driven
+# reports for citation purposes: any qualitative claim the thesis makes about
+# the business cites ``(source: company)`` so the QNT-67 hallucination scorer
+# can tell grounded prose apart from prior knowledge.
+REPORT_TOOLS: tuple[str, ...] = ("company", "technical", "fundamental", "news")
 
 # Output section names (in order). Used both inside ``SYSTEM_PROMPT`` and by
 # tests asserting the prompt asks for the right structure. These mirror the
@@ -79,8 +85,11 @@ If two reports disagree on a number, name the disagreement instead of \
 resolving it.
 2. Cite the source for every numeric or factual claim. Append \
 `(source: <name>)` to each sentence that makes such a claim, where `<name>` \
-is one of: technical, fundamental, news. If a claim spans multiple reports, \
-list each: `(source: technical, fundamental)`.
+is one of: company, technical, fundamental, news. If a claim spans multiple reports, \
+list each: `(source: technical, fundamental)`. The ``company`` report is the \
+canonical source for qualitative business context (segments, competitors, \
+known risks, watch metrics) — cite it whenever the thesis leans on those \
+even though the report has no numbers.
 3. Do not invent numbers. If a report does not contain the figure a section \
 needs, write "<metric> not available in the supplied reports" instead of \
 estimating, rounding, or paraphrasing into a number.
@@ -103,7 +112,7 @@ NVDA". Cite the reports that ground the framing. Keep it to 2-4 sentences.
 
 ## Bull Case
 Supporting points for the bull thesis. Each point is one bullet with an \
-inline citation (source: technical|fundamental|news). The number of points \
+inline citation (source: company|technical|fundamental|news). The number of points \
 must reflect the actual evidence in the supplied reports — do not pad to \
 match a template count. **Allow asymmetry**: leave this section EMPTY \
 (an empty list) if the reports do not support a real bull case. Inventing \
@@ -215,7 +224,8 @@ verbatim in one of the supplied reports. Do not compute percentages, growth \
 rates, ratios, averages, or differences that the reports do not already state.
 2. Cite the source for the value. The 'source' field MUST be one of: \
 technical, fundamental, news. Inline cite the same way in the prose answer: \
-``(source: <name>)``.
+``(source: <name>)``. (The static company-context report is not planned for \
+single-metric questions, so it will never be in the supplied reports here.)
 3. If the relevant value is not in the supplied reports, write \
 "<metric> not available in the supplied reports" in the answer field, \
 leave cited_value empty, and set source to null. Do not estimate, round, \
@@ -275,8 +285,8 @@ reports do not state. The user can read both columns; you do not need to \
 do the subtraction for them.
 2. Cite the source for every numeric or factual claim. Append \
 `(source: <name>)` to each sentence that makes such a claim, where \
-`<name>` is one of: technical, fundamental, news. Each per-ticker section \
-cites only that ticker's reports.
+`<name>` is one of: company, technical, fundamental, news. Each per-ticker \
+section cites only that ticker's reports.
 3. Do not invent numbers. If a metric is missing for one ticker, omit it \
 or say "not available" — do not estimate, average, or paraphrase a value \
 into existence.
@@ -292,7 +302,7 @@ schema, so no free-form preamble.
 named them. Each section has:
   * ticker: the symbol (e.g. "NVDA").
   * summary: 1-2 sentences summarising that ticker's situation. Inline \
-cite (source: technical|fundamental|news).
+cite (source: company|technical|fundamental|news).
   * key_values: 1-4 verbatim cited values relevant to the user's \
 question. Each entry is {label, value, source}.
 * differences: A SHORT qualitative paragraph (2-3 sentences) contrasting \

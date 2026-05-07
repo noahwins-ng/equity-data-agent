@@ -133,19 +133,29 @@ def _build_plan_prompt(
         # Quick-fact path narrows aggressively — the user asked one question,
         # we want the one report that answers it. Over-fetching is the wrong
         # default here because it pulls news/fundamental tools the question
-        # doesn't touch and burns provider quota.
+        # doesn't touch and burns provider quota. ``company`` is explicitly
+        # excluded too — single-metric asks don't benefit from a static
+        # business profile (QNT-175).
         bias = (
             "The user asked a single-metric question; pick ONLY the report(s) "
-            "directly needed to answer it. Omit anything not strictly required. "
-            "If unsure, prefer the smallest plan that can answer the question."
+            "directly needed to answer it. Omit anything not strictly required, "
+            "including the 'company' report — static business context never "
+            "answers a single-number question. If unsure, prefer the smallest "
+            "plan that can answer the question."
         )
     else:
         # Both ``thesis`` and ``comparison`` over-fetch — the comparison path
         # then re-runs the same plan against each ticker, so a narrow plan
-        # would starve the second ticker too.
+        # would starve the second ticker too. ``company`` is always included:
+        # it's the static business-context report (description, competitors,
+        # risks, watch metrics) the QNT-175 thesis upgrade leans on for
+        # qualitative grounding.
         bias = (
             "Include every report that is even marginally relevant; omit only "
-            "reports that are clearly irrelevant to the question."
+            "reports that are clearly irrelevant to the question. Always "
+            "include the 'company' report when it is in the available set — "
+            "it grounds the thesis in the company's actual business and is "
+            "cheap to fetch."
         )
     return (
         f"You are planning which reports to fetch for an investment analysis of {ticker}.\n"
@@ -156,13 +166,27 @@ def _build_plan_prompt(
     )
 
 
-def _parse_plan(raw: str, available: list[str]) -> list[str]:
+def _parse_plan(raw: str, available: list[str], intent: Intent = "thesis") -> list[str]:
     """Return the subset of ``available`` named in ``raw``, preserving the
     order in ``available``. Falls back to the full list if parsing yields
-    nothing — we'd rather over-fetch than strand the synthesize node."""
+    nothing — we'd rather over-fetch than strand the synthesize node.
+
+    QNT-175: enforces the ``company`` rule from the plan prompt as code, not
+    just as a textual bias the LLM can ignore. ``thesis`` and ``comparison``
+    paths always pull ``company`` when it's available (the static profile
+    grounds qualitative claims); ``quick_fact`` always drops it (a one-metric
+    answer never reaches for the description / competitor list).
+    """
     tokens = {t.strip().lower() for t in raw.replace("\n", ",").split(",") if t.strip()}
     chosen = [t for t in available if t in tokens]
-    return chosen or list(available)
+    if not chosen:
+        chosen = list(available)
+    if "company" in available:
+        if intent in ("thesis", "comparison") and "company" not in chosen:
+            chosen = [t for t in available if t == "company" or t in chosen]
+        elif intent == "quick_fact":
+            chosen = [t for t in chosen if t != "company"]
+    return chosen
 
 
 def _confidence_from_reports(reports: dict[str, str], plan: list[str]) -> float:
@@ -418,7 +442,7 @@ def build_graph(
         prompt = _build_plan_prompt(ticker, question, available, intent)
         response = langfuse.traced_invoke(get_llm(temperature=0.0), prompt, name="plan")
         content = response.content if hasattr(response, "content") else str(response)
-        plan = _parse_plan(str(content), available)
+        plan = _parse_plan(str(content), available, intent)
         logger.info(
             "plan %s: %s (intent=%s, comparison_tickers=%s)",
             ticker,

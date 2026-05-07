@@ -202,15 +202,16 @@ def test_search_news_falls_back_to_empty_array_on_qdrant_outage(
 def test_default_report_tools_dispatch_to_correct_endpoints(
     ch_client: Client, patched_tools: TestClient
 ) -> None:
-    """The plan-shape tool map (technical/fundamental/news) routes correctly.
+    """The plan-shape tool map (company/technical/fundamental/news) routes correctly.
 
     The graph's plan node iterates over keys in this map. A typo in any
-    one of the three keys would silently break a plan — exercising the
-    map keys end-to-end pins the contract.
+    one of the keys would silently break a plan — exercising the map keys
+    end-to-end pins the contract. QNT-175 added ``company`` (static profile,
+    no DB query) on top of the original trio.
     """
     _seed_full_ticker(ch_client, "AAPL")
     tools = agent_tools.default_report_tools()
-    assert set(tools.keys()) == {"technical", "fundamental", "news"}
+    assert set(tools.keys()) == {"company", "technical", "fundamental", "news"}
     for name, fn in tools.items():
         body = fn("AAPL")
         assert not body.startswith("[error]"), f"tool {name} returned [error]: {body}"
