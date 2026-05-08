@@ -90,3 +90,61 @@ def fundamentals_revenue_and_net_income_populated(
             + (f": {empty_tickers}" if empty_tickers else "")
         ),
     )
+
+
+@asset_check(asset=fundamentals)
+def fundamentals_no_all_zero_core_rows(
+    clickhouse: ClickHouseResource,
+) -> AssetCheckResult:
+    """Warn on individual rows where revenue, net_income, AND total_assets are all 0.
+
+    Catches stub rows from the QNT-179 race where yfinance lists a period as
+    a column header before populating values; the older
+    ``fundamentals_revenue_and_net_income_populated`` check only flags
+    tickers whose every row is zero, so a single stub mixed in with real
+    rows slipped through (AAPL Q2 FY2026 + 8 historical stubs across
+    GOOGL/JPM/META/TSLA/UNH).
+
+    Non-blocking: a stub usually self-heals on the next scheduled fetch via
+    ReplacingMergeTree, but the WARN gives us visibility while it sits
+    there.
+    """
+    # Total stub count comes from a count() query so the metadata stays accurate
+    # if the corruption ever spreads beyond a handful of rows; the sample query
+    # caps payload size with LIMIT 11 (10 surfaced + 1 to detect "more than 10").
+    count_result = clickhouse.execute(
+        "SELECT count() FROM equity_raw.fundamentals FINAL "
+        "WHERE revenue = 0 AND net_income = 0 AND total_assets = 0"
+    )
+    stub_count = int(count_result.result_rows[0][0])
+
+    sample_df = clickhouse.query_df(
+        "SELECT ticker, period_end, period_type "
+        "FROM equity_raw.fundamentals FINAL "
+        "WHERE revenue = 0 AND net_income = 0 AND total_assets = 0 "
+        "ORDER BY ticker, period_end "
+        "LIMIT 11"
+    )
+    sample = [
+        f"{r['ticker']}/{r['period_end']}/{r['period_type']}"
+        for _, r in sample_df.head(10).iterrows()
+    ]
+    truncated = stub_count > len(sample)
+    return AssetCheckResult(
+        passed=stub_count == 0,
+        severity=AssetCheckSeverity.WARN,
+        metadata={
+            "stub_row_count": stub_count,
+            "sample": sample,
+        },
+        description=(
+            f"{stub_count} rows have all-zero revenue, net_income, and total_assets"
+            + (
+                f" (first 10 of {stub_count}: {sample})"
+                if truncated and sample
+                else f" ({sample})"
+                if sample
+                else ""
+            )
+        ),
+    )
