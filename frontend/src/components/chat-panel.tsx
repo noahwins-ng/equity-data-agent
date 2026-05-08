@@ -119,25 +119,63 @@ function splitProseIntoSegments(text: string): ProseSegment[] {
   return segments;
 }
 
+// ─── Suggestion button (QNT-178) ──────────────────────────────────────────
+//
+// Shared by the cold-start ``EmptyState`` (prefills composer) and the mid-
+// conversation ``ConversationalCard`` (auto-sends). Same visual; different
+// click contracts — the button itself is dumb, click behaviour is parent-
+// driven.
+
+function SuggestionButton({
+  text,
+  onClick,
+}: {
+  text: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="w-full rounded border border-zinc-800 bg-zinc-950/60 px-2 py-1 text-left font-mono text-[11px] text-zinc-300 transition hover:border-zinc-600 hover:text-zinc-100"
+    >
+      {text}
+    </button>
+  );
+}
+
 // ─── Composer — input + send ───────────────────────────────────────────────
 //
 // QNT-176: tools/cite toggles removed. Tools were never optional from the
 // user's perspective (every useful chat answer needs them; ``cite_sources``
 // was a no-op on the backend). Hiding those behind toggles taught the wrong
 // mental model.
+//
+// QNT-178: now a controlled component. The parent owns ``value`` so an
+// ``EmptyState`` suggestion click can prefill the textarea. ``focusKey`` is
+// a counter the parent bumps to request a focus — Composer watches it via
+// useEffect and calls ``textareaRef.current.focus()``. Avoids forwardRef
+// since the parent never needs to call focus() directly; it just bumps the
+// key after setting the value.
 
 function Composer({
   ticker,
   sources,
   disabled,
+  value,
+  onChange,
   onSubmit,
+  focusKey,
 }: {
   ticker: string | null;
   sources: string[];
   disabled: boolean;
+  value: string;
+  onChange: (next: string) => void;
   onSubmit: (input: string) => void;
+  focusKey: number;
 }) {
-  const [input, setInput] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const placeholder = useMemo(() => {
     const focus = ticker ? ticker : "the watchlist";
@@ -147,12 +185,20 @@ function Composer({
     return `Ask the analyst about ${focus}... (cites ${sources.join(", ")})`;
   }, [ticker, sources]);
 
+  // Focus the textarea whenever the parent bumps focusKey. Skip the first
+  // render (focusKey starts at 0) so opening the page doesn't steal focus
+  // from the rest of the layout.
+  useEffect(() => {
+    if (focusKey === 0) return;
+    textareaRef.current?.focus();
+  }, [focusKey]);
+
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    const trimmed = input.trim();
+    const trimmed = value.trim();
     if (!trimmed || disabled) return;
     onSubmit(trimmed);
-    setInput("");
+    onChange("");
   }
 
   return (
@@ -173,8 +219,9 @@ function Composer({
       </div>
       <div className="flex items-end gap-2">
         <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
+          ref={textareaRef}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
           rows={2}
           placeholder={placeholder}
           disabled={disabled}
@@ -188,13 +235,63 @@ function Composer({
         />
         <button
           type="submit"
-          disabled={disabled || !input.trim()}
+          disabled={disabled || !value.trim()}
           className="h-8 rounded bg-emerald-600 px-3 text-[10px] font-semibold uppercase tracking-wider text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
         >
           Send
         </button>
       </div>
     </form>
+  );
+}
+
+// ─── Empty state — cold-start suggestions (QNT-178) ───────────────────────
+//
+// Replaces the placeholder line with 4 suggestion buttons covering the
+// agent's main answer shapes (thesis + the 3 QNT-176 focused intents).
+// Click prefills the composer + focuses; the user can edit before pressing
+// Send. No-ticker landing state is unchanged ("Pick a ticker from the
+// watchlist first") because the composer is disabled until they pick one.
+
+function emptyStateSuggestions(ticker: string): string[] {
+  return [
+    `Give me a balanced thesis on ${ticker}`,
+    `Technical analysis of ${ticker}`,
+    `Walk me through ${ticker}'s fundamentals`,
+    `What's the news sentiment on ${ticker}?`,
+  ];
+}
+
+function EmptyState({
+  ticker,
+  onSuggestion,
+}: {
+  ticker: string | null;
+  onSuggestion: (q: string) => void;
+}) {
+  if (!ticker) {
+    return (
+      <div className="flex h-full items-center justify-center px-6 text-center">
+        <p className="text-xs text-zinc-500">
+          Pick a ticker from the watchlist to start a research session.
+        </p>
+      </div>
+    );
+  }
+  const suggestions = emptyStateSuggestions(ticker);
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 px-6">
+      <p className="text-center text-sm text-zinc-300">
+        What would you like to know about {ticker}?
+      </p>
+      <ul className="w-full max-w-sm space-y-1">
+        {suggestions.map((s) => (
+          <li key={s}>
+            <SuggestionButton text={s} onClick={() => onSuggestion(s)} />
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -520,13 +617,12 @@ function ConversationalCard({
             <ul className="space-y-1">
               {conversational.suggestions.map((s, i) => (
                 <li key={i}>
-                  <button
-                    type="button"
-                    onClick={() => onSuggestion(s)}
-                    className="w-full rounded border border-zinc-800 bg-zinc-950/60 px-2 py-1 text-left font-mono text-[11px] text-zinc-300 transition hover:border-zinc-600 hover:text-zinc-100"
-                  >
-                    {s}
-                  </button>
+                  {/* Mid-conversation redirect: clicking auto-sends because
+                      the user has already committed to asking. EmptyState
+                      uses the same SuggestionButton but its parent prefills
+                      the composer instead — different surface, different
+                      contract. */}
+                  <SuggestionButton text={s} onClick={() => onSuggestion(s)} />
                 </li>
               ))}
             </ul>
@@ -862,6 +958,33 @@ export function ChatPanel() {
   const sources = useHealthSources();
   const [runs, setRuns] = useState<ChatRun[]>([]);
   const abortRef = useRef<AbortController | null>(null);
+  // QNT-178: composer is now controlled from here so EmptyState suggestion
+  // clicks can prefill the textarea. ``focusKey`` is bumped after a prefill
+  // to request focus inside Composer (skipped on initial render so opening
+  // the page doesn't steal focus).
+  // Initialised at 0 so the focus useEffect inside Composer can skip the
+  // first render — prefillComposer increments the counter, never resets it.
+  const [composerInput, setComposerInput] = useState("");
+  const [composerFocusKey, setComposerFocusKey] = useState(0);
+
+  // Clear the composer when the active ticker changes. Prefilled suggestions
+  // ("Technical analysis of TSLA") embed the ticker by name, so leaving the
+  // text behind on /ticker/AAPL would let the user accidentally Send a TSLA
+  // question against the AAPL run path. Pre-existing typed text gets cleared
+  // too — the cost (re-typing 30 chars) is small vs. cross-ticker leak risk.
+  // React-recommended "adjust state during render" pattern (avoids the
+  // setState-in-useEffect anti-pattern); fires synchronously, no extra commit.
+  // https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes
+  const [prevTicker, setPrevTicker] = useState(ticker);
+  if (prevTicker !== ticker) {
+    setPrevTicker(ticker);
+    setComposerInput("");
+  }
+
+  const prefillComposer = useCallback((q: string) => {
+    setComposerInput(q);
+    setComposerFocusKey((k) => k + 1);
+  }, []);
 
   // Auto-scroll to the latest run as events arrive.
   const scrollerRef = useRef<HTMLDivElement | null>(null);
@@ -1030,14 +1153,6 @@ export function ChatPanel() {
           <span className="text-zinc-300">
             Analyst · {ticker ?? "session"}
           </span>
-          <span className="flex gap-1">
-            <span className="rounded border border-zinc-700 bg-zinc-900/60 px-1 py-0.5 text-zinc-400">
-              LangGraph
-            </span>
-            <span className="rounded border border-zinc-700 bg-zinc-900/60 px-1 py-0.5 text-zinc-400">
-              Cited
-            </span>
-          </span>
         </div>
         {/* QNT-161: demo-limits hint. Sets expectations BEFORE the user
             hits a 429 — recruiters see the cap is intentional, not a
@@ -1045,7 +1160,10 @@ export function ChatPanel() {
             numbers come from packages/shared/src/shared/config.py
             (CHAT_RATE_LIMIT) — keep them aligned by hand for now;
             QNT-86 / a future "/api/v1/limits" endpoint can drive this
-            from the server. */}
+            from the server.
+            QNT-178: dropped the LangGraph / Cited header pills — both
+            were decorative; the trust line below is the canonical
+            advertisement of what's behind the demo. */}
         <span className="text-[9px] normal-case tracking-normal text-zinc-500">
           demo: ~30 queries/hour per visitor · powered by Groq free tier
         </span>
@@ -1053,14 +1171,7 @@ export function ChatPanel() {
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto">
         {runs.length === 0 ? (
-          <div className="flex h-full items-center justify-center px-6 text-center">
-            <p className="text-xs text-zinc-500">
-              Ask a question to start a research session.
-              {ticker
-                ? ` Active ticker: ${ticker}.`
-                : " Pick a ticker from the watchlist first."}
-            </p>
-          </div>
+          <EmptyState ticker={ticker} onSuggestion={prefillComposer} />
         ) : (
           runs.map((run) => (
             <RunBlock
@@ -1076,7 +1187,10 @@ export function ChatPanel() {
         ticker={ticker}
         sources={sources}
         disabled={isStreaming}
+        value={composerInput}
+        onChange={setComposerInput}
         onSubmit={startRun}
+        focusKey={composerFocusKey}
       />
     </aside>
   );
