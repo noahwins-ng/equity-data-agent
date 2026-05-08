@@ -4,16 +4,16 @@
  * Fundamentals card — Quarterly / Annual / TTM tabs over
  * `equity_derived.fundamental_summary`.
  *
- * ROE / ROA framing:
- *   - On Quarterly the API does not store a point-in-time ROE/ROA (those need
- *     a trailing-4Q income figure to be meaningful), so we render the literal
- *     `N/A point-in-time` per design v2.
- *   - On TTM we render the value with the trailing-4Q caveat.
- *   - On Annual we render the as-reported value (the QNT-134 contract).
+ * ROE / ROA framing (post-QNT-179 round 2):
+ *   - All three period_types render the row's own value via `roeRoaCell`.
+ *   - Annual = as-reported full-year NI / equity.
+ *   - Quarterly = single-quarter NI / equity ("ROE for the quarter").
+ *   - TTM = trailing-4Q NI / equity-at-period-end (computed in
+ *     `_build_ttm_rows`); rendered with a trailing-4Q caveat.
  *
- * Empty-data fallback (AC #9): when the requested period has no rows we
- * surface a small "no <period> data" line; the caller can hand-pick TTM as a
- * fallback because the rendering logic doesn't reach into the page state.
+ * Empty-data fallback: when the requested period has no rows we surface a
+ * small "no <period> data" line; the caller can hand-pick TTM as a fallback
+ * because the rendering logic doesn't reach into the page state.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -51,15 +51,17 @@ function pickAbsolute(row: FundamentalRow, kind: "revenue" | "net_income" | "fcf
 }
 
 /**
- * EBITDA margin: stored on TTM rows directly; for quarterly + annual the
- * fundamental_summary asset deliberately leaves it null (avoiding a
- * single-quarter EBITDA / single-quarter revenue ratio that would be
- * meaningless), so derive it from the raw EBITDA / revenue here.
+ * EBITDA margin is only semantically defined on TTM rows: yfinance hands us
+ * a single point-in-time TTM EBITDA stamped on every quarterly + annual row,
+ * so dividing it by single-quarter revenue produces a meaningless ~4× ratio
+ * (AAPL Q4-25 ebitda 159.98B / revenue 143.76B = 111%). The fundamental_summary
+ * asset deliberately leaves quarterly + annual ebitda_margin_pct null and
+ * computes the TTM-vs-TTM ratio directly. Render `--` for non-TTM rows; the
+ * card's TTM tab carries the real number.
  */
 function pickEbitdaMargin(row: FundamentalRow): number | null {
   if (row.period_type === "ttm") return row.ebitda_margin_pct;
-  if (row.ebitda === null || row.revenue === null || row.revenue === 0) return null;
-  return (row.ebitda / row.revenue) * 100;
+  return null;
 }
 
 export function FundamentalsCard({
@@ -217,8 +219,8 @@ export function FundamentalsCard({
             />
             <Row label="Debt / equity" value={formatRatio(display.debt_to_equity, 2)} />
             <Row label="Current ratio" value={formatRatio(display.current_ratio, 2)} />
-            <Row label="ROE" value={roeRoaCell(display, "roe", rows)} />
-            <Row label="ROA" value={roeRoaCell(display, "roa", rows)} />
+            <Row label="ROE" value={roeRoaCell(display, "roe")} />
+            <Row label="ROA" value={roeRoaCell(display, "roa")} />
           </dl>
         </>
       )}
@@ -248,26 +250,17 @@ function peCell(
   return { label, value: formatRatio(price / denom, 2) };
 }
 
-function roeRoaCell(
-  row: FundamentalRow,
-  field: "roe" | "roa",
-  allRows: FundamentalRow[],
-): string {
-  // Annual: as-reported, no caveat needed.
-  if (row.period_type === "annual") {
-    return row[field] === null ? "—" : formatPct(row[field]);
-  }
-  // TTM: API now computes from BS values when the asset left them null,
-  // so the row's own value is what we want.
-  if (row.period_type === "ttm") {
-    return row[field] === null ? "—" : `${formatPct(row[field])} trailing 4Q`;
-  }
-  // Quarterly: a single quarter's NI ÷ equity is meaningless. Fall back to
-  // the latest TTM row's value with a `(TTM)` suffix — that's what
-  // most financial dashboards surface for "Q3 ROE" anyway.
-  const ttm = pickLatest(allRows, "ttm");
-  if (!ttm || ttm[field] === null) return "—";
-  return `${formatPct(ttm[field])} (TTM)`;
+function roeRoaCell(row: FundamentalRow, field: "roe" | "roa"): string {
+  // All period_types now read off the row's own value:
+  //   - annual: full-year NI / equity, as reported
+  //   - quarterly: single-quarter NI / equity ("ROE for the quarter")
+  //   - ttm: NI_TTM / equity-at-period-end (QNT-179 round 2 backend addition)
+  // The earlier "fall back to TTM for quarterly" path was rendering "--"
+  // because the TTM payload didn't carry roe/roa at all; now that it does,
+  // the row's own value is always meaningful.
+  if (row[field] === null) return "—";
+  if (row.period_type === "ttm") return `${formatPct(row[field])} trailing 4Q`;
+  return formatPct(row[field]);
 }
 
 function Row({
