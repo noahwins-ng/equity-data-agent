@@ -68,7 +68,7 @@ ssh hetzner "docker cp /tmp/load_test_baseline.py \
 - **p50 sits at 390–600 ms** across endpoints — within the ballpark for a single-row ClickHouse FINAL query plus serialization on a CX41.
 - **`/quote` is the slowest** at p50 (~600 ms): it stitches OHLCV + 30-bar avg volume + TTM P/E + raw market cap in one round-trip (intentional per `data.py:542` — saves the frontend three sequential calls on every navigation).
 - **p95/p99 spread is wide** (700–1200 ms), driven by ClickHouse merge contention under 20-way concurrent FINAL reads. This is consistent with the `system.text_log` / `metric_log` merge creep noted in the ops runbook — the equity tables aren't the hot path here, but they share the merge scheduler.
-- **End-to-end frontend latency will exceed these numbers** by the trycloudflare → Hetzner network hop (typically +50–150 ms RTT depending on PoP). The p95 ceiling here is the API floor; user-perceived latency is API + tunnel + Caddy + Vercel cache miss.
+- **End-to-end frontend latency will exceed these numbers** by the Cloudflare → Hetzner tunnel hop (typically +50–150 ms RTT depending on PoP). The p95 ceiling here is the API floor; user-perceived latency is API + tunnel + Vercel cache miss.
 
 There is no hard SLO yet. The original QNT-65 target was "p95 < 500 ms across endpoints" — only `ohlcv` and `indicators` hit that bar at p95, and none hit it at p99. That is acceptable for the current demo (Vercel ISR + Dagster deploy hook means most page loads serve a build-time-pinned response, not a fresh API call), but worth noting if a future feature ever depends on per-request p95 < 500 ms.
 

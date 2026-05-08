@@ -21,7 +21,7 @@ Simplest path **with native Discord integration on free tier** — free for 50 m
 2. **Dashboard → + Add New Monitor**
    - Monitor Type: **HTTP(s)**
    - Friendly Name: `equity-data-agent prod API`
-   - URL: `https://<your-trycloudflare-url>/api/v1/health` (post-QNT-75 / ADR-018 — read the current trycloudflare URL with `ssh hetzner "docker logs equity-data-agent-cloudflared-1 2>&1 | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | head -1"`). Refresh this URL whenever cloudflared restarts — see `docs/guides/vercel-deploy.md` "When the trycloudflare URL rotates" for the runbook. Pre-QNT-75 this was `http://<hetzner-ip>:8000/api/v1/health`; that endpoint is now closed (api is bound to loopback only).
+   - URL: `https://api.<your-domain>/api/v1/health` (ADR-018 named-tunnel mode, QNT-177). The hostname is stable across reboots — set once and forget. Pre-QNT-75 this was `http://<hetzner-ip>:8000/api/v1/health`; that endpoint is now closed (api is bound to loopback only).
    - Monitoring Interval: **5 min** (tightest on free tier).
    - Monitor Timeout: **30 s**.
    - **HTTP status codes**: alert on anything outside `200`. Don't use keyword matching — `/health` returns HTTP 200 with `status:"degraded"` when Qdrant is down, and we don't want to page on that.

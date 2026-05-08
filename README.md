@@ -180,7 +180,7 @@ See [`docs/architecture/system-overview.md`](docs/architecture/system-overview.m
 | LLM routing | **LiteLLM** + **Groq** (default) + **Gemini 2.5 Flash** (override) | One model alias `equity-agent/default`; switch backends via env var ([ADR-011](docs/decisions/011-llm-routing-groq-default-gemini-override.md)) |
 | Observability | **Langfuse** (agent traces) + **Sentry** (FastAPI errors, hooks live) | |
 | Frontend | **Next.js 16** on **Vercel** | [ADR-005](docs/decisions/005-nextjs-vercel-over-python-native-frontend.md), [ADR-008](docs/decisions/008-no-vercel-ai-sdk.md) (no Vercel AI SDK — native fetch + ReadableStream for SSE), [ADR-014](docs/decisions/014-nextjs-rendering-mode-per-page.md) (rendering mode per page) |
-| Ingress | **Cloudflare quick tunnel** | Free HTTPS at `*.trycloudflare.com`, FastAPI port :8000 closed to public internet, no domain purchase ([ADR-018](docs/decisions/018-cloudflare-quick-tunnel-for-https-ingress.md)) |
+| Ingress | **Cloudflare named tunnel** | HTTPS at `api.<your-domain>`, FastAPI port :8000 closed to public internet, stable across reboots ([ADR-018](docs/decisions/018-cloudflare-quick-tunnel-for-https-ingress.md)) |
 | Packaging | **uv workspaces** | 4 packages under `packages/` ([ADR-002](docs/decisions/002-monorepo-uv-workspaces.md)) |
 
 ---
@@ -200,12 +200,12 @@ Ingress topology ([ADR-018](docs/decisions/018-cloudflare-quick-tunnel-for-https
 
 ```
 Browser → https://equity-data-agent-ynr2.vercel.app   (Vercel CDN, frontend)
-        → https://*.trycloudflare.com                 (Cloudflare edge, free WAF + DDoS)
+        → https://api.<your-domain>                   (Cloudflare edge, free WAF + DDoS)
         → cloudflared (outbound from Hetzner — no public ingress port)
         → api:8000                                    (FastAPI, loopback-bound)
 ```
 
-End-to-end HTTPS for $0 (no domain purchase, no Let's Encrypt). The `*.trycloudflare.com` hostname rotates on cloudflared restart; recovery runbook in [`docs/guides/vercel-deploy.md`](docs/guides/vercel-deploy.md) is ~5 min.
+End-to-end HTTPS via a Cloudflare named tunnel. The hostname is stable across reboots and image bumps — `NEXT_PUBLIC_API_URL` is set once in Vercel and never rotates. Setup runbook in [`docs/guides/vercel-deploy.md`](docs/guides/vercel-deploy.md).
 
 **Why not a PaaS** ([ADR-013](docs/decisions/013-stay-on-bespoke-compose-not-coolify.md)) — every PaaS default is now a documented decision in this repo: HEALTHCHECK + log rotation + `mem_limit`, `restart: unless-stopped`, `autoheal` for sick-but-still-up containers. Each one paid for in incident-debrief, not assumed.
 
