@@ -315,9 +315,13 @@ services:
     # a connector reconnect.
     image: cloudflare/cloudflared:2026.3.0
     restart: unless-stopped
-    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    # Token is passed via TUNNEL_TOKEN env var (not the --token flag) so the
+    # ciphertext doesn't end up in `docker inspect .Config.Cmd` or
+    # /proc/<pid>/cmdline. Cloudflared reads $TUNNEL_TOKEN automatically when
+    # `--token` is absent.
+    command: tunnel --no-autoupdate run
     environment:
-      - CLOUDFLARE_TUNNEL_TOKEN
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
     depends_on:
       api:
         condition: service_healthy

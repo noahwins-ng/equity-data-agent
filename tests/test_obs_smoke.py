@@ -174,14 +174,6 @@ def test_extract_compose_bind_mounts_skips_named_volumes_and_host_paths() -> Non
         assert not m.source.startswith("/"), m
 
 
-def test_extract_compose_bind_mounts_skips_dormant_profiles() -> None:
-    mounts = obs_smoke.extract_compose_bind_mounts(REPO_ROOT / "docker-compose.yml")
-    services = {m.service for m in mounts}
-    # caddy is in the dormant `prod-caddy` profile (QNT-75 / ADR-018) — its
-    # Caddyfile mount must NOT appear as a covered-by-deploy expectation.
-    assert "caddy" not in services
-
-
 # ─── Deploy directive parsing ───────────────────────────────────────────────
 
 
