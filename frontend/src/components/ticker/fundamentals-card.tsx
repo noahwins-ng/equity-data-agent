@@ -55,13 +55,24 @@ function pickAbsolute(row: FundamentalRow, kind: "revenue" | "net_income" | "fcf
  * a single point-in-time TTM EBITDA stamped on every quarterly + annual row,
  * so dividing it by single-quarter revenue produces a meaningless ~4× ratio
  * (AAPL Q4-25 ebitda 159.98B / revenue 143.76B = 111%). The fundamental_summary
- * asset deliberately leaves quarterly + annual ebitda_margin_pct null and
- * computes the TTM-vs-TTM ratio directly. Render `--` for non-TTM rows; the
- * card's TTM tab carries the real number.
+ * asset deliberately leaves quarterly + annual ebitda_margin_pct null.
+ *
+ * On the QUARTERLY + ANNUAL tabs we surface the latest TTM row's value as a
+ * fallback so the cell is always informative — the displayed number is the
+ * standard way financial dashboards quote "EBITDA margin" (a TTM ratio), and
+ * the caller appends a `(TTM)` suffix in render so users know it's not
+ * period-aligned. Same pattern as the old roeRoaCell quarterly fallback,
+ * but reachable now that `_build_ttm_rows` populates the TTM row.
  */
-function pickEbitdaMargin(row: FundamentalRow): number | null {
-  if (row.period_type === "ttm") return row.ebitda_margin_pct;
-  return null;
+function pickEbitdaMargin(
+  row: FundamentalRow,
+  allRows: FundamentalRow[],
+): { value: number | null; suffix: string } {
+  if (row.period_type === "ttm") {
+    return { value: row.ebitda_margin_pct, suffix: "" };
+  }
+  const ttm = pickLatest(allRows, "ttm");
+  return { value: ttm?.ebitda_margin_pct ?? null, suffix: ttm?.ebitda_margin_pct != null ? " (TTM)" : "" };
 }
 
 export function FundamentalsCard({
@@ -200,7 +211,10 @@ export function FundamentalsCard({
             />
             <Row
               label="EBITDA margin"
-              value={formatPct(pickEbitdaMargin(display))}
+              value={(() => {
+                const { value, suffix } = pickEbitdaMargin(display, rows);
+                return value === null ? "—" : `${formatPct(value)}${suffix}`;
+              })()}
             />
             <Row
               label="Net income"
