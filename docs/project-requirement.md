@@ -797,14 +797,14 @@ One-time setup for a fresh Hetzner CX41. After this, the CI/CD pipeline in Secti
    - `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` (from Langfuse dashboard)
    - `NEXT_PUBLIC_API_URL=https://<your-trycloudflare-url>` (read from `docker logs equity-data-agent-cloudflared-1` after first `compose up`; rotates on cloudflared restart — runbook in `docs/guides/vercel-deploy.md`)
    - **Never commit `.env` to git** — it's in `.gitignore`
-5. **HTTPS ingress (ADR-018)**: No DNS or Let's Encrypt configuration is required. The `cloudflared` service is part of the `prod` profile — it connects outbound to Cloudflare on first `compose up` and Cloudflare assigns a free `*.trycloudflare.com` hostname. Read the URL from `docker logs equity-data-agent-cloudflared-1`, paste it into the Vercel project's `NEXT_PUBLIC_API_URL` env, redeploy. (For a stable URL on a paid domain, see the dormant `prod-caddy` profile + ADR-018's upgrade path.)
+5. **HTTPS ingress (ADR-018, named-tunnel migration QNT-177)**: No Let's Encrypt configuration is required. The `cloudflared` service runs a Cloudflare named tunnel anchored to `api.<your-domain>` (configured dashboard-side in Cloudflare Zero Trust). The connector token in `CLOUDFLARE_TUNNEL_TOKEN` authenticates the connector; the public hostname mapping is dashboard-side. Set Vercel's `NEXT_PUBLIC_API_URL` to `https://api.<your-domain>` once and the value is permanent across reboots. Full setup runbook in `docs/guides/vercel-deploy.md`.
 6. **Start services**: `docker compose --profile prod up -d --build`
 7. **Wait for ClickHouse**: `docker compose exec clickhouse clickhouse-client --query "SELECT 1"` — retry until it responds
 8. **Run migrations**: `make migrate` — creates databases and tables (migrations are idempotent — safe to re-run)
 9. **Backfill data**: Open Dagster UI via SSH tunnel (`ssh -L 3000:localhost:3000 hetzner`), manually materialize all partitions of `ohlcv_raw` with `period="2y"` asset config. Then trigger `fundamentals`, `ohlcv_weekly`, `ohlcv_monthly`, `technical_indicators_*`, and `fundamental_summary` in dependency order.
 10. **Verify**:
-    - `curl https://<your-trycloudflare-url>/api/v1/health` returns `{"status": "ok"}`
-    - `curl https://<your-trycloudflare-url>/api/v1/dashboard/summary` returns 10 tickers
+    - `curl https://api.<your-domain>/api/v1/health` returns `{"status": "ok"}`
+    - `curl https://api.<your-domain>/api/v1/dashboard/summary` returns 10 tickers
     - Dagster UI shows all schedules registered and next run times
     - Vercel frontend loads and displays dashboard
 
