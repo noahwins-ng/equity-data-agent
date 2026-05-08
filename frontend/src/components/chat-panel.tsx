@@ -32,6 +32,8 @@ import {
   type ComparisonPayload,
   type ConversationalPayload,
   type DoneEvent,
+  type FocusedAnalysisPayload,
+  type FocusKind,
   type HealthResponse,
   type Intent,
   type IntentEvent,
@@ -69,6 +71,7 @@ type ChatRun = {
   quickFact: QuickFactPayload | null;
   comparison: ComparisonPayload | null;
   conversational: ConversationalPayload | null;
+  focused: FocusedAnalysisPayload | null;
   errors: ChatErrorEvent[];
   stats: DoneEvent | null;
 };
@@ -116,7 +119,12 @@ function splitProseIntoSegments(text: string): ProseSegment[] {
   return segments;
 }
 
-// ─── Composer — input + tools/cite toggles + send ─────────────────────────
+// ─── Composer — input + send ───────────────────────────────────────────────
+//
+// QNT-176: tools/cite toggles removed. Tools were never optional from the
+// user's perspective (every useful chat answer needs them; ``cite_sources``
+// was a no-op on the backend). Hiding those behind toggles taught the wrong
+// mental model.
 
 function Composer({
   ticker,
@@ -127,11 +135,9 @@ function Composer({
   ticker: string | null;
   sources: string[];
   disabled: boolean;
-  onSubmit: (input: string, toolsEnabled: boolean, citeSources: boolean) => void;
+  onSubmit: (input: string) => void;
 }) {
   const [input, setInput] = useState("");
-  const [toolsEnabled, setToolsEnabled] = useState(true);
-  const [citeSources, setCiteSources] = useState(true);
 
   const placeholder = useMemo(() => {
     const focus = ticker ? ticker : "the watchlist";
@@ -145,7 +151,7 @@ function Composer({
     event.preventDefault();
     const trimmed = input.trim();
     if (!trimmed || disabled) return;
-    onSubmit(trimmed, toolsEnabled, citeSources);
+    onSubmit(trimmed);
     setInput("");
   }
 
@@ -164,30 +170,6 @@ function Composer({
             no ticker
           </span>
         )}
-        <button
-          type="button"
-          onClick={() => setToolsEnabled((v) => !v)}
-          aria-pressed={toolsEnabled}
-          className={`rounded border px-1.5 py-0.5 font-mono transition ${
-            toolsEnabled
-              ? "border-zinc-600 bg-zinc-800 text-zinc-100"
-              : "border-zinc-800 bg-zinc-900/60 text-zinc-500"
-          }`}
-        >
-          tools {toolsEnabled ? "on" : "off"}
-        </button>
-        <button
-          type="button"
-          onClick={() => setCiteSources((v) => !v)}
-          aria-pressed={citeSources}
-          className={`rounded border px-1.5 py-0.5 font-mono transition ${
-            citeSources
-              ? "border-zinc-600 bg-zinc-800 text-zinc-100"
-              : "border-zinc-800 bg-zinc-900/60 text-zinc-500"
-          }`}
-        >
-          cite {citeSources ? "on" : "off"}
-        </button>
       </div>
       <div className="flex items-end gap-2">
         <textarea
@@ -555,6 +537,115 @@ function ConversationalCard({
   );
 }
 
+// ─── Focused-analysis card (QNT-176) ──────────────────────────────────────
+//
+// One card shape covers all three focused intents (fundamental / technical /
+// news_sentiment). The ``focus`` discriminator drives the header label and
+// the accent palette so a glance tells the user which read they got. The
+// body fields are rendered the same way the comparison card renders its
+// per-ticker section: prose summary with chips, a bullet list of key
+// points, and a chip table of cited values.
+
+const FOCUS_PILL: Record<FocusKind, { label: string; className: string }> = {
+  fundamental: {
+    label: "Fundamentals",
+    className: "border-sky-700/40 bg-sky-900/20 text-sky-300",
+  },
+  technical: {
+    label: "Technicals",
+    className: "border-emerald-700/40 bg-emerald-900/20 text-emerald-300",
+  },
+  news_sentiment: {
+    label: "News sentiment",
+    className: "border-amber-700/40 bg-amber-900/20 text-amber-300",
+  },
+};
+
+function focusPill(focus: FocusKind): { label: string; className: string } {
+  return (
+    FOCUS_PILL[focus] ?? {
+      label: focus,
+      className: "border-zinc-700 bg-zinc-900/40 text-zinc-300",
+    }
+  );
+}
+
+function FocusedAnalysisCard({
+  ticker,
+  focused,
+  stats,
+}: {
+  ticker: string | null;
+  focused: FocusedAnalysisPayload;
+  stats: DoneEvent | null;
+}) {
+  const pill = focusPill(focused.focus);
+  return (
+    <section className="rounded border border-zinc-800 bg-zinc-900/40">
+      <header className="flex items-baseline justify-between gap-2 border-b border-zinc-800 px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider text-zinc-400">
+        <span className="flex items-baseline gap-2">
+          <span>Analysis · {ticker ?? "session"}</span>
+          <span
+            className={`rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider ${pill.className}`}
+          >
+            {pill.label}
+          </span>
+        </span>
+        {stats && (
+          <span className="text-zinc-500">
+            {stats.tools_count} sources · {stats.citations_count} cited
+          </span>
+        )}
+      </header>
+
+      <div className="space-y-3 p-3">
+        <ProseBlock text={focused.summary} />
+
+        {focused.key_points.length > 0 && (
+          <div>
+            <h4 className="mb-1 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+              Key points
+            </h4>
+            <ol className="space-y-1 pl-4 text-xs text-zinc-200">
+              {focused.key_points.map((point, i) => (
+                <li key={i} className="list-decimal">
+                  <ProseBlock text={point} />
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
+
+        {focused.cited_values.length > 0 && (
+          <div className="rounded border border-zinc-800 bg-zinc-950/60 p-2">
+            <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+              Cited values
+            </div>
+            <ul className="space-y-1">
+              {focused.cited_values.map((kv, i) => (
+                <li
+                  key={i}
+                  className="flex items-baseline justify-between gap-2 font-mono text-[10px]"
+                >
+                  <span className="uppercase tracking-wider text-zinc-500">{kv.label}</span>
+                  <span className="flex items-baseline gap-1">
+                    <span className="rounded border border-zinc-700 bg-zinc-950 px-1 py-px font-mono text-[10px] tabular-nums text-zinc-100">
+                      {kv.value}
+                    </span>
+                    <span className="rounded border border-zinc-700 bg-zinc-900 px-1 py-px text-[9px] uppercase tracking-wide text-zinc-400">
+                      {kv.source}
+                    </span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 // ─── Run renderer (one user prompt → one streamed answer) ────────────────
 
 function RunBlock({
@@ -574,7 +665,8 @@ function RunBlock({
     run.thesis !== null ||
     run.quickFact !== null ||
     run.comparison !== null ||
-    run.conversational !== null;
+    run.conversational !== null ||
+    run.focused !== null;
   const showStandaloneProse = !hasCard && proseText;
 
   // Streaming label — match the user's chosen layout so the spinner names
@@ -584,6 +676,9 @@ function RunBlock({
     quick_fact: "quick fact…",
     comparison: "comparison…",
     conversational: "reply…",
+    fundamental: "fundamental analysis…",
+    technical: "technical analysis…",
+    news_sentiment: "news sentiment…",
   };
 
   return (
@@ -628,6 +723,16 @@ function RunBlock({
       {/* QNT-149: quick-fact card — renders when intent=quick_fact */}
       {run.quickFact && (
         <QuickFactCard ticker={run.ticker} quickFact={run.quickFact} stats={run.stats} />
+      )}
+
+      {/* QNT-176: focused-analysis card — renders when intent ∈
+        {fundamental, technical, news_sentiment} */}
+      {run.focused && (
+        <FocusedAnalysisCard
+          ticker={run.ticker}
+          focused={run.focused}
+          stats={run.stats}
+        />
       )}
 
       {/* Structured thesis (only when intent=thesis) */}
@@ -702,7 +807,7 @@ const RATE_LIMIT_REDIRECT =
   "a moment, or fork the repo to run the agent against your own keys.";
 
 async function consumeChatStream(
-  body: { ticker: string; message: string; tools_enabled: boolean; cite_sources: boolean },
+  body: { ticker: string; message: string },
   onEvent: (event: string, data: unknown) => void,
   signal: AbortSignal,
 ): Promise<void> {
@@ -772,7 +877,7 @@ export function ChatPanel() {
   }, []);
 
   const startRun = useCallback(
-    (prompt: string, toolsEnabled: boolean, citeSources: boolean) => {
+    (prompt: string) => {
       // The endpoint requires a valid ticker. If the user is on the landing
       // route we surface a friendly error instead of crashing the panel.
       if (!ticker) {
@@ -790,6 +895,7 @@ export function ChatPanel() {
           quickFact: null,
           comparison: null,
           conversational: null,
+          focused: null,
           errors: [
             {
               detail: "Pick a ticker from the watchlist before asking the analyst.",
@@ -816,6 +922,7 @@ export function ChatPanel() {
         quickFact: null,
         comparison: null,
         conversational: null,
+        focused: null,
         errors: [],
         stats: null,
       };
@@ -832,8 +939,6 @@ export function ChatPanel() {
         {
           ticker,
           message: prompt,
-          tools_enabled: toolsEnabled,
-          cite_sources: citeSources,
         },
         (event, data) => {
           if (event === "tool_call") {
@@ -871,6 +976,9 @@ export function ChatPanel() {
           } else if (event === "conversational") {
             const ev = data as ConversationalPayload;
             updateRun(id, (r) => ({ ...r, conversational: ev }));
+          } else if (event === "focused") {
+            const ev = data as FocusedAnalysisPayload;
+            updateRun(id, (r) => ({ ...r, focused: ev }));
           } else if (event === "done") {
             const ev = data as DoneEvent;
             updateRun(id, (r) => ({
@@ -881,7 +989,8 @@ export function ChatPanel() {
                 !r.thesis &&
                 !r.quickFact &&
                 !r.comparison &&
-                !r.conversational
+                !r.conversational &&
+                !r.focused
                   ? "errored"
                   : "done",
             }));
@@ -957,7 +1066,7 @@ export function ChatPanel() {
             <RunBlock
               key={run.id}
               run={run}
-              onSuggestion={(q) => startRun(q, true, true)}
+              onSuggestion={(q) => startRun(q)}
             />
           ))
         )}

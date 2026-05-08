@@ -45,6 +45,7 @@ from agent.evals.judge import score as judge_score_fn
 from agent.evals.similarity import cosine
 from agent.evals.tool_calls import check as check_tool_calls
 from agent.evals.tool_calls import wrap_with_recorder
+from agent.focused import FocusedAnalysis
 from agent.graph import build_graph
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
@@ -166,17 +167,18 @@ def _git_sha() -> str:
 def _prompt_version() -> str:
     """Stable hash of the system prompts + report-tool registry.
 
-    Hashing all five (thesis + quick-fact + comparison + conversational +
-    tools) keeps a tool-name rename or a prompt edit on any path visible in
-    history.csv as a different ``prompt_version`` — so a regression
-    showing "judge 8 → 5 the day prompt_version changed" reads obviously
-    in the diff.
+    Hashing every system prompt (thesis + quick-fact + comparison +
+    conversational + focused, QNT-176) plus the tool-name registry keeps a
+    tool-name rename or a prompt edit on any path visible in history.csv
+    as a different ``prompt_version`` — so a regression showing "judge
+    8 → 5 the day prompt_version changed" reads obviously in the diff.
     """
     from hashlib import sha256
 
     from agent.prompts import (
         COMPARISON_SYSTEM_PROMPT,
         CONVERSATIONAL_SYSTEM_PROMPT,
+        FOCUSED_SYSTEM_PROMPT,
         QUICK_FACT_SYSTEM_PROMPT,
         REPORT_TOOLS,
         SYSTEM_PROMPT,
@@ -190,6 +192,8 @@ def _prompt_version() -> str:
         + COMPARISON_SYSTEM_PROMPT
         + "\n"
         + CONVERSATIONAL_SYSTEM_PROMPT
+        + "\n"
+        + FOCUSED_SYSTEM_PROMPT
         + "\n"
         + ",".join(sorted(REPORT_TOOLS))
     )
@@ -236,12 +240,15 @@ def run_record(record: GoldenRecord, *, llm_for_judge: Any | None = None) -> Eva
     quick_fact_obj = state.get("quick_fact")
     comparison_obj = state.get("comparison")
     conversational_obj = state.get("conversational")
+    focused_obj = state.get("focused")
     if isinstance(comparison_obj, ComparisonAnswer):
         thesis = comparison_obj.to_markdown()
     elif isinstance(thesis_obj, Thesis):
         thesis = thesis_obj.to_markdown()
     elif isinstance(quick_fact_obj, QuickFactAnswer):
         thesis = quick_fact_obj.to_markdown()
+    elif isinstance(focused_obj, FocusedAnalysis):
+        thesis = focused_obj.to_markdown()
     elif isinstance(conversational_obj, ConversationalAnswer):
         thesis = conversational_obj.to_markdown()
     else:

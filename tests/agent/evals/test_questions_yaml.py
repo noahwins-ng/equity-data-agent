@@ -53,8 +53,33 @@ def test_question_ids_are_unique() -> None:
 
 
 def test_record_count_within_target_band() -> None:
-    # AC: "15-20 curated records". Lower bound is the substantive guarantee
-    # (anything fewer is too thin); upper bound is a soft cap so the suite
-    # stays fast enough to run on every prompt edit.
+    # AC: originally "15-20 curated records" (QNT-67). Bumped to 15-25 in
+    # QNT-176 to make room for one record per supported intent shape — the
+    # focused trio (fundamental / technical / news_sentiment) added 3 rows.
+    # Lower bound is the substantive guarantee (anything fewer is too thin);
+    # upper bound is a soft cap so the suite stays fast enough to run on
+    # every prompt edit.
     records = load_goldens()
-    assert 15 <= len(records) <= 20, f"record count {len(records)} outside 15-20 band"
+    assert 15 <= len(records) <= 25, f"record count {len(records)} outside 15-25 band"
+
+
+def test_every_intent_has_at_least_one_golden() -> None:
+    """QNT-176: regression guard so a future intent addition lands with a
+    golden record alongside it, not as an afterthought. The 'auto' default
+    is allowed for records that don't pin an explicit intent (the original
+    QNT-67 thesis records use it); but every NAMED intent in
+    ``agent.intent.Intent`` must appear in at least one record's
+    ``expected_intent`` field."""
+    from typing import get_args
+
+    from agent.intent import Intent
+
+    pinned = {r.expected_intent for r in load_goldens() if r.expected_intent != "auto"}
+    named = set(get_args(Intent))
+    # ``thesis`` is implied by every ``auto`` record (the heuristic default),
+    # so it doesn't need to be pinned. Every other intent does.
+    required = named - {"thesis"}
+    missing = required - pinned
+    assert not missing, (
+        f"goldens missing pinned records for intents: {sorted(missing)} (found: {sorted(pinned)})"
+    )

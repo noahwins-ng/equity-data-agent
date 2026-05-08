@@ -42,6 +42,12 @@ Event contract
                     to a deterministic domain redirect. The panel renders a
                     short prose answer + suggestion list.
 
+``focused``       — full :class:`~agent.focused.FocusedAnalysis` dumped to
+                    JSON (QNT-176). Emitted only when intent ∈
+                    {"fundamental", "technical", "news_sentiment"}; the
+                    panel renders a focused-analysis card and skips the
+                    thesis card.
+
 ``intent``        — ``{intent}`` one-shot event emitted right after the
                     classify node decides which shape will be produced
                     (QNT-149). Lets the panel preempt its layout while
@@ -86,6 +92,7 @@ from typing import Any
 
 from agent.comparison import ComparisonAnswer
 from agent.conversational import ConversationalAnswer, domain_redirect
+from agent.focused import FocusedAnalysis
 from agent.graph import OPTIONAL_TOOLS, build_graph
 from agent.llm import (
     TokenUsageTracker,
@@ -129,8 +136,6 @@ class ChatRequest(BaseModel):
 
     ticker: str = Field(min_length=1, max_length=8)
     message: str = Field(default="", max_length=_MESSAGE_MAX_LEN)
-    tools_enabled: bool = True
-    cite_sources: bool = True
 
     @field_validator("message")
     @classmethod
@@ -234,6 +239,22 @@ def _count_comparison_citations(comparison: ComparisonAnswer | None) -> int:
         return 0
     structured = sum(len(s.key_values) for s in comparison.sections)
     inline_texts = [s.summary for s in comparison.sections] + [comparison.differences]
+    inline = sum(len(_CITATION_PATTERN.findall(text or "")) for text in inline_texts)
+    return structured + inline
+
+
+def _count_focused_citations(focused: FocusedAnalysis | None) -> int:
+    """Citations for the focused-analysis path (QNT-176).
+
+    Each ``FocusedValue`` carries a structured source; each inline
+    ``(source: …)`` parens in the summary or key_points adds one. Mirrors
+    :func:`_count_comparison_citations` so the panel's "N cited" badge
+    counts the same surface across all card shapes.
+    """
+    if focused is None:
+        return 0
+    structured = len(focused.cited_values)
+    inline_texts = [focused.summary, *focused.key_points]
     inline = sum(len(_CITATION_PATTERN.findall(text or "")) for text in inline_texts)
     return structured + inline
 
@@ -475,7 +496,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
         def _emit(event: str, data: dict[str, object]) -> None:
             loop.call_soon_threadsafe(queue.put_nowait, (event, dict(data)))
 
-        base_tools = default_report_tools() if request.tools_enabled else {}
+        base_tools = default_report_tools()
         instrumented = _instrument_tools(base_tools, queue, loop, ticker)
         graph = build_graph(instrumented, event_emitter=_emit)
 
@@ -579,6 +600,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
         quick_fact = state.get("quick_fact") if isinstance(state, dict) else None
         comparison = state.get("comparison") if isinstance(state, dict) else None
         conversational = state.get("conversational") if isinstance(state, dict) else None
+        focused = state.get("focused") if isinstance(state, dict) else None
         intent = state.get("intent", "thesis") if isinstance(state, dict) else "thesis"
         confidence = float(state.get("confidence", 0.0)) if isinstance(state, dict) else 0.0
         errors = state.get("errors") or {} if isinstance(state, dict) else {}
@@ -645,6 +667,16 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
                 yield _sse("prose_chunk", {"delta": chunk + " "})
                 await asyncio.sleep(0)
             yield _sse("quick_fact", quick_fact.model_dump())
+        elif intent in {"fundamental", "technical", "news_sentiment"} and isinstance(
+            focused, FocusedAnalysis
+        ):
+            # QNT-176: focused-analysis card. Stream the summary as prose
+            # so the panel has something to render before the full payload
+            # lands, then emit the structured event.
+            for chunk in _split_prose(focused.summary):
+                yield _sse("prose_chunk", {"delta": chunk + " "})
+                await asyncio.sleep(0)
+            yield _sse("focused", focused.model_dump())
         elif isinstance(thesis, Thesis):
             # Stream prose. The structured-output runnable returns the entire
             # setup paragraph at once, so we re-chunk it client-side. A future
@@ -672,6 +704,10 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
         elif intent == "quick_fact":
             citations_count = _count_quick_fact_citations(
                 quick_fact if isinstance(quick_fact, QuickFactAnswer) else None
+            )
+        elif intent in {"fundamental", "technical", "news_sentiment"}:
+            citations_count = _count_focused_citations(
+                focused if isinstance(focused, FocusedAnalysis) else None
             )
         elif intent == "conversational":
             # Conversational answers carry no citations by design — the
