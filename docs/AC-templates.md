@@ -10,7 +10,7 @@ Apply when `git diff --name-only main...HEAD` touches any of:
 - `Dockerfile` (any)
 - `.github/workflows/*.yml`
 - `Makefile`
-- Root config: `dagster.yaml`, `Caddyfile`, `litellm_config.yaml`
+- Root config: `dagster.yaml`, `litellm_config.yaml`
 - `scripts/*.sh`
 
 ### Default AC

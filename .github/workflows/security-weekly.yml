@@ -32,7 +32,6 @@ jobs:
           - clickhouse/clickhouse-server:24-alpine
           - litellm/litellm:v1.81.14-stable
           - cloudflare/cloudflared:2026.3.0
-          - caddy:2-alpine
           - amir20/dozzle:v8.13.13
           - prom/node-exporter:v1.8.2
           - gcr.io/cadvisor/cadvisor:v0.55.1

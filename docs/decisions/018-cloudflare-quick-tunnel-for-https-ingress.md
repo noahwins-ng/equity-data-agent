@@ -1,7 +1,7 @@
 # ADR-018: Cloudflare Quick Tunnel for HTTPS Ingress (No Custom Domain)
 
 **Date**: 2026-05-02
-**Status**: Accepted
+**Status**: Superseded 2026-05-08 by named-tunnel migration (QNT-177) — see Update at end.
 
 ## Context
 
@@ -78,3 +78,20 @@ This decision is reversible. To switch to a custom domain at any future point:
 4. Update `NEXT_PUBLIC_API_URL` in Vercel and redeploy.
 
 No frontend code changes are required for either upgrade — the API client reads the URL from the env var.
+
+## Update — 2026-05-08: Migration to Named Tunnel (QNT-177)
+
+The cost objection in alternative B turned out to be moot — `nusaverde.com` was already on Cloudflare for an unrelated site, so the `api.<our-domain>` subdomain was free to claim with no incremental DNS or registration cost. Combined with the operational toll of the quick tunnel ("Harder" point #1: Vercel env var refresh on every cloudflared restart), the trade-off equation flipped.
+
+**Trigger:** 2026-05-08 outage. The Hetzner host rebooted at 04:00 UTC after `unattended-upgrades` installed a kernel CVE patch. The cloudflared container restarted with `--url http://api:8000` and got a fresh `*.trycloudflare.com` hostname. The Vercel build (SHA `7591bfa`, baked the previous URL into `NEXT_PUBLIC_API_URL` ten hours earlier) was now stale; `generateStaticParams()` fetched the dead URL at build time, returned `[]`, and `dynamicParams = false` collapsed every `/ticker/*` slug to 404 until manual recovery. Same root pattern as the Apr-18 incident captured in memory (`feedback_health_endpoint_is_not_durability.md`); cadence is gated on Ubuntu kernel CVE releases (~3 weeks between events), not predictable.
+
+**Decision:** Switch to alternative B — Cloudflare named tunnel anchored to `api.nusaverde.com`. The `cloudflared` service in `docker-compose.yml` now runs `tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}`; the public hostname (`api.nusaverde.com` → `http://api:8000`) is configured in the Cloudflare Zero Trust dashboard. The connector token lives in `.env.sops` (CD decrypts and ships to Hetzner per QNT-102).
+
+**Consequences of the switch:**
+
+- The "Harder" point #1 above ("trycloudflare URL rotates whenever cloudflared restarts") no longer applies. Reboots, image bumps, and container recreates are all non-events for the public hostname.
+- The "Harder" point #4 (uptime probes against the trycloudflare URL) is improved: probes can now point at `https://api.nusaverde.com/api/v1/health` permanently.
+- The dormant `caddy` service, `Caddyfile`, and `prod-caddy` profile are removed in the same PR — the named-tunnel path was always one of the two upgrade options listed in the original ADR; we picked it, and the Caddy fallback is no longer load-bearing. Reverting to Caddy + own-domain (alternative A) is still possible by reading this ADR's history in git, but is not pre-wired in the working tree.
+- `NEXT_PUBLIC_API_URL` is now `https://api.nusaverde.com` and is permanent — no more refresh-on-rotate runbook.
+
+**Reversibility:** Switching back to a quick tunnel would require restoring the `--url` flag and removing the env-var requirement. Switching to Caddy + own-domain would require reintroducing the service definition + Caddyfile + opening firewall ports 80/443 + DNS A-record. Neither is expected; the named-tunnel mode supersedes the original choice.

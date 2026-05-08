@@ -348,7 +348,7 @@ Services covered by the sidecar (label `autoheal=true` in `docker-compose.yml`):
 Services intentionally **not** labeled (and why):
 - `clickhouse` — natural unhealthy windows under heavy merge load; killing it during a merge would orphan the merge and force re-execution. Healthcheck remains as a detector.
 - `observability` stack (`prometheus`, `grafana`, `cadvisor`, `dozzle`) — secondary infra; if they wedge, page a human, don't loop-restart against an unknown failure.
-- `cloudflared` — would rotate the trycloudflare hostname, breaking the frontend's `NEXT_PUBLIC_API_URL` until manual rotation. Healthcheck remains as a detector.
+- `cloudflared` — autoheal restart is safe with the named tunnel (QNT-177): the connector reauthenticates with the same token and the public hostname stays bound. Currently still excluded out of conservatism — revisit if false-positive autoheal restarts cause noise. Healthcheck remains as a detector.
 
 **Diagnosis**:
 

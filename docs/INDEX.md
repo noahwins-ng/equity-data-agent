@@ -48,8 +48,8 @@ How to do common tasks. Operational runbooks.
 - [hetzner-bootstrap.md](guides/hetzner-bootstrap.md) — One-time production server setup on Hetzner CX41
 - [project-setup-playbook.md](guides/project-setup-playbook.md) — Reusable checklist for bootstrapping new projects
 - [ops-runbook.md](guides/ops-runbook.md) — Failure-mode catalog: symptoms, diagnosis, response, prevention (check here first when prod breaks)
-- [vercel-deploy.md](guides/vercel-deploy.md) — Phase 6 deploy runbook: cloudflared quick-tunnel ingress + Vercel project link + CORS allowlist edit + URL-rotation recovery
-- [uptime-monitoring.md](guides/uptime-monitoring.md) — UptimeRobot probe + Healthchecks.io heartbeat setup against the trycloudflare API URL
+- [vercel-deploy.md](guides/vercel-deploy.md) — Phase 6 deploy runbook: Cloudflare named-tunnel ingress + Vercel project link + CORS allowlist edit
+- [uptime-monitoring.md](guides/uptime-monitoring.md) — UptimeRobot probe + Healthchecks.io heartbeat setup against the named-tunnel API URL
 
 ### [retros/](retros/)
 End-of-phase retrospectives. What shipped, what was hard, lessons learned.

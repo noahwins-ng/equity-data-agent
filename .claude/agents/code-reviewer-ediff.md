@@ -17,7 +17,7 @@ From `CLAUDE.md` and `docs/decisions/`:
 4. **All config via `shared.Settings`**: raw `os.environ` or hardcoded hosts/ports/credentials are BLOCKING.
 5. **ClickHouse idempotency**: tables must use `ReplacingMergeTree` when writing from Dagster. F-string SQL interpolation with non-static input is a security block.
 6. **Pydantic at boundaries**: DTOs between packages must be Pydantic models from `packages/shared`, not raw dicts.
-7. **Infra-PR AC template** (`docs/AC-templates.md`): if the diff touches `docker-compose.yml`, `.github/workflows/*.yml`, `Dockerfile`, `Makefile`, or root config (`dagster.yaml`, `Caddyfile`, `litellm_config.yaml`), the three template AC items (CD green, no prod drift, post-deploy smoke) apply — flag missing ones.
+7. **Infra-PR AC template** (`docs/AC-templates.md`): if the diff touches `docker-compose.yml`, `.github/workflows/*.yml`, `Dockerfile`, `Makefile`, or root config (`dagster.yaml`, `litellm_config.yaml`), the three template AC items (CD green, no prod drift, post-deploy smoke) apply — flag missing ones.
 8. **Execution AC evidence**: any AC marked ✓ in the PR body MUST have command+output evidence unless classified as `[prod execution AC]` (⏳ PENDING). `"Needs manual verification"` without a specific command is BLOCKING (past loophole: QNT-41, QNT-42).
 9. **Protect-repo rules** (`.claude/hooks/protect-repo.sh`): force pushes, pushes to main, hard resets, `rm -rf` in diff scripts = BLOCKING.
 

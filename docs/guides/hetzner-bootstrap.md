@@ -79,13 +79,11 @@ Values you'll encrypt into `.env.sops`:
 
 ---
 
-## 5. Expose Port 8000 (no-domain setup)
+## 5. Public ingress (Cloudflare named tunnel)
 
-Port 8000 is already exposed in `docker-compose.yml` — no manual edit needed. This allows direct access via `http://<your-ip>:8000` until a domain + Caddy is added in Phase 6.
+Public HTTPS ingress is via a Cloudflare named tunnel (ADR-018, named-tunnel migration QNT-177). The `cloudflared` service connects outbound to Cloudflare and exposes the FastAPI at `api.<your-domain>`. The `api` service binds port 8000 to loopback only — no public port, no DNS A-record, no Let's Encrypt.
 
-The `caddy` service will fail to start without a valid domain — that's expected and won't affect the rest of the stack.
-
-> **Phase 6:** Remove the `ports` exposure from the `api` service, update `Caddyfile` with your real domain, point DNS, and Caddy handles HTTPS automatically.
+Setup is one-time: create the tunnel in Cloudflare Zero Trust, configure the public hostname, paste the connector token into `.env.sops`. Full runbook in `docs/guides/vercel-deploy.md`.
 
 ---
 
@@ -147,13 +145,11 @@ curl http://<your-ip>:8000/health
 Expected: all services `Up`, health check returns `200 OK`.
 
 **Acceptance criteria (from QNT-83):**
-- [ ] All prod services healthy: `clickhouse`, `dagster`, `dagster-daemon`, `api`, `litellm`
-- [ ] `http://<your-ip>:8000/health` returns 200
+- [ ] All prod services healthy: `clickhouse`, `dagster`, `dagster-daemon`, `api`, `litellm`, `cloudflared`
+- [ ] `https://api.<your-domain>/api/v1/health` returns 200 (after Cloudflare named tunnel is configured per `docs/guides/vercel-deploy.md`)
 - [ ] GitHub Actions CD completes on next push to main
 - [ ] ClickHouse databases `equity_raw` and `equity_derived` with all 9 tables exist
 - [ ] GitHub secrets configured
-
-> `caddy` is deferred to Phase 6 when a domain is available.
 
 ---
 

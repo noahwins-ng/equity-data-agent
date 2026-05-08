@@ -55,8 +55,9 @@ DEFAULT_PROM_URL = os.environ.get("PROM_URL", "http://localhost:9090")
 DEFAULT_GRAFANA_URL = os.environ.get("GRAFANA_URL", "http://localhost:3030")
 
 # Profiles whose services are exercised by `docker compose --profile prod up`.
-# `prod-caddy` is the dormant Caddyfile profile (QNT-75 / ADR-018) — deliberately
-# not running, so its bind mounts are out of scope for the restart-wiring check.
+# Defensive filter: skips services whose `profiles:` is set and disjoint from
+# this set. Currently a no-op (every compose service is in `prod` or `dev,prod`),
+# but reserved for future dormant profiles.
 ACTIVE_PROFILES: set[str] = {"prod"}
 
 
