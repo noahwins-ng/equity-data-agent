@@ -299,23 +299,25 @@ services:
     logging: *default-logging
     profiles: [prod]
 
-  # QNT-75 / ADR-018: Cloudflare quick tunnel — public HTTPS ingress for the
-  # FastAPI service without buying a domain. Connects outbound to Cloudflare
-  # and exposes the API at a `*.trycloudflare.com` URL that prints to logs on
-  # startup. Frontend (Vercel) reads that URL via NEXT_PUBLIC_API_URL.
+  # QNT-177 / ADR-018: Cloudflare named tunnel — public HTTPS ingress for the
+  # FastAPI service. The tunnel is created in Cloudflare Zero Trust (name
+  # `equity-data-agent`) with a Public Hostname mapping `api.<our-domain>` to
+  # `http://api:8000`. The connector token in CLOUDFLARE_TUNNEL_TOKEN
+  # authenticates this connector to that tunnel; the public hostname and
+  # ingress rules are configured dashboard-side, not in the compose flag.
   #
-  # Trade-off vs. a named tunnel: the trycloudflare hostname rotates on every
-  # cloudflared restart. With `restart: unless-stopped` and Hetzner stability
-  # this is rare (kernel reboots / crashes). When it rotates, refresh the
-  # Vercel env var per docs/guides/vercel-deploy.md.
+  # The hostname is stable across reboots, image bumps, and container
+  # recreations. Replaces the QNT-75 quick-tunnel (`--url http://api:8000`)
+  # which rotated on every restart and broke Vercel's build-time env var.
   cloudflared:
     # Pin to a specific version (matches the litellm pin pattern in this file).
-    # Floating `latest` means every `docker compose up -d --build` may pull a
-    # new binary and recreate the container, which rotates the trycloudflare
-    # hostname unnecessarily. Bump deliberately by editing this tag.
+    # Bump deliberately by editing this tag — no operational consequence beyond
+    # a connector reconnect.
     image: cloudflare/cloudflared:2026.3.0
     restart: unless-stopped
-    command: tunnel --no-autoupdate --url http://api:8000
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    environment:
+      - CLOUDFLARE_TUNNEL_TOKEN
     depends_on:
       api:
         condition: service_healthy
@@ -324,35 +326,6 @@ services:
     cpus: 0.05
     logging: *default-logging
     profiles: [prod]
-
-  # Caddy is retained for the future "named tunnel + own domain" path
-  # (ADR-018 lists it as an upgrade option). Inactive under the default `prod`
-  # profile — once a domain is registered and Caddyfile is updated from
-  # `your-domain.com`, start with both profiles:
-  #   docker compose --profile prod --profile prod-caddy up -d
-  # (caddy depends on `api` which lives in the `prod` profile.)
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
-      - caddy_data:/data
-    depends_on: [api]
-    mem_limit: 256m
-    mem_reservation: 64m
-    cpus: 0.1
-    logging: *default-logging
-    healthcheck:
-      # Use 127.0.0.1 (not localhost) — busybox wget tries ::1 first and Caddy admin binds IPv4-only.
-      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:2019/config/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    profiles: [prod-caddy]
 
   # ── Observability stack (QNT-103) ───────────────────────────────────────────
   # Five services for unified-logs UI + per-container/host metrics + alerting.
@@ -542,7 +515,6 @@ services:
 
 volumes:
   clickhouse_data:  # persists ClickHouse data — NEVER omit this volume
-  caddy_data:       # persists TLS certificates across restarts
   prometheus_data:  # 15d of TSDB metrics
   grafana_data:     # Grafana state (changed admin password, modified dashboards)
   dagster_home:     # persists Dagster run history + schedule/sensor cursors across rebuilds;
