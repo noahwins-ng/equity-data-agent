@@ -159,6 +159,44 @@ def test_quarterly_2023_q4_first_valid_ttm_pe(ratios: pd.DataFrame) -> None:
 # ─── Near-zero EPS → P/E is N/M (not meaningful) ────────────────────────────
 
 
+# ─── TTM balance-sheet ratios (QNT-179 round 2) ──────────────────────────────
+#
+# `_build_ttm_rows` pairs TTM net_income / gross_profit with the matching
+# quarter's balance-sheet snapshot to surface roe / roa / gross_margin / D-E /
+# current ratio on the TTM row. The fundamentals UI reads these off the latest
+# TTM row to render the Quarterly tab's ROE/ROA — without them the cells were
+# rendering "--" even though the data existed (AAPL spot-check, 2026-05-08).
+
+
+def test_ttm_2024_q4_roe(ratios: pd.DataFrame) -> None:
+    # ni_ttm (2024 Q1..Q4) = 4M + 4.5M + 5M + 6.5M = 20M
+    # equity at 2024-Q4 = total_assets - total_liabilities = 300M - 150M = 150M
+    # ROE_TTM = 20M / 150M * 100 = 13.333...%
+    assert _row(ratios, "2024-12-31", "ttm")["roe"] == pytest.approx(20 / 150 * 100)
+
+
+def test_ttm_2024_q4_roa(ratios: pd.DataFrame) -> None:
+    # ROA_TTM = ni_ttm / total_assets_at_period_end = 20M / 300M * 100 = 6.666...%
+    assert _row(ratios, "2024-12-31", "ttm")["roa"] == pytest.approx(20 / 300 * 100)
+
+
+def test_ttm_2024_q4_gross_margin(ratios: pd.DataFrame) -> None:
+    # gross_profit_ttm = 17.5M + 18.5M + 19M + 20M = 75M
+    # revenue_ttm = 35M + 37M + 38M + 40M = 150M
+    # gross_margin_ttm = 75 / 150 * 100 = 50%
+    assert _row(ratios, "2024-12-31", "ttm")["gross_margin_pct"] == pytest.approx(50.0)
+
+
+def test_ttm_2024_q4_debt_to_equity(ratios: pd.DataFrame) -> None:
+    # debt at 2024-Q4 = 75M; equity = 150M; D/E = 0.5
+    assert _row(ratios, "2024-12-31", "ttm")["debt_to_equity"] == pytest.approx(0.5)
+
+
+def test_ttm_2024_q4_current_ratio(ratios: pd.DataFrame) -> None:
+    # current_assets at 2024-Q4 = 100M; current_liabilities = 40M; ratio = 2.5
+    assert _row(ratios, "2024-12-31", "ttm")["current_ratio"] == pytest.approx(2.5)
+
+
 def test_pe_not_meaningful_below_eps_threshold() -> None:
     """When EPS < $0.10 (N/M threshold), pe_ratio must be NaN even though
     net_income and TTM sum are positive."""

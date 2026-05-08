@@ -169,6 +169,9 @@ def _build_ttm_rows(
     fcf_ttm = cast(
         pd.Series, cast(pd.Series, q["free_cash_flow"]).rolling(window=4, min_periods=4).sum()
     )
+    gross_profit_ttm = cast(
+        pd.Series, cast(pd.Series, q["gross_profit"]).rolling(window=4, min_periods=4).sum()
+    )
 
     valid = rev_ttm.notna() & ni_ttm.notna() & fcf_ttm.notna()
     if not bool(valid.any()):
@@ -184,12 +187,32 @@ def _build_ttm_rows(
     ps_ttm = cast(pd.Series, market_cap_q / rev_ttm.replace(0, np.nan))
     nm_ttm = cast(pd.Series, ni_ttm / rev_ttm.replace(0, np.nan) * 100)
     fcf_yield_ttm = cast(pd.Series, fcf_ttm / market_cap_q * 100)
+    gross_margin_ttm = cast(pd.Series, gross_profit_ttm / rev_ttm.replace(0, np.nan) * 100)
     # EBITDA margin only makes sense as a TTM ratio because yfinance hands
     # us a single TTM EBITDA figure (point-in-time, same on every ingested
     # row). TTM revenue is the matching denominator, so this is the one
     # row_type where ebitda_margin_pct is semantically defined.
     ebitda_q = cast(pd.Series, q["ebitda"]).replace(0, np.nan)
     ebitda_margin_ttm = cast(pd.Series, ebitda_q / rev_ttm.replace(0, np.nan) * 100)
+
+    # Balance-sheet ratios use the matching quarter's snapshot, not a rolling
+    # sum — book value, debt, and current assets are point-in-time concepts.
+    # Pairing TTM net_income with period-end equity gives the canonical "ROE
+    # over trailing twelve months" that financial dashboards expect.
+    #
+    # Negative equity (book value < 0; classic Boeing / SBUX signature) is
+    # masked to NaN rather than divided into. A negative ROE on a buyback-
+    # driven negative book value is mathematically real but inverts the sign
+    # ("more profitable = more negative ROE") and lights up the UI with a
+    # misleading number. NaN renders as "--" which is the safer default.
+    equity_q = cast(pd.Series, q["total_assets"] - q["total_liabilities"])
+    equity_q = equity_q.where(equity_q > 0)
+    total_assets_q = cast(pd.Series, q["total_assets"]).replace(0, np.nan)
+    current_liab_q = cast(pd.Series, q["current_liabilities"]).replace(0, np.nan)
+    roe_ttm = cast(pd.Series, ni_ttm / equity_q * 100)
+    roa_ttm = cast(pd.Series, ni_ttm / total_assets_q * 100)
+    debt_to_equity_ttm = cast(pd.Series, q["total_debt"] / equity_q)
+    current_ratio_ttm = cast(pd.Series, q["current_assets"] / current_liab_q)
 
     payload: dict[str, Any] = {
         "period_end": q["period_end"],
@@ -201,8 +224,13 @@ def _build_ttm_rows(
         "pe_ratio": pe_ttm,
         "price_to_sales": ps_ttm,
         "net_margin_pct": nm_ttm,
+        "gross_margin_pct": gross_margin_ttm,
         "fcf_yield": fcf_yield_ttm,
         "ebitda_margin_pct": ebitda_margin_ttm,
+        "roe": roe_ttm,
+        "roa": roa_ttm,
+        "debt_to_equity": debt_to_equity_ttm,
+        "current_ratio": current_ratio_ttm,
     }
     # The asset always sets `ticker` AFTER calling this helper (one-ticker per
     # partition), so the test fixture omits the column. Only carry it through
