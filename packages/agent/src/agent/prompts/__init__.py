@@ -10,12 +10,14 @@ from __future__ import annotations
 from agent.prompts.system import (
     COMPARISON_SYSTEM_PROMPT,
     CONVERSATIONAL_SYSTEM_PROMPT,
+    FOCUSED_SYSTEM_PROMPT,
     QUICK_FACT_SYSTEM_PROMPT,
     REPORT_TOOLS,
     SYSTEM_PROMPT,
     THESIS_SECTIONS,
     build_comparison_prompt,
     build_conversational_prompt,
+    build_focused_prompt,
     build_quick_fact_prompt,
     build_synthesis_prompt,
 )
@@ -23,12 +25,14 @@ from agent.prompts.system import (
 __all__ = [
     "COMPARISON_SYSTEM_PROMPT",
     "CONVERSATIONAL_SYSTEM_PROMPT",
+    "FOCUSED_SYSTEM_PROMPT",
     "QUICK_FACT_SYSTEM_PROMPT",
     "REPORT_TOOLS",
     "SYSTEM_PROMPT",
     "THESIS_SECTIONS",
     "build_comparison_prompt",
     "build_conversational_prompt",
+    "build_focused_prompt",
     "build_quick_fact_prompt",
     "build_synthesis_prompt",
 ]

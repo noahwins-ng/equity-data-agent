@@ -54,7 +54,15 @@ from agent.tracing import langfuse
 
 logger = logging.getLogger(__name__)
 
-Intent = Literal["thesis", "quick_fact", "comparison", "conversational"]
+Intent = Literal[
+    "thesis",
+    "quick_fact",
+    "comparison",
+    "conversational",
+    "fundamental",
+    "technical",
+    "news_sentiment",
+]
 
 
 class IntentDecision(BaseModel):
@@ -68,7 +76,13 @@ class IntentDecision(BaseModel):
             "plus one cited value is enough. 'comparison' when the user asks "
             "to compare two tickers side-by-side. 'conversational' for "
             "greetings, capability asks, meta-questions, and clearly "
-            "off-domain inputs (anything not about US public equities)."
+            "off-domain inputs (anything not about US public equities). "
+            "'fundamental' when the user explicitly asks for a fundamental "
+            "deep dive (valuation, earnings, margins) on one ticker. "
+            "'technical' when the user explicitly asks for a technical "
+            "analysis (price action, indicators, trend) on one ticker. "
+            "'news_sentiment' when the user asks for a news / headline / "
+            "sentiment read on one ticker."
         ),
     )
 
@@ -168,6 +182,52 @@ _CONVERSATIONAL_TOKENS: tuple[str, ...] = (
     "poem",
 )
 
+# QNT-176: focused-analysis trigger phrases. These pick a single report
+# family for a deeper read than ``quick_fact`` but narrower than the full
+# four-section ``thesis``. Each tuple is matched on whole-word boundaries
+# (see ``_matches_any``), so partial-word collisions ("technical analysis"
+# inside a longer prose run is fine; "tech" alone is not) are avoided.
+#
+# Phrasings explicitly opted into:
+#  * "fundamental analysis", "fundamentals" -- the canonical English asks.
+#  * "valuation deep dive", "valuation breakdown", "earnings deep dive" --
+#    the user has already named the report family in plain English.
+#  * "technical analysis", "technicals", "ta on", "ta for" -- the abbreviated
+#    "TA" form is finance-domain shorthand the chat sees often.
+#  * "chart setup" -- common phrasing for "what does the chart say?".
+#  * "news sentiment", "sentiment on", "what is the sentiment" -- the
+#    structured sentiment question.
+#  * "headlines on", "news read" -- shorter framings of the same ask.
+_FUNDAMENTAL_TOKENS: tuple[str, ...] = (
+    "fundamental analysis",
+    "fundamentals",
+    "valuation deep dive",
+    "valuation breakdown",
+    "earnings deep dive",
+)
+
+_TECHNICAL_ANALYSIS_TOKENS: tuple[str, ...] = (
+    "technical analysis",
+    "technicals",
+    "ta on",
+    "ta for",
+    "chart setup",
+)
+
+# Tightened on review: bare ``sentiment on`` matched non-ticker phrasings like
+# "market sentiment on the sector" and "based on recent sentiment on Wall
+# Street"; bare ``headlines on`` had the same false-positive shape ("headlines
+# on the bond market"). The remaining tokens all carry the word "news" or
+# "sentiment" with enough surrounding context to be unambiguous focused asks
+# — anything broader defers to the LLM classifier, which is the safer arm
+# given the safe-default-to-thesis bias.
+_NEWS_SENTIMENT_TOKENS: tuple[str, ...] = (
+    "news sentiment",
+    "what is the sentiment",
+    "what's the sentiment",
+    "news read",
+)
+
 # Short questions are more likely quick-fact. Tuned conservatively: a 12-word
 # question can still be open-ended, so this is one signal among several.
 _SHORT_QUESTION_WORD_LIMIT = 12
@@ -247,6 +307,26 @@ def _heuristic_intent(question: str) -> Intent | None:
         if len(extract_tickers(question)) >= 2:
             return "comparison"
 
+    # QNT-176: focused-analysis intents are checked BEFORE thesis tokens so
+    # phrases like "walk me through META's fundamentals" (which would
+    # otherwise match the thesis token "walk me through") and "valuation
+    # deep dive" (which would otherwise match the thesis token "deep dive")
+    # route to the narrower path the user explicitly asked for.
+    #
+    # Mutual exclusivity: if the question names MORE than one focus
+    # ("triangulate technicals AND fundamentals"), the user wants a
+    # synthesis across domains — that's a thesis, not a focused read.
+    # Only fire the focused branch when exactly one focus matches.
+    focused_hits: list[Intent] = []
+    if _matches_any(text, _FUNDAMENTAL_TOKENS) is not None:
+        focused_hits.append("fundamental")
+    if _matches_any(text, _NEWS_SENTIMENT_TOKENS) is not None:
+        focused_hits.append("news_sentiment")
+    if _matches_any(text, _TECHNICAL_ANALYSIS_TOKENS) is not None:
+        focused_hits.append("technical")
+    if len(focused_hits) == 1:
+        return focused_hits[0]
+
     if _matches_any(text, _THESIS_TOKENS):
         return "thesis"
 
@@ -278,12 +358,28 @@ a meta question about the tool itself, or asked something clearly off-topic \
 (e.g. "what's the weather?", "tell me a joke", "hello", "what can you do?"). \
 The agent should answer briefly and redirect to its actual capabilities; \
 it must NOT fabricate an equities answer.
+* "fundamental" — the user asked for a fundamental deep dive on one ticker \
+(e.g. "walk me through META's fundamentals", "valuation deep dive on AAPL", \
+"how is MSFT valued?"). The answer is a focused multi-sentence read on \
+valuation, earnings, and margins for that ticker — narrower than a full \
+thesis, deeper than a single number.
+* "technical" — the user asked for a technical analysis on one ticker \
+(e.g. "give me the technical analysis of NVDA", "how do the technicals \
+look on AAPL?", "chart setup for TSLA"). The answer is a focused read on \
+price action, indicators, and trend.
+* "news_sentiment" — the user asked for a news / headline / sentiment \
+read on one ticker (e.g. "what's the news sentiment on AAPL?", "headlines \
+on META", "any concerning news for UNH?"). The answer is a focused read \
+on recent headlines and their sentiment.
 
 If you are uncertain between "thesis" and "quick_fact", default to "thesis" \
 — that path is the existing safe shape. Pick "comparison" only when there \
 is an explicit multi-ticker contrast in the question. Pick "conversational" \
 only for greetings, capability asks, or clearly off-domain inputs — \
-ambiguous equity questions should NOT route here.
+ambiguous equity questions should NOT route here. Pick "fundamental", \
+"technical", or "news_sentiment" ONLY when the user explicitly named that \
+domain; an open-ended "should I buy NVDA?" still routes to "thesis" even \
+though the answer happens to lean on fundamentals.
 
 Question: {question}
 """

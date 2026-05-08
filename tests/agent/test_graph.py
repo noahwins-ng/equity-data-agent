@@ -983,3 +983,140 @@ def test_hint_from_intent_quick_fact_resolves_to_a_real_bank_label() -> None:
 
     # Conversational does not invoke the redirect (it IS the redirect).
     assert _hint_from_intent("conversational") is None
+
+
+# ─── QNT-176: focused-analysis intents ──────────────────────────────────────
+
+
+def test_focused_intent_narrows_plan_to_company_and_matching_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each focused intent must narrow the plan to ``[company, <report>]``
+    deterministically — no plan-LLM call (the user named the domain
+    explicitly; nothing to disambiguate)."""
+    from agent.focused import FocusedAnalysis
+    from agent.intent import Intent
+
+    cases: list[tuple[Intent, str, str]] = [
+        ("fundamental", "give me a fundamental analysis of NVDA", "fundamental"),
+        ("technical", "technical analysis of NVDA", "technical"),
+        ("news_sentiment", "what is the sentiment on NVDA?", "news"),
+    ]
+
+    for intent, question, expected_report in cases:
+        llm = _StructuredLLM()
+        # Synthesize stub returns a FocusedAnalysis matching the focus.
+        llm._structured_runnable.invoke = MagicMock(
+            return_value=FocusedAnalysis(
+                focus=intent,  # type: ignore[arg-type]
+                summary=f"focused {intent} summary",
+                key_points=[],
+                cited_values=[],
+            ),
+        )
+
+        plan_calls: list[str] = []
+
+        def traced(llm_: Any, prompt: object, *, name: str, _plan=plan_calls) -> Any:
+            if name == "plan":
+                _plan.append(name)
+            return llm_.invoke(prompt)
+
+        monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+        monkeypatch.setattr(graph_module.langfuse, "traced_invoke", traced)
+        from agent import intent as intent_module
+
+        monkeypatch.setattr(intent_module, "get_llm", lambda *_a, **_kw: llm)
+
+        graph = build_graph({name: _mock_tool(name) for name in REPORT_TOOLS})
+        result = graph.invoke({"ticker": "NVDA", "question": question})
+
+        # No plan-LLM call.
+        assert plan_calls == [], f"unexpected plan call for intent={intent}"
+        # Plan is exactly [company, <report>].
+        assert result["plan"] == ["company", expected_report], (
+            f"plan for intent={intent} was {result['plan']!r}"
+        )
+        # Reports gathered match the plan.
+        assert set(result["reports"]) == {"company", expected_report}
+        # Focused payload populated; thesis/quick_fact/comparison are None.
+        assert isinstance(result["focused"], FocusedAnalysis)
+        assert result["focused"].focus == intent
+        assert result["thesis"] is None
+        assert result["quick_fact"] is None
+        assert result["comparison"] is None
+
+
+def test_focused_intent_falls_back_to_redirect_when_reports_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the matching report can't be fetched (and ``company`` is also
+    absent), the focused branch falls back to a deterministic conversational
+    redirect — same contract as every other synthesize path."""
+    from agent.conversational import ConversationalAnswer
+
+    llm = _StructuredLLM()
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+    monkeypatch.setattr(
+        graph_module.langfuse,
+        "traced_invoke",
+        lambda llm_, prompt, *, name: llm_.invoke(prompt),
+    )
+    from agent import intent as intent_module
+
+    monkeypatch.setattr(intent_module, "get_llm", lambda *_a, **_kw: llm)
+
+    # No tools registered — gather will return empty reports.
+    graph = build_graph({})
+    result = graph.invoke({"ticker": "NVDA", "question": "give me a fundamental analysis of NVDA"})
+
+    assert result["focused"] is None
+    assert isinstance(result["conversational"], ConversationalAnswer)
+
+
+def test_focused_intent_corrects_mismatched_focus_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the LLM hallucinates a different ``focus`` literal than the user
+    asked for, the synthesize node re-asserts the value from intent so the
+    UI card label matches the request."""
+    from agent.focused import FocusedAnalysis
+
+    llm = _StructuredLLM()
+    # User asked for technical; LLM emitted fundamental.
+    llm._structured_runnable.invoke = MagicMock(
+        return_value=FocusedAnalysis(
+            focus="fundamental",
+            summary="summary",
+            key_points=[],
+            cited_values=[],
+        ),
+    )
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+    monkeypatch.setattr(
+        graph_module.langfuse,
+        "traced_invoke",
+        lambda llm_, prompt, *, name: llm_.invoke(prompt),
+    )
+    from agent import intent as intent_module
+
+    monkeypatch.setattr(intent_module, "get_llm", lambda *_a, **_kw: llm)
+
+    graph = build_graph({name: _mock_tool(name) for name in REPORT_TOOLS})
+    result = graph.invoke({"ticker": "NVDA", "question": "technical analysis of NVDA"})
+
+    assert isinstance(result["focused"], FocusedAnalysis)
+    assert result["focused"].focus == "technical"
+
+
+def test_hint_from_intent_focused_resolves_to_real_bank_label() -> None:
+    """The QNT-176 focused intents must produce hints that exist in the
+    suggestion bank — same regression guardrail as the QNT-149 finding."""
+    from agent.conversational import _SUGGESTION_BANK
+    from agent.graph import _hint_from_intent
+
+    bank_labels = {label for label, _ in _SUGGESTION_BANK}
+    for intent in ("fundamental", "technical", "news_sentiment"):
+        hint = _hint_from_intent(intent)  # type: ignore[arg-type]
+        assert hint is not None, f"intent {intent!r} produced None hint"
+        assert hint in bank_labels, f"intent {intent!r} hint {hint!r} not in {bank_labels}"

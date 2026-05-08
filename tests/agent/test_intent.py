@@ -284,3 +284,84 @@ def test_heuristic_help_phrase_with_ticker_does_not_misclassify_as_conversationa
     assert _heuristic_intent("help me with AAPL fundamentals") != "conversational"
     # No-ticker conversational asks still fire correctly.
     assert _heuristic_intent("help me figure out how this works") == "conversational"
+
+
+# ─── QNT-176: focused-analysis heuristic ────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "question,expected",
+    [
+        ("Give me a fundamental analysis of NVDA", "fundamental"),
+        ("Walk me through META's fundamentals", "fundamental"),
+        ("valuation deep dive on AAPL", "fundamental"),
+        ("technical analysis of NVDA", "technical"),
+        ("how do the technicals look on AAPL?", "technical"),
+        ("TA on TSLA please", "technical"),
+        ("chart setup for MSFT", "technical"),
+        ("What's the news sentiment on AAPL?", "news_sentiment"),
+        ("what is the sentiment for UNH?", "news_sentiment"),
+        ("give me a news read on META", "news_sentiment"),
+    ],
+)
+def test_heuristic_classifies_focused_intents(question: str, expected: str) -> None:
+    """Each focused-analysis trigger phrase routes to the matching intent
+    without an LLM call."""
+    from agent.intent import _heuristic_intent
+
+    assert _heuristic_intent(question) == expected
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # Review finding: bare 'sentiment on' / 'headlines on' tripped the
+        # heuristic on phrases that name no ticker and target no domain.
+        # These must NOT route to news_sentiment.
+        "What's the market sentiment on the sector right now?",
+        "Based on recent sentiment on Wall Street, what's next?",
+        "Headlines on the bond market today",
+    ],
+)
+def test_heuristic_does_not_misfire_on_overbroad_sentiment_phrases(question: str) -> None:
+    """Regression guard for the QNT-176 review finding — the focused
+    heuristic must not capture non-domain-specific sentiment talk."""
+    from agent.intent import _heuristic_intent
+
+    assert _heuristic_intent(question) != "news_sentiment"
+
+
+def test_heuristic_focused_loses_to_thesis_when_multiple_focuses_named() -> None:
+    """If the user names multiple report families in one breath ("triangulate
+    technicals AND fundamentals"), they want a thesis, not a single-domain
+    read. The focused branch must defer in that case."""
+    from agent.intent import _heuristic_intent
+
+    # Two focuses → not a single focused intent; falls through to None or
+    # thesis depending on later checks. The forbidden outcome is any single
+    # focused intent.
+    result = _heuristic_intent("Triangulate technicals fundamentals and news for META")
+    assert result not in {"fundamental", "technical", "news_sentiment"}
+
+
+def test_heuristic_focused_loses_to_explicit_thesis_token() -> None:
+    """When BOTH a focused token and a thesis token appear, the focused
+    branch wins because we check it FIRST — but only when it's an
+    unambiguous focused phrasing. ``walk me through META's fundamentals``
+    is the canonical focused ask the QNT-176 ticket calls out."""
+    from agent.intent import _heuristic_intent
+
+    assert _heuristic_intent("walk me through META's fundamentals") == "fundamental"
+
+
+def test_heuristic_short_circuits_focused_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A heuristic-matched focused question must NOT call the LLM."""
+    structured = _patch_llm_pipeline(monkeypatch, IntentDecision(intent="thesis"))
+    assert classify_intent("technical analysis of NVDA") == "technical"
+    assert structured.invoke.call_count == 0
+
+
+def test_llm_fallback_returns_focused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Heuristic returns None → LLM picks one of the focused intents."""
+    _patch_llm_pipeline(monkeypatch, IntentDecision(intent="fundamental"))
+    assert classify_intent("How is MSFT looking from a value angle?") == "fundamental"

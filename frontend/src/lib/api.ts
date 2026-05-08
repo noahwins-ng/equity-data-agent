@@ -218,8 +218,6 @@ export type HealthResponse = {
 export type ChatRequest = {
   ticker: string;
   message: string;
-  tools_enabled?: boolean;
-  cite_sources?: boolean;
 };
 
 export type ToolCallEvent = {
@@ -257,11 +255,20 @@ export type ThesisPayload = {
 // delivered on the corresponding event. ``conversational`` also serves as
 // the deterministic fallback when ANY synthesize path fails — the panel
 // always renders an in-domain reply, never a blank state or stack trace.
+// QNT-176: ``fundamental`` / ``technical`` / ``news_sentiment`` are the
+// focused-analysis intents — the user explicitly named one report family
+// and gets a focused multi-sentence read narrowed to that domain (plus
+// ``company`` as qualitative grounding).
 export type Intent =
   | "thesis"
   | "quick_fact"
   | "comparison"
-  | "conversational";
+  | "conversational"
+  | "fundamental"
+  | "technical"
+  | "news_sentiment";
+
+export type FocusKind = "fundamental" | "technical" | "news_sentiment";
 
 export type IntentEvent = {
   intent: Intent;
@@ -306,6 +313,24 @@ export type ComparisonPayload = {
 export type ConversationalPayload = {
   answer: string;
   suggestions: string[];
+};
+
+// QNT-176: focused-analysis response shape. Mirrors
+// ``agent.focused.FocusedAnalysis``. ``focus`` selects the card accent;
+// the body fields are identical across all three focuses.
+export type FocusedSource = "company" | "technical" | "fundamental" | "news";
+
+export type FocusedValue = {
+  label: string;
+  value: string;
+  source: FocusedSource;
+};
+
+export type FocusedAnalysisPayload = {
+  focus: FocusKind;
+  summary: string;
+  key_points: string[];
+  cited_values: FocusedValue[];
 };
 
 export type DoneEvent = {

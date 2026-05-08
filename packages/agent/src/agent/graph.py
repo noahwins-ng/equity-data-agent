@@ -44,12 +44,14 @@ from shared.tickers import TICKERS
 
 from agent.comparison import ComparisonAnswer
 from agent.conversational import ConversationalAnswer, domain_redirect
+from agent.focused import FocusedAnalysis
 from agent.intent import Intent, classify_intent, extract_tickers
 from agent.llm import get_llm
 from agent.prompts import (
     REPORT_TOOLS,
     build_comparison_prompt,
     build_conversational_prompt,
+    build_focused_prompt,
     build_quick_fact_prompt,
     build_synthesis_prompt,
 )
@@ -85,6 +87,19 @@ EventEmitter = Callable[[str, dict[str, object]], None]
 # the thesis. Technical & fundamental are load-bearing.
 OPTIONAL_TOOLS: frozenset[str] = frozenset({"news"})
 
+# QNT-176: focused-analysis intent → matching report family. The plan node
+# narrows to ``["company", <report>]`` for these intents (company grounds
+# qualitative business context per QNT-175; the matching report carries
+# the numbers). News is the report family for the news_sentiment focus
+# even though it is in OPTIONAL_TOOLS — if news is down the synthesize
+# node falls back to a domain redirect, same as any other empty-reports
+# failure.
+_FOCUSED_REPORT: dict[Intent, str] = {
+    "fundamental": "fundamental",
+    "technical": "technical",
+    "news_sentiment": "news",
+}
+
 _MAX_TOOL_ATTEMPTS = 2  # first try + one retry
 
 
@@ -119,6 +134,7 @@ class AgentState(TypedDict):
     quick_fact: NotRequired[QuickFactAnswer | None]
     comparison: NotRequired[ComparisonAnswer | None]
     conversational: NotRequired[ConversationalAnswer | None]
+    focused: NotRequired[FocusedAnalysis | None]
     confidence: NotRequired[float]
 
 
@@ -301,6 +317,17 @@ def _coerce_conversational(response: object) -> ConversationalAnswer | None:
     return None
 
 
+def _coerce_focused(response: object) -> FocusedAnalysis | None:
+    """Normalise whatever ``traced_invoke`` hands back into a ``FocusedAnalysis``."""
+    if isinstance(response, FocusedAnalysis):
+        return response
+    if isinstance(response, dict):
+        parsed = response.get("parsed")
+        if isinstance(parsed, FocusedAnalysis):
+            return parsed
+    return None
+
+
 def _resolve_comparison_tickers(primary: str, question: str) -> list[str]:
     """Return up to 2 tickers to compare, in user-named order.
 
@@ -338,6 +365,16 @@ def _hint_from_intent(intent: Intent) -> str | None:
         return "technical"
     if intent == "comparison":
         return "comparison"
+    # QNT-176: focused intents map to the matching suggestion-bank label
+    # so a synthesize-failure redirect biases toward the same domain the
+    # user originally asked about (e.g. failed news_sentiment → news
+    # suggestions, not a random thesis pitch).
+    if intent == "fundamental":
+        return "fundamental"
+    if intent == "technical":
+        return "technical"
+    if intent == "news_sentiment":
+        return "news"
     return None
 
 
@@ -448,7 +485,14 @@ def build_graph(
         # removes the narrowing failure mode the QNT-175 force-include
         # already half-fixed for ``company``. Quick_fact keeps the LLM call
         # because narrowing to the single relevant report IS its purpose.
-        if intent == "quick_fact":
+        #
+        # QNT-176: focused-analysis intents narrow deterministically to
+        # ``["company", <matching_report>]``. The user named the domain
+        # explicitly; the plan-LLM has nothing to disambiguate.
+        if intent in _FOCUSED_REPORT:
+            wanted = ("company", _FOCUSED_REPORT[intent])
+            plan = [t for t in available if t in wanted]
+        elif intent == "quick_fact":
             prompt = _build_plan_prompt(ticker, question, available, intent)
             response = langfuse.traced_invoke(get_llm(temperature=0.0), prompt, name="plan")
             content = response.content if hasattr(response, "content") else str(response)
@@ -544,6 +588,7 @@ def build_graph(
                 "quick_fact": None,
                 "comparison": None,
                 "conversational": None,
+                "focused": None,
                 "confidence": confidence,
             }
 
@@ -622,6 +667,40 @@ def build_graph(
             )
             return payload
 
+        if intent in _FOCUSED_REPORT:
+            if not reports:
+                return _fallback(
+                    "I couldn't pull a report to answer that focused analysis right now."
+                )
+            prompt = build_focused_prompt(intent, ticker, question, reports)
+            structured_llm = get_llm().with_structured_output(FocusedAnalysis)
+            try:
+                response = langfuse.traced_invoke(structured_llm, prompt, name="synthesize")
+            except Exception as exc:  # noqa: BLE001 — surface as fallback redirect
+                logger.warning(
+                    "synthesize %s: focused (%s) structured output failed: %s",
+                    ticker,
+                    intent,
+                    exc,
+                )
+                response = None
+            focused = _coerce_focused(response)
+            if focused is None:
+                return _fallback("I had trouble pulling that focused analysis together.")
+            # Re-assert the focus discriminator from intent — defends against
+            # a misbehaving provider that echoed the wrong literal back.
+            if focused.focus != intent:
+                focused = focused.model_copy(update={"focus": intent})
+            payload = _empty_payload()
+            payload["focused"] = focused
+            logger.info(
+                "synthesize %s: confidence=%s focused=%s",
+                ticker,
+                confidence,
+                intent,
+            )
+            return payload
+
         if intent == "quick_fact":
             if not reports:
                 return _fallback("I couldn't pull a report to answer that quick fact right now.")
@@ -693,6 +772,7 @@ __all__ = [
     "ComparisonAnswer",
     "ConversationalAnswer",
     "EventEmitter",
+    "FocusedAnalysis",
     "Intent",
     "QuickFactAnswer",
     "Thesis",

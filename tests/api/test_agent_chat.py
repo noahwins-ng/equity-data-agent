@@ -472,46 +472,6 @@ def test_optional_tool_failure_does_not_emit_error_event(
     assert error_events == []
 
 
-def test_tools_disabled_skips_tool_calls(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``tools_enabled: false`` must not invoke any report tool — the SSE
-    stream contains zero tool_call events."""
-    thesis = _stub_thesis(setup="Tools-off framing.")
-
-    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
-        # Assert the request really did skip tool registration.
-        assert tools == {}
-        graph = MagicMock()
-        graph.invoke.return_value = {
-            "ticker": "NVDA",
-            "intent": "thesis",
-            "plan": [],
-            "reports": {"technical": "stub"},
-            "errors": {},
-            "thesis": thesis,
-            "quick_fact": None,
-            "confidence": 0.5,
-        }
-        return graph
-
-    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
-    monkeypatch.setattr(
-        chat_module,
-        "default_report_tools",
-        lambda: {"technical": lambda t: "stub"},
-    )
-
-    r = client.post(
-        "/api/v1/agent/chat",
-        json={"ticker": "NVDA", "message": "", "tools_enabled": False},
-    )
-    frames = _parse_sse(r.text)
-    events = [name for name, _ in frames]
-    assert "tool_call" not in events
-    assert "thesis" in events
-
-
 def test_summary_uses_error_string_when_tool_returns_error_marker() -> None:
     """``[error] <kind>: <detail>`` from agent.tools surfaces verbatim in the
     tool_result summary so the panel can render the failure rather than a
@@ -1168,3 +1128,76 @@ def test_cors_post_allowed(client: TestClient) -> None:
     assert r.status_code == 200
     allowed = r.headers["access-control-allow-methods"]
     assert "POST" in allowed
+
+
+# ─── QNT-176: focused-analysis SSE wiring ───────────────────────────────────
+
+
+def test_focused_intent_emits_focused_event_not_thesis(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the graph returns one of the focused intents, the SSE stream
+    emits an ``intent`` preamble and a ``focused`` event; the thesis card
+    is intentionally absent and the done event reports the focused intent
+    + a non-zero citations count from the structured cited_values."""
+    from agent.focused import FocusedAnalysis, FocusedValue
+
+    focused = FocusedAnalysis(
+        focus="technical",
+        summary="Momentum looks constructive (source: technical).",
+        key_points=["RSI sits at 62 (source: technical)"],
+        cited_values=[FocusedValue(label="RSI", value="62", source="technical")],
+    )
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
+        graph = MagicMock()
+        graph.invoke.return_value = {
+            "ticker": "NVDA",
+            "intent": "technical",
+            "plan": ["company", "technical"],
+            "reports": {"company": "stub", "technical": "stub"},
+            "errors": {},
+            "thesis": None,
+            "quick_fact": None,
+            "comparison": None,
+            "conversational": None,
+            "focused": focused,
+            "confidence": 1.0,
+        }
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    r = client.post(
+        "/api/v1/agent/chat",
+        json={"ticker": "NVDA", "message": "technical analysis of NVDA"},
+    )
+    frames = _parse_sse(r.text)
+    events = [name for name, _ in frames]
+
+    # Intent preamble + focused payload, no thesis.
+    assert "focused" in events
+    assert "thesis" not in events
+    focused_data = next(data for name, data in frames if name == "focused")
+    assert focused_data == focused.model_dump()
+
+    # Done payload carries the focused intent + at least one citation
+    # (one structured cited_value + one inline (source: …) parens =
+    # _count_focused_citations returns >= 2).
+    done_data = frames[-1][1]
+    assert events[-1] == "done"
+    assert done_data["intent"] == "technical"
+    assert done_data["citations_count"] >= 2
+
+
+def test_chat_request_rejects_legacy_toggle_fields() -> None:
+    """QNT-176: ``tools_enabled`` and ``cite_sources`` are removed from
+    ``ChatRequest``. Pydantic models are open by default (extra fields
+    silently ignored), so the request still parses — but the runtime no
+    longer reads or honours either field. This test pins the schema
+    surface so a future re-introduction is intentional, not accidental."""
+    schema_fields = set(chat_module.ChatRequest.model_fields)
+    assert "tools_enabled" not in schema_fields
+    assert "cite_sources" not in schema_fields
+    assert schema_fields == {"ticker", "message"}

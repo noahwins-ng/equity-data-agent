@@ -1,10 +1,15 @@
 # Golden-set questions for agent evaluation (QNT-67, eval type (b)).
 #
-# 16 records spanning every ticker in shared.tickers.TICKERS — coverage is
-# enforced by tests/agent/evals/test_questions_yaml.py. The mix favours
-# thin/quiet tickers (UNH, V, JPM) over the obvious heavyweights (NVDA, AAPL)
-# so prompt regressions on the long tail don't hide behind tech-mega-cap
-# successes (Phase 2 retro lesson — feedback_sample_ac_broadly.md).
+# Records span every ticker in shared.tickers.TICKERS (coverage enforced by
+# tests/agent/evals/test_questions_yaml.py) and exercise every supported
+# intent shape: thesis, quick_fact, comparison, conversational, plus the
+# QNT-176 focused-analysis trio (fundamental, technical, news_sentiment).
+# The mix favours thin/quiet tickers (UNH, V, JPM) over the obvious
+# heavyweights (NVDA, AAPL) so prompt regressions on the long tail don't
+# hide behind tech-mega-cap successes (Phase 2 retro lesson —
+# feedback_sample_ac_broadly.md). The record-count band lives in
+# test_record_count_within_target_band; bump it together when adding
+# records here.
 #
 # Record shape:
 #   - id: short-slug                     # stable identifier; appears in history.csv
@@ -226,6 +231,7 @@ questions:
     question: "What's NVDA's RSI right now?"
     expected_tools:
       - technical
+    expected_intent: quick_fact
     reference_thesis: |
       A useful answer states NVDA's current RSI value verbatim from the
       technical report and labels the bucket (overbought, neutral,
@@ -282,3 +288,68 @@ questions:
       three suggested questions drawn from the agent's actual
       capabilities. CONTAINS NO DIGITS — no years, no counts, no
       percentages.
+
+  # QNT-176: focused-analysis goldens. Three records — one per focused
+  # intent (fundamental / technical / news_sentiment). The plan node
+  # narrows DETERMINISTICALLY to ``[company, <focus_report>]``, so
+  # ``expected_tools`` is exactly that pair (no over-fetch tolerance
+  # required, but the tool-call check would accept it either way).
+  # Tickers are picked from the long-tail (UNH, V) plus one heavyweight
+  # so a prompt regression on the niche names is visible.
+  - id: jpm-fundamental-deepdive
+    ticker: JPM
+    question: "Walk me through JPM's fundamentals — valuation deep dive."
+    expected_tools:
+      - company
+      - fundamental
+    expected_intent: fundamental
+    reference_thesis: |
+      A useful answer is a focused fundamental read: 2-4 sentences of
+      summary leaning on JPM's valuation (P/E vs. its threshold), latest
+      EPS, revenue, and net-margin posture pulled VERBATIM from the
+      fundamental report and grounded in JPM's actual business segments
+      from the company report. 2-5 key-point bullets cite underlying
+      metrics with (source: fundamental) or (source: company). Cited
+      values list contains 1-4 entries (P/E, EPS, revenue, margin) each
+      copied byte-for-byte from the report. NO technical / chart talk
+      (RSI, MACD, SMA-50) — the focus is fundamentals only. NO four-
+      section thesis, NO buy/sell verdict.
+
+  - id: v-technical-analysis
+    ticker: V
+    question: "Give me a technical analysis of V — chart setup and indicators."
+    expected_tools:
+      - company
+      - technical
+    expected_intent: technical
+    reference_thesis: |
+      A useful answer is a focused technical read: 2-4 sentences naming
+      the trend direction (uptrend / downtrend / consolidation) drawn
+      from moving-average alignment, the current RSI bucket (overbought
+      / neutral / oversold) with the canonical thresholds, and the MACD
+      posture relative to its signal line — all VERBATIM from the
+      technical report. 2-5 key-point bullets cite underlying values
+      with (source: technical) or (source: company). Cited values list
+      surfaces RSI, MACD, SMA-50 or current price (1-4 entries) copied
+      byte-for-byte. NO P/E / earnings talk — focus is technicals
+      only. NO four-section thesis, NO buy/sell verdict.
+
+  - id: unh-news-sentiment
+    ticker: UNH
+    question: "What's the news sentiment on UNH — any concerning headlines?"
+    expected_tools:
+      - company
+      - news
+    expected_intent: news_sentiment
+    reference_thesis: |
+      A useful answer is a focused news-sentiment read: 2-4 sentences
+      capturing the OVERALL TILT of recent UNH headlines in qualitative
+      language ("constructive", "mixed", "cautious") with (source: news)
+      cites and (source: company) for any qualitative business context.
+      2-5 key-point bullets each quote or summarise one headline with
+      (source: news). Cited values list MAY be empty (news sentiment
+      often has no quantitative anchor) or hold one qualitative label
+      like "constructive" with source=news. NO P/E, RSI, or other
+      numeric metrics from technical / fundamental — those reports were
+      not gathered for this focus. NO four-section thesis, NO buy/sell
+      verdict.
