@@ -6,6 +6,7 @@ from dagster_pipelines.asset_checks.fundamental_summary_checks import (
 )
 from dagster_pipelines.asset_checks.fundamentals_checks import (
     fundamentals_has_rows,
+    fundamentals_no_all_zero_core_rows,
     fundamentals_period_type_valid,
     fundamentals_revenue_and_net_income_populated,
 )
@@ -50,6 +51,7 @@ ALL_ASSET_CHECKS = [
     fundamentals_has_rows,
     fundamentals_period_type_valid,
     fundamentals_revenue_and_net_income_populated,
+    fundamentals_no_all_zero_core_rows,
     # technical_indicators
     daily_rsi_in_range,
     daily_macd_signal_coherent,
@@ -91,6 +93,7 @@ __all__ = [
     "fundamental_summary_no_infinities",
     "fundamental_summary_pe_in_band",
     "fundamentals_has_rows",
+    "fundamentals_no_all_zero_core_rows",
     "fundamentals_period_type_valid",
     "fundamentals_revenue_and_net_income_populated",
     "monthly_rsi_in_range",

@@ -34,26 +34,33 @@ def _extract_periods(
 
     Each column in the DataFrame is a reporting period (datetime index).
     Rows are financial line items.
+
+    Skips a period when its Total Revenue cell is missing/NaN: yfinance
+    sometimes lists an upcoming/just-reported period as a column header
+    while the cells are still empty (QNT-179, AAPL Q2 FY2026 race). Without
+    this guard, ``_safe_get``'s zero default lands an all-zero stub row in
+    ClickHouse that downstream ratios divide by zero against.
     """
     if income_stmt.empty:
         return []
 
     rows: list[dict] = []
     for period_end in income_stmt.columns:
+        revenue = _safe_get(income_stmt, "Total Revenue", period_end)
+        if revenue is None:
+            # yfinance has the period header but no values yet; skip the
+            # whole period so we don't half-ingest a quarter.
+            continue
+
         row: dict = {
             "ticker": ticker,
             "period_end": period_end.date() if hasattr(period_end, "date") else period_end,
             "period_type": period_type,
             "fetched_at": datetime.utcnow(),
+            "revenue": revenue,
+            "gross_profit": _safe_get_or_zero(income_stmt, "Gross Profit", period_end),
+            "net_income": _safe_get_or_zero(income_stmt, "Net Income", period_end),
         }
-
-        # Income statement
-        for field, col_name in [
-            ("revenue", "Total Revenue"),
-            ("gross_profit", "Gross Profit"),
-            ("net_income", "Net Income"),
-        ]:
-            row[field] = _safe_get(income_stmt, col_name, period_end)
 
         # Balance sheet
         for field, col_name in [
@@ -64,10 +71,10 @@ def _extract_periods(
             ("total_debt", "Total Debt"),
             ("cash_and_equivalents", "Cash And Cash Equivalents"),
         ]:
-            row[field] = _safe_get(balance_sheet, col_name, period_end)
+            row[field] = _safe_get_or_zero(balance_sheet, col_name, period_end)
 
         # Cash flow
-        row["free_cash_flow"] = _safe_get(cashflow, "Free Cash Flow", period_end)
+        row["free_cash_flow"] = _safe_get_or_zero(cashflow, "Free Cash Flow", period_end)
 
         # Info fields (point-in-time, same for all periods)
         row["ebitda"] = float(info.get("ebitda", 0) or 0)
@@ -79,8 +86,13 @@ def _extract_periods(
     return rows
 
 
-def _safe_get(df: pd.DataFrame, field: str, column: object) -> float:
-    """Safely extract a value from a yfinance statement DataFrame."""
+def _safe_get(df: pd.DataFrame, field: str, column: object) -> float | None:
+    """Return a value from a yfinance statement DataFrame, or ``None`` if missing.
+
+    ``None`` distinguishes "yfinance has no value here" from "the value is
+    legitimately zero" — critical for the spine field (revenue) which the
+    caller uses to decide whether to keep the period at all.
+    """
     try:
         if field in df.index and column in df.columns:
             val = df.loc[field, column]
@@ -88,7 +100,20 @@ def _safe_get(df: pd.DataFrame, field: str, column: object) -> float:
                 return float(val)
     except (KeyError, TypeError):
         pass
-    return 0.0
+    return None
+
+
+def _safe_get_or_zero(df: pd.DataFrame, field: str, column: object) -> float:
+    """Like ``_safe_get`` but coerces missing to 0.0 — for non-spine fields.
+
+    The ClickHouse columns are non-nullable Float64, so missing values land
+    as 0.0. This is acceptable for fields like ``gross_profit`` where the
+    period itself is already validated (revenue is present) — a missing
+    line item then is genuinely "zero" or "yfinance lacks this granularity",
+    not a stale-period stub.
+    """
+    val = _safe_get(df, field, column)
+    return val if val is not None else 0.0
 
 
 @asset(
