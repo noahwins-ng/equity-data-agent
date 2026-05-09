@@ -27,7 +27,7 @@
 | Area | Concrete proof |
 |---|---|
 | **Full-stack** | Next.js 16 (App Router, SSG + Vercel Deploy Hook, SSE chat) · FastAPI (async, OpenAPI, per-IP rate-limit + token budget + fail-closed circuit breaker) · TypeScript types auto-generated from the OpenAPI schema |
-| **LLM engineering** | LangGraph 3-node `plan → gather → synthesize` agent with 4-intent classifier (thesis / quick-fact / comparison / conversational) plus focused-analysis intents (fundamental / technical / news_sentiment) · LiteLLM routing across Groq + Gemini with a free-tier-first policy · Hallucination eval harness (regex-verified, **22/22 pass** on the 22-question golden set) · Cross-model bench with `git`-tracked history |
+| **LLM engineering** | Intent-routed LangGraph (`classify → plan → gather → synthesize`) supporting 7 response shapes (thesis / quick-fact / comparison / conversational + focused-analysis: fundamental / technical / news_sentiment) · LiteLLM routing across Groq + Gemini with a free-tier-first policy · Hallucination eval harness (regex-verified, **22/22 pass** on the 22-question golden set) · Cross-model bench with `git`-tracked history |
 | **Data engineering** | Dagster asset graph (**10 assets · 30 domain-bounded asset checks · 2 schedules**) · ClickHouse + Qdrant Cloud · Idempotent migrations re-applied every deploy · Multi-timeframe aggregation (daily → weekly → monthly) · Per-ticker news relevance filter at ingest |
 | **System design** | **19 ADRs** documenting every non-obvious choice (storage, agent shape, LLM routing, deploy ingress, public-chat threat model) — written at decision time, not retrofitted |
 | **Production ops** | Bespoke Docker Compose on a Hetzner VPS · 7 phase retros + a living failure-mode runbook · Multi-layer observability (Sentry + Langfuse + Prometheus + Grafana + cAdvisor + node_exporter + Dozzle) · Discord alerting on Dagster materialization failures + Docker container events ≤30s · UptimeRobot probe on `/api/v1/health` |
@@ -112,7 +112,7 @@ graph LR
     end
 
     subgraph "LangGraph — Reasoning"
-        AGENT[plan → gather → synthesize]
+        AGENT[classify → plan → gather → synthesize]
         TOOLS[get_*_report tools]
     end
 
@@ -159,7 +159,7 @@ See [`docs/architecture/system-overview.md`](docs/architecture/system-overview.m
 
 ![CLI thesis](docs/screenshots/cli-thesis.png)
 
-**Langfuse trace** — a full `plan → gather → synthesize` agent run with tool-call latencies and per-step token usage.
+**Langfuse trace** — a full `classify → plan → gather → synthesize` agent run with per-node spans and per-LLM-call generation observations carrying model name, token usage, and latency.
 
 ![Langfuse trace](docs/screenshots/langfuse-trace.png)
 
@@ -176,7 +176,7 @@ See [`docs/architecture/system-overview.md`](docs/architecture/system-overview.m
 | Storage | **ClickHouse** + **Qdrant Cloud** | Columnar OLAP for indicators / ratios; managed vector store for news embeddings ([ADR-001](docs/decisions/001-clickhouse-over-postgres.md), [ADR-009](docs/decisions/009-embedding-via-qdrant-cloud-inference.md)) |
 | Orchestration | **Dagster** | Asset-based lineage, sensors trigger downstream recompute, asset checks with real domain bounds catch bugs that pass code review |
 | API | **FastAPI** | Async, Pydantic-native, auto-generated OpenAPI; rate-limit + per-IP token budget + fail-closed breaker for the public chat endpoint ([ADR-017](docs/decisions/017-public-chat-truly-public-no-auth.md)) |
-| Agent | **LangGraph** | 3-node minimal graph (plan / gather / synthesize) per [ADR-007](docs/decisions/007-minimal-agent-graph-first.md); 4-intent classifier (thesis / quick-fact / comparison / conversational) |
+| Agent | **LangGraph** | Intent-routed 4-node graph (`classify` → `plan` → `gather` → `synthesize`) — per [ADR-007](docs/decisions/007-minimal-agent-graph-first.md)'s minimal-loop principle, with the `classify` router added later for response-shape routing across 7 intents |
 | LLM routing | **LiteLLM** + **Groq** (default) + **Gemini 2.5 Flash** (override) | One model alias `equity-agent/default`; switch backends via env var ([ADR-011](docs/decisions/011-llm-routing-groq-default-gemini-override.md)) |
 | Observability | **Langfuse** (agent traces) + **Sentry** (FastAPI errors) + Prometheus / Grafana / cAdvisor / node_exporter / Dozzle (host + container metrics + logs) | |
 | Frontend | **Next.js 16** on **Vercel** | [ADR-005](docs/decisions/005-nextjs-vercel-over-python-native-frontend.md), [ADR-008](docs/decisions/008-no-vercel-ai-sdk.md) (no Vercel AI SDK — native fetch + ReadableStream for SSE), [ADR-014](docs/decisions/014-nextjs-rendering-mode-per-page.md) (rendering mode per page) |
