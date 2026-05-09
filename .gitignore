@@ -35,3 +35,6 @@ htmlcov/
 .pyright/
 .mypy_cache/
 .claude/scheduled_tasks.lock
+
+# Personal / not-for-git docs
+docs/resume-blurb.md
