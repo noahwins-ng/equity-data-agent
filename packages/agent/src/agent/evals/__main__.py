@@ -16,18 +16,28 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
-from agent.evals.golden_set import (
+# Eval / bench runs are fully reproducible from history.csv (run_id +
+# git_sha + prompt_version + judge + cosine + token cost), so Langfuse
+# traces are pure duplicates that burn the free-tier event budget — a
+# 22-record bench emits ~200 observations. Disable tracing before
+# `agent.tracing` reads settings at import time. Override by setting the
+# keys explicitly in the calling env if a single run does need a trace.
+os.environ["LANGFUSE_PUBLIC_KEY"] = ""
+os.environ["LANGFUSE_SECRET_KEY"] = ""
+
+from agent.evals.golden_set import (  # noqa: E402
     HISTORY_PATH,
     fail_threshold_from_env,
     is_failing,
     run_all,
     summarise,
 )
-from agent.llm import set_model_override
-from agent.tracing import langfuse
+from agent.llm import set_model_override  # noqa: E402
+from agent.tracing import langfuse  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
