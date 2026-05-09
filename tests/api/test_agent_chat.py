@@ -1201,3 +1201,176 @@ def test_chat_request_rejects_legacy_toggle_fields() -> None:
     assert "tools_enabled" not in schema_fields
     assert "cite_sources" not in schema_fields
     assert schema_fields == {"ticker", "message"}
+
+
+# ─── QNT-182: deterministic eval scores pushed onto prod traces ─────────────
+
+
+def _install_fake_langfuse(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    """Replace the module-level Langfuse client with a MagicMock.
+
+    Tests run with no real Langfuse keys (so ``agent.tracing.langfuse`` is
+    ``None`` by default and the score push is a no-op). To exercise the
+    score-push code path we install a fake client at the import site
+    (``agent.eval_scores.langfuse``) and return it for assertions.
+    """
+    fake = MagicMock()
+    monkeypatch.setattr("agent.eval_scores.langfuse", fake)
+    return fake
+
+
+def test_eval_scores_pushed_on_happy_path(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both ``hallucination_ok`` and ``plan_adherence`` are pushed onto the
+    Langfuse trace when the graph completes successfully (QNT-182 AC #1, #3).
+
+    Uses a local graph stub whose reports contain the numbers the stubbed
+    thesis cites — otherwise ``hallucination_ok`` would correctly flag them
+    and the test wouldn't be exercising the happy path.
+    """
+    fake_lf = _install_fake_langfuse(monkeypatch)
+
+    clean_thesis = Thesis(
+        setup="NVDA framing.",
+        bull_case=["RSI 62 reading (source: technical)"],
+        bear_case=["P/E 35 expansion risk (source: fundamental)"],
+        verdict_stance="constructive",
+        verdict_action="Trim above SMA50 (source: technical).",
+    )
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
+        graph = MagicMock()
+
+        def invoke(state: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+            ticker = state["ticker"]
+            return {
+                "ticker": ticker,
+                "intent": "thesis",
+                "plan": ["technical", "fundamental"],
+                "reports": {
+                    "technical": "RSI is 62 currently. SMA50 cited.",
+                    "fundamental": "P/E sits at 35.",
+                },
+                "errors": {},
+                "thesis": clean_thesis,
+                "quick_fact": None,
+                "confidence": 0.67,
+            }
+
+        graph.invoke.side_effect = invoke
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(
+        chat_module,
+        "default_report_tools",
+        lambda: {
+            "technical": lambda t: f"RSI 62 reading for {t}. SMA50 cited.",
+            "fundamental": lambda t: f"P/E 35 for {t}.",
+        },
+    )
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
+    assert r.status_code == 200
+
+    score_calls = fake_lf.score_current_trace.call_args_list
+    score_names = {call.kwargs["name"] for call in score_calls}
+    assert score_names == {"hallucination_ok", "plan_adherence"}
+
+    for call in score_calls:
+        assert call.kwargs["value"] == 1.0
+        assert call.kwargs["data_type"] == "NUMERIC"
+
+
+def test_eval_scores_flag_fabricated_number(
+    client: TestClient,
+    stub_graph: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A thesis citing a number absent from the reports is flagged with
+    ``hallucination_ok=0.0`` and the offending token in ``comment``
+    (QNT-182 AC #2, #4)."""
+    fake_lf = _install_fake_langfuse(monkeypatch)
+
+    # Override the stub to inject a hallucinated number. Patch build_graph
+    # again so its thesis cites RSI 99 — which appears in NO report body
+    # produced by the stubbed tools. The hallucination scorer should flag 99.
+    bad_thesis = Thesis(
+        setup="NVDA framing.",
+        bull_case=["RSI 99 (source: technical)"],
+        bear_case=["Multiple compression risk (source: fundamental)"],
+        verdict_stance="constructive",
+        verdict_action="Trim above SMA50 (source: technical).",
+    )
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
+        graph = MagicMock()
+
+        def invoke(state: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+            ticker = state["ticker"]
+            reports = {name: fn(ticker) for name, fn in tools.items()}
+            return {
+                "ticker": ticker,
+                "intent": "thesis",
+                "plan": list(tools.keys()),
+                "reports": reports,
+                "errors": {},
+                "thesis": bad_thesis,
+                "quick_fact": None,
+                "confidence": 0.67,
+            }
+
+        graph.invoke.side_effect = invoke
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
+    assert r.status_code == 200
+
+    score_calls = fake_lf.score_current_trace.call_args_list
+    halluc_call = next(c for c in score_calls if c.kwargs["name"] == "hallucination_ok")
+    assert halluc_call.kwargs["value"] == 0.0
+    # ``HallucinationResult.reason()`` formats the unsupported tokens into
+    # the comment — the fabricated 99 must show up there.
+    assert "99" in halluc_call.kwargs["comment"]
+
+
+def test_eval_scores_skipped_when_langfuse_disabled(
+    client: TestClient,
+    stub_graph: MagicMock,
+) -> None:
+    """When Langfuse keys are unset (the test default), the score push is a
+    silent no-op and the SSE response completes normally (QNT-182 AC #5)."""
+    # No monkeypatch — ``agent.eval_scores.langfuse`` is ``None`` here. If
+    # the score-push helper didn't guard on it, this request would crash.
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
+    assert r.status_code == 200
+    frames = _parse_sse(r.text)
+    events = [name for name, _ in frames]
+    assert events[-1] == "done"
+    # Ensure no error frame leaked from a score-push exception.
+    assert "error" not in events
+
+
+def test_eval_scores_swallow_langfuse_failures(
+    client: TestClient,
+    stub_graph: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If ``score_current_trace`` raises, the request must still complete —
+    observability must not crash the SSE response (matches the
+    ``_UsageCallback`` pattern in ``agent.llm``)."""
+    fake_lf = _install_fake_langfuse(monkeypatch)
+    fake_lf.score_current_trace.side_effect = RuntimeError("langfuse upstream down")
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
+    assert r.status_code == 200
+    frames = _parse_sse(r.text)
+    events = [name for name, _ in frames]
+    assert events[-1] == "done"
+    # The SSE error event is reserved for graph-level failures; a Langfuse
+    # outage must not surface to the client.
+    assert "error" not in events

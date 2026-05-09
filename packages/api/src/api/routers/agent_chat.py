@@ -94,6 +94,7 @@ from typing import Any
 
 from agent.comparison import ComparisonAnswer
 from agent.conversational import ConversationalAnswer, domain_redirect
+from agent.eval_scores import push_to_current_trace as push_eval_scores
 from agent.focused import FocusedAnalysis
 from agent.graph import OPTIONAL_TOOLS, build_graph
 from agent.llm import (
@@ -544,6 +545,14 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
                 except Exception as exc:  # noqa: BLE001 — surfaced as SSE error
                     logger.exception("agent graph failed for %s", ticker)
                     final_state_holder["error"] = exc
+                else:
+                    # QNT-182: push deterministic eval scores onto this
+                    # trace while still inside @observe so
+                    # score_current_trace resolves the ambient trace ID.
+                    # Helper is a safe no-op when Langfuse keys are unset.
+                    state_obj = final_state_holder.get("state")
+                    if isinstance(state_obj, dict):
+                        push_eval_scores(state_obj)
 
         runner_task = asyncio.create_task(asyncio.to_thread(_runner))
         run_deadline = loop.time() + settings.CHAT_RUN_TIMEOUT
