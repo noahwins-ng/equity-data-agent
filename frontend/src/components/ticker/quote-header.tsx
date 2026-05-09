@@ -83,7 +83,7 @@ export function QuoteHeader({
           )}
         </div>
         <div className="flex shrink-0 items-baseline gap-2 whitespace-nowrap">
-          <span className="font-mono text-2xl font-semibold tabular-nums leading-none text-zinc-50">
+          <span className="font-mono text-xl font-semibold tabular-nums leading-none text-zinc-50">
             {formatPrice(quote.price)}
           </span>
           <span className={`font-mono text-xs tabular-nums ${changeColor}`}>
