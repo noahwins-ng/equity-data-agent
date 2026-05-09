@@ -4,12 +4,12 @@
  * Fundamentals card — Quarterly / Annual / TTM tabs over
  * `equity_derived.fundamental_summary`.
  *
- * ROE / ROA framing (post-QNT-179 round 2):
- *   - All three period_types render the row's own value via `roeRoaCell`.
- *   - Annual = as-reported full-year NI / equity.
- *   - Quarterly = single-quarter NI / equity ("ROE for the quarter").
- *   - TTM = trailing-4Q NI / equity-at-period-end (computed in
- *     `_build_ttm_rows`); rendered with a trailing-4Q caveat.
+ * Quarterly tab calibration (QNT-180): P/E, ROE, ROA and FCF yield on the
+ * QUARTERLY tab read from the latest TTM row, not from the single-quarter
+ * value, because every external dashboard (TradingView, Yahoo, Bloomberg)
+ * quotes those four metrics as TTM. Single-quarter ROE / ROA are
+ * mathematically valid but make lumpy quarters (NVDA Q4 FY26: 27% vs 76%
+ * TTM) look like the wrong number. Annual + TTM tabs are unchanged.
  *
  * Empty-data fallback: when the requested period has no rows we surface a
  * small "no <period> data" line; the caller can hand-pick TTM as a fallback
@@ -80,10 +80,9 @@ export function FundamentalsCard({
   currentPrice,
 }: {
   ticker: string;
-  // Latest close from the quote endpoint, used as the numerator when we
-  // compute P/E against the displayed period's EPS denominator. The card
-  // computes P/E per period (Annual / Quarterly-annualised / TTM) rather
-  // than rendering a single P/E TTM regardless of the active tab.
+  // Latest close from the quote endpoint, used as the P/E numerator on
+  // the ANNUAL tab (price / FY-EPS). Quarterly + TTM tabs read the
+  // backend-computed `pe_ratio` from the TTM row instead of recomputing.
   currentPrice: number | null;
 }) {
   const [period, setPeriod] = useState<PeriodType>("annual");
@@ -188,13 +187,10 @@ export function FundamentalsCard({
             </p>
           )}
           <dl className="divide-y divide-zinc-800/60 text-sm">
-            {/* P/E is period-aware: Annual = price / annual EPS,
-                Quarterly = price / (Q EPS × 4) annualised, TTM = price /
-                TTM EPS. The label travels with the period so the user
-                isn't misled by a single number across all tabs. peCell
-                returns { label, value } — Row's props match exactly, so
-                spread directly. */}
-            <Row {...peCell(display, currentPrice)} />
+            {/* P/E label travels with period: Annual = "P/E" (price /
+                FY-EPS); Quarterly + TTM = "P/E TTM" (TTM row's pe_ratio).
+                peCell returns { label, value }; Row's props match. */}
+            <Row {...peCell(display, rows, currentPrice)} />
             <Row
               label="Revenue"
               value={formatCompact(pickAbsolute(display, "revenue"))}
@@ -224,17 +220,28 @@ export function FundamentalsCard({
               extraLabel="YoY"
             />
             <Row label="EPS" value={formatRatio(display.eps, 2)} />
-            <Row
-              label="FCF"
-              value={formatCompact(pickAbsolute(display, "fcf"))}
-              extra={formatPct(display.fcf_yield)}
-              extraColor={changeColorClass(display.fcf_yield)}
-              extraLabel="yield"
-            />
+            {(() => {
+              const { yieldValue, yieldSuffix } = pickFcfYield(display, rows);
+              // Render order on the QUARTERLY tab (per AC #5):
+              //   "<value> <pct> yield (TTM)"
+              // The (TTM) marker rides on `extraLabel` so it sits AFTER
+              // the "yield" word, not between % and yield. `extraLabel`
+              // hides below 2xl (same responsive behavior as the rest of
+              // the card) — the percentage value alone is still shown.
+              return (
+                <Row
+                  label="FCF"
+                  value={formatCompact(pickAbsolute(display, "fcf"))}
+                  extra={yieldValue == null ? "—" : formatPct(yieldValue)}
+                  extraColor={changeColorClass(yieldValue)}
+                  extraLabel={yieldSuffix ? `yield${yieldSuffix}` : "yield"}
+                />
+              );
+            })()}
             <Row label="Debt / equity" value={formatRatio(display.debt_to_equity, 2)} />
             <Row label="Current ratio" value={formatRatio(display.current_ratio, 2)} />
-            <Row label="ROE" value={roeRoaCell(display, "roe")} />
-            <Row label="ROA" value={roeRoaCell(display, "roa")} />
+            <Row label="ROE" value={roeRoaCell(display, rows, "roe")} />
+            <Row label="ROA" value={roeRoaCell(display, rows, "roa")} />
           </dl>
         </>
       )}
@@ -245,36 +252,60 @@ export function FundamentalsCard({
 
 function peCell(
   row: FundamentalRow,
+  allRows: FundamentalRow[],
   price: number | null,
 ): { label: string; value: string } {
-  // Label travels with the displayed period: Annual = "P/E", Quarterly =
-  // "P/E annualised" (single-Q EPS × 4 — flagged so it's not mistaken for
-  // a true TTM P/E), TTM = "P/E TTM". Returns "—" when price or EPS are
-  // missing, or when the effective denominator is zero. Negative EPS
-  // produces a negative P/E (loss-making companies — valid signal).
-  const label =
-    row.period_type === "annual"
-      ? "P/E"
-      : row.period_type === "quarterly"
-        ? "P/E annualised"
-        : "P/E TTM";
-  if (price === null || row.eps === null) return { label, value: "—" };
-  const denom = row.period_type === "quarterly" ? row.eps * 4 : row.eps;
-  if (denom === 0) return { label, value: "—" };
-  return { label, value: formatRatio(price / denom, 2) };
+  // Annual: as-reported full-year EPS, label "P/E", price / FY-EPS.
+  //   Negative FY-EPS produces a negative P/E (loss-making — valid signal).
+  // Quarterly: read pe_ratio from the latest TTM row, label "P/E TTM"
+  //   (QNT-180). The earlier price/(Q-EPS×4) annualisation produced
+  //   numbers that didn't match TradingView/Yahoo — NVDA Q4-26 was
+  //   30.43 vs the canonical 43.55 TTM.
+  // TTM: read pe_ratio from the row itself, label "P/E TTM".
+  if (row.period_type === "annual") {
+    if (price === null || row.eps === null || row.eps === 0) return { label: "P/E", value: "—" };
+    return { label: "P/E", value: formatRatio(price / row.eps, 2) };
+  }
+  const source = row.period_type === "ttm" ? row : pickLatest(allRows, "ttm");
+  if (source?.pe_ratio == null) return { label: "P/E TTM", value: "—" };
+  return { label: "P/E TTM", value: formatRatio(source.pe_ratio, 2) };
 }
 
-function roeRoaCell(row: FundamentalRow, field: "roe" | "roa"): string {
-  // All period_types now read off the row's own value:
-  //   - annual: full-year NI / equity, as reported
-  //   - quarterly: single-quarter NI / equity ("ROE for the quarter")
-  //   - ttm: NI_TTM / equity-at-period-end (QNT-179 round 2 backend addition)
-  // The earlier "fall back to TTM for quarterly" path was rendering "--"
-  // because the TTM payload didn't carry roe/roa at all; now that it does,
-  // the row's own value is always meaningful.
-  if (row[field] === null) return "—";
-  if (row.period_type === "ttm") return `${formatPct(row[field])} trailing 4Q`;
-  return formatPct(row[field]);
+function roeRoaCell(
+  row: FundamentalRow,
+  allRows: FundamentalRow[],
+  field: "roe" | "roa",
+): string {
+  // Annual: full-year NI / equity, as reported.
+  // Quarterly: read TTM row's value with " (TTM)" suffix (QNT-180). Single-
+  //   quarter ROE/ROA is mathematically valid but lumpy quarters (NVDA Q4
+  //   FY26: 27% Q vs 76% TTM) make it look like the wrong number; every
+  //   external dashboard quotes TTM. Falls back to "—" if no TTM row.
+  // TTM: NI_TTM / equity-at-period-end, with a trailing-4Q caveat.
+  if (row.period_type === "ttm") {
+    return row[field] == null ? "—" : `${formatPct(row[field])} trailing 4Q`;
+  }
+  if (row.period_type === "quarterly") {
+    const ttm = pickLatest(allRows, "ttm");
+    return ttm?.[field] == null ? "—" : `${formatPct(ttm[field])} (TTM)`;
+  }
+  return row[field] == null ? "—" : formatPct(row[field]);
+}
+
+/**
+ * FCF yield on QUARTERLY rows reads the latest TTM row's `fcf_yield` and
+ * appends a `(TTM)` suffix (QNT-180). Annual + TTM tabs render the row's
+ * own value unchanged.
+ */
+function pickFcfYield(
+  row: FundamentalRow,
+  allRows: FundamentalRow[],
+): { yieldValue: number | null; yieldSuffix: string } {
+  if (row.period_type === "quarterly") {
+    const ttm = pickLatest(allRows, "ttm");
+    return { yieldValue: ttm?.fcf_yield ?? null, yieldSuffix: ttm?.fcf_yield != null ? " (TTM)" : "" };
+  }
+  return { yieldValue: row.fcf_yield, yieldSuffix: "" };
 }
 
 function Row({
