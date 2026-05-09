@@ -35,7 +35,6 @@ def _build_client() -> Langfuse | None:
         public_key=settings.LANGFUSE_PUBLIC_KEY,
         secret_key=settings.LANGFUSE_SECRET_KEY,
         base_url=settings.LANGFUSE_BASE_URL,
-        sample_rate=settings.LANGFUSE_SAMPLE_RATE,
     )
 
 

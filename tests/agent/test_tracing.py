@@ -43,7 +43,6 @@ def test_enabled_when_both_keys_present(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(settings, "LANGFUSE_PUBLIC_KEY", "pk-test")
     monkeypatch.setattr(settings, "LANGFUSE_SECRET_KEY", "sk-test")
-    monkeypatch.setattr(settings, "LANGFUSE_SAMPLE_RATE", 1.0)
     monkeypatch.setattr(tracing, "Langfuse", MagicMock(return_value=MagicMock()))
     fake_handler = MagicMock(name="CallbackHandler-instance")
     monkeypatch.setattr(tracing, "CallbackHandler", MagicMock(return_value=fake_handler))
@@ -55,7 +54,6 @@ def test_enabled_when_both_keys_present(monkeypatch: pytest.MonkeyPatch) -> None
         public_key="pk-test",
         secret_key="sk-test",
         base_url=settings.LANGFUSE_BASE_URL,
-        sample_rate=1.0,
     )
 
 
@@ -84,23 +82,6 @@ def test_flush_calls_client_flush_when_enabled(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(tracing, "langfuse", fake)
     tracing.flush()
     fake.flush.assert_called_once_with()
-
-
-def test_sample_rate_threaded_through_to_client(monkeypatch: pytest.MonkeyPatch) -> None:
-    """LANGFUSE_SAMPLE_RATE must reach the Langfuse(sample_rate=...) ctor —
-    the prod cost lever depends on it."""
-    from shared.config import settings
-
-    monkeypatch.setattr(settings, "LANGFUSE_PUBLIC_KEY", "pk-test")
-    monkeypatch.setattr(settings, "LANGFUSE_SECRET_KEY", "sk-test")
-    monkeypatch.setattr(settings, "LANGFUSE_SAMPLE_RATE", 0.2)
-    monkeypatch.setattr(tracing, "Langfuse", MagicMock(return_value=MagicMock()))
-
-    tracing._build_client()
-
-    langfuse_ctor = cast(MagicMock, tracing.Langfuse)
-    langfuse_ctor.assert_called_once()
-    assert langfuse_ctor.call_args.kwargs["sample_rate"] == 0.2
 
 
 # ─── Architectural invariant: llm.invoke must carry config= for tracing ─────
