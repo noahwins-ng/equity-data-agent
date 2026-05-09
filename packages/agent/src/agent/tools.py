@@ -46,7 +46,13 @@ import httpx
 from shared.config import settings
 from shared.tickers import TICKERS
 
-from agent.tracing import observe
+# Tool wrappers are pure HTTP-to-FastAPI calls, not LLM calls — no
+# `@observe` decorators here. The four agent-graph node spans (classify
+# / plan / gather / synthesize) carry the agent's behavioural shape;
+# tool-call correctness is asserted by the eval's `tool_call_ok` axis,
+# tool latency / errors live in Sentry + FastAPI access logs. Tracing
+# every tool call adds 4-6 Langfuse observations per chat run with no
+# debug signal a span doesn't already give us.
 
 logger = logging.getLogger(__name__)
 
@@ -116,38 +122,32 @@ def _report_tool(kind: str, ticker: str) -> str:
     return _fetch_text(url, name=f"{kind}-report")
 
 
-@observe(name="get_summary_report")
 def get_summary_report(ticker: str) -> str:
     """High-level snapshot report. Phase-5 convention: the agent reads this
     first to orient itself before selecting deeper reports in the plan step."""
     return _report_tool("summary", ticker)
 
 
-@observe(name="get_technical_report")
 def get_technical_report(ticker: str) -> str:
     """Technical-indicator report: RSI, MACD, SMAs, and trend summary."""
     return _report_tool("technical", ticker)
 
 
-@observe(name="get_fundamental_report")
 def get_fundamental_report(ticker: str) -> str:
     """Fundamental report: latest P/E, revenue, and earnings surprises."""
     return _report_tool("fundamental", ticker)
 
 
-@observe(name="get_news_report")
 def get_news_report(ticker: str) -> str:
     """Recent news headlines (pre-aggregated by the API template layer)."""
     return _report_tool("news", ticker)
 
 
-@observe(name="get_company_report")
 def get_company_report(ticker: str) -> str:
     """Static company business profile: description, competitors, risks, watch."""
     return _report_tool("company", ticker)
 
 
-@observe(name="search_news")
 def search_news(ticker: str, query: str) -> str:
     """Semantic news search against Qdrant, returned as pretty JSON.
 
