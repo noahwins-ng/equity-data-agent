@@ -581,7 +581,7 @@ def _stub_token_callback(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:  # noqa: ARG001
         graph = MagicMock()
 
-        def invoke(state: dict[str, Any]) -> dict[str, Any]:
+        def invoke(state: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
             tracker = llm_module._TOKEN_TRACKER.get()
             if tracker is not None:
                 tracker.add(1234)

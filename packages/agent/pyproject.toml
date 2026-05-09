@@ -7,6 +7,10 @@ dependencies = [
     "langgraph>=0.2.0",
     "langchain-core>=0.3.0",
     "langchain-openai>=0.2.0",
+    # Required by langfuse.langchain.CallbackHandler (QNT-181). The Langfuse
+    # SDK's LangChain integration imports `langchain` directly; core+openai
+    # alone aren't enough.
+    "langchain>=0.3.0",
     "langfuse>=2.0.0",
     "httpx>=0.27.0",
 ]

@@ -360,25 +360,23 @@ def test_default_report_tools_compose_with_build_graph(
             self._plan_response = AIMessage(content=plan_response)
             self._thesis = thesis
 
-        def invoke(self, _prompt: str) -> Any:
+        def invoke(self, _prompt: str, **_kwargs: Any) -> Any:
             return self._plan_response
 
         def with_structured_output(self, _schema: object) -> Any:
             outer = self
 
             class _StructuredRunnable:
-                def invoke(self, _prompt: object) -> Any:
+                def invoke(self, _prompt: object, **_kwargs: Any) -> Any:
                     return outer._thesis
 
             return _StructuredRunnable()
 
     stub = _StubLLM("company, technical, fundamental, news", expected_thesis)
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: stub)
-    monkeypatch.setattr(
-        graph_module.langfuse,
-        "traced_invoke",
-        lambda llm_, prompt, *, name: llm_.invoke(prompt),
-    )
+    # QNT-181: graph nodes call ``llm.invoke(prompt, config=config)`` directly;
+    # stub.invoke / structured.invoke accept ``**_kwargs`` so the propagated
+    # ``config=`` kwarg flows through unchanged.
     _install_recorder(monkeypatch, lambda url, _p: _ok(f"body for {url}"))
 
     graph = graph_module.build_graph(default_report_tools())

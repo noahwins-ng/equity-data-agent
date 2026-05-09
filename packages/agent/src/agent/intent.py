@@ -46,11 +46,11 @@ import logging
 import re
 from typing import Literal
 
+from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 from shared.tickers import TICKERS
 
 from agent.llm import get_llm
-from agent.tracing import langfuse
 
 logger = logging.getLogger(__name__)
 
@@ -385,13 +385,21 @@ Question: {question}
 """
 
 
-def classify_intent(question: str) -> Intent:
+def classify_intent(
+    question: str,
+    *,
+    config: RunnableConfig | None = None,
+) -> Intent:
     """Return the response shape to use for ``question``.
 
     Pure dispatcher: heuristic first, LLM fallback. Both branches default
     to ``thesis`` on any failure or ambiguity so callers never see an
-    invalid intent. Routed through ``langfuse.traced_invoke`` so a misroute
-    is visible in the dashboard.
+    invalid intent.
+
+    QNT-181: ``config`` carries the LangGraph CallbackHandler from the
+    graph entry point so the LLM-fallback path's generation observation
+    nests under the parent ``agent-chat`` trace. ``None`` (the default,
+    used by tests + the heuristic-only direct callers) skips tracing.
     """
     heuristic = _heuristic_intent(question)
     if heuristic is not None:
@@ -400,10 +408,9 @@ def classify_intent(question: str) -> Intent:
 
     structured_llm = get_llm(temperature=0.0).with_structured_output(IntentDecision)
     try:
-        response = langfuse.traced_invoke(
-            structured_llm,
+        response = structured_llm.invoke(
             _CLASSIFY_PROMPT.format(question=question.strip()),
-            name="classify",
+            config=config,
         )
     except Exception as exc:  # noqa: BLE001 — bias to thesis on any failure
         logger.warning("classify llm failed, defaulting to thesis: %s", exc)

@@ -214,8 +214,8 @@ class _GroqQuotaError(Exception):
     LiteLLM raises ``litellm.RateLimitError`` for upstream 429s. The
     synthesize node catches ``Exception`` (BLE001 with a fallback
     rationale) so the exact class doesn't matter for the contract — we
-    just need ANY exception that escapes ``traced_invoke`` to land in the
-    ``_fallback`` path.
+    just need ANY exception that escapes the structured-LLM call to land
+    in the ``_fallback`` path.
     """
 
 
@@ -230,22 +230,32 @@ def test_groq_quota_error_falls_back_to_conversational_redirect(
     """
     from agent import graph as graph_module
 
-    # Stub ``traced_invoke`` to raise the Groq quota error on every LLM
-    # call. plan_node and synthesize_node both call it; we want the error
-    # to surface specifically inside synthesize so the fallback path runs.
+    # QNT-181: stub the LLM directly. Thesis intent skips the plan-LLM
+    # call so the only LLM call left is synthesize (via the structured
+    # runnable). Force the structured invoke to raise the quota error so
+    # the synthesize fallback path runs end-to-end.
     call_log: list[str] = []
 
-    def _raise_quota(llm: Any, prompt: Any, *, name: str) -> Any:  # noqa: ARG001
-        call_log.append(name)
-        if name == "synthesize":
-            raise _GroqQuotaError("groq quota exceeded for the day")
-        # Return a minimal stub for plan so plan_node can produce a list.
-        stub = type("Stub", (), {"content": "technical"})()
-        return stub
+    class _QuotaLLM:
+        def invoke(self, _prompt: Any, **_kw: Any) -> Any:
+            call_log.append("plan")
+            stub = type("Stub", (), {"content": "technical"})()
+            return stub
 
-    monkeypatch.setattr(graph_module.langfuse, "traced_invoke", _raise_quota)
+        def with_structured_output(self, _schema: object) -> Any:
+            outer = self
+
+            class _StructuredRunnable:
+                def invoke(self, _prompt: Any, **_kw: Any) -> Any:
+                    call_log.append("synthesize")
+                    raise _GroqQuotaError("groq quota exceeded for the day")
+                    _ = outer  # keep closure ref for clarity
+
+            return _StructuredRunnable()
+
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: _QuotaLLM())
     # Force intent=thesis so the synthesize path is the one that crashes.
-    monkeypatch.setattr(graph_module, "classify_intent", lambda _q: "thesis")
+    monkeypatch.setattr(graph_module, "classify_intent", lambda _q, **_: "thesis")
 
     # Minimal tool returning a non-empty report so synthesize doesn't
     # short-circuit on "no reports" before reaching the LLM call.

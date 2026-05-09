@@ -68,7 +68,14 @@ def test_analyze_success_prints_thesis_and_exits_0(
     assert "## Bear Case" in out.out
     assert "## Verdict" in out.out
     assert "confidence=0.67" in out.err
-    stub_graph.invoke.assert_called_once_with({"ticker": "NVDA"})
+    # QNT-181: CLI now passes config={"callbacks": [handler]} when Langfuse
+    # is enabled, or config={} when disabled. Tests run with keys stripped
+    # so config defaults to {}; assert the state shape and accept any config.
+    stub_graph.invoke.assert_called_once()
+    call = stub_graph.invoke.call_args
+    assert call.args == ({"ticker": "NVDA"},)
+    # config kwarg present (empty when disabled, populated when enabled).
+    assert "config" in call.kwargs
 
 
 def test_analyze_quick_fact_intent_prints_short_answer(

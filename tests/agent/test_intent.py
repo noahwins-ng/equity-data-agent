@@ -115,11 +115,9 @@ def _patch_llm_pipeline(
     llm = MagicMock()
     llm.with_structured_output = MagicMock(return_value=structured)
     monkeypatch.setattr(intent_module, "get_llm", MagicMock(return_value=llm))
-    monkeypatch.setattr(
-        intent_module.langfuse,
-        "traced_invoke",
-        lambda runnable, prompt, *, name: runnable.invoke(prompt),
-    )
+    # QNT-181: classify_intent calls structured_llm.invoke(prompt, config=...)
+    # directly now that traced_invoke is gone. The MagicMock accepts the extra
+    # ``config=`` kwarg unchanged so no extra patching is required here.
     return structured
 
 
