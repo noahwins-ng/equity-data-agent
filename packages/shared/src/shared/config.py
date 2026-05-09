@@ -49,10 +49,6 @@ class Settings(BaseSettings):
     LANGFUSE_PUBLIC_KEY: str = ""
     LANGFUSE_SECRET_KEY: str = ""
     LANGFUSE_BASE_URL: str = "https://us.cloud.langfuse.com"
-    # Trace sampling probability passed to ``Langfuse(sample_rate=...)``.
-    # 1.0 = trace every request (dev / staging); 0.2 = trace 20% (prod cost
-    # control under the 50k/month free tier). 0.0 disables tracing entirely.
-    LANGFUSE_SAMPLE_RATE: float = 1.0
 
     # ─── Alerting (QNT-62 + QNT-101) ─────────────────────────────────────
     # Discord webhook used by docker-events-notify.sh (container die/kill/oom)
