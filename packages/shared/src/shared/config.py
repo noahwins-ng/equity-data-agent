@@ -53,15 +53,6 @@ class Settings(BaseSettings):
     # 1.0 = trace every request (dev / staging); 0.2 = trace 20% (prod cost
     # control under the 50k/month free tier). 0.0 disables tracing entirely.
     LANGFUSE_SAMPLE_RATE: float = 1.0
-    # Pepper for HMAC-SHA256 over client_ip when tagging Langfuse traces
-    # with a user_id (QNT-181 / ADR-019). Without this, an unsalted hash of
-    # an IP is trivially reversible by enumeration over the IPv4 universe;
-    # with a fixed-but-secret pepper, inversion requires also knowing the
-    # pepper. Generate with `openssl rand -hex 32` and store in the
-    # SOPS-encrypted prod env. Empty in dev = degrades to plain HMAC w/
-    # empty key (still better than truncated SHA-256, but not a privacy
-    # guarantee — set the value before claiming one).
-    LANGFUSE_USER_ID_PEPPER: str = ""
 
     # ─── Alerting (QNT-62 + QNT-101) ─────────────────────────────────────
     # Discord webhook used by docker-events-notify.sh (container die/kill/oom)

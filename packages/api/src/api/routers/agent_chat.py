@@ -83,7 +83,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
-import hmac
 import json
 import logging
 import re
@@ -504,20 +503,16 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
         graph = build_graph(instrumented, event_emitter=_emit)
 
         # QNT-181: tag every Langfuse trace with a per-request session_id
-        # (uuid4) and a per-IP user_id derived from a peppered HMAC of the
-        # client IP. The HMAC + secret pepper makes hash inversion infeasible
-        # (a plain truncated sha256 over the IPv4 universe is reversible by
-        # enumeration); the 12-char prefix is enough collision resistance for
-        # the demo's traffic volume while keeping the UI filter ergonomic.
-        # Same spirit as ADR-017's threat model: rate-limit by IP, never
-        # store the IP itself, and never publish a value an attacker can
-        # cheaply reverse to recover one.
+        # (uuid4) and a per-IP user_id (truncated sha256 of client_ip). The
+        # hash is for stable filter cardinality in the Langfuse UI -- "all
+        # traces from this IP" is one filter click -- not for privacy.
+        # ADR-017 already established this as an open public-demo with no
+        # auth and no PII; the IP is not sensitive (city-level geo at most,
+        # which any HTTP server already logs). If login/multi-tenant ever
+        # lands, swap to HMAC + a SOPS-encrypted pepper before user_id maps
+        # to a real identity.
         session_id = str(uuid.uuid4())
-        user_id = hmac.new(
-            settings.LANGFUSE_USER_ID_PEPPER.encode(),
-            client_ip.encode(),
-            hashlib.sha256,
-        ).hexdigest()[:12]
+        user_id = hashlib.sha256(client_ip.encode()).hexdigest()[:12]
 
         @observe(name="agent-chat")
         def _runner() -> None:
