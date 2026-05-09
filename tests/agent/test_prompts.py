@@ -326,16 +326,7 @@ def test_synthesize_node_invokes_llm_with_system_message(
     llm.invoke = MagicMock(return_value=plan_response)
     llm.with_structured_output = MagicMock(return_value=structured_runnable)
 
-    captured: list[object] = []
-
-    def traced(llm_: object, prompt: object, *, name: str) -> object:
-        if name == "synthesize":
-            captured.append(prompt)
-            return structured_runnable.invoke(prompt)
-        return llm.invoke(prompt)
-
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
-    monkeypatch.setattr(graph_module.langfuse, "traced_invoke", traced)
 
     def tool(t: str) -> str:
         return f"report for {t}"
@@ -343,8 +334,14 @@ def test_synthesize_node_invokes_llm_with_system_message(
     graph = build_graph({name: tool for name in REPORT_TOOLS})
     graph.invoke({"ticker": "NVDA", "question": "Is NVDA a buy?"})
 
-    assert len(captured) == 1, "synthesize must be called exactly once per run"
-    synthesize_prompt = captured[0]
+    # Synthesize was called exactly once on the structured runnable; pull
+    # the prompt off its call_args. QNT-181 routes via direct .invoke()
+    # rather than the old traced_invoke wrapper, so the structured stub's
+    # MagicMock records the call.
+    assert structured_runnable.invoke.call_count == 1, (
+        "synthesize must be called exactly once per run"
+    )
+    synthesize_prompt = structured_runnable.invoke.call_args.args[0]
     assert isinstance(synthesize_prompt, list), (
         f"expected messages list, got {type(synthesize_prompt).__name__} — "
         "regression to flat-string delivery would re-introduce role confusion"

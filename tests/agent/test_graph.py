@@ -99,11 +99,9 @@ def stub_llm(monkeypatch: pytest.MonkeyPatch) -> _StructuredLLM:
     factory = MagicMock(return_value=llm)
     monkeypatch.setattr(graph_module, "get_llm", factory)
     monkeypatch.setattr(intent_module, "get_llm", factory)
-    monkeypatch.setattr(
-        graph_module.langfuse,
-        "traced_invoke",
-        lambda llm_, prompt, *, name: llm_.invoke(prompt),
-    )
+    # QNT-181: nodes call ``llm.invoke(prompt, config=config)`` directly now
+    # that traced_invoke is gone. The stub's ``invoke`` is a MagicMock so it
+    # accepts the extra ``config=`` kwarg unchanged — no extra patching needed.
     return llm
 
 
@@ -327,11 +325,6 @@ def test_llm_is_injected_via_get_llm_factory(
     llm.invoke.return_value = AIMessage(content="technical")
     factory = MagicMock(return_value=llm)
     monkeypatch.setattr(graph_module, "get_llm", factory)
-    monkeypatch.setattr(
-        graph_module.langfuse,
-        "traced_invoke",
-        lambda llm_, prompt, *, name: llm_.invoke(prompt),
-    )
 
     graph = build_graph({"technical": _mock_tool("tech")})
     _run(graph)
@@ -339,31 +332,29 @@ def test_llm_is_injected_via_get_llm_factory(
     assert factory.call_count >= 1  # plan + synthesize both call get_llm()
 
 
-def test_llm_calls_go_through_traced_invoke(
+def test_llm_calls_carry_runtime_config_for_callback_propagation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Every LLM call in the graph must route through ``langfuse.traced_invoke``
-    (the contract enforced by test_tracing.py's AST scanner at package level;
-    this test adds a runtime assertion)."""
+    """QNT-181: every LLM call inside a graph node must pass
+    ``config=`` so the LangGraph CallbackHandler attached at graph entry
+    propagates to LLM-level generation observations. This is the runtime
+    counterpart to the AST contract test in test_tracing.py."""
     llm = _StructuredLLM()
     llm.invoke.return_value = AIMessage(content="technical")
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
 
-    calls: list[str] = []
-
-    def traced(llm_: Any, prompt: str, *, name: str) -> Any:
-        calls.append(name)
-        return llm_.invoke(prompt)
-
-    monkeypatch.setattr(graph_module.langfuse, "traced_invoke", traced)
-
     graph = build_graph({"technical": _mock_tool("tech")})
     _run(graph)
 
-    # Thesis intent skips the plan LLM call (fetch-everything is deterministic),
-    # so only the synthesize call routes through traced_invoke. quick_fact
-    # would still produce ["plan", "synthesize"] — covered by a separate test.
-    assert calls == ["synthesize"]
+    # Thesis intent skips the plan LLM call (fetch-everything is
+    # deterministic), so only the synthesize structured-output call lands.
+    # Assert the call carried a ``config=`` kwarg — the keyword is the
+    # CallbackHandler propagation channel.
+    assert llm._structured_runnable.invoke.call_count == 1
+    synth_call = llm._structured_runnable.invoke.call_args
+    assert "config" in synth_call.kwargs, (
+        f"synthesize llm.invoke must pass config=; got kwargs={synth_call.kwargs!r}"
+    )
 
 
 def test_no_tools_registered_yields_empty_plan(stub_llm: _StructuredLLM) -> None:  # noqa: ARG001
@@ -444,25 +435,17 @@ def test_thesis_skips_plan_llm_and_fetches_all_available_tools(
     explicit no-LLM-call assertion.
     """
     llm = _StructuredLLM()
-    plan_call_count = {"n": 0}
-    synth_call_count = {"n": 0}
-
-    def traced(llm_: Any, prompt: object, *, name: str) -> Any:  # noqa: ARG001
-        if name == "plan":
-            plan_call_count["n"] += 1
-        elif name == "synthesize":
-            synth_call_count["n"] += 1
-        return llm_.invoke(prompt)
-
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
-    monkeypatch.setattr(graph_module.langfuse, "traced_invoke", traced)
 
     graph = build_graph({name: _mock_tool(name) for name in REPORT_TOOLS})
     result = _run(graph)
 
-    # Thesis: zero plan-LLM calls, one synthesize call.
-    assert plan_call_count["n"] == 0
-    assert synth_call_count["n"] == 1
+    # Thesis: zero plan-LLM calls (raw .invoke), one synthesize call
+    # (.structured_invoke). The plan node short-circuits to the
+    # fetch-everything deterministic branch on thesis intent, so only the
+    # structured-output synthesize lands.
+    assert llm.invoke.call_count == 0
+    assert llm._structured_runnable.invoke.call_count == 1
     # And every available tool was fetched.
     assert set(result["reports"]) == set(REPORT_TOOLS)
 
@@ -478,20 +461,16 @@ def test_quick_fact_still_calls_plan_llm_to_narrow(
     problem the path was carved out of."""
     llm = _StructuredLLM()
     llm.invoke.return_value = AIMessage(content="technical")
-    plan_calls: list[str] = []
-
-    def traced(llm_: Any, prompt: object, *, name: str) -> Any:
-        if name == "plan":
-            plan_calls.append(name)
-        return llm_.invoke(prompt)
-
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
-    monkeypatch.setattr(graph_module.langfuse, "traced_invoke", traced)
 
     graph = build_graph({name: _mock_tool(name) for name in REPORT_TOOLS})
     graph.invoke({"ticker": "NVDA", "question": "What's NVDA's RSI?"})
 
-    assert plan_calls == ["plan"]
+    # quick_fact runs the plan-LLM call (raw .invoke) to narrow the report
+    # set, then a structured synthesize call. Both must land for the
+    # narrow-on-quick-fact contract.
+    assert llm.invoke.call_count == 1
+    assert llm._structured_runnable.invoke.call_count == 1
 
 
 def test_parse_plan_force_includes_company_for_comparison() -> None:
@@ -631,7 +610,7 @@ def test_classify_default_to_thesis_when_classify_intent_fails(
     node must default to ``thesis`` so the safe path runs. Defends the
     QNT-67 / QNT-128 contracts against a misbehaving classifier."""
     stub_llm.invoke.return_value = AIMessage(content="technical")
-    monkeypatch.setattr(graph_module, "classify_intent", lambda _q: "thesis")
+    monkeypatch.setattr(graph_module, "classify_intent", lambda _q, **_: "thesis")
     graph = build_graph({"technical": _mock_tool("tech")})
 
     result = graph.invoke({"ticker": "NVDA", "question": "ambiguous mid-length question"})
@@ -646,24 +625,20 @@ def test_quick_fact_intent_narrows_plan_prompt(
     """Plan prompt for quick_fact bias should tell the LLM to fetch only
     the needed report. Direct check on the planner-prompt builder rather
     than asserting the LLM's choice (which is up to the model)."""
-    monkeypatch.setattr(graph_module, "classify_intent", lambda _q: "quick_fact")
-    captured: list[str] = []
-
-    real_traced = graph_module.langfuse.traced_invoke
-
-    def capturing_traced(llm_: Any, prompt: Any, *, name: str) -> Any:
-        if name == "plan":
-            captured.append(str(prompt))
-        return real_traced(llm_, prompt, name=name)
-
-    monkeypatch.setattr(graph_module.langfuse, "traced_invoke", capturing_traced)
+    monkeypatch.setattr(graph_module, "classify_intent", lambda _q, **_: "quick_fact")
     stub_llm.invoke.return_value = AIMessage(content="technical")
     graph = build_graph({"technical": _mock_tool("tech")})
 
     graph.invoke({"ticker": "NVDA", "question": "What's the RSI?"})
 
-    assert captured, "plan node must call the LLM"
-    assert "single-metric" in captured[0].lower() or "directly needed" in captured[0].lower()
+    # The plan path uses raw .invoke() (not structured_output), so the
+    # captured prompt sits on the plan-call args of the stub.
+    assert stub_llm.invoke.call_count >= 1, "plan node must call the LLM"
+    plan_call = stub_llm.invoke.call_args_list[0]
+    plan_prompt = (
+        str(plan_call.args[0]) if plan_call.args else str(plan_call.kwargs.get("input", ""))
+    )
+    assert "single-metric" in plan_prompt.lower() or "directly needed" in plan_prompt.lower()
 
 
 # ─── QNT-156: comparison + conversational + domain-redirect fallback ─────
@@ -716,7 +691,7 @@ def test_comparison_with_only_one_resolved_ticker_falls_back_to_redirect(
     deterministic conversational redirect with hint=comparison."""
     from agent.conversational import ConversationalAnswer
 
-    monkeypatch.setattr(graph_module, "classify_intent", lambda _q: "comparison")
+    monkeypatch.setattr(graph_module, "classify_intent", lambda _q, **_: "comparison")
     stub_llm.invoke.return_value = AIMessage(content="fundamental")
     graph = build_graph({"fundamental": _mock_tool("fund")})
 
@@ -815,7 +790,7 @@ def test_comparison_skips_when_one_ticker_has_no_reports(
     NOT produce a half-comparison — it falls back to a redirect."""
     from agent.conversational import ConversationalAnswer
 
-    monkeypatch.setattr(graph_module, "classify_intent", lambda _q: "comparison")
+    monkeypatch.setattr(graph_module, "classify_intent", lambda _q, **_: "comparison")
     stub_llm.invoke.return_value = AIMessage(content="fundamental")
 
     def aapl_only(ticker: str) -> str:
@@ -1015,15 +990,7 @@ def test_focused_intent_narrows_plan_to_company_and_matching_report(
             ),
         )
 
-        plan_calls: list[str] = []
-
-        def traced(llm_: Any, prompt: object, *, name: str, _plan=plan_calls) -> Any:
-            if name == "plan":
-                _plan.append(name)
-            return llm_.invoke(prompt)
-
         monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
-        monkeypatch.setattr(graph_module.langfuse, "traced_invoke", traced)
         from agent import intent as intent_module
 
         monkeypatch.setattr(intent_module, "get_llm", lambda *_a, **_kw: llm)
@@ -1031,8 +998,9 @@ def test_focused_intent_narrows_plan_to_company_and_matching_report(
         graph = build_graph({name: _mock_tool(name) for name in REPORT_TOOLS})
         result = graph.invoke({"ticker": "NVDA", "question": question})
 
-        # No plan-LLM call.
-        assert plan_calls == [], f"unexpected plan call for intent={intent}"
+        # No plan-LLM call: focused intents narrow deterministically to
+        # ``["company", <matching_report>]`` without consulting the planner.
+        assert llm.invoke.call_count == 0, f"unexpected plan call for intent={intent}"
         # Plan is exactly [company, <report>].
         assert result["plan"] == ["company", expected_report], (
             f"plan for intent={intent} was {result['plan']!r}"
@@ -1057,11 +1025,6 @@ def test_focused_intent_falls_back_to_redirect_when_reports_empty(
 
     llm = _StructuredLLM()
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
-    monkeypatch.setattr(
-        graph_module.langfuse,
-        "traced_invoke",
-        lambda llm_, prompt, *, name: llm_.invoke(prompt),
-    )
     from agent import intent as intent_module
 
     monkeypatch.setattr(intent_module, "get_llm", lambda *_a, **_kw: llm)
@@ -1093,11 +1056,6 @@ def test_focused_intent_corrects_mismatched_focus_field(
         ),
     )
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
-    monkeypatch.setattr(
-        graph_module.langfuse,
-        "traced_invoke",
-        lambda llm_, prompt, *, name: llm_.invoke(prompt),
-    )
     from agent import intent as intent_module
 
     monkeypatch.setattr(intent_module, "get_llm", lambda *_a, **_kw: llm)

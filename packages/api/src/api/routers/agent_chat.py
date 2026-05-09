@@ -82,10 +82,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import hmac
 import json
 import logging
 import re
 import time
+import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC
 from typing import Any
@@ -102,7 +105,7 @@ from agent.llm import (
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 from agent.tools import default_report_tools
-from agent.tracing import observe
+from agent.tracing import make_callback_handler, observe, propagate_attributes
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
@@ -500,26 +503,52 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
         instrumented = _instrument_tools(base_tools, queue, loop, ticker)
         graph = build_graph(instrumented, event_emitter=_emit)
 
+        # QNT-181: tag every Langfuse trace with a per-request session_id
+        # (uuid4) and a per-IP user_id derived from a peppered HMAC of the
+        # client IP. The HMAC + secret pepper makes hash inversion infeasible
+        # (a plain truncated sha256 over the IPv4 universe is reversible by
+        # enumeration); the 12-char prefix is enough collision resistance for
+        # the demo's traffic volume while keeping the UI filter ergonomic.
+        # Same spirit as ADR-017's threat model: rate-limit by IP, never
+        # store the IP itself, and never publish a value an attacker can
+        # cheaply reverse to recover one.
+        session_id = str(uuid.uuid4())
+        user_id = hmac.new(
+            settings.LANGFUSE_USER_ID_PEPPER.encode(),
+            client_ip.encode(),
+            hashlib.sha256,
+        ).hexdigest()[:12]
+
         @observe(name="agent-chat")
         def _runner() -> None:
-            # Run the graph in a worker thread; emitted events have already been
-            # routed onto the queue via ``call_soon_threadsafe``. The final state
-            # is captured for post-run prose / thesis / done events.
+            # Run the graph in a worker thread; emitted events have already
+            # been routed onto the queue via ``call_soon_threadsafe``. The
+            # final state is captured for post-run prose / thesis / done
+            # events.
             #
-            # ``@observe(name="agent-chat")`` opens a parent observation so the
-            # four node-level @observe spans (classify / plan / gather /
-            # synthesize) and the per-tool spans nest under one trace in
-            # Langfuse — matches the CLI's ``agent.__main__.analyze`` topology.
-            # Without this wrapper, langfuse-python's contextvar-based parent
-            # tracking can't see a parent and each node opens its own root
-            # trace.
-            try:
-                final_state_holder["state"] = graph.invoke(
-                    {"ticker": ticker, "question": request.message}
-                )
-            except Exception as exc:  # noqa: BLE001 — surfaced as SSE error
-                logger.exception("agent graph failed for %s", ticker)
-                final_state_holder["error"] = exc
+            # ``@observe(name="agent-chat")`` opens the parent trace; the
+            # CallbackHandler attached via ``config={"callbacks": [...]}``
+            # drives the per-node and per-LLM-call observations under it
+            # (LangGraph passes ``config`` to every node, and each node
+            # forwards it to inner ``llm.invoke`` calls). This matches the
+            # CLI's ``agent.__main__.analyze`` topology. ``propagate_attributes``
+            # tags trace_name + session_id + user_id on every observation
+            # opened in this thread context.
+            handler = make_callback_handler()
+            graph_config: dict[str, object] = {"callbacks": [handler]} if handler else {}
+            with propagate_attributes(
+                trace_name="agent-chat",
+                session_id=session_id,
+                user_id=user_id,
+            ):
+                try:
+                    final_state_holder["state"] = graph.invoke(
+                        {"ticker": ticker, "question": request.message},
+                        config=graph_config,  # type: ignore[arg-type]
+                    )
+                except Exception as exc:  # noqa: BLE001 — surfaced as SSE error
+                    logger.exception("agent graph failed for %s", ticker)
+                    final_state_holder["error"] = exc
 
         runner_task = asyncio.create_task(asyncio.to_thread(_runner))
         run_deadline = loop.time() + settings.CHAT_RUN_TIMEOUT

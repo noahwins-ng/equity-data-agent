@@ -37,7 +37,7 @@ from agent.evals.golden_set import (  # noqa: E402
     summarise,
 )
 from agent.llm import set_model_override  # noqa: E402
-from agent.tracing import langfuse  # noqa: E402
+from agent.tracing import flush as flush_langfuse  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.exception("eval run failed")
         return 1
     finally:
-        langfuse.flush()
+        flush_langfuse()
 
     print(f"run_id: {run_id}")
     print(summarise(outcomes))

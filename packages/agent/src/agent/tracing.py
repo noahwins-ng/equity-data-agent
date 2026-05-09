@@ -1,161 +1,63 @@
-"""Langfuse tracing for the agent.
+"""Langfuse tracing — LangGraph CallbackHandler at graph entry (ADR-019).
 
-Any code path that calls the LLM in the agent package MUST go through
-``langfuse.traced_invoke`` (or be wrapped by an ``@observe``-decorated caller).
-That contract is checked by ``tests/test_tracing.py::test_no_raw_llm_invoke``.
+Pattern at the request boundary (FastAPI ``agent_chat`` and CLI ``analyze``)::
 
-Pattern:
-    from agent.tracing import langfuse, observe
-    from agent.llm import get_llm
+    @observe(name="agent-chat")
+    def run(...):
+        with propagate_attributes(trace_name="agent-chat",
+                                  session_id=..., user_id=...):
+            handler = make_callback_handler()
+            config = {"callbacks": [handler]} if handler else {}
+            graph.invoke(state, config=config)
 
-    @observe()
-    def synthesize(state):
-        response = langfuse.traced_invoke(get_llm(), prompt, name="synthesize")
-        return response.content
-
-When ``LANGFUSE_PUBLIC_KEY`` / ``LANGFUSE_SECRET_KEY`` are unset (e.g. unit tests)
-tracing silently no-ops so callers don't need to branch on environment.
+Graph nodes accept ``(state, config: RunnableConfig)`` and forward ``config``
+to inner ``llm.invoke(prompt, config=config)`` so the handler reaches every
+LLM call. When keys are unset (tests, eval bench runs) ``make_callback_handler``
+returns ``None`` and callers branch on the empty-config form above.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage
-from langfuse import Langfuse, observe
-from pydantic import BaseModel
+from langfuse import Langfuse, observe, propagate_attributes
+from langfuse.langchain import CallbackHandler
 from shared.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-def _usage_from_response(response: object) -> dict[str, int] | None:
-    """langchain-openai surfaces token counts on ``AIMessage.usage_metadata``
-    for OpenAI-compatible providers — LiteLLM passes them through from
-    Groq / Gemini. Returns None if unavailable so Langfuse falls back to its
-    own tokenizer."""
-    if not isinstance(response, AIMessage):
+def _build_client() -> Langfuse | None:
+    if not (settings.LANGFUSE_PUBLIC_KEY and settings.LANGFUSE_SECRET_KEY):
+        logger.info("Langfuse keys not configured; agent tracing disabled.")
         return None
-    usage = getattr(response, "usage_metadata", None)
-    if not usage:
-        return None
-    return {
-        "input": int(usage.get("input_tokens", 0)),
-        "output": int(usage.get("output_tokens", 0)),
-        "total": int(usage.get("total_tokens", 0)),
-    }
+    return Langfuse(
+        public_key=settings.LANGFUSE_PUBLIC_KEY,
+        secret_key=settings.LANGFUSE_SECRET_KEY,
+        base_url=settings.LANGFUSE_BASE_URL,
+        sample_rate=settings.LANGFUSE_SAMPLE_RATE,
+    )
 
 
-def _model_from_response(response: object) -> str | None:
-    if not isinstance(response, AIMessage):
-        return None
-    meta = getattr(response, "response_metadata", None) or {}
-    return meta.get("model_name") or meta.get("model")
+langfuse: Langfuse | None = _build_client()
 
 
-class LangfuseResource:
-    """Configured Langfuse client + helpers for tracing agent runs.
-
-    Initialised from ``shared.settings``. When keys are missing tracing is
-    disabled at the SDK level and ``traced_invoke`` degrades to a plain
-    ``llm.invoke`` — matches the "no agent code path emits an LLM call without
-    a Langfuse trace" AC: with keys set every call is traced; without keys
-    the call still works but no trace is emitted (and none could be).
-    """
-
-    def __init__(self) -> None:
-        self.enabled = bool(settings.LANGFUSE_PUBLIC_KEY and settings.LANGFUSE_SECRET_KEY)
-        # Skip client construction entirely when disabled — the Langfuse SDK
-        # emits a loud "Authentication error" at init with empty keys even when
-        # tracing_enabled=False, which would scare users running tests offline.
-        self._client: Langfuse | None = (
-            Langfuse(
-                public_key=settings.LANGFUSE_PUBLIC_KEY,
-                secret_key=settings.LANGFUSE_SECRET_KEY,
-                base_url=settings.LANGFUSE_BASE_URL,
-            )
-            if self.enabled
-            else None
-        )
-        if not self.enabled:
-            logger.info("Langfuse keys not configured; agent tracing disabled.")
-
-    @property
-    def client(self) -> Langfuse | None:
-        return self._client
-
-    def traced_invoke(
-        self,
-        llm: Any,
-        prompt: str | list[BaseMessage],
-        *,
-        name: str = "llm-call",
-    ) -> Any:
-        """Invoke ``llm`` inside a Langfuse generation span.
-
-        Captures prompt, output, model name, and token usage. Latency is
-        captured automatically by the span's start/end times. If tracing is
-        disabled, invokes the LLM unchanged.
-
-        ``prompt`` accepts either a plain string (used by the plan node, which
-        emits a one-shot user instruction) or a list of ``BaseMessage`` (used
-        by the synthesize node since QNT-58, which delivers ``SYSTEM_PROMPT``
-        in the system turn rather than flattened into the user message).
-
-        QNT-60 follow-up: add an async ``traced_ainvoke`` wrapping
-        ``llm.ainvoke`` for SSE streaming — the AST contract test already
-        covers ``ainvoke`` so adding the wrapper first keeps CI green.
-        """
-        if not self.enabled or self._client is None:
-            return llm.invoke(prompt)
-
-        # Langfuse's `input` field expects something serialisable to JSON; a
-        # ``list[BaseMessage]`` round-trips fine because BaseMessage subclasses
-        # are pydantic models. We pass it through unchanged so the dashboard
-        # shows the system + user turns separately.
-        with self._client.start_as_current_observation(
-            as_type="generation",
-            name=name,
-            input=prompt,
-        ) as gen:
-            try:
-                response = llm.invoke(prompt)
-            except Exception as exc:
-                # Tag the span so failed runs show up in the dashboard instead of
-                # hanging as empty generations, then let the caller see the error.
-                gen.update(level="ERROR", status_message=f"{type(exc).__name__}: {exc}")
-                raise
-            # AIMessage (langchain BaseMessage) carries .content — keep that
-            # path first because BaseMessage IS a pydantic BaseModel, so the
-            # naive isinstance(response, BaseModel) check would match and we'd
-            # dump the full AIMessage JSON instead of just the content string.
-            # ``with_structured_output(...)`` returns a non-Message BaseModel
-            # (the schema instance, e.g. ``Thesis``) — JSON-dump those so the
-            # dashboard shows the parsed sections instead of a Python repr.
-            if isinstance(response, BaseMessage):
-                output: object = response.content
-            elif isinstance(response, BaseModel):
-                output = response.model_dump_json()
-            elif hasattr(response, "content"):
-                output = response.content
-            else:
-                output = str(response)
-            gen.update(
-                output=output,
-                model=_model_from_response(response),
-                usage_details=_usage_from_response(response),
-            )
-            return response
-
-    def flush(self) -> None:
-        """Block until queued events reach Langfuse. Call at process exit —
-        CLI runs are short-lived and would otherwise drop the trailing spans."""
-        if self._client is not None:
-            self._client.flush()
+def make_callback_handler() -> CallbackHandler | None:
+    """Per-request handler factory; ``None`` when tracing disabled."""
+    return CallbackHandler() if langfuse is not None else None
 
 
-langfuse = LangfuseResource()
+def flush() -> None:
+    """Block until queued events reach Langfuse; call at process exit."""
+    if langfuse is not None:
+        langfuse.flush()
 
 
-__all__ = ["LangfuseResource", "langfuse", "observe"]
+__all__ = [
+    "CallbackHandler",
+    "flush",
+    "langfuse",
+    "make_callback_handler",
+    "observe",
+    "propagate_attributes",
+]

@@ -39,6 +39,7 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, NotRequired, TypedDict
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from shared.tickers import TICKERS
 
@@ -57,7 +58,6 @@ from agent.prompts import (
 )
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
-from agent.tracing import langfuse, observe
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
@@ -263,7 +263,7 @@ def _gather_reports(
 
 
 def _coerce_thesis(response: object) -> Thesis | None:
-    """Normalise whatever ``traced_invoke`` hands back into a ``Thesis``.
+    """Normalise whatever ``llm.invoke`` hands back into a ``Thesis``.
 
     Structured-output runnables can return a ``Thesis`` directly, an
     ``include_raw=True`` dict, or — on a parsing failure with some providers
@@ -281,7 +281,7 @@ def _coerce_thesis(response: object) -> Thesis | None:
 
 
 def _coerce_quick_fact(response: object) -> QuickFactAnswer | None:
-    """Normalise whatever ``traced_invoke`` hands back into a ``QuickFactAnswer``.
+    """Normalise whatever ``llm.invoke`` hands back into a ``QuickFactAnswer``.
 
     Mirror of :func:`_coerce_thesis` for the quick-fact path — same provider
     quirks apply.
@@ -296,7 +296,7 @@ def _coerce_quick_fact(response: object) -> QuickFactAnswer | None:
 
 
 def _coerce_comparison(response: object) -> ComparisonAnswer | None:
-    """Normalise whatever ``traced_invoke`` hands back into a ``ComparisonAnswer``."""
+    """Normalise whatever ``llm.invoke`` hands back into a ``ComparisonAnswer``."""
     if isinstance(response, ComparisonAnswer):
         return response
     if isinstance(response, dict):
@@ -307,7 +307,7 @@ def _coerce_comparison(response: object) -> ComparisonAnswer | None:
 
 
 def _coerce_conversational(response: object) -> ConversationalAnswer | None:
-    """Normalise whatever ``traced_invoke`` hands back into a ``ConversationalAnswer``."""
+    """Normalise whatever ``llm.invoke`` hands back into a ``ConversationalAnswer``."""
     if isinstance(response, ConversationalAnswer):
         return response
     if isinstance(response, dict):
@@ -318,7 +318,7 @@ def _coerce_conversational(response: object) -> ConversationalAnswer | None:
 
 
 def _coerce_focused(response: object) -> FocusedAnalysis | None:
-    """Normalise whatever ``traced_invoke`` hands back into a ``FocusedAnalysis``."""
+    """Normalise whatever ``llm.invoke`` hands back into a ``FocusedAnalysis``."""
     if isinstance(response, FocusedAnalysis):
         return response
     if isinstance(response, dict):
@@ -400,19 +400,21 @@ def build_graph(
     unit tests that read final state directly.
     """
 
-    @observe(name="classify")
-    def classify_node(state: AgentState) -> dict[str, object]:
+    def classify_node(state: AgentState, config: RunnableConfig) -> dict[str, object]:
+        # QNT-181: nodes accept ``config`` so the LangGraph CallbackHandler
+        # propagates to inner ``llm.invoke(prompt, config=config)`` calls.
+        # Without it, generation observations would not nest under the
+        # parent agent-chat trace.
         ticker = state["ticker"]
         question = state.get("question", "")
         # ``classify_intent`` already biases to "thesis" on internal LLM
         # failures, but a failure in the surrounding observability stack
-        # (Langfuse SDK outage, decorator hook crash) would propagate and
-        # kill the run — same shape as plan_node / synthesize_node, both
-        # of which wrap their LLM call in BLE001. Mirror that contract here
-        # so the bias-to-thesis invariant the rest of the graph relies on
-        # cannot be defeated by an unrelated dependency.
+        # would propagate and kill the run — same shape as plan_node /
+        # synthesize_node which wrap their LLM call in BLE001. Mirror that
+        # contract here so the bias-to-thesis invariant the rest of the
+        # graph relies on cannot be defeated by an unrelated dependency.
         try:
-            intent: Intent = classify_intent(question)
+            intent: Intent = classify_intent(question, config=config)
         except Exception as exc:  # noqa: BLE001 — preserve the safe default
             logger.warning("classify %s: defaulting to thesis: %s", ticker, exc)
             intent = "thesis"
@@ -431,8 +433,7 @@ def build_graph(
                 logger.warning("classify %s: event_emitter failed: %s (continuing)", ticker, exc)
         return {"intent": intent}
 
-    @observe(name="plan")
-    def plan_node(state: AgentState) -> dict[str, object]:
+    def plan_node(state: AgentState, config: RunnableConfig) -> dict[str, object]:
         ticker = state["ticker"]
         question = state.get("question", "")
         intent = state.get("intent", "thesis")
@@ -494,7 +495,7 @@ def build_graph(
             plan = [t for t in available if t in wanted]
         elif intent == "quick_fact":
             prompt = _build_plan_prompt(ticker, question, available, intent)
-            response = langfuse.traced_invoke(get_llm(temperature=0.0), prompt, name="plan")
+            response = get_llm(temperature=0.0).invoke(prompt, config=config)
             content = response.content if hasattr(response, "content") else str(response)
             plan = _parse_plan(str(content), available, intent)
         else:
@@ -514,8 +515,7 @@ def build_graph(
             "reports_by_ticker": {},
         }
 
-    @observe(name="gather")
-    def gather_node(state: AgentState) -> dict[str, object]:
+    def gather_node(state: AgentState, config: RunnableConfig) -> dict[str, object]:  # noqa: ARG001 — config received for LangGraph contract; tools are HTTP, no LLM call
         ticker = state["ticker"]
         intent = state.get("intent", "thesis")
         plan = state.get("plan", [])
@@ -570,8 +570,7 @@ def build_graph(
         )
         return {"reports": reports, "errors": errors, "reports_by_ticker": {}}
 
-    @observe(name="synthesize")
-    def synthesize_node(state: AgentState) -> dict[str, object]:
+    def synthesize_node(state: AgentState, config: RunnableConfig) -> dict[str, object]:
         ticker = state["ticker"]
         question = state.get("question", "")
         reports = state.get("reports", {})
@@ -613,7 +612,7 @@ def build_graph(
             prompt = build_conversational_prompt(question)
             structured_llm = get_llm().with_structured_output(ConversationalAnswer)
             try:
-                response = langfuse.traced_invoke(structured_llm, prompt, name="synthesize")
+                response = structured_llm.invoke(prompt, config=config)
             except Exception as exc:  # noqa: BLE001 — fall back to deterministic redirect
                 logger.warning(
                     "synthesize %s: conversational structured output failed: %s",
@@ -646,7 +645,7 @@ def build_graph(
             prompt = build_comparison_prompt(comparison_tickers, question, reports_by_ticker)
             structured_llm = get_llm().with_structured_output(ComparisonAnswer)
             try:
-                response = langfuse.traced_invoke(structured_llm, prompt, name="synthesize")
+                response = structured_llm.invoke(prompt, config=config)
             except Exception as exc:  # noqa: BLE001 — fall back to redirect
                 logger.warning(
                     "synthesize %s: comparison structured output failed: %s",
@@ -675,7 +674,7 @@ def build_graph(
             prompt = build_focused_prompt(intent, ticker, question, reports)
             structured_llm = get_llm().with_structured_output(FocusedAnalysis)
             try:
-                response = langfuse.traced_invoke(structured_llm, prompt, name="synthesize")
+                response = structured_llm.invoke(prompt, config=config)
             except Exception as exc:  # noqa: BLE001 — surface as fallback redirect
                 logger.warning(
                     "synthesize %s: focused (%s) structured output failed: %s",
@@ -707,7 +706,7 @@ def build_graph(
             prompt = build_quick_fact_prompt(ticker, question, reports)
             structured_llm = get_llm().with_structured_output(QuickFactAnswer)
             try:
-                response = langfuse.traced_invoke(structured_llm, prompt, name="synthesize")
+                response = structured_llm.invoke(prompt, config=config)
             except Exception as exc:  # noqa: BLE001 — surface as fallback redirect
                 logger.warning(
                     "synthesize %s: quick-fact structured output failed: %s", ticker, exc
@@ -735,7 +734,7 @@ def build_graph(
         # rather than crashing the whole run.
         structured_llm = get_llm().with_structured_output(Thesis)
         try:
-            response = langfuse.traced_invoke(structured_llm, prompt, name="synthesize")
+            response = structured_llm.invoke(prompt, config=config)
         except Exception as exc:  # noqa: BLE001 — surface as fallback redirect
             logger.warning("synthesize %s: structured output failed: %s", ticker, exc)
             response = None

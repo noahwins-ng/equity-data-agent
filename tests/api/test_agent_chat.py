@@ -81,7 +81,7 @@ def stub_graph(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
         graph = MagicMock()
 
-        def invoke(state: dict[str, Any]) -> dict[str, Any]:
+        def invoke(state: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
             ticker = state["ticker"]
             reports: dict[str, str] = {}
             for name, fn in tools.items():
@@ -359,7 +359,7 @@ def test_agent_timeout_forwards_synthetic_exception_to_sentry(
 
     invoke_unblock = threading.Event()
 
-    def _slow_invoke(state: dict[str, Any]) -> dict[str, Any]:
+    def _slow_invoke(state: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
         invoke_unblock.wait(timeout=3)
         return {
             "ticker": state["ticker"],
@@ -658,7 +658,7 @@ def test_intent_event_arrives_before_first_tool_call(
     def _fake_build(tools: dict[str, Any], *, event_emitter: Any = None) -> Any:
         graph = MagicMock()
 
-        def invoke(state: dict[str, Any]) -> dict[str, Any]:
+        def invoke(state: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
             ticker = state["ticker"]
             # Mirror real classify_node behavior: emit intent BEFORE any
             # tool runs. The SSE wrapper's emitter posts onto the asyncio
@@ -911,7 +911,7 @@ async def test_client_disconnect_cancels_runner_task(
     invoke_started = threading.Event()
     invoke_unblock = threading.Event()
 
-    def _slow_invoke(state: dict[str, Any]) -> dict[str, Any]:
+    def _slow_invoke(state: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
         invoke_started.set()
         # Block until either the test releases us or 5s elapses (failsafe).
         # If the runner_task is properly cancelled, the asyncio side stops
@@ -1008,7 +1008,7 @@ async def test_run_timeout_emits_agent_timeout_error(
 
     invoke_unblock = threading.Event()
 
-    def _slow_invoke(state: dict[str, Any]) -> dict[str, Any]:
+    def _slow_invoke(state: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
         # Block past CHAT_RUN_TIMEOUT
         invoke_unblock.wait(timeout=3)
         return {
@@ -1070,7 +1070,7 @@ def test_streaming_race_async_worker_drains_cleanly(
     def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
         graph = MagicMock()
 
-        def invoke(state: dict[str, Any]) -> dict[str, Any]:
+        def invoke(state: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
             ticker = state["ticker"]
             reports = {name: fn(ticker) for name, fn in tools.items()}
             return {

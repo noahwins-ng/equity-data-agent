@@ -33,7 +33,6 @@ import re
 from typing import Any
 
 from agent.llm import get_llm
-from agent.tracing import langfuse
 
 logger = logging.getLogger(__name__)
 
@@ -98,8 +97,11 @@ def score(
         reference=reference.strip(),
         generated=generated.strip(),
     )
+    # QNT-181: eval __main__ env-strips Langfuse keys at import time, so
+    # this is a plain LLM call. No callback config to thread either —
+    # judge runs are recorded in history.csv with full reproducibility.
     try:
-        response = langfuse.traced_invoke(judge_llm, prompt, name="eval-judge")
+        response = judge_llm.invoke(prompt)
     except Exception as exc:  # noqa: BLE001 — judge errors must not crash the eval loop
         logger.warning("eval-judge failed: %s", exc)
         return None

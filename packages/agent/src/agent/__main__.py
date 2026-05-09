@@ -16,6 +16,7 @@ import logging
 import sys
 from pathlib import Path
 
+from langchain_core.runnables import RunnableConfig
 from shared.tickers import TICKERS
 
 from agent.comparison import ComparisonAnswer
@@ -24,7 +25,8 @@ from agent.graph import build_graph
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 from agent.tools import default_report_tools
-from agent.tracing import langfuse, observe
+from agent.tracing import flush as flush_langfuse
+from agent.tracing import make_callback_handler, observe
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +42,11 @@ def analyze(ticker: str, output: Path | None = None) -> int:
         return 1
 
     graph = build_graph(default_report_tools())
-    final_state = graph.invoke({"ticker": ticker})
+    # QNT-181: pass a CallbackHandler via runtime config so every nested
+    # LangGraph node + LLM call lands under the @observe parent trace.
+    handler = make_callback_handler()
+    config: RunnableConfig = {"callbacks": [handler]} if handler else {}
+    final_state = graph.invoke({"ticker": ticker}, config=config)
 
     thesis_obj = final_state.get("thesis")
     quick_fact_obj = final_state.get("quick_fact")
@@ -110,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.exception("agent analyze failed")
         return 1
     finally:
-        langfuse.flush()
+        flush_langfuse()
 
 
 if __name__ == "__main__":
