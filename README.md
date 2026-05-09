@@ -4,13 +4,13 @@
 
 ![Equity Data Agent — live terminal](docs/screenshots/terminal-live.png)
 
-> Production AI research tool for US equities, deployed live at **[equity-data-agent-ynr2.vercel.app](https://equity-data-agent-ynr2.vercel.app)**. Solo portfolio build — 227 merged PRs, 18 ADRs, 640 tests, 7 shipped phases — designed to demonstrate end-to-end ownership of a non-trivial AI system: data engineering, LLM safety, agent design, frontend, and production ops.
+> Production AI research tool for US equities, deployed live at **[equity-data-agent-ynr2.vercel.app](https://equity-data-agent-ynr2.vercel.app)**. Solo portfolio build — **250+ merged PRs · 19 ADRs · 700+ tests · 7 shipped phases** — designed to demonstrate end-to-end ownership of a non-trivial AI system: data engineering, LLM safety, agent design, frontend, and production ops.
 >
-> Product claim: **the LLM never does math.** Every number in every thesis is pre-computed by Dagster, served as a human-readable report by FastAPI, and only *interpreted* by the LangGraph agent — so hallucinated financials are architecturally impossible. [→ how](#hallucination-resistance)
+> **Product claim: the LLM never does math.** Every number in every thesis is pre-computed by Dagster, served as a human-readable report by FastAPI, and only *interpreted* by the LangGraph agent — so hallucinated financials are architecturally impossible. [→ how](#hallucination-resistance)
 
 ![Phases](https://img.shields.io/badge/phases-7%2F7%20complete-2ea44f)
-![Tests](https://img.shields.io/badge/tests-640%20passing-2ea44f)
-![ADRs](https://img.shields.io/badge/ADRs-18-1f6feb)
+![Tests](https://img.shields.io/badge/tests-704%20passing-2ea44f)
+![ADRs](https://img.shields.io/badge/ADRs-19-1f6feb)
 ![Hallucination](https://img.shields.io/badge/hallucination__ok-16%2F16-2ea44f)
 ![Prod](https://img.shields.io/badge/prod-live-success)
 
@@ -22,30 +22,19 @@
 
 ---
 
-## Highlights
+## What's demonstrated
 
-| Area | What's demonstrated |
+| Area | Concrete proof |
 |---|---|
-| **Full-stack** | Next.js 16 (App Router, SSG/ISR, SSE chat) · FastAPI (async, OpenAPI, per-IP rate-limit + token budget) · TypeScript types auto-generated from the OpenAPI schema |
-| **LLM engineering** | LangGraph agent (3-node `plan → gather → synthesize` graph) · LiteLLM routing across Groq + Gemini with a free-tier-first policy · Hallucination eval harness (regex-verified, **16/16 pass** on the 16-question golden set) · Cross-model bench with `git`-tracked history |
-| **Data engineering** | Dagster asset graph (8 assets, **17 domain-bounded asset checks**, 2 schedules) · ClickHouse + Qdrant Cloud · Idempotent migrations re-applied every deploy · Multi-timeframe aggregation (daily → weekly → monthly) |
-| **System design** | **18 ADRs** documenting every non-obvious choice (storage, agent shape, LLM routing, deploy ingress, public-chat threat model) — not retrofitted, written at decision time |
-| **Production ops** | Bespoke Docker Compose on a Hetzner VPS · 7 phase retros + a living failure-mode runbook · Multi-layer observability (Sentry + Langfuse + Prometheus + Grafana + cAdvisor + node_exporter + Dozzle) · Discord alerting on Dagster materialization failures and Docker container events ≤30s |
+| **Full-stack** | Next.js 16 (App Router, SSG + Vercel Deploy Hook, SSE chat) · FastAPI (async, OpenAPI, per-IP rate-limit + token budget + fail-closed circuit breaker) · TypeScript types auto-generated from the OpenAPI schema |
+| **LLM engineering** | LangGraph 3-node `plan → gather → synthesize` agent with 4-intent classifier (thesis / quick-fact / comparison / conversational) · LiteLLM routing across Groq + Gemini with a free-tier-first policy · Hallucination eval harness (regex-verified, **16/16 pass** on the 16-question golden set) · Cross-model bench with `git`-tracked history |
+| **Data engineering** | Dagster asset graph (**10 assets · 30 domain-bounded asset checks · 2 schedules**) · ClickHouse + Qdrant Cloud · Idempotent migrations re-applied every deploy · Multi-timeframe aggregation (daily → weekly → monthly) · Per-ticker news relevance filter at ingest |
+| **System design** | **19 ADRs** documenting every non-obvious choice (storage, agent shape, LLM routing, deploy ingress, public-chat threat model) — written at decision time, not retrofitted |
+| **Production ops** | Bespoke Docker Compose on a Hetzner VPS · 7 phase retros + a living failure-mode runbook · Multi-layer observability (Sentry + Langfuse + Prometheus + Grafana + cAdvisor + node_exporter + Dozzle) · Discord alerting on Dagster materialization failures + Docker container events ≤30s · UptimeRobot probe on `/api/v1/health` |
 | **CI/CD + security** | SOPS-encrypted secrets · SHA-identity gate + Dagster-load gate on every deploy · Layered scanner suite (pip-audit + bandit + gitleaks + npm audit + weekly Trivy image CVE scan) · Dependabot with grouped bumps + a waivers file with rationale |
-| **Testing** | **640 pytest tests** (unit + real-ClickHouse integration) · Endpoint p50/p95/p99 latency baseline with error-rate gate · Asset-check domain bounds that have caught real arithmetic bugs that passed code review |
+| **Testing** | **704 pytest tests** (unit + real-ClickHouse integration) · Endpoint p50/p95/p99 latency baseline with error-rate gate · Asset-check domain bounds that have caught real arithmetic bugs that passed code review |
 
----
-
-## What's shipped (May 2026)
-
-All 7 planned phases are complete. Remaining work lives in a perpetual **Ops & Reliability** queue.
-
-- **Live frontend** at [equity-data-agent-ynr2.vercel.app](https://equity-data-agent-ynr2.vercel.app) — Next.js 16 + TradingView Lightweight Charts v5 + SSE chat panel
-- **Public chat agent** — rate-limited (5/min, 30/hr, 100/day per IP), per-IP daily Groq-token budget, fail-closed circuit breaker (no paid-provider fallback)
-- **10-ticker universe** — NVDA, AAPL, MSFT, GOOGL, AMZN, META, TSLA, JPM, V, UNH; daily Dagster ingest at 17:00 ET
-- **8 Dagster assets, 17 asset checks, 2 schedules** in production (gated at every CD run)
-- **16/16 hallucination_ok** on the 16-question golden eval set (Llama-4-Scout-17B via Groq free tier)
-- **Phase 7 closeout**: Sentry FastAPI error tracking, Discord alerting on Dagster materialization failures, RFC 9110 `Retry-After` honoring on all ingest assets, real-ClickHouse integration tests per router (640 tests total), endpoint p50/p95/p99 baseline + Prometheus/Grafana/cAdvisor/node_exporter/Dozzle observability stack
+The 10-ticker universe (NVDA, AAPL, MSFT, GOOGL, AMZN, META, TSLA, JPM, V, UNH) ingests daily at 17:00 ET. All 7 planned phases are complete; remaining work lives in a perpetual **Ops & Reliability** queue.
 
 ---
 
@@ -75,7 +64,7 @@ Three independent enforcement layers:
 2. **System prompt** — `SYSTEM_PROMPT` in [`packages/agent/src/agent/prompts/`](packages/agent/src/agent/prompts/) ratifies the rule: "every numeric claim must cite the report it came from; never derive a new number".
 3. **Eval harness** — [`packages/agent/src/agent/evals/hallucination.py`](packages/agent/src/agent/evals/hallucination.py) regexes every numeric literal from a generated thesis and asserts each appears verbatim in one of the report strings the agent received as tool output. Run on a 16-question golden set covering all 10 portfolio tickers; results land in [`packages/agent/src/agent/evals/history.csv`](packages/agent/src/agent/evals/history.csv) so prompt-version quality is `git log -p`-visible.
 
-Most recent cross-model bench ([`docs/model-bench-2026-04.md`](docs/model-bench-2026-04.md)): **Llama-4-Scout-17B → 16/16 hallucination_ok, 16/16 tool_call_ok on 16 complete theses** — promoted as the fallback. Llama-3.3-70B (the production default) lands 9/9 clean on the records that fit inside Groq's daily TPD bucket; the remaining 7 records were truncated mid-bench and are tracked for a clean re-run.
+Most recent cross-model bench ([`docs/model-bench-2026-04.md`](docs/model-bench-2026-04.md)): **Llama-4-Scout-17B → 16/16 hallucination_ok, 16/16 tool_call_ok** on 16 complete theses — promoted as the fallback. Llama-3.3-70B (the production default) lands 9/9 clean on the records that fit inside Groq's daily TPD bucket.
 
 [ADR-012](docs/decisions/012-domain-conventions-in-reports-not-prompts.md) extends the contract: *canonical thresholds* (RSI 70/30, P/E rich/cheap bands) live in the **report templates**, never in the prompt — so the model can quote them without "leaking" prior knowledge.
 
@@ -151,7 +140,7 @@ See [`docs/architecture/system-overview.md`](docs/architecture/system-overview.m
 
 ## Screenshots
 
-**Live terminal** — deployed at [equity-data-agent-ynr2.vercel.app](https://equity-data-agent-ynr2.vercel.app). Watchlist on the left, ticker detail (chart + technicals + fundamentals + news) center, agent chat panel right. Server-rendered with ISR; chat streams over SSE.
+**Live terminal** — deployed at [equity-data-agent-ynr2.vercel.app](https://equity-data-agent-ynr2.vercel.app). Watchlist on the left, ticker detail (chart + technicals + fundamentals + news) center, agent chat panel right. Server-rendered with SSG; chat streams over SSE.
 
 ![Live terminal](docs/screenshots/terminal-live.png)
 
@@ -178,7 +167,7 @@ See [`docs/architecture/system-overview.md`](docs/architecture/system-overview.m
 | API | **FastAPI** | Async, Pydantic-native, auto-generated OpenAPI; rate-limit + per-IP token budget + fail-closed breaker for the public chat endpoint ([ADR-017](docs/decisions/017-public-chat-truly-public-no-auth.md)) |
 | Agent | **LangGraph** | 3-node minimal graph (plan / gather / synthesize) per [ADR-007](docs/decisions/007-minimal-agent-graph-first.md); 4-intent classifier (thesis / quick-fact / comparison / conversational) |
 | LLM routing | **LiteLLM** + **Groq** (default) + **Gemini 2.5 Flash** (override) | One model alias `equity-agent/default`; switch backends via env var ([ADR-011](docs/decisions/011-llm-routing-groq-default-gemini-override.md)) |
-| Observability | **Langfuse** (agent traces) + **Sentry** (FastAPI errors, hooks live) | |
+| Observability | **Langfuse** (agent traces) + **Sentry** (FastAPI errors) + Prometheus / Grafana / cAdvisor / node_exporter / Dozzle (host + container metrics + logs) | |
 | Frontend | **Next.js 16** on **Vercel** | [ADR-005](docs/decisions/005-nextjs-vercel-over-python-native-frontend.md), [ADR-008](docs/decisions/008-no-vercel-ai-sdk.md) (no Vercel AI SDK — native fetch + ReadableStream for SSE), [ADR-014](docs/decisions/014-nextjs-rendering-mode-per-page.md) (rendering mode per page) |
 | Ingress | **Cloudflare named tunnel** | HTTPS at `api.<your-domain>`, FastAPI port :8000 closed to public internet, stable across reboots ([ADR-018](docs/decisions/018-cloudflare-quick-tunnel-for-https-ingress.md)) |
 | Packaging | **uv workspaces** | 4 packages under `packages/` ([ADR-002](docs/decisions/002-monorepo-uv-workspaces.md)) |
@@ -190,11 +179,12 @@ See [`docs/architecture/system-overview.md`](docs/architecture/system-overview.m
 Deployment isn't `git push` and pray. Each merge to `main` runs a series of explicit gates designed by every prior outage:
 
 1. **SOPS decrypt** — age-encrypted `.env.sops` decrypted in CI, never written to prod disk
-2. **SHA gate** — `git rev-parse HEAD` on prod must match the merged commit. Catches the "deploy succeeded but code is 17 commits behind" outage class. ([retro](docs/retros/phase-3-api-layer.md))
+2. **SHA gate** — `git rev-parse HEAD` on prod must match the merged commit. Catches the "deploy succeeded but code is N commits behind" outage class. ([retro](docs/retros/phase-3-api-layer.md))
 3. **Dagster load gate** — definitions module imports cleanly with `≥8 assets`, `≥17 checks`, `≥2 schedules`. Catches the silent "code-server up but graph broken" class. ([retro](docs/retros/phase-3-api-layer.md))
 4. **Health-check loop** — 60s timeout retries on `/health`; deploy fails if API doesn't come up.
 5. **Idempotent ClickHouse migrations** — re-applied every deploy. ([retro](docs/retros/phase-2-calculation-layer.md))
 6. **Bind-mount config detection** — changes to `litellm_config.yaml` / `dagster.yaml` / `workspace.yaml` trigger explicit `docker compose restart` (catches stale-config-on-disk class). ([retro](docs/retros/phase-3-api-layer.md))
+7. **`obs-smoke` pre-prod gate** — asserts every Prometheus target up, every Grafana dashboard panel non-empty, every alert rule state≠unknown — closes the "shipped infra to prod, every signal still green, none of it actually working" class.
 
 Ingress topology ([ADR-018](docs/decisions/018-cloudflare-quick-tunnel-for-https-ingress.md)):
 
@@ -211,7 +201,7 @@ End-to-end HTTPS via a Cloudflare named tunnel. The hostname is stable across re
 
 The full failure-mode catalog (symptoms → diagnosis → response → prevention) lives in [`docs/guides/ops-runbook.md`](docs/guides/ops-runbook.md).
 
-**Alerting** — UptimeRobot probe on `/api/v1/health` (Discord) + a `docker-events-notify` systemd unit streaming `die`/`kill`/`oom`/`restart` events to Discord ≤30s. Health monitor cron every 15 min surfaces failures via `make monitor-log`.
+**Alerting** — UptimeRobot probe on `/api/v1/health` (Discord) + a `docker-events-notify` systemd unit streaming `die`/`kill`/`oom`/`restart` events to Discord ≤30s. Health monitor cron every 15 min surfaces failures via `make monitor-log`. Dagster run-failure sensor wired to the same Discord webhook so asset materialization failures alert in the ops channel.
 
 ---
 
@@ -225,7 +215,7 @@ Supply-chain hygiene is enforced by a layered scanner suite that runs on every P
 | `bandit -lll` | Python static analysis (eval/exec, shell injection, weak crypto, hardcoded passwords) | PR gate (CI) + `make security-scan` |
 | `gitleaks` | Secrets in commits (API keys, dotenv values, service-account JSON) | PR gate (CI) + `make security-scan` |
 | `npm audit --audit-level=high` | Frontend dep CVEs | PR gate (CI) + `make security-scan` |
-| `trivy image` | OS-package and lib CVEs in every prod image (ClickHouse, LiteLLM, Caddy, Grafana, ...) | Weekly cron, posts severity summary to Discord ops channel |
+| `trivy image` | OS-package and lib CVEs in every prod image (ClickHouse, LiteLLM, Grafana, ...) | Weekly cron, posts severity summary to Discord ops channel |
 | Dependabot | Grouped weekly minor/patch bumps + immediate security PRs | `.github/dependabot.yml` (Python, npm, GHA, Docker) |
 
 `make security-scan` runs the full PR-gate suite locally — same flags, same gate level. Active waivers and the rationale for each (false positive vs. tracked deferral) live in [`.security/waivers.md`](.security/waivers.md); reviewers cross-check that file when a previously-failing finding disappears.
@@ -260,7 +250,7 @@ uv run python -m agent analyze NVDA
 
 &nbsp;
 
-The repo is built around a tight inner loop: every issue gets its own branch, its own PR, and squash-merges to `main`. Slash-command shortcuts (Claude Code) glue Linear status, branch state, and CI together so context-switching is cheap.
+The repo is built around a tight inner loop: every change gets its own branch, its own PR, and squash-merges to `main`.
 
 | Surface | Command | URL |
 |---|---|---|
@@ -281,12 +271,11 @@ make test-integration               # pytest (needs: make tunnel)
 uv run python -m agent.evals
 uv run python -m agent.evals --model equity-agent/bench-llama4scout
 
-# issue-driven flow (one branch / one PR per ticket)
-make issue QNT=66                   # checkout branch + flip Linear to In Progress
-make pr    QNT=66 TITLE="..."       # push + open PR with `Closes QNT-XX` so Linear auto-closes
+# local prod-image build (used before pushing infra changes)
+make build
 ```
 
-Slash commands (`/pick`, `/implement`, `/sanity-check`, `/review`, `/ship`, `/go`) drive the issue → PR → merge → deploy pipeline; `/server-audit` and `/retro` cover the ops + end-of-phase rituals. Full reference: [`docs/guides/dev-workflow.md`](docs/guides/dev-workflow.md). Project conventions (commit format, branching, MCP server setup, hooks) live in [`CLAUDE.md`](CLAUDE.md).
+Project conventions (commit format, branching, MCP server setup, hooks) live in [`CLAUDE.md`](CLAUDE.md). Failure-mode catalog and ops procedures live in [`docs/guides/ops-runbook.md`](docs/guides/ops-runbook.md).
 
 </details>
 
@@ -298,8 +287,8 @@ The repo's "shared brain" is under [`docs/`](docs/INDEX.md):
 
 - [`docs/INDEX.md`](docs/INDEX.md) — entry point
 - [`docs/architecture/system-overview.md`](docs/architecture/system-overview.md) — how the system works (data flow, package boundaries, prod infra)
-- [`docs/decisions/`](docs/decisions/) — **18 ADRs** documenting every non-obvious choice (storage, orchestration, agent shape, LLM routing, deploy ingress)
+- [`docs/decisions/`](docs/decisions/) — **19 ADRs** documenting every non-obvious choice (storage, orchestration, agent shape, LLM routing, deploy ingress)
 - [`docs/retros/`](docs/retros/) — phase retrospectives ([Phase 0](docs/retros/phase-0-foundation.md) · [Phase 1](docs/retros/phase-1-data-ingestion.md) · [Phase 2](docs/retros/phase-2-calculation-layer.md) · [Phase 3](docs/retros/phase-3-api-layer.md) · [Phase 4](docs/retros/phase-4-narrative-data.md) · [Phase 5](docs/retros/phase-5-agent-layer.md) · [Phase 6](docs/retros/phase-6-frontend.md) · [Phase 7](docs/retros/phase-7-observability-polish.md))
 - [`docs/patterns.md`](docs/patterns.md) — established code recipes
 - [`docs/guides/ops-runbook.md`](docs/guides/ops-runbook.md) — failure-mode catalog (symptoms → diagnosis → response → prevention)
-- [`docs/guides/vercel-deploy.md`](docs/guides/vercel-deploy.md) — Phase 6 deploy + rotation runbook
+- [`docs/guides/vercel-deploy.md`](docs/guides/vercel-deploy.md) — frontend deploy + rotation runbook
