@@ -64,7 +64,18 @@ Three independent enforcement layers:
 2. **System prompt** — `SYSTEM_PROMPT` in [`packages/agent/src/agent/prompts/`](packages/agent/src/agent/prompts/) ratifies the rule: "every numeric claim must cite the report it came from; never derive a new number".
 3. **Eval harness** — [`packages/agent/src/agent/evals/hallucination.py`](packages/agent/src/agent/evals/hallucination.py) regexes every numeric literal from a generated thesis and asserts each appears verbatim in one of the report strings the agent received as tool output. Run on a 22-question golden set covering all 10 portfolio tickers across every supported intent shape (thesis · quick-fact · comparison · conversational · fundamental · technical · news-sentiment); results land in [`packages/agent/src/agent/evals/history.csv`](packages/agent/src/agent/evals/history.csv) so prompt-version quality is `git log -p`-visible.
 
-Most recent bench (May 9, 2026): **Llama-4-Scout-17B → 22/22 hallucination_ok, 22/22 tool_call_ok** on the full 22-record set, avg_judge 7.14, avg_cosine 0.411. Llama-3.3-70B is the production default; Scout-17B is the calibrated fallback. The April 2026 cross-model comparison ([`docs/model-bench-2026-04.md`](docs/model-bench-2026-04.md)) covers gpt-oss-20b/120b · llama-3.3-70b · llama-4-scout-17b · qwen3-32b · gemma3-27b · gemini-2.5-flash-lite against the pre-expansion 16-record set.
+Most recent benches (May 9, 2026, full 22-record set):
+
+| Model | hallucination_ok | tool_call_ok | judge | cos | avg latency | role |
+|---|---|---|---|---|---|---|
+| **Llama-3.3-70B** | **22/22** | **22/22** | **7.91** | 0.417 | 14.6s | production default |
+| **Llama-4-Scout-17B** | **22/22** | **22/22** | 7.14 | 0.411 | **3.8s** | calibrated fallback (4× faster) |
+| GPT-OSS-120B | 21/22 ✗ | 22/22 | 5.14 | 0.438 | 21.7s | disqualified (hallucinated on `tsla-news`) |
+| GPT-OSS-20B | 22/22 | 22/22 | 4.09 | 0.398 | 27.4s | clean but lowest quality + slowest |
+
+The 120B finding is exactly why the eval gate exists: GPT-OSS-120B was 16/16 clean on the April 16-record bench, so on the easier surface it looked qualified. Adding 6 news-sentiment / focused-analysis questions in May surfaced one fabricated number — the model would have shipped to prod with no signal that the contract was broken. This is the failure mode ADR-003 prevents architecturally and the eval catches behaviorally; both layers paid for themselves on this run.
+
+The April 2026 cross-model comparison ([`docs/model-bench-2026-04.md`](docs/model-bench-2026-04.md)) is preserved as a frozen-set artifact against the pre-expansion 16 records (also covers Qwen3-32B, Gemma3-27B, Gemini-2.5-Flash-Lite — Gemma3-27B has since been deprecated by Google).
 
 [ADR-012](docs/decisions/012-domain-conventions-in-reports-not-prompts.md) extends the contract: *canonical thresholds* (RSI 70/30, P/E rich/cheap bands) live in the **report templates**, never in the prompt — so the model can quote them without "leaking" prior knowledge.
 
