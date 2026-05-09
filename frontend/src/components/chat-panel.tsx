@@ -1148,7 +1148,7 @@ export function ChatPanel() {
       aria-label="Agent chat"
       className="flex h-full flex-col border-l border-zinc-800 bg-zinc-950 text-zinc-100"
     >
-      <header className="flex flex-col gap-1 border-b border-zinc-800 px-4 py-3 font-mono text-[10px] uppercase tracking-wider">
+      <header className="flex flex-col gap-1 border-b border-zinc-800 px-4 py-3 font-mono text-xs uppercase tracking-wider">
         <div className="flex items-baseline justify-between">
           <span className="text-zinc-300">
             Analyst · {ticker ?? "session"}
@@ -1164,7 +1164,7 @@ export function ChatPanel() {
             QNT-178: dropped the LangGraph / Cited header pills — both
             were decorative; the trust line below is the canonical
             advertisement of what's behind the demo. */}
-        <span className="text-[9px] normal-case tracking-normal text-zinc-500">
+        <span className="text-[11px] normal-case tracking-normal text-zinc-500">
           demo: ~30 queries/hour per visitor · powered by Groq free tier
         </span>
       </header>
