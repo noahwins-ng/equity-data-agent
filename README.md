@@ -11,7 +11,7 @@
 ![Phases](https://img.shields.io/badge/phases-7%2F7%20complete-2ea44f)
 ![Tests](https://img.shields.io/badge/tests-704%20passing-2ea44f)
 ![ADRs](https://img.shields.io/badge/ADRs-19-1f6feb)
-![Hallucination](https://img.shields.io/badge/hallucination__ok-16%2F16-2ea44f)
+![Hallucination](https://img.shields.io/badge/hallucination__ok-22%2F22-2ea44f)
 ![Prod](https://img.shields.io/badge/prod-live-success)
 
 ![pip-audit](https://img.shields.io/badge/pip--audit-clean-2ea44f)
@@ -27,7 +27,7 @@
 | Area | Concrete proof |
 |---|---|
 | **Full-stack** | Next.js 16 (App Router, SSG + Vercel Deploy Hook, SSE chat) · FastAPI (async, OpenAPI, per-IP rate-limit + token budget + fail-closed circuit breaker) · TypeScript types auto-generated from the OpenAPI schema |
-| **LLM engineering** | LangGraph 3-node `plan → gather → synthesize` agent with 4-intent classifier (thesis / quick-fact / comparison / conversational) · LiteLLM routing across Groq + Gemini with a free-tier-first policy · Hallucination eval harness (regex-verified, **16/16 pass** on the 16-question golden set) · Cross-model bench with `git`-tracked history |
+| **LLM engineering** | LangGraph 3-node `plan → gather → synthesize` agent with 4-intent classifier (thesis / quick-fact / comparison / conversational) plus focused-analysis intents (fundamental / technical / news_sentiment) · LiteLLM routing across Groq + Gemini with a free-tier-first policy · Hallucination eval harness (regex-verified, **22/22 pass** on the 22-question golden set) · Cross-model bench with `git`-tracked history |
 | **Data engineering** | Dagster asset graph (**10 assets · 30 domain-bounded asset checks · 2 schedules**) · ClickHouse + Qdrant Cloud · Idempotent migrations re-applied every deploy · Multi-timeframe aggregation (daily → weekly → monthly) · Per-ticker news relevance filter at ingest |
 | **System design** | **19 ADRs** documenting every non-obvious choice (storage, agent shape, LLM routing, deploy ingress, public-chat threat model) — written at decision time, not retrofitted |
 | **Production ops** | Bespoke Docker Compose on a Hetzner VPS · 7 phase retros + a living failure-mode runbook · Multi-layer observability (Sentry + Langfuse + Prometheus + Grafana + cAdvisor + node_exporter + Dozzle) · Discord alerting on Dagster materialization failures + Docker container events ≤30s · UptimeRobot probe on `/api/v1/health` |
@@ -62,9 +62,9 @@ Three independent enforcement layers:
 
 1. **Architecture** ([ADR-003](docs/decisions/003-intelligence-vs-math.md)) — the agent has no database client, no calculator tool, no arithmetic primitives. It physically cannot compute a number; the only numbers it sees are the ones FastAPI already chose to print.
 2. **System prompt** — `SYSTEM_PROMPT` in [`packages/agent/src/agent/prompts/`](packages/agent/src/agent/prompts/) ratifies the rule: "every numeric claim must cite the report it came from; never derive a new number".
-3. **Eval harness** — [`packages/agent/src/agent/evals/hallucination.py`](packages/agent/src/agent/evals/hallucination.py) regexes every numeric literal from a generated thesis and asserts each appears verbatim in one of the report strings the agent received as tool output. Run on a 16-question golden set covering all 10 portfolio tickers; results land in [`packages/agent/src/agent/evals/history.csv`](packages/agent/src/agent/evals/history.csv) so prompt-version quality is `git log -p`-visible.
+3. **Eval harness** — [`packages/agent/src/agent/evals/hallucination.py`](packages/agent/src/agent/evals/hallucination.py) regexes every numeric literal from a generated thesis and asserts each appears verbatim in one of the report strings the agent received as tool output. Run on a 22-question golden set covering all 10 portfolio tickers across every supported intent shape (thesis · quick-fact · comparison · conversational · fundamental · technical · news-sentiment); results land in [`packages/agent/src/agent/evals/history.csv`](packages/agent/src/agent/evals/history.csv) so prompt-version quality is `git log -p`-visible.
 
-Most recent cross-model bench ([`docs/model-bench-2026-04.md`](docs/model-bench-2026-04.md)): **Llama-4-Scout-17B → 16/16 hallucination_ok, 16/16 tool_call_ok** on 16 complete theses — promoted as the fallback. Llama-3.3-70B (the production default) lands 9/9 clean on the records that fit inside Groq's daily TPD bucket.
+Most recent bench (May 9, 2026): **Llama-4-Scout-17B → 22/22 hallucination_ok, 22/22 tool_call_ok** on the full 22-record set, avg_judge 7.14, avg_cosine 0.411. Llama-3.3-70B is the production default; Scout-17B is the calibrated fallback. The April 2026 cross-model comparison ([`docs/model-bench-2026-04.md`](docs/model-bench-2026-04.md)) covers gpt-oss-20b/120b · llama-3.3-70b · llama-4-scout-17b · qwen3-32b · gemma3-27b · gemini-2.5-flash-lite against the pre-expansion 16-record set.
 
 [ADR-012](docs/decisions/012-domain-conventions-in-reports-not-prompts.md) extends the contract: *canonical thresholds* (RSI 70/30, P/E rich/cheap bands) live in the **report templates**, never in the prompt — so the model can quote them without "leaking" prior knowledge.
 
@@ -267,7 +267,7 @@ make format                         # ruff format
 make test                           # pytest (unit, no infra)
 make test-integration               # pytest (needs: make tunnel)
 
-# eval harness — runs the 16-question golden set against any LiteLLM-routed model
+# eval harness — runs the 22-question golden set against any LiteLLM-routed model
 uv run python -m agent.evals
 uv run python -m agent.evals --model equity-agent/bench-llama4scout
 
