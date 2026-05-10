@@ -1476,6 +1476,22 @@ def test_intent_tag_swallows_langfuse_failures(
     assert "error" not in events
 
 
+def test_runner_root_span_name_distinct_from_trace_name() -> None:
+    """Post-QNT-182 follow-up: the @observe-decorated runner must use a
+    name different from the trace_name passed to propagate_attributes,
+    otherwise Langfuse v4 renders two sibling 'agent-chat' nodes in the
+    trace tree (v3 collapsed them; v4 doesn't). Pinning this so a future
+    refactor doesn't accidentally reintroduce the visual duplication."""
+    import inspect
+
+    src = inspect.getsource(chat_module._stream)
+    # The root span should be 'agent-chat-handler', the trace should be
+    # 'agent-chat'. Asserting both literals appear in the SSE handler
+    # source guards against a rename that drops the distinction.
+    assert '@observe(name="agent-chat-handler")' in src
+    assert 'trace_name="agent-chat"' in src
+
+
 def test_current_model_info_returned_for_default_provider() -> None:
     """``current_model_info`` resolves the active alias against the static
     map so the SSE handler can stamp Langfuse traces with the upstream
