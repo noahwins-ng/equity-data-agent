@@ -106,7 +106,7 @@ from agent.llm import (
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 from agent.tools import default_report_tools
-from agent.tracing import langfuse, make_callback_handler
+from agent.tracing import langfuse, make_callback_handler, propagate_attributes
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
@@ -522,16 +522,23 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
             # final state is captured for post-run prose / thesis / done
             # events.
             #
-            # Single-root tracing (post-feedback): the LangGraph
-            # ``CallbackHandler`` is the only span source. We pass
-            # ``run_name="agent-chat"`` plus the langfuse-langchain metadata
-            # keys (``langfuse_session_id`` / ``langfuse_user_id`` /
-            # ``langfuse_tags``) via the RunnableConfig so the handler tags
-            # the trace itself rather than wrapping it in a separate
-            # ``@observe`` span. The previous ``@observe(name="agent-chat-handler")``
-            # + ``propagate_attributes(trace_name="agent-chat", ...)`` pair
-            # produced two visually nested rows in the Langfuse v4 UI
-            # (trace + redundant root span) -- this collapses them.
+            # Tracing topology (Langfuse v4): the trace and its root
+            # observation are always rendered as two separate rows in the v4
+            # UI. We deliberately give them DIFFERENT names so the hierarchy
+            # is self-documenting:
+            #
+            #   agent-chat        <- trace (the request boundary; carries
+            #                       session_id, user_id, intent/model tags,
+            #                       hallucination_ok / plan_adherence scores)
+            #     langgraph-run   <- root span (the LangGraph runnable; the
+            #                       parent of classify/plan/gather/synthesize
+            #                       and the per-LLM ChatOpenAI generations)
+            #
+            # The trace name comes from ``propagate_attributes(trace_name=...)``;
+            # the root-span name comes from ``run_name`` in RunnableConfig.
+            # session_id / user_id / model are passed via the langfuse-langchain
+            # metadata keys (``langfuse_session_id`` / ``langfuse_user_id``)
+            # so the handler attaches them at trace level.
             handler = make_callback_handler()
             # QNT-182 follow-up: stamp the resolved upstream model on every
             # observation in the trace via metadata. LangChain only sees the
@@ -543,7 +550,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
             if handler is not None:
                 graph_config = {
                     "callbacks": [handler],
-                    "run_name": "agent-chat",
+                    "run_name": "langgraph-run",
                     "metadata": {
                         "langfuse_session_id": session_id,
                         "langfuse_user_id": user_id,
@@ -551,10 +558,11 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
                     },
                 }
             try:
-                final_state_holder["state"] = graph.invoke(
-                    {"ticker": ticker, "question": request.message},
-                    config=graph_config,  # type: ignore[arg-type]
-                )
+                with propagate_attributes(trace_name="agent-chat"):
+                    final_state_holder["state"] = graph.invoke(
+                        {"ticker": ticker, "question": request.message},
+                        config=graph_config,  # type: ignore[arg-type]
+                    )
             except Exception as exc:  # noqa: BLE001 — surfaced as SSE error
                 logger.exception("agent graph failed for %s", ticker)
                 final_state_holder["error"] = exc
