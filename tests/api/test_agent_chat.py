@@ -1383,24 +1383,50 @@ def test_eval_scores_swallow_langfuse_failures(
 # ─── QNT-182 follow-up: resolved-model metadata + intent trace tag ──────────
 
 
-def test_intent_tag_pushed_to_trace(
+def test_intent_and_model_tags_pushed_to_trace(
     client: TestClient,
     stub_graph: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The classified intent lands as an ``intent:<value>`` trace tag via
-    the ingestion path (Langfuse v4 has no public update_current_trace for
-    tags)."""
+    """Both the classified intent AND the resolved upstream model land as
+    trace tags via the ingestion path (Langfuse v4 has no public
+    update_current_trace for tags). The model tag pairs with the metadata
+    stamp so the Tags column carries both axes for filtering."""
     fake_lf = _install_fake_langfuse(monkeypatch)
 
     r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
     assert r.status_code == 200
 
     # stub_graph hard-codes intent="thesis" in the canned final state.
+    # Default provider is groq -> equity-agent/default -> llama-3.3-70b.
     fake_lf._create_trace_tags_via_ingestion.assert_called_once_with(
         trace_id="test-trace-id",
-        tags=["intent:thesis"],
+        tags=["intent:thesis", "model:groq/llama-3.3-70b-versatile"],
     )
+
+
+def test_model_tag_skipped_when_alias_unmapped(
+    client: TestClient,
+    stub_graph: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the active alias resolves to ``unknown`` (someone added a
+    litellm_config entry without updating the resolved-model map), the
+    model tag is skipped. Intent tag still fires so trace filtering by
+    shape continues to work."""
+    fake_lf = _install_fake_langfuse(monkeypatch)
+    from agent.llm import set_model_override
+
+    set_model_override("equity-agent/some-new-bench-alias")
+    try:
+        r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
+        assert r.status_code == 200
+        fake_lf._create_trace_tags_via_ingestion.assert_called_once_with(
+            trace_id="test-trace-id",
+            tags=["intent:thesis"],
+        )
+    finally:
+        set_model_override(None)
 
 
 def test_intent_tag_skipped_when_intent_missing(
