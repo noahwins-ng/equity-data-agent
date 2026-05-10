@@ -579,9 +579,23 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
                             try:
                                 trace_id = langfuse.get_current_trace_id()
                                 if trace_id:
+                                    # QNT-182 follow-up: also tag with the
+                                    # resolved upstream model. Pairs with the
+                                    # metadata stamp -- metadata is filterable
+                                    # but takes a metadata-key filter; tags
+                                    # show up directly in the Tags column and
+                                    # filter via the same "any of" operator
+                                    # the intent tag uses, so one tag
+                                    # vocabulary covers both axes ("show me
+                                    # all conversational redirects on
+                                    # llama-3.3-70b" is two tag chips).
+                                    tags = [f"intent:{intent}"]
+                                    resolved = model_info.get("resolved_model")
+                                    if resolved and resolved != "unknown":
+                                        tags.append(f"model:{resolved}")
                                     langfuse._create_trace_tags_via_ingestion(  # noqa: SLF001 — no public v4 equivalent
                                         trace_id=trace_id,
-                                        tags=[f"intent:{intent}"],
+                                        tags=tags,
                                     )
                             except Exception as exc:  # noqa: BLE001 — telemetry must not crash
                                 logger.warning("eval-tag push failed: %s", exc)
