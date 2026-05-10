@@ -377,9 +377,9 @@ jobs:
             n = len(ag.get_all_asset_keys())
             c = len(list(ag.asset_check_keys))
             s = len(list(defs.schedules))
-            assert n >= 8, f'expected >=8 assets, got {n}'
-            assert c >= 17, f'expected >=17 asset checks, got {c}'
-            assert s >= 2, f'expected >=2 schedules, got {s}'
+            assert n >= 10, f'expected >=10 assets, got {n}'
+            assert c >= 25, f'expected >=25 asset checks, got {c}'
+            assert s >= 4, f'expected >=4 schedules, got {s}'
             print(f'OK: assets={n} checks={c} schedules={s}')
             "
 

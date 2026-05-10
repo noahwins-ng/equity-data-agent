@@ -4,12 +4,12 @@
 
 ![Equity Data Agent — live terminal](docs/screenshots/terminal-live.png)
 
-> Production AI research tool for US equities, deployed live at **[equity-data-agent-ynr2.vercel.app](https://equity-data-agent-ynr2.vercel.app)**. Solo portfolio build — **250+ merged PRs · 19 ADRs · 700+ tests · 7 shipped phases** — designed to demonstrate end-to-end ownership of a non-trivial AI system: data engineering, LLM safety, agent design, frontend, and production ops.
+> Production AI research tool for US equities, deployed live at **[equity-data-agent-ynr2.vercel.app](https://equity-data-agent-ynr2.vercel.app)**. Solo portfolio build — **260+ merged PRs · 19 ADRs · 700+ tests · 7 shipped phases** — designed to demonstrate end-to-end ownership of a non-trivial AI system: data engineering, LLM safety, agent design, frontend, and production ops.
 >
 > **Product claim: the LLM never does math.** Every number in every thesis is pre-computed by Dagster, served as a human-readable report by FastAPI, and only *interpreted* by the LangGraph agent — so hallucinated financials are architecturally impossible. [→ how](#hallucination-resistance)
 
 ![Phases](https://img.shields.io/badge/phases-7%2F7%20complete-2ea44f)
-![Tests](https://img.shields.io/badge/tests-704%20passing-2ea44f)
+![Tests](https://img.shields.io/badge/tests-716%20passing-2ea44f)
 ![ADRs](https://img.shields.io/badge/ADRs-19-1f6feb)
 ![Hallucination](https://img.shields.io/badge/hallucination__ok-22%2F22-2ea44f)
 ![Prod](https://img.shields.io/badge/prod-live-success)
@@ -28,11 +28,11 @@
 |---|---|
 | **Full-stack** | Next.js 16 (App Router, SSG + Vercel Deploy Hook, SSE chat) · FastAPI (async, OpenAPI, per-IP rate-limit + token budget + fail-closed circuit breaker) · TypeScript types auto-generated from the OpenAPI schema |
 | **LLM engineering** | Intent-routed LangGraph (`classify → plan → gather → synthesize`) supporting 7 response shapes (thesis / quick-fact / comparison / conversational + focused-analysis: fundamental / technical / news_sentiment) · LiteLLM routing across Groq + Gemini with a free-tier-first policy · Hallucination eval harness (regex-verified, **22/22 pass** on the 22-question golden set) · Cross-model bench with `git`-tracked history |
-| **Data engineering** | Dagster asset graph (**10 assets · 30 domain-bounded asset checks · 2 schedules**) · ClickHouse + Qdrant Cloud · Idempotent migrations re-applied every deploy · Multi-timeframe aggregation (daily → weekly → monthly) · Per-ticker news relevance filter at ingest |
+| **Data engineering** | Dagster asset graph (**10 assets · 30 domain-bounded asset checks · 6 schedules**) · ClickHouse + Qdrant Cloud · Idempotent migrations re-applied every deploy · Multi-timeframe aggregation (daily → weekly → monthly) · Per-ticker news relevance filter at ingest |
 | **System design** | **19 ADRs** documenting every non-obvious choice (storage, agent shape, LLM routing, deploy ingress, public-chat threat model) — written at decision time, not retrofitted |
 | **Production ops** | Bespoke Docker Compose on a Hetzner VPS · 7 phase retros + a living failure-mode runbook · Multi-layer observability (Sentry + Langfuse + Prometheus + Grafana + cAdvisor + node_exporter + Dozzle) · Discord alerting on Dagster materialization failures + Docker container events ≤30s · UptimeRobot probe on `/api/v1/health` |
 | **CI/CD + security** | SOPS-encrypted secrets · SHA-identity gate + Dagster-load gate on every deploy · Layered scanner suite (pip-audit + bandit + gitleaks + npm audit + weekly Trivy image CVE scan) · Dependabot with grouped bumps + a waivers file with rationale |
-| **Testing** | **704 pytest tests** (unit + real-ClickHouse integration) · Endpoint p50/p95/p99 latency baseline with error-rate gate · Asset-check domain bounds that have caught real arithmetic bugs that passed code review |
+| **Testing** | **716 pytest tests** (unit + real-ClickHouse integration) · Endpoint p50/p95/p99 latency baseline with error-rate gate · Asset-check domain bounds that have caught real arithmetic bugs that passed code review |
 
 The 10-ticker universe (NVDA, AAPL, MSFT, GOOGL, AMZN, META, TSLA, JPM, V, UNH) ingests daily at 17:00 ET. All 7 planned phases are complete; remaining work lives in a perpetual **Ops & Reliability** queue.
 
@@ -191,7 +191,7 @@ Deployment isn't `git push` and pray. Each merge to `main` runs a series of expl
 
 1. **SOPS decrypt** — age-encrypted `.env.sops` decrypted in CI, never written to prod disk
 2. **SHA gate** — `git rev-parse HEAD` on prod must match the merged commit. Catches the "deploy succeeded but code is N commits behind" outage class. ([retro](docs/retros/phase-3-api-layer.md))
-3. **Dagster load gate** — definitions module imports cleanly with `≥8 assets`, `≥17 checks`, `≥2 schedules`. Catches the silent "code-server up but graph broken" class. ([retro](docs/retros/phase-3-api-layer.md))
+3. **Dagster load gate** — definitions module imports cleanly with `≥10 assets`, `≥25 checks`, `≥4 schedules`. Catches the silent "code-server up but graph broken" class. ([retro](docs/retros/phase-3-api-layer.md))
 4. **Health-check loop** — 60s timeout retries on `/health`; deploy fails if API doesn't come up.
 5. **Idempotent ClickHouse migrations** — re-applied every deploy. ([retro](docs/retros/phase-2-calculation-layer.md))
 6. **Bind-mount config detection** — changes to `litellm_config.yaml` / `dagster.yaml` / `workspace.yaml` trigger explicit `docker compose restart` (catches stale-config-on-disk class). ([retro](docs/retros/phase-3-api-layer.md))
