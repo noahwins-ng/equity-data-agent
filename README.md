@@ -159,7 +159,7 @@ See [`docs/architecture/system-overview.md`](docs/architecture/system-overview.m
 
 ![CLI thesis](docs/screenshots/cli-thesis.png)
 
-**Langfuse trace** — a full `classify → plan → gather → synthesize` agent run with per-node spans and per-LLM-call generation observations carrying model name, token usage, and latency.
+**Langfuse trace** — a full `classify → plan → gather → synthesize` agent run on prod, tagged with `intent:thesis` + `model:groq/llama-3.3-70b-versatile` and scored inline (`hallucination_ok`, `plan_adherence`). Per-node spans nest the per-LLM `ChatOpenAI` generation, which carries model name, token usage (`3,394 → 334`), and latency. `session_id` and a hashed-IP `user_id` make every prod chat filterable in the trace list.
 
 ![Langfuse trace](docs/screenshots/langfuse-trace.png)
 
