@@ -1210,12 +1210,16 @@ def _install_fake_langfuse(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """Replace the module-level Langfuse client with a MagicMock.
 
     Tests run with no real Langfuse keys (so ``agent.tracing.langfuse`` is
-    ``None`` by default and the score push is a no-op). To exercise the
-    score-push code path we install a fake client at the import site
-    (``agent.eval_scores.langfuse``) and return it for assertions.
+    ``None`` by default and the score / tag pushes are no-ops). To exercise
+    those code paths we install the same fake client at every import site
+    that holds a reference to the original module-level ``langfuse`` --
+    currently ``agent.eval_scores`` (score push) and ``api.routers.agent_chat``
+    (intent-tag ingestion via ``_create_trace_tags_via_ingestion``).
     """
     fake = MagicMock()
+    fake.get_current_trace_id.return_value = "test-trace-id"
     monkeypatch.setattr("agent.eval_scores.langfuse", fake)
+    monkeypatch.setattr("api.routers.agent_chat.langfuse", fake)
     return fake
 
 
@@ -1374,3 +1378,102 @@ def test_eval_scores_swallow_langfuse_failures(
     # The SSE error event is reserved for graph-level failures; a Langfuse
     # outage must not surface to the client.
     assert "error" not in events
+
+
+# ─── QNT-182 follow-up: resolved-model metadata + intent trace tag ──────────
+
+
+def test_intent_tag_pushed_to_trace(
+    client: TestClient,
+    stub_graph: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The classified intent lands as an ``intent:<value>`` trace tag via
+    the ingestion path (Langfuse v4 has no public update_current_trace for
+    tags)."""
+    fake_lf = _install_fake_langfuse(monkeypatch)
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
+    assert r.status_code == 200
+
+    # stub_graph hard-codes intent="thesis" in the canned final state.
+    fake_lf._create_trace_tags_via_ingestion.assert_called_once_with(
+        trace_id="test-trace-id",
+        tags=["intent:thesis"],
+    )
+
+
+def test_intent_tag_skipped_when_intent_missing(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A graph that returns no ``intent`` (graph crashed pre-classify, or a
+    custom test stub) must not attempt to tag the trace."""
+    fake_lf = _install_fake_langfuse(monkeypatch)
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
+        graph = MagicMock()
+        graph.invoke.side_effect = lambda state, **_kw: {
+            "ticker": state["ticker"],
+            "plan": [],
+            "reports": {},
+            "errors": {},
+            "thesis": None,
+            "quick_fact": None,
+            "confidence": 0.0,
+            # intent deliberately absent
+        }
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
+    assert r.status_code == 200
+    fake_lf._create_trace_tags_via_ingestion.assert_not_called()
+
+
+def test_intent_tag_swallows_langfuse_failures(
+    client: TestClient,
+    stub_graph: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the ingestion call raises, the SSE request must still complete --
+    observability never crashes the request."""
+    fake_lf = _install_fake_langfuse(monkeypatch)
+    fake_lf._create_trace_tags_via_ingestion.side_effect = RuntimeError("ingest down")
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
+    assert r.status_code == 200
+    events = [name for name, _ in _parse_sse(r.text)]
+    assert events[-1] == "done"
+    assert "error" not in events
+
+
+def test_current_model_info_returned_for_default_provider() -> None:
+    """``current_model_info`` resolves the active alias against the static
+    map so the SSE handler can stamp Langfuse traces with the upstream
+    provider/model name."""
+    from agent.llm import current_model_info
+
+    info = current_model_info()
+    # Default provider is groq -> equity-agent/default -> llama-3.3-70b.
+    assert info["alias"] == "equity-agent/default"
+    assert info["resolved_model"] == "groq/llama-3.3-70b-versatile"
+
+
+def test_current_model_info_returns_unknown_for_unmapped_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An alias not in the static map (e.g. someone added a litellm_config
+    entry but forgot to update the resolved-model map) gets `unknown` rather
+    than raising -- telemetry-stamping must never break a request."""
+    from agent.llm import current_model_info, set_model_override
+
+    set_model_override("equity-agent/some-new-bench-alias")
+    try:
+        info = current_model_info()
+        assert info["alias"] == "equity-agent/some-new-bench-alias"
+        assert info["resolved_model"] == "unknown"
+    finally:
+        set_model_override(None)

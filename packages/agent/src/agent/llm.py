@@ -38,6 +38,29 @@ _ALIAS_BY_PROVIDER = {
     "gemini": "equity-agent/gemini",
 }
 
+# QNT-182: Static map from LiteLLM alias to the upstream provider/model the
+# alias resolves to, kept in sync with ``litellm_config.yaml``. Used to stamp
+# Langfuse traces with the real model name -- LangChain only sees the alias
+# (we pass ``model=alias`` to ChatOpenAI), and LiteLLM echoes the alias back
+# in the response, so without this map "which model served this trace" is
+# unanswerable from observability. Does NOT capture fallback fires (when
+# ``equity-agent/default`` falls back to ``equity-agent/fallback-llama4scout``
+# on Groq TPD exhaustion); detecting that needs LiteLLM response inspection
+# and is a follow-up.
+_RESOLVED_MODEL_BY_ALIAS: dict[str, str] = {
+    "equity-agent/default": "groq/llama-3.3-70b-versatile",
+    "equity-agent/fallback-llama4scout": "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+    "equity-agent/gemini": "gemini/gemini-2.5-flash",
+    "equity-agent/bench-gptoss120b": "groq/openai/gpt-oss-120b",
+    "equity-agent/bench-gptoss20b": "groq/openai/gpt-oss-20b",
+    "equity-agent/bench-llama4scout": "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+    "equity-agent/bench-qwen3-32b": "groq/qwen/qwen3-32b",
+    "equity-agent/bench-gemma4-31b": "gemini/gemma-4-31b-it",
+    "equity-agent/bench-gemma3-27b": "gemini/gemma-3-27b-it",
+    "equity-agent/bench-gemini31flashlite": "gemini/gemini-3.1-flash-lite-preview",
+    "equity-agent/bench-llama3-70b": "groq/llama-3.3-70b-versatile",
+}
+
 # QNT-129 bench harness override. When set, every ``get_llm()`` call returns a
 # ChatOpenAI pointed at this alias instead of the provider lookup. Set via
 # ``set_model_override(...)`` from ``agent.evals.__main__ --model`` so one
@@ -50,6 +73,38 @@ def set_model_override(alias: str | None) -> None:
     """Force every subsequent ``get_llm()`` to return ``alias``, or clear with None."""
     global _MODEL_OVERRIDE
     _MODEL_OVERRIDE = alias
+
+
+def _current_alias() -> str:
+    """Return the alias ``get_llm()`` would currently use.
+
+    Mirrors the alias-resolution branch in :func:`get_llm` so callers (e.g.
+    the SSE handler tagging Langfuse traces) can stamp the right name without
+    constructing an LLM instance. Falls back to the groq default on misconfig
+    rather than raising, because telemetry-stamping must never break a request.
+    """
+    if _MODEL_OVERRIDE is not None:
+        return _MODEL_OVERRIDE
+    provider = settings.EQUITY_AGENT_PROVIDER.lower()
+    return _ALIAS_BY_PROVIDER.get(provider, _ALIAS_BY_PROVIDER["groq"])
+
+
+def current_model_info() -> dict[str, str]:
+    """Return ``{"alias": ..., "resolved_model": ...}`` for trace tagging.
+
+    Reads the active alias the same way ``get_llm()`` does and resolves it
+    against the static :data:`_RESOLVED_MODEL_BY_ALIAS` map. Unknown aliases
+    (e.g. someone added a new bench entry to ``litellm_config.yaml`` but
+    forgot to update the map) resolve to ``"unknown"`` rather than raising
+    -- the trace still carries the alias, the resolved-model field just
+    flags the gap so a Langfuse filter on ``resolved_model = unknown``
+    surfaces drift.
+    """
+    alias = _current_alias()
+    return {
+        "alias": alias,
+        "resolved_model": _RESOLVED_MODEL_BY_ALIAS.get(alias, "unknown"),
+    }
 
 
 # ─── Per-request token tracking (QNT-161) ───────────────────────────────────
@@ -171,6 +226,7 @@ def get_llm(temperature: float = 0.2) -> ChatOpenAI:
 
 __all__ = [
     "TokenUsageTracker",
+    "current_model_info",
     "get_llm",
     "reset_token_tracker",
     "set_model_override",

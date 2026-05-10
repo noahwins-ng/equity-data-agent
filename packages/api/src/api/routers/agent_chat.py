@@ -99,13 +99,14 @@ from agent.focused import FocusedAnalysis
 from agent.graph import OPTIONAL_TOOLS, build_graph
 from agent.llm import (
     TokenUsageTracker,
+    current_model_info,
     reset_token_tracker,
     set_token_tracker,
 )
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 from agent.tools import default_report_tools
-from agent.tracing import make_callback_handler, observe, propagate_attributes
+from agent.tracing import langfuse, make_callback_handler, observe, propagate_attributes
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
@@ -532,10 +533,17 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
             # opened in this thread context.
             handler = make_callback_handler()
             graph_config: dict[str, object] = {"callbacks": [handler]} if handler else {}
+            # QNT-182 follow-up: stamp the resolved upstream model on every
+            # observation in the trace via metadata. LangChain only sees the
+            # LiteLLM alias (we pass ``model=alias`` to ChatOpenAI), so without
+            # this the trace is unanswerable on "which model served this run".
+            # Static map -- doesn't catch fallback fires (separate ticket).
+            model_info = current_model_info()
             with propagate_attributes(
                 trace_name="agent-chat",
                 session_id=session_id,
                 user_id=user_id,
+                metadata=model_info,
             ):
                 try:
                     final_state_holder["state"] = graph.invoke(
@@ -553,6 +561,30 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
                     state_obj = final_state_holder.get("state")
                     if isinstance(state_obj, dict):
                         push_eval_scores(state_obj)
+                        # QNT-182 follow-up: tag the trace with the resolved
+                        # intent so the Tracing list is filterable by shape
+                        # ("show me only conversational redirects" / "thesis-
+                        # shape only") without parsing the SSE event stream.
+                        # Belongs here, after graph.invoke, because the intent
+                        # isn't decided until classify_node runs inside the
+                        # graph. Langfuse v4 has no public update_current_trace
+                        # for tags (propagate_attributes is set-once at context
+                        # entry); using the ingestion path with the resolved
+                        # trace_id is the only way to add a tag after the
+                        # context has opened. Swallowed on failure -- the
+                        # trace just won't carry the intent tag, which is
+                        # benign vs. crashing the request.
+                        intent = state_obj.get("intent")
+                        if isinstance(intent, str) and intent and langfuse is not None:
+                            try:
+                                trace_id = langfuse.get_current_trace_id()
+                                if trace_id:
+                                    langfuse._create_trace_tags_via_ingestion(  # noqa: SLF001 — no public v4 equivalent
+                                        trace_id=trace_id,
+                                        tags=[f"intent:{intent}"],
+                                    )
+                            except Exception as exc:  # noqa: BLE001 — telemetry must not crash
+                                logger.warning("eval-tag push failed: %s", exc)
 
         runner_task = asyncio.create_task(asyncio.to_thread(_runner))
         run_deadline = loop.time() + settings.CHAT_RUN_TIMEOUT
