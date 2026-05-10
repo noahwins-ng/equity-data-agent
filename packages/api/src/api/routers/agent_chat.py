@@ -94,7 +94,7 @@ from typing import Any
 
 from agent.comparison import ComparisonAnswer
 from agent.conversational import ConversationalAnswer, domain_redirect
-from agent.eval_scores import push_to_current_trace as push_eval_scores
+from agent.eval_scores import push_to_trace_id as push_eval_scores
 from agent.focused import FocusedAnalysis
 from agent.graph import OPTIONAL_TOOLS, build_graph
 from agent.llm import (
@@ -106,7 +106,7 @@ from agent.llm import (
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 from agent.tools import default_report_tools
-from agent.tracing import langfuse, make_callback_handler, observe, propagate_attributes
+from agent.tracing import langfuse, make_callback_handler
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
@@ -516,95 +516,88 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
         session_id = str(uuid.uuid4())
         user_id = hashlib.sha256(client_ip.encode()).hexdigest()[:12]
 
-        @observe(name="agent-chat-handler")
         def _runner() -> None:
             # Run the graph in a worker thread; emitted events have already
             # been routed onto the queue via ``call_soon_threadsafe``. The
             # final state is captured for post-run prose / thesis / done
             # events.
             #
-            # ``@observe(name="agent-chat-handler")`` opens the root span;
-            # ``propagate_attributes(trace_name="agent-chat", ...)`` below
-            # sets the trace label. The two names are deliberately distinct
-            # post-Langfuse v4 -- naming both "agent-chat" caused the trace
-            # tree to render two siblings labeled "agent-chat" because v4
-            # surfaces the trace and its root span as separate nodes (v3
-            # collapsed them visually). The CallbackHandler attached via
-            # ``config={"callbacks": [...]}`` drives the per-node and
-            # per-LLM-call observations under it (LangGraph passes
-            # ``config`` to every node, and each node forwards it to inner
-            # ``llm.invoke`` calls). This matches the CLI's
-            # ``agent.__main__.analyze`` topology, where ``@observe()``
-            # already defaults to the function name (different from the
-            # trace name).
+            # Single-root tracing (post-feedback): the LangGraph
+            # ``CallbackHandler`` is the only span source. We pass
+            # ``run_name="agent-chat"`` plus the langfuse-langchain metadata
+            # keys (``langfuse_session_id`` / ``langfuse_user_id`` /
+            # ``langfuse_tags``) via the RunnableConfig so the handler tags
+            # the trace itself rather than wrapping it in a separate
+            # ``@observe`` span. The previous ``@observe(name="agent-chat-handler")``
+            # + ``propagate_attributes(trace_name="agent-chat", ...)`` pair
+            # produced two visually nested rows in the Langfuse v4 UI
+            # (trace + redundant root span) -- this collapses them.
             handler = make_callback_handler()
-            graph_config: dict[str, object] = {"callbacks": [handler]} if handler else {}
             # QNT-182 follow-up: stamp the resolved upstream model on every
             # observation in the trace via metadata. LangChain only sees the
             # LiteLLM alias (we pass ``model=alias`` to ChatOpenAI), so without
             # this the trace is unanswerable on "which model served this run".
             # Static map -- doesn't catch fallback fires (separate ticket).
             model_info = current_model_info()
-            with propagate_attributes(
-                trace_name="agent-chat",
-                session_id=session_id,
-                user_id=user_id,
-                metadata=model_info,
-            ):
+            graph_config: dict[str, object] = {}
+            if handler is not None:
+                graph_config = {
+                    "callbacks": [handler],
+                    "run_name": "agent-chat",
+                    "metadata": {
+                        "langfuse_session_id": session_id,
+                        "langfuse_user_id": user_id,
+                        **model_info,
+                    },
+                }
+            try:
+                final_state_holder["state"] = graph.invoke(
+                    {"ticker": ticker, "question": request.message},
+                    config=graph_config,  # type: ignore[arg-type]
+                )
+            except Exception as exc:  # noqa: BLE001 — surfaced as SSE error
+                logger.exception("agent graph failed for %s", ticker)
+                final_state_holder["error"] = exc
+                return
+
+            state_obj = final_state_holder.get("state")
+            if not isinstance(state_obj, dict):
+                return
+            # The handler exposes the trace it just created via
+            # ``last_trace_id``. ``None`` when tracing is disabled or no LLM
+            # call fired inside the graph (deterministic redirect path).
+            trace_id = getattr(handler, "last_trace_id", None) if handler is not None else None
+            # QNT-182: push deterministic eval scores onto this trace.
+            # Safe no-op when Langfuse keys are unset OR ``trace_id`` is None.
+            push_eval_scores(state_obj, trace_id)
+            # QNT-182 follow-up: tag the trace with the resolved intent so
+            # the Tracing list is filterable by shape ("show me only
+            # conversational redirects" / "thesis-shape only") without
+            # parsing the SSE event stream. Belongs here, after graph.invoke,
+            # because the intent isn't decided until classify_node runs.
+            # Langfuse v4 has no public ``update_current_trace`` for tags;
+            # the ingestion path with the resolved trace_id is the only way
+            # to add a tag post-hoc. Swallowed on failure -- the trace just
+            # won't carry the intent tag, which is benign vs. crashing the
+            # request.
+            intent = state_obj.get("intent")
+            if isinstance(intent, str) and intent and langfuse is not None and trace_id:
                 try:
-                    final_state_holder["state"] = graph.invoke(
-                        {"ticker": ticker, "question": request.message},
-                        config=graph_config,  # type: ignore[arg-type]
+                    # Pair the intent tag with the resolved upstream model.
+                    # Metadata is filterable by key but tags surface in the
+                    # Tags column with one "any of" operator across both
+                    # axes ("conversational redirects on llama-3.3-70b" is
+                    # two tag chips).
+                    tags = [f"intent:{intent}"]
+                    resolved = model_info.get("resolved_model")
+                    if resolved and resolved != "unknown":
+                        tags.append(f"model:{resolved}")
+                    langfuse._create_trace_tags_via_ingestion(  # noqa: SLF001 — no public v4 equivalent
+                        trace_id=trace_id,
+                        tags=tags,
                     )
-                except Exception as exc:  # noqa: BLE001 — surfaced as SSE error
-                    logger.exception("agent graph failed for %s", ticker)
-                    final_state_holder["error"] = exc
-                else:
-                    # QNT-182: push deterministic eval scores onto this
-                    # trace while still inside @observe so
-                    # score_current_trace resolves the ambient trace ID.
-                    # Helper is a safe no-op when Langfuse keys are unset.
-                    state_obj = final_state_holder.get("state")
-                    if isinstance(state_obj, dict):
-                        push_eval_scores(state_obj)
-                        # QNT-182 follow-up: tag the trace with the resolved
-                        # intent so the Tracing list is filterable by shape
-                        # ("show me only conversational redirects" / "thesis-
-                        # shape only") without parsing the SSE event stream.
-                        # Belongs here, after graph.invoke, because the intent
-                        # isn't decided until classify_node runs inside the
-                        # graph. Langfuse v4 has no public update_current_trace
-                        # for tags (propagate_attributes is set-once at context
-                        # entry); using the ingestion path with the resolved
-                        # trace_id is the only way to add a tag after the
-                        # context has opened. Swallowed on failure -- the
-                        # trace just won't carry the intent tag, which is
-                        # benign vs. crashing the request.
-                        intent = state_obj.get("intent")
-                        if isinstance(intent, str) and intent and langfuse is not None:
-                            try:
-                                trace_id = langfuse.get_current_trace_id()
-                                if trace_id:
-                                    # QNT-182 follow-up: also tag with the
-                                    # resolved upstream model. Pairs with the
-                                    # metadata stamp -- metadata is filterable
-                                    # but takes a metadata-key filter; tags
-                                    # show up directly in the Tags column and
-                                    # filter via the same "any of" operator
-                                    # the intent tag uses, so one tag
-                                    # vocabulary covers both axes ("show me
-                                    # all conversational redirects on
-                                    # llama-3.3-70b" is two tag chips).
-                                    tags = [f"intent:{intent}"]
-                                    resolved = model_info.get("resolved_model")
-                                    if resolved and resolved != "unknown":
-                                        tags.append(f"model:{resolved}")
-                                    langfuse._create_trace_tags_via_ingestion(  # noqa: SLF001 — no public v4 equivalent
-                                        trace_id=trace_id,
-                                        tags=tags,
-                                    )
-                            except Exception as exc:  # noqa: BLE001 — telemetry must not crash
-                                logger.warning("eval-tag push failed: %s", exc)
+                except Exception as exc:  # noqa: BLE001 — telemetry must not crash
+                    logger.warning("eval-tag push failed: %s", exc)
 
         runner_task = asyncio.create_task(asyncio.to_thread(_runner))
         run_deadline = loop.time() + settings.CHAT_RUN_TIMEOUT

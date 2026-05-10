@@ -26,12 +26,11 @@ from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 from agent.tools import default_report_tools
 from agent.tracing import flush as flush_langfuse
-from agent.tracing import make_callback_handler, observe
+from agent.tracing import make_callback_handler
 
 logger = logging.getLogger(__name__)
 
 
-@observe()
 def analyze(ticker: str, output: Path | None = None) -> int:
     ticker = ticker.upper()
     if ticker not in TICKERS:
@@ -42,10 +41,15 @@ def analyze(ticker: str, output: Path | None = None) -> int:
         return 1
 
     graph = build_graph(default_report_tools())
-    # QNT-181: pass a CallbackHandler via runtime config so every nested
-    # LangGraph node + LLM call lands under the @observe parent trace.
+    # Single-root tracing: the LangGraph CallbackHandler is the only span
+    # source; ``run_name`` names the trace itself. No outer ``@observe`` --
+    # the v4 trace + root-span duality renders as two visually nested rows
+    # in the UI when both are present (see api.routers.agent_chat for the
+    # same pattern in prod chat).
     handler = make_callback_handler()
-    config: RunnableConfig = {"callbacks": [handler]} if handler else {}
+    config: RunnableConfig = (
+        {"callbacks": [handler], "run_name": "agent-cli-analyze"} if handler else {}
+    )
     final_state = graph.invoke({"ticker": ticker}, config=config)
 
     thesis_obj = final_state.get("thesis")

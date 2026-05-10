@@ -14,12 +14,14 @@ The other two scorers (``judge_score``, ``cosine``) need either an LLM call or
 a reference thesis, neither of which is free at prod-chat scale. We
 deliberately do NOT push those — see the QNT-182 ticket for the cost rationale.
 
-Wiring: :func:`push_to_current_trace` is called from inside the
-``@observe(name="agent-chat")``-decorated runner in
-``api.routers.agent_chat`` after ``graph.invoke()`` returns. It uses
-``langfuse.score_current_trace(...)`` so no trace ID extraction is needed.
+Wiring: :func:`push_to_trace_id` is called from ``api.routers.agent_chat``
+after ``graph.invoke()`` returns, with the ``trace_id`` resolved from the
+LangGraph ``CallbackHandler``'s ``last_trace_id`` attribute. It uses
+``langfuse.create_score(trace_id=..., ...)`` so the score lands on the
+trace the handler actually emitted (no implicit ambient-context dependency).
 When Langfuse keys are unset (eval bench runs strip them at import time, ADR-019)
-the call is a safe no-op.
+or the handler never produced a trace (no LLM call inside the graph) the call
+is a safe no-op.
 """
 
 from __future__ import annotations
@@ -142,33 +144,35 @@ def compute_scores(state: dict[str, Any]) -> tuple[HallucinationResult, set[str]
     return hallucination, missing
 
 
-def push_to_current_trace(state: dict[str, Any]) -> None:
+def push_to_trace_id(state: dict[str, Any], trace_id: str | None) -> None:
     """Compute and attach ``hallucination_ok`` + ``plan_adherence`` scores to
-    the active Langfuse trace.
+    the Langfuse trace identified by ``trace_id``.
 
-    Must be called from within an ``@observe``-decorated function so
-    ``score_current_trace`` resolves the ambient trace. Safe no-op when:
+    ``trace_id`` is the LangGraph ``CallbackHandler.last_trace_id`` captured
+    after ``graph.invoke()`` returns; ``None`` when the handler never created
+    a trace (no LLM call fired inside the graph). Safe no-op when:
 
     * Langfuse keys are unset (``langfuse is None``) — eval bench runs strip
       keys at import time so callbacks have no client to flow to.
-    * No trace context is active (e.g. unit tests calling ``_runner``
-      bypassing ``@observe``).
+    * ``trace_id`` is ``None`` or empty — nothing to score.
 
     Failures are logged at WARNING and swallowed: observability must never
     break the SSE response, same pattern as ``_UsageCallback`` in
     ``agent.llm``.
     """
-    if langfuse is None:
+    if langfuse is None or not trace_id:
         return
     try:
         hallucination, missing_tools = compute_scores(state)
-        langfuse.score_current_trace(
+        langfuse.create_score(
+            trace_id=trace_id,
             name="hallucination_ok",
             value=1.0 if hallucination.ok else 0.0,
             data_type="NUMERIC",
             comment=hallucination.reason(),
         )
-        langfuse.score_current_trace(
+        langfuse.create_score(
+            trace_id=trace_id,
             name="plan_adherence",
             value=0.0 if missing_tools else 1.0,
             data_type="NUMERIC",
@@ -180,5 +184,5 @@ def push_to_current_trace(state: dict[str, Any]) -> None:
 
 __all__ = [
     "compute_scores",
-    "push_to_current_trace",
+    "push_to_trace_id",
 ]
