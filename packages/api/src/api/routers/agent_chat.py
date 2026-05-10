@@ -516,21 +516,27 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
         session_id = str(uuid.uuid4())
         user_id = hashlib.sha256(client_ip.encode()).hexdigest()[:12]
 
-        @observe(name="agent-chat")
+        @observe(name="agent-chat-handler")
         def _runner() -> None:
             # Run the graph in a worker thread; emitted events have already
             # been routed onto the queue via ``call_soon_threadsafe``. The
             # final state is captured for post-run prose / thesis / done
             # events.
             #
-            # ``@observe(name="agent-chat")`` opens the parent trace; the
-            # CallbackHandler attached via ``config={"callbacks": [...]}``
-            # drives the per-node and per-LLM-call observations under it
-            # (LangGraph passes ``config`` to every node, and each node
-            # forwards it to inner ``llm.invoke`` calls). This matches the
-            # CLI's ``agent.__main__.analyze`` topology. ``propagate_attributes``
-            # tags trace_name + session_id + user_id on every observation
-            # opened in this thread context.
+            # ``@observe(name="agent-chat-handler")`` opens the root span;
+            # ``propagate_attributes(trace_name="agent-chat", ...)`` below
+            # sets the trace label. The two names are deliberately distinct
+            # post-Langfuse v4 -- naming both "agent-chat" caused the trace
+            # tree to render two siblings labeled "agent-chat" because v4
+            # surfaces the trace and its root span as separate nodes (v3
+            # collapsed them visually). The CallbackHandler attached via
+            # ``config={"callbacks": [...]}`` drives the per-node and
+            # per-LLM-call observations under it (LangGraph passes
+            # ``config`` to every node, and each node forwards it to inner
+            # ``llm.invoke`` calls). This matches the CLI's
+            # ``agent.__main__.analyze`` topology, where ``@observe()``
+            # already defaults to the function name (different from the
+            # trace name).
             handler = make_callback_handler()
             graph_config: dict[str, object] = {"callbacks": [handler]} if handler else {}
             # QNT-182 follow-up: stamp the resolved upstream model on every
