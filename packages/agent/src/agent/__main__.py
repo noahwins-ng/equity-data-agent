@@ -26,7 +26,7 @@ from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 from agent.tools import default_report_tools
 from agent.tracing import flush as flush_langfuse
-from agent.tracing import make_callback_handler
+from agent.tracing import make_callback_handler, propagate_attributes
 
 logger = logging.getLogger(__name__)
 
@@ -41,16 +41,16 @@ def analyze(ticker: str, output: Path | None = None) -> int:
         return 1
 
     graph = build_graph(default_report_tools())
-    # Single-root tracing: the LangGraph CallbackHandler is the only span
-    # source; ``run_name`` names the trace itself. No outer ``@observe`` --
-    # the v4 trace + root-span duality renders as two visually nested rows
-    # in the UI when both are present (see api.routers.agent_chat for the
-    # same pattern in prod chat).
+    # Tracing topology: trace name comes from propagate_attributes, root-span
+    # name from run_name. v4 always renders both as separate rows -- distinct
+    # names keep the hierarchy self-documenting (see api.routers.agent_chat
+    # for the same pattern + full rationale).
     handler = make_callback_handler()
     config: RunnableConfig = (
-        {"callbacks": [handler], "run_name": "agent-cli-analyze"} if handler else {}
+        {"callbacks": [handler], "run_name": "langgraph-run"} if handler else {}
     )
-    final_state = graph.invoke({"ticker": ticker}, config=config)
+    with propagate_attributes(trace_name="agent-cli-analyze"):
+        final_state = graph.invoke({"ticker": ticker}, config=config)
 
     thesis_obj = final_state.get("thesis")
     quick_fact_obj = final_state.get("quick_fact")

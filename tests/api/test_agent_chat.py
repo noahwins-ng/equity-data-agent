@@ -1484,13 +1484,17 @@ def test_intent_tag_swallows_langfuse_failures(
     assert "error" not in events
 
 
-def test_runner_uses_handler_only_single_root_trace() -> None:
-    """The chat runner must rely on the LangGraph CallbackHandler as the
-    only span source -- no ``@observe`` wrapper, no ``propagate_attributes``.
-    The previous double-decorator pair produced two visually nested rows in
-    the Langfuse v4 UI (trace + redundant root span). Pinning the
-    handler-only shape so a refactor can't silently reintroduce the
-    duplication.
+def test_runner_uses_distinct_trace_and_root_span_names() -> None:
+    """Langfuse v4 always renders the trace and its root observation as
+    separate rows in the UI. Distinct names keep the hierarchy
+    self-documenting:
+
+        agent-chat        <- trace (set via propagate_attributes(trace_name=))
+          langgraph-run   <- root span (set via run_name in RunnableConfig)
+
+    Also pinned: no ``@observe`` decorator anywhere in the router (the
+    LangGraph CallbackHandler is the source of truth for span work; @observe
+    would re-introduce a redundant middle layer).
     """
     import ast
     import inspect
@@ -1508,15 +1512,11 @@ def test_runner_uses_handler_only_single_root_trace() -> None:
                     "must not use @observe -- the LangGraph CallbackHandler is "
                     "the only span source."
                 )
-    # Imports must not pull in observe / propagate_attributes from agent.tracing.
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == "agent.tracing":
-            imported = {alias.name for alias in node.names}
-            assert "observe" not in imported
-            assert "propagate_attributes" not in imported
-    # Trace metadata is set via langfuse-langchain's RunnableConfig keys.
+    # Trace name + root span name + langfuse-langchain metadata keys all
+    # surface in the runner source.
     runner_src = inspect.getsource(chat_module._stream)
-    assert '"run_name": "agent-chat"' in runner_src
+    assert 'trace_name="agent-chat"' in runner_src
+    assert '"run_name": "langgraph-run"' in runner_src
     assert '"langfuse_session_id"' in runner_src
     assert '"langfuse_user_id"' in runner_src
 
