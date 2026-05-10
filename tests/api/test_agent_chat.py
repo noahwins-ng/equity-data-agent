@@ -1215,11 +1215,18 @@ def _install_fake_langfuse(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     that holds a reference to the original module-level ``langfuse`` --
     currently ``agent.eval_scores`` (score push) and ``api.routers.agent_chat``
     (intent-tag ingestion via ``_create_trace_tags_via_ingestion``).
+
+    Single-root tracing (post-feedback): trace_id no longer comes from
+    ``langfuse.get_current_trace_id()``; it comes from the LangGraph
+    ``CallbackHandler.last_trace_id``. We install a fake handler too so the
+    SSE handler resolves a known trace_id post-graph.
     """
     fake = MagicMock()
-    fake.get_current_trace_id.return_value = "test-trace-id"
     monkeypatch.setattr("agent.eval_scores.langfuse", fake)
     monkeypatch.setattr("api.routers.agent_chat.langfuse", fake)
+    fake_handler = MagicMock()
+    fake_handler.last_trace_id = "test-trace-id"
+    monkeypatch.setattr("api.routers.agent_chat.make_callback_handler", lambda: fake_handler)
     return fake
 
 
@@ -1279,13 +1286,14 @@ def test_eval_scores_pushed_on_happy_path(
     r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
     assert r.status_code == 200
 
-    score_calls = fake_lf.score_current_trace.call_args_list
+    score_calls = fake_lf.create_score.call_args_list
     score_names = {call.kwargs["name"] for call in score_calls}
     assert score_names == {"hallucination_ok", "plan_adherence"}
 
     for call in score_calls:
         assert call.kwargs["value"] == 1.0
         assert call.kwargs["data_type"] == "NUMERIC"
+        assert call.kwargs["trace_id"] == "test-trace-id"
 
 
 def test_eval_scores_flag_fabricated_number(
@@ -1334,7 +1342,7 @@ def test_eval_scores_flag_fabricated_number(
     r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
     assert r.status_code == 200
 
-    score_calls = fake_lf.score_current_trace.call_args_list
+    score_calls = fake_lf.create_score.call_args_list
     halluc_call = next(c for c in score_calls if c.kwargs["name"] == "hallucination_ok")
     assert halluc_call.kwargs["value"] == 0.0
     # ``HallucinationResult.reason()`` formats the unsupported tokens into
@@ -1364,11 +1372,11 @@ def test_eval_scores_swallow_langfuse_failures(
     stub_graph: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """If ``score_current_trace`` raises, the request must still complete —
+    """If ``create_score`` raises, the request must still complete —
     observability must not crash the SSE response (matches the
     ``_UsageCallback`` pattern in ``agent.llm``)."""
     fake_lf = _install_fake_langfuse(monkeypatch)
-    fake_lf.score_current_trace.side_effect = RuntimeError("langfuse upstream down")
+    fake_lf.create_score.side_effect = RuntimeError("langfuse upstream down")
 
     r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
     assert r.status_code == 200
@@ -1476,20 +1484,41 @@ def test_intent_tag_swallows_langfuse_failures(
     assert "error" not in events
 
 
-def test_runner_root_span_name_distinct_from_trace_name() -> None:
-    """Post-QNT-182 follow-up: the @observe-decorated runner must use a
-    name different from the trace_name passed to propagate_attributes,
-    otherwise Langfuse v4 renders two sibling 'agent-chat' nodes in the
-    trace tree (v3 collapsed them; v4 doesn't). Pinning this so a future
-    refactor doesn't accidentally reintroduce the visual duplication."""
+def test_runner_uses_handler_only_single_root_trace() -> None:
+    """The chat runner must rely on the LangGraph CallbackHandler as the
+    only span source -- no ``@observe`` wrapper, no ``propagate_attributes``.
+    The previous double-decorator pair produced two visually nested rows in
+    the Langfuse v4 UI (trace + redundant root span). Pinning the
+    handler-only shape so a refactor can't silently reintroduce the
+    duplication.
+    """
+    import ast
     import inspect
 
-    src = inspect.getsource(chat_module._stream)
-    # The root span should be 'agent-chat-handler', the trace should be
-    # 'agent-chat'. Asserting both literals appear in the SSE handler
-    # source guards against a rename that drops the distinction.
-    assert '@observe(name="agent-chat-handler")' in src
-    assert 'trace_name="agent-chat"' in src
+    src = inspect.getsource(chat_module)
+    tree = ast.parse(src)
+    # Walk every nested function and confirm none of them carry an @observe
+    # decorator (parse-level check ignores docstrings / comments).
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            for dec in node.decorator_list:
+                dec_src = ast.unparse(dec)
+                assert not dec_src.startswith("observe"), (
+                    f"{node.name} carries decorator {dec_src!r}; the chat runner "
+                    "must not use @observe -- the LangGraph CallbackHandler is "
+                    "the only span source."
+                )
+    # Imports must not pull in observe / propagate_attributes from agent.tracing.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "agent.tracing":
+            imported = {alias.name for alias in node.names}
+            assert "observe" not in imported
+            assert "propagate_attributes" not in imported
+    # Trace metadata is set via langfuse-langchain's RunnableConfig keys.
+    runner_src = inspect.getsource(chat_module._stream)
+    assert '"run_name": "agent-chat"' in runner_src
+    assert '"langfuse_session_id"' in runner_src
+    assert '"langfuse_user_id"' in runner_src
 
 
 def test_current_model_info_returned_for_default_provider() -> None:
