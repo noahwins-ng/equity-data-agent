@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
 import { ChatPanel } from "@/components/chat-panel";
 import { Watchlist } from "@/components/watchlist";
 import "./globals.css";
@@ -47,6 +48,7 @@ export default function RootLayout({
           <main className="min-h-0 overflow-y-auto">{children}</main>
           <ChatPanel />
         </div>
+        <Analytics />
       </body>
     </html>
   );
