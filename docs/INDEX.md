@@ -39,6 +39,7 @@ Architecture Decision Records (ADRs). Read these to understand **why** we chose 
 - [016-news-publisher-canonicalisation-and-cross-ticker-storage.md](decisions/016-news-publisher-canonicalisation-and-cross-ticker-storage.md)
 - [017-public-chat-truly-public-no-auth.md](decisions/017-public-chat-truly-public-no-auth.md)
 - [018-cloudflare-quick-tunnel-for-https-ingress.md](decisions/018-cloudflare-quick-tunnel-for-https-ingress.md)
+- [019-langfuse-callbackhandler-over-per-node-observe.md](decisions/019-langfuse-callbackhandler-over-per-node-observe.md)
 
 ### [guides/](guides/)
 How to do common tasks. Operational runbooks.

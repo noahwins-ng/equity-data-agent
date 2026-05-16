@@ -1,5 +1,7 @@
 # Equity Data Agent — Project Requirements
 
+> **Status (2026-05-16):** This document captures the Phase-0 design intent and evolves incrementally. For current production reality — ingress topology, deploy gates, LLM routing, env schema, ADR count — the **[README.md](../README.md)** and the **[`docs/decisions/`](decisions/)** ADRs are authoritative. Sections marked **⚠ stale** below have been superseded by later ADRs or tickets; they are retained as historical context.
+
 ## 1. Executive Summary
 
 **Equity Data Agent** is an autonomous, institutional-grade equity research platform that transforms raw market data (price, fundamentals) and narrative data (news) into actionable investment theses.
@@ -208,7 +210,7 @@ equity-data-agent/
 ├── pyproject.toml                  # Root workspace definition
 ├── uv.lock
 ├── Dockerfile                      # Multi-stage build: `base` (uv + deps) → `dagster` target → `api` target
-├── Caddyfile                       # Dormant — retained under `prod-caddy` profile for the future named-tunnel + own-domain upgrade path. Active prod HTTPS is via cloudflared (ADR-018).
+├── ~~Caddyfile~~                       # ⚠ stale — Caddyfile no longer exists on disk. Ingress is a Cloudflare named tunnel (ADR-018, QNT-177); `prod-caddy` profile was removed.
 ├── litellm_config.yaml             # LiteLLM model routing: dev/prod → Groq (default); override → Gemini 2.5 Flash. See ADR-011 + QNT-123.
 ├── docker-compose.yml              # Profiles: dev, prod
 ├── docs/
@@ -598,26 +600,20 @@ services:
 
   cloudflared:
     image: cloudflare/cloudflared:2026.3.0
-    command: tunnel --no-autoupdate --url http://api:8000
-    # No public ports — connects OUTBOUND to Cloudflare and exposes the API
-    # at a free *.trycloudflare.com hostname (read from `docker logs cloudflared`).
-    # See ADR-018 for the choice of quick tunnel over a paid named-tunnel domain.
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    # ⚠ stale (above command is the named-tunnel form; original quick-tunnel below is superseded):
+    # command: tunnel --no-autoupdate --url http://api:8000  (quick-tunnel, hostname rotates)
+    # Named tunnel (QNT-177 / ADR-018): hostname is stable at api.<domain>, no rotation.
 
-  # Caddy is retained under the `prod-caddy` profile for the future named-tunnel
-  # + own-domain upgrade path. Inactive in default `prod` profile.
-  # caddy:
-  #   image: caddy:2-alpine
-  #   ports: ["80:80", "443:443"]
-  #   profiles: [prod-caddy]
-  #   ...
+  # ⚠ stale — prod-caddy profile and Caddyfile have been removed (QNT-177). Caddy is no
+  # longer retained. Named-tunnel ingress via cloudflared is the production path.
 
 volumes:
-  caddy_data:        # persists TLS certificates if/when Caddy is reactivated
   clickhouse_data:   # persists ClickHouse data across container restarts (CRITICAL — omitting this loses all market data on `docker compose down`)
 ```
 
 - Environment variable: `CLICKHOUSE_HOST=clickhouse` when `ENV=prod` (Docker network)
-- **HTTPS in production (post-Phase-6, ADR-018)**: Vercel serves the frontend over HTTPS. FastAPI port :8000 is bound to **loopback only** (`127.0.0.1:8000`) on Hetzner — no public ingress port. The `cloudflared` quick-tunnel service connects outbound to Cloudflare, which exposes the API at a free `*.trycloudflare.com` HTTPS hostname. End-to-end TLS, free Cloudflare WAF + DDoS protection, $0 cost. The trade-off is a hostname that rotates on cloudflared restart (~1-2× per year on stable Hetzner uptime); recovery runbook in `docs/guides/vercel-deploy.md`.
+- **HTTPS in production (ADR-018, updated QNT-177)**: Vercel serves the frontend over HTTPS. FastAPI port :8000 is bound to **loopback only** (`127.0.0.1:8000`) on Hetzner — no public ingress port. The `cloudflared` service runs a **named tunnel** anchored to `api.<your-domain>`, exposing the API at a stable HTTPS hostname. End-to-end TLS, free Cloudflare WAF + DDoS protection, $0 cost. ~~The trade-off is a hostname that rotates on cloudflared restart~~ — ⚠ stale: hostname is **permanent** with a named tunnel; `NEXT_PUBLIC_API_URL` is set once in Vercel and never rotates. See `docs/guides/vercel-deploy.md`.
 - **Dagster UI is internal only**: Do NOT expose port 3000 externally. Access via SSH tunnel (`ssh -L 3000:localhost:3000 hetzner`) when needed. No public auth is configured.
 - **Port exposure policy**:
   - **Externally accessible**: 22 (SSH) only — `cloudflared` makes outbound connections, no inbound port required.
@@ -625,7 +621,7 @@ volumes:
   - **Docker-internal only** (not bound to host at all): 4000 (LiteLLM).
   - **Recommendation**: Configure Hetzner firewall to allow only 22 inbound. No port exposure beyond SSH.
 
-> **Recommendation**: Use Docker Compose **profiles**. The `dev` profile starts only ClickHouse (for when you want a local DB but run services natively). The `prod` profile starts everything including cloudflared. The dormant `prod-caddy` profile activates Caddy if/when you upgrade to a named tunnel + own domain.
+> **Recommendation**: Use Docker Compose **profiles**. The `dev` profile starts only ClickHouse (for when you want a local DB but run services natively). The `prod` profile starts everything including cloudflared. ~~The dormant `prod-caddy` profile activates Caddy if/when you upgrade to a named tunnel + own domain.~~ ⚠ stale: `prod-caddy` profile has been removed; named-tunnel ingress via cloudflared is the production path (QNT-177).
 
 ### 7.3 CI/CD (GitHub Actions + Vercel)
 
@@ -653,8 +649,10 @@ Frontend (Vercel):
 
 ### 7.4 Environment Switching
 
+> ⚠ **stale snippet** — The schema below shows the Phase-0 field set. The live `packages/shared/src/shared/config.py` uses uppercase env-var names and has grown to include additional fields (`API_BASE_URL`, `FINNHUB_API_KEY`, `DISCORD_WEBHOOK_URL`, `DAGSTER_BASE_URL`, `ENABLE_SENTRY_TEST`, provenance settings). The *pattern* (pydantic-settings with env-file support, dev-vs-prod toggle) is still accurate; the field list is not. Read the source file for the current contract.
+
 ```python
-# packages/shared/src/shared/config.py
+# packages/shared/src/shared/config.py — illustrative pattern, not current field list
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -672,14 +670,17 @@ class Settings(BaseSettings):
     langfuse_public_key: str = ""            # Agent tracing (Phase 7)
     langfuse_secret_key: str = ""
     langfuse_base_url: str = "https://us.cloud.langfuse.com"  # match the region where the Langfuse project was created; wrong region silently drops traces (QNT-61 finding)
+    # ... additional fields in the live file — see packages/shared/src/shared/config.py
 ```
 
 ### 7.5 LiteLLM Model Routing
 
 See [ADR-011](decisions/011-llm-routing-groq-default-claude-override.md) for the selection rationale (why Groq over Ollama Cloud / Gemini / OpenAI / self-hosted).
 
+> ⚠ **stale snippet** — The snippet below shows the Phase-5 baseline. The live `litellm_config.yaml` has grown to include a Llama-4-Scout fallback alias and 8 bench aliases for the eval harness. The *routing pattern* (single `equity-agent/default` alias decoupling agent code from provider) is still accurate; the full model_list is not. Read the source file for the current config.
+
 ```yaml
-# litellm_config.yaml — at repo root, mounted into LiteLLM container
+# litellm_config.yaml — illustrative pattern, not full current model_list
 model_list:
   - model_name: equity-agent/default       # alias used by agent code
     litellm_params:
@@ -687,11 +688,7 @@ model_list:
       api_base: https://api.groq.com/openai/v1
       api_key: os.environ/GROQ_API_KEY      # reads from environment variable
 
-  # Quality override — set EQUITY_AGENT_PROVIDER=gemini to route here:
-  # - model_name: equity-agent/default
-  #   litellm_params:
-  #     model: gemini/gemini-2.5-flash
-  #     api_key: os.environ/GEMINI_API_KEY
+  # Fallback alias and bench aliases also defined — see litellm_config.yaml for full list
 ```
 
 The agent graph references only the alias `equity-agent/default` — never a provider-specific model name. Switching from Groq to Gemini is a config-only change (edit YAML, restart LiteLLM). QNT-67 eval harness logs a per-provider column so the split is a measurable eval axis, not an invisible default.
@@ -795,7 +792,7 @@ One-time setup for a fresh Hetzner CX41. After this, the CI/CD pipeline in Secti
    - `QDRANT_API_KEY=<from Qdrant Cloud dashboard>`
    - `SENTRY_DSN=<from Sentry project settings>`
    - `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` (from Langfuse dashboard)
-   - `NEXT_PUBLIC_API_URL=https://<your-trycloudflare-url>` (read from `docker logs equity-data-agent-cloudflared-1` after first `compose up`; rotates on cloudflared restart — runbook in `docs/guides/vercel-deploy.md`)
+   - `NEXT_PUBLIC_API_URL=https://api.<your-domain>` (set once — permanent with named tunnel; ~~`trycloudflare-url`~~ ⚠ stale: quick-tunnel hostname rotation no longer applies post-QNT-177)
    - **Never commit `.env` to git** — it's in `.gitignore`
 5. **HTTPS ingress (ADR-018, named-tunnel migration QNT-177)**: No Let's Encrypt configuration is required. The `cloudflared` service runs a Cloudflare named tunnel anchored to `api.<your-domain>` (configured dashboard-side in Cloudflare Zero Trust). The connector token in `CLOUDFLARE_TUNNEL_TOKEN` authenticates the connector; the public hostname mapping is dashboard-side. Set Vercel's `NEXT_PUBLIC_API_URL` to `https://api.<your-domain>` once and the value is permanent across reboots. Full setup runbook in `docs/guides/vercel-deploy.md`.
 6. **Start services**: `docker compose --profile prod up -d --build`

@@ -1,12 +1,14 @@
 # Equity Data Agent
 
+> **TL;DR** — Production AI research tool for US equities. An LLM agent writes investment theses, but the architecture forbids it from doing arithmetic: Dagster pre-computes every number, FastAPI prints it as a human-readable report string, the agent only quotes. A regex eval verifies every numeric literal in a generated thesis was lifted verbatim from a report — 22/22 on the golden set. [Live demo](https://equity-data-agent-ynr2.vercel.app) · [How it works](#hallucination-resistance) · [ADRs](docs/decisions/)
+
 [![Live demo](https://img.shields.io/badge/live%20demo-equity--data--agent--ynr2.vercel.app-success?style=for-the-badge)](https://equity-data-agent-ynr2.vercel.app)
 
 ![Equity Data Agent — live terminal](docs/screenshots/terminal-live.png)
 
 > Production AI research tool for US equities, deployed live at **[equity-data-agent-ynr2.vercel.app](https://equity-data-agent-ynr2.vercel.app)**. Solo portfolio build — **260+ merged PRs · 19 ADRs · 700+ tests · 7 shipped phases** — designed to demonstrate end-to-end ownership of a non-trivial AI system: data engineering, LLM safety, agent design, frontend, and production ops.
 >
-> **Product claim: the LLM never does math.** Every number in every thesis is pre-computed by Dagster, served as a human-readable report by FastAPI, and only *interpreted* by the LangGraph agent — so hallucinated financials are architecturally impossible. [→ how](#hallucination-resistance)
+> **Product claim: the LLM never does math.** Every number in every thesis is pre-computed by Dagster, served as a human-readable report by FastAPI, and only *interpreted* by the LangGraph agent — so the agent **cannot fabricate a number** (architectural provenance guarantee), with a behavioural eval gating correctness regressions. [→ how](#hallucination-resistance)
 
 ![Phases](https://img.shields.io/badge/phases-7%2F7%20complete-2ea44f)
 ![Tests](https://img.shields.io/badge/tests-716%20passing-2ea44f)
@@ -32,7 +34,7 @@
 | **System design** | **19 ADRs** documenting every non-obvious choice (storage, agent shape, LLM routing, deploy ingress, public-chat threat model) — written at decision time, not retrofitted |
 | **Production ops** | Bespoke Docker Compose on a Hetzner VPS · 7 phase retros + a living failure-mode runbook · Multi-layer observability (Sentry + Langfuse + Prometheus + Grafana + cAdvisor + node_exporter + Dozzle) · Discord alerting on Dagster materialization failures + Docker container events ≤30s · UptimeRobot probe on `/api/v1/health` |
 | **CI/CD + security** | SOPS-encrypted secrets · SHA-identity gate + Dagster-load gate on every deploy · Layered scanner suite (pip-audit + bandit + gitleaks + npm audit + weekly Trivy image CVE scan) · Dependabot with grouped bumps + a waivers file with rationale |
-| **Testing** | **716 pytest tests** (unit + real-ClickHouse integration) · Endpoint p50/p95/p99 latency baseline with error-rate gate · Asset-check domain bounds that have caught real arithmetic bugs that passed code review |
+| **Testing** | **716 pytest tests** (unit + real-ClickHouse integration) · Endpoint p50/p95/p99 latency baseline with error-rate gate · Asset-check domain bounds that have caught real arithmetic bugs that passed code review · Frontend testing is intentionally manual + Vercel preview deploys at this scale |
 
 The 10-ticker universe (NVDA, AAPL, MSFT, GOOGL, AMZN, META, TSLA, JPM, V, UNH) ingests daily at 17:00 ET. All 7 planned phases are complete; remaining work lives in a perpetual **Ops & Reliability** queue.
 
@@ -54,15 +56,17 @@ A regression suite regexes every numeric literal out of the agent's thesis and a
 
 ## Hallucination resistance
 
-This is the product's main claim. The contract:
+This is the product's main claim, enforced by two independent layers with different guarantees:
+
+**Layer 1 — Provenance (architectural, cannot be violated by prompt drift)**
 
 > **The agent's thesis cannot contain a number that was not pre-computed by Dagster and printed verbatim into a FastAPI report string.**
 
-Three independent enforcement layers:
+The agent has no database client, no calculator tool, no arithmetic primitives ([ADR-003](docs/decisions/003-intelligence-vs-math.md)). It physically cannot introduce a number; the only numbers it sees are the ones FastAPI already printed into a report. This is structural — it holds regardless of what the model says. `SYSTEM_PROMPT` in [`packages/agent/src/agent/prompts/`](packages/agent/src/agent/prompts/) reinforces the rule at the prompt layer: "every numeric claim must cite the report it came from; never derive a new number".
 
-1. **Architecture** ([ADR-003](docs/decisions/003-intelligence-vs-math.md)) — the agent has no database client, no calculator tool, no arithmetic primitives. It physically cannot compute a number; the only numbers it sees are the ones FastAPI already chose to print.
-2. **System prompt** — `SYSTEM_PROMPT` in [`packages/agent/src/agent/prompts/`](packages/agent/src/agent/prompts/) ratifies the rule: "every numeric claim must cite the report it came from; never derive a new number".
-3. **Eval harness** — [`packages/agent/src/agent/evals/hallucination.py`](packages/agent/src/agent/evals/hallucination.py) regexes every numeric literal from a generated thesis and asserts each appears verbatim in one of the report strings the agent received as tool output. Run on a 22-question golden set covering all 10 portfolio tickers across every supported intent shape (thesis · quick-fact · comparison · conversational · fundamental · technical · news-sentiment); results land in [`packages/agent/src/agent/evals/history.csv`](packages/agent/src/agent/evals/history.csv) so prompt-version quality is `git log -p`-visible.
+**Layer 2 — Correctness (behavioural, eval-gated)**
+
+Provenance does *not* guarantee the agent cites the *right* number for the question. A number can be lifted verbatim from a report and still be the wrong period, stale, or irrelevant to what was asked. [`packages/agent/src/agent/evals/hallucination.py`](packages/agent/src/agent/evals/hallucination.py) gates this: it regexes every numeric literal from a generated thesis and asserts each appears verbatim in one of the report strings the agent received as tool output (provenance check), and the judge column in the results tracks answer quality and relevance (correctness signal). Run on a 22-question golden set covering all 10 portfolio tickers across every supported intent shape (thesis · quick-fact · comparison · conversational · fundamental · technical · news-sentiment); results land in [`packages/agent/src/agent/evals/history.csv`](packages/agent/src/agent/evals/history.csv) so prompt-version quality is `git log -p`-visible.
 
 Most recent benches (May 9, 2026, full 22-record set):
 
