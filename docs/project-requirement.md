@@ -1,76 +1,134 @@
-# Equity Data Agent — Project Requirements
+# Equity Data Agent - Project Requirements
 
-> **Status (2026-05-16):** This document captures the Phase-0 design intent and evolves incrementally. For current production reality — ingress topology, deploy gates, LLM routing, env schema, ADR count — the **[README.md](../README.md)** and the **[`docs/decisions/`](decisions/)** ADRs are authoritative. Sections marked **⚠ stale** below have been superseded by later ADRs or tickets; they are retained as historical context.
+Status: current production requirements. This document is the canonical
+product and architecture spec — delivery history lives in
+[`docs/project-plan.md`](project-plan.md), tradeoff history lives in
+[`docs/decisions/`](decisions/), and post-phase lessons live in
+[`docs/retros/`](retros/).
+
+- Last reviewed: 2026-05-16
+- Re-verify cadence: every phase retro (or sooner when an ADR lands that
+  changes a contract here).
 
 ## 1. Executive Summary
 
-**Equity Data Agent** is an autonomous, institutional-grade equity research platform that transforms raw market data (price, fundamentals) and narrative data (news) into actionable investment theses.
+Equity Data Agent is a production-style AI equity research platform for a
+focused universe of US equities. It transforms market data, fundamentals, and
+news into chart-ready data, human-readable reports, and streamed investment
+analysis.
 
-This is a portfolio project demonstrating both **Data Engineering** and **AI Engineering** — from ingestion pipelines and columnar storage to agentic reasoning and vector search.
+This is primarily a portfolio project demonstrating:
 
-### The "Intelligence vs. Math" Philosophy
+- Data engineering: scheduled ingestion, warehouse modeling, derived assets,
+  idempotent migrations, and asset checks.
+- AI engineering: report-grounded LangGraph agent, model routing, structured
+  outputs, hallucination/provenance evals, and tracing.
+- Full-stack product engineering: Next.js terminal UI, ticker detail pages,
+  financial charting, persistent chat, and SSE streaming.
+- Production operations: Hetzner backend, Vercel frontend, Cloudflare named
+  tunnel, observability, alerts, deploy gates, and runbooks.
 
-Most AI agents fail at financial analysis because they attempt to calculate technical indicators or financial ratios "in their heads," leading to hallucinations. This project enforces a hard separation:
+The central architectural thesis is **Intelligence vs. Math** (see
+[ADR-003](decisions/003-intelligence-vs-math.md) for the rationale and
+[ADR-012](decisions/012-domain-conventions-in-reports-not-prompts.md) for the
+report-template extension):
 
 | Layer | Responsibility | Technology |
 |---|---|---|
-| **Calculation Layer** | 100% of the math — indicators, ratios, aggregations | Python / SQL |
-| **Reasoning Layer** | Interprets pre-computed results, formulates thesis | LLM (via LangGraph) |
+| Calculation | Compute indicators, ratios, aggregates, embeddings | Dagster, Python, SQL |
+| Interpretation | Format rows into report strings and frontend JSON | FastAPI |
+| Reasoning | Synthesize answers from reports only | LangGraph, LLM |
 
-The LLM never touches arithmetic. It receives fully computed, human-readable reports and reasons over them.
-
----
+The LLM does not calculate financial metrics. It reads report strings that
+already contain computed values and cites those report sources in its answer.
 
 ## 2. Architectural Principles
 
-These rules are **non-negotiable**. Every design decision must satisfy all six.
+These rules are non-negotiable.
 
 ### 2.1 Mathematical Isolation
-The LLM is strictly forbidden from performing arithmetic — no RSI calculations, no percentage changes, no YoY growth. All **complex financial math** (indicators, ratios, aggregations) is performed by Dagster assets (Python/SQL) and passed to the agent as pre-formatted report strings.
 
-FastAPI's Interpreter role may perform **trivial presentation-layer arithmetic** — e.g., daily change % from two close prices, RSI category thresholds, trend labels from SMA crossover. These are formatting decisions, not financial calculations.
+All complex financial math must happen outside the LLM:
+
+- Technical indicators: RSI, MACD, SMA, EMA, Bollinger Bands, ADX, ATR, OBV,
+  MACD cross flags.
+- Fundamental metrics: P/E, EV/EBITDA, P/B, P/S, EPS, margins, ROE, ROA, FCF
+  yield, leverage, liquidity, TTM revenue, TTM net income, TTM FCF, YoY growth.
+- Multi-timeframe bars: daily source bars aggregated to weekly and monthly.
+- News embeddings and semantic search vectors.
+
+FastAPI may compute trivial presentation values such as daily change percent,
+RSI category labels, trend labels, and "next ingest" display strings. Those
+values are still API outputs; they are not computed by the agent.
+
+This principle is enforced as a measurable contract in
+[§9.5 Numeric Provenance Contract](#95-numeric-provenance-contract).
 
 ### 2.2 Database Isolation
-The Agent never connects directly to ClickHouse or Qdrant. It interacts solely with FastAPI endpoints. If the agent needs data, it calls a tool that hits an API.
+
+The agent must not access ClickHouse or Qdrant directly. It calls tools backed
+by FastAPI endpoints. The only data the model sees is:
+
+- User question.
+- Ticker context.
+- Report strings returned by FastAPI.
+- System/developer prompts.
 
 ### 2.3 Role Distinction
 
-| Component | Role | Analogy |
+| Component | Role | Owns |
 |---|---|---|
-| **Dagster** | The Worker | Always-on, fetches and transforms data on schedule |
-| **FastAPI** | The Interpreter | Turns raw DB rows into readable, contextualized reports |
-| **LangGraph** | The Executive | Reasons over reports, synthesizes investment theses |
+| Dagster | Worker | Ingestion, transformations, schedules, sensors, checks |
+| ClickHouse | Structured store | Raw and derived tabular data |
+| Qdrant Cloud | Vector store | News embeddings and semantic search |
+| FastAPI | Interpreter | Report endpoints, data endpoints, health, SSE chat route |
+| LangGraph | Executive | Intent routing, tool planning, synthesis |
+| Next.js | Presentation | Watchlist, ticker detail, charting, chat panel |
 
 ### 2.4 Idempotency
-All Dagster assets must be re-runnable. If the same data is fetched twice, ClickHouse handles de-duplication automatically via `ReplacingMergeTree` keyed on the `ORDER BY` columns.
+
+All ingestion and derived assets must be safe to re-run. ClickHouse tables use
+`ReplacingMergeTree` with version columns such as `fetched_at` or
+`computed_at`; repeated fetches converge to one current row after replacement.
 
 ### 2.5 Asset-Based Lineage
-Data is defined as Software-Defined Assets in Dagster, not just cron jobs. The full lineage — Raw Price → Technical Indicator → Fundamental Summary → Agent Response — must be visible in the Dagster UI.
+
+Data transformations must be Dagster software-defined assets, not anonymous
+cron scripts. The lineage from raw source data to derived analytics must remain
+visible in Dagster.
 
 ### 2.6 Ticker Scope
-Initial scope is **10 high-conviction US equities**. The architecture must support scaling to hundreds of tickers without a rewrite. This means: no hardcoded ticker lists in business logic, partition-aware assets, and parameterized queries.
 
----
+The production universe is intentionally small:
+
+```text
+NVDA, AAPL, MSFT, GOOGL, AMZN, META, TSLA, JPM, V, UNH
+```
+
+The canonical registry lives in `packages/shared/src/shared/tickers.py`.
+Business logic should derive ticker lists from shared registry constants or
+from the `/api/v1/tickers` endpoint. Avoid hardcoded ticker lists outside
+fixtures and documentation examples.
 
 ## 3. System Architecture
 
-### 3.1 High-Level Data Flow
+### 3.1 High-Level Flow
 
 ```mermaid
 graph LR
-    subgraph Data Sources
+    subgraph Sources
         YF[yfinance]
-        NEWS[Free News APIs]
+        NEWS[Finnhub /company-news]
     end
 
-    subgraph Dagster - Worker Layer
-        OHLCV[OHLCV Asset]
-        FUND[Fundamentals Asset]
-        AGG[Weekly/Monthly Aggregation]
-        TECH[Technical Indicators<br/>Daily / Weekly / Monthly]
-        FSUM[Fundamental Summary Asset]
-        NRAW[news_raw Asset]
-        EMB[Embeddings Asset]
+    subgraph Dagster
+        OHLCV[ohlcv_raw]
+        FUND[fundamentals]
+        AGG[ohlcv_weekly/monthly]
+        TECH[technical_indicators]
+        FSUM[fundamental_summary]
+        NRAW[news_raw]
+        EMB[news_embeddings]
     end
 
     subgraph Storage
@@ -78,773 +136,898 @@ graph LR
         QD[(Qdrant Cloud)]
     end
 
-    subgraph FastAPI - Interpreter Layer
-        API[Report Endpoints]
-        SSE[Agent Chat SSE]
+    subgraph FastAPI
+        REPORTS[report endpoints]
+        DATA[data endpoints]
+        SEARCH[search endpoints]
+        CHAT[agent chat SSE]
     end
 
-    subgraph LangGraph - Executive Layer
-        AGENT[Research Agent]
-        TOOLS[Tool Definitions]
+    subgraph Agent
+        GRAPH[classify -> plan -> gather -> synthesize]
+        TOOLS[report tools]
     end
 
-    subgraph Next.js - Frontend
-        DASH[Dashboard]
-        DETAIL[Ticker Detail + Charts]
-        CHAT[Agent Chat]
+    subgraph Frontend
+        UI[Next.js terminal UI]
     end
 
     YF --> OHLCV --> CH
     YF --> FUND --> CH
-    NEWS --> NRAW[news_raw Asset]
-    NRAW --> CH
+    NEWS --> NRAW --> CH
     NRAW --> EMB --> QD
-    CH --> AGG --> CH
+    OHLCV --> AGG --> CH
     CH --> TECH --> CH
     OHLCV --> FSUM
     FUND --> FSUM
     FSUM --> CH
-    CH --> API
-    QD --> API
-    API --> TOOLS --> AGENT
-    API --> DASH
-    API --> DETAIL
-    AGENT --> SSE --> CHAT
+    CH --> REPORTS
+    CH --> DATA
+    QD --> SEARCH
+    QD --> REPORTS
+    REPORTS --> TOOLS --> GRAPH
+    GRAPH --> CHAT --> UI
+    DATA --> UI
+    SEARCH --> UI
 ```
 
-### 3.2 Component Responsibilities
+### 3.2 Request Flow Example
 
-```mermaid
-graph TD
-    subgraph Calculation Layer
-        D[Dagster Assets]
-        SQL[ClickHouse SQL]
-        PY[Python Computations]
-    end
+When a user asks for an NVDA thesis:
 
-    subgraph Serving Layer
-        FA[FastAPI Endpoints]
-        SC[Shared Schemas]
-    end
+1. The chat panel posts `{ticker: "NVDA", message: "..."}` to
+   `/api/v1/agent/chat`.
+2. The LangGraph graph classifies the intent.
+3. The graph plans report tools. Thesis and comparison paths over-fetch; quick
+   facts narrow to the smallest relevant set; focused analysis chooses the
+   matching report family.
+4. Tool wrappers call FastAPI report endpoints such as
+   `/api/v1/reports/technical/NVDA`.
+5. FastAPI reads ClickHouse and Qdrant, formats report strings, and returns
+   text.
+6. The graph synthesizes the response and streams SSE events back to the UI.
 
-    subgraph Reasoning Layer
-        LG[LangGraph Agent]
-        LIT[LiteLLM Proxy]
-        OLL[Groq / Gemini 2.5 Flash]
-    end
+### 3.3 Package Boundaries
 
-    subgraph Presentation Layer
-        NX[Next.js on Vercel]
-        TV[TradingView Charts]
-    end
-
-    subgraph Observability
-        LF[Langfuse Tracing]
-        SE[Sentry Error Tracking]
-        HM[Health Monitor Cron]
-        DUI[Dagster UI]
-    end
-
-    D --> SQL
-    D --> PY
-    D -->|writes| SC
-    FA -->|reads via| SC
-    LG -->|calls tools| FA
-    FA -->|hosts SSE| LG
-    NX -->|fetches data| FA
-    NX --> TV
-    LG --> LIT --> OLL
-    LG --> LF
-    D --> DUI
+```text
+shared              <- no internal dependencies
+dagster-pipelines   <- shared
+agent               <- shared; calls api over HTTP, never imports api
+api                 <- shared + agent; runs the graph in-process for SSE
+frontend            <- TypeScript app; calls FastAPI over HTTP
 ```
 
-### 3.3 Request Flow Example
-
-When the agent needs to assess NVDA:
-
-1. **Agent** calls `get_technical_report(ticker="NVDA")` tool
-2. **Tool** makes HTTP request to `GET /api/v1/reports/technical/NVDA`
-3. **FastAPI** queries ClickHouse for pre-computed indicators
-4. **FastAPI** formats results into a human-readable string report
-5. **Agent** receives the report string and reasons over it — zero math involved
-
----
+The `api -> agent` dependency is intentional. The public chat endpoint runs the
+LangGraph graph in-process rather than operating a separate agent service.
 
 ## 4. Technical Stack
 
 | Technology | Purpose | Rationale |
 |---|---|---|
-| **Python 3.12+** | Language | Ecosystem depth for data + ML |
-| **uv** | Package management | Fast, deterministic, workspace support |
-| **Dagster** | Orchestration | Asset-based lineage, built-in UI, sensor/schedule primitives |
-| **FastAPI** | API layer | Async, Pydantic-native, auto-generated OpenAPI docs |
-| **LangGraph** | Agent framework | Stateful graphs, tool integration, controllable execution flow |
-| **ClickHouse** | Structured storage | Columnar, blazing fast aggregations, `ReplacingMergeTree` for idempotency |
-| **Qdrant Cloud** | Vector storage | Managed free tier, native Python SDK, filtering support |
-| **LiteLLM Proxy** | LLM routing | Switch between Groq (default) and Gemini 2.5 Flash (override) without code changes. See ADR-011 + QNT-123 (Pro → Flash swap after Pro fell off the free tier). **Pin version in pyproject.toml** (supply chain incident March 2026 — do not float) |
-| **Groq** | Managed inference (default) | `https://api.groq.com/openai/v1` (OpenAI-compatible), llama-3.3-70b-versatile at ~500 tok/s. Free tier (30 RPM / 6K TPM / up to 14.4K RPD) covers Phase 5 dev + portfolio demos. No local model container on Hetzner. |
-| **Langfuse** | Observability | Trace agent thoughts, tool calls, and latency |
-| **Next.js 16** | Frontend | App Router, SSR/SSG, React 19, Turbopack stable, Vercel-native deployment |
-| **TradingView Lightweight Charts v5** | Financial charting | Free (Apache 2.0), candlestick, volume, indicator overlays, native multi-pane support |
-| **Tailwind CSS** | Styling | Utility-first, fast iteration, consistent design |
-| **Vercel** | Frontend hosting | Zero-config Next.js deployment, global CDN, preview deploys |
-| **yfinance** | Market data | Free, covers US equities (price + fundamentals) |
-| **Docker Compose** | Backend deployment | Single-command prod deployment with profile support |
-| **GitHub Actions** | CI/CD | Automated testing and deployment pipeline |
-
-### Resource Constraints (Hetzner CX41 — 16GB RAM)
-
-| Service | Max Memory | Notes |
-|---|---|---|
-| ClickHouse | 4 GB | `max_memory_usage` setting |
-| Dagster + FastAPI + cloudflared + LiteLLM + OS | 12 GB | Inference via Groq / Gemini 2.5 Flash (see ADR-011) — no local model container. LiteLLM proxy ~300MB, cloudflared ~50MB. 6GB freed vs self-hosted Ollama. |
-
----
+| Python 3.12 | Backend language | Data, API, and AI ecosystem depth |
+| uv workspaces | Python package management | Fast installs and monorepo support |
+| Dagster | Orchestration | Asset lineage, schedules, sensors, checks |
+| ClickHouse | Structured warehouse | Fast OLAP reads, ReplacingMergeTree idempotency |
+| Qdrant Cloud | Vector search | Managed news embeddings and semantic search |
+| FastAPI | API layer | Pydantic-native, OpenAPI, SSE route |
+| LangGraph | Agent graph | Controllable classify/plan/gather/synthesize flow |
+| LiteLLM | Model routing | Provider swap behind one model alias |
+| Groq | Default LLM provider | Free-tier fast inference for Llama models |
+| Gemini 2.5 Flash | Override provider | Free-tier fallback/override path |
+| Langfuse | Agent tracing | Model, token, span, and eval observability |
+| Sentry | Error tracking | API and chat worker failure visibility |
+| Next.js 16 | Frontend | App Router, SSG, Vercel-native deployment |
+| TradingView Lightweight Charts | Charting | Financial candlestick and time-series rendering |
+| Tailwind CSS | Styling | Consistent utility-first interface |
+| Docker Compose | Backend deployment | Explicit single-host production topology |
+| Vercel | Frontend hosting | CDN, previews, deploy hooks |
+| Cloudflare named tunnel | HTTPS ingress | Stable API hostname without inbound public API port |
 
 ## 5. Repository Structure
 
-Monorepo using **uv workspaces** with four Python packages + one Next.js frontend:
+Current high-level structure:
 
-```
+```text
 equity-data-agent/
-├── pyproject.toml                  # Root workspace definition
-├── uv.lock
-├── Dockerfile                      # Multi-stage build: `base` (uv + deps) → `dagster` target → `api` target
-├── ~~Caddyfile~~                       # ⚠ stale — Caddyfile no longer exists on disk. Ingress is a Cloudflare named tunnel (ADR-018, QNT-177); `prod-caddy` profile was removed.
-├── litellm_config.yaml             # LiteLLM model routing: dev/prod → Groq (default); override → Gemini 2.5 Flash. See ADR-011 + QNT-123.
-├── docker-compose.yml              # Profiles: dev, prod
-├── docs/
-│   ├── project-requirement.md      # This document
-│   ├── architecture/               # System overview, data flow
-│   ├── decisions/                  # ADRs (ADR-001 through ADR-018)
-│   └── guides/                     # Local dev setup, runbooks
-├── .github/
-│   └── workflows/
-│       ├── ci.yml                  # Lint + test on PR
-│       └── deploy.yml              # SSH deploy on push to main
-├── migrations/                     # Version-controlled ClickHouse DDL (auto-applied on deploy; `make migrate` for local dev)
-│   ├── 000_create_databases.sql    # CREATE DATABASE IF NOT EXISTS equity_raw / equity_derived
-│   ├── 001_create_ohlcv_raw.sql
-│   ├── 002_create_fundamentals.sql
-│   └── ...
-├── packages/
-│   ├── shared/                     # Shared Pydantic schemas + config
-│   │   ├── pyproject.toml
-│   │   └── src/shared/
-│   │       ├── schemas/            # Pydantic models for OHLCV, fundamentals, indicators
-│   │       ├── config.py           # Settings (env-aware: dev/prod)
-│   │       └── tickers.py          # Ticker registry (single source of truth)
-│   ├── dagster-pipelines/          # Dagster assets, sensors, schedules
-│   │   ├── pyproject.toml
-│   │   └── src/dagster_pipelines/
-│   │       ├── assets/
-│   │       │   ├── ingestion/      # OHLCV, fundamentals fetching
-│   │       │   ├── aggregation/    # ohlcv_weekly, ohlcv_monthly derivation
-│   │       │   ├── indicators/     # Technical indicator computation
-│   │       │   └── embeddings/     # News embedding vectorization
-│   │       ├── resources/          # ClickHouse client, Qdrant client
-│   │       ├── sensors/            # Trigger downstream on upstream materialization
-│   │       └── definitions.py
-│   ├── api/                        # FastAPI application
-│   │   ├── pyproject.toml
-│   │   └── src/api/
-│   │       ├── routers/
-│   │       │   ├── reports.py      # /reports/technical/{ticker}, /reports/fundamental/{ticker}, /reports/news/{ticker}, /reports/summary/{ticker}
-│   │       │   ├── data.py         # /ohlcv/{ticker}, /indicators/{ticker}, /fundamentals/{ticker}, /dashboard/summary — JSON for frontend
-│   │       │   ├── search.py       # /search/news (Qdrant semantic search)
-│   │       │   ├── tickers.py      # /tickers — ticker registry endpoint
-│   │       │   └── agent.py        # /agent/chat — SSE stream of LangGraph execution
-│   │       ├── services/           # Business logic: query CH, format reports
-│   │       └── main.py
-│   └── agent/                      # LangGraph agent
-│       ├── pyproject.toml
-│       └── src/agent/
-│           ├── graph.py            # LangGraph state machine
-│           ├── tools/              # Tool definitions (call FastAPI endpoints)
-│           ├── prompts/            # System prompts, report templates
-│           └── main.py
-├── frontend/                       # Next.js 16 application (not a uv workspace)
-│   ├── package.json
-│   ├── next.config.ts
-│   ├── tailwind.config.ts
-│   ├── app/
-│   │   ├── layout.tsx              # Root layout with navigation
-│   │   ├── page.tsx                # Dashboard — ticker cards overview
-│   │   ├── ticker/[symbol]/
-│   │   │   └── page.tsx            # Ticker detail — chart, indicators, fundamentals
-│   │   ��── chat/
-│   │       └── page.tsx            # Agent chat interface
-│   ├── components/
-│   │   ├── chart/                  # TradingView Lightweight Charts wrappers
-│   │   ├── ticker/                 # Ticker card, indicator badges
-│   │   └── chat/                   # Chat message, input, streaming
-│   └── lib/
-│       └── api.ts                  # FastAPI client (typed fetch wrappers)
-└── tests/
-    ├── shared/
-    ├── dagster/
-    ├── api/
-    └── agent/
+|-- pyproject.toml
+|-- uv.lock
+|-- Dockerfile
+|-- docker-compose.yml
+|-- dagster.yaml
+|-- workspace.yaml
+|-- litellm_config.yaml
+|-- migrations/
+|-- observability/
+|-- scripts/
+|-- docs/
+|-- frontend/
+|   |-- package.json
+|   `-- src/
+|       |-- app/
+|       |   |-- layout.tsx
+|       |   |-- page.tsx
+|       |   `-- ticker/[symbol]/page.tsx
+|       |-- components/
+|       `-- lib/
+|-- packages/
+|   |-- shared/
+|   |-- dagster-pipelines/
+|   |-- api/
+|   `-- agent/
+`-- tests/
+    |-- shared/
+    |-- dagster/
+    |-- api/
+    |-- agent/
+    `-- integration/
 ```
 
-> **Recommendation**: The `shared` package is the glue. Pydantic models defined here are used by both Dagster (when writing to ClickHouse) and FastAPI (when reading from ClickHouse). This prevents schema drift and gives you a single place to update data contracts.
+Important package responsibilities:
 
-### Package Dependency Graph
-
-Each package declares its inter-package dependencies in its own `pyproject.toml`. This is the allowed import direction — violating it creates circular dependencies.
-
-```
-shared          ← no internal deps (only external: pydantic, pydantic-settings)
-dagster-pipelines  ← shared (schemas, config, tickers)
-agent           ← shared (schemas, config) — calls api via HTTP, never imports it
-api             ← shared (schemas, config) + agent (runs LangGraph graph in SSE endpoint)
-```
-
-The `api → agent` dependency exists because the `/agent/chat` SSE endpoint imports and executes the LangGraph graph directly (in-process), rather than calling a separate agent service over HTTP. This keeps the architecture simple (one Python process) at the cost of coupling `api` to `agent`.
-
----
+- `packages/shared`: settings, ticker registry, shared schemas.
+- `packages/dagster-pipelines`: assets, resources, schedules, sensors,
+  deployment helpers.
+- `packages/api`: FastAPI app, routers, ClickHouse/Qdrant clients, report
+  templates, public chat protections.
+- `packages/agent`: LangGraph graph, tools, prompts, typed answer schemas,
+  eval harness, tracing utilities.
+- `frontend`: Next.js app with persistent shell, ticker detail, and chat.
 
 ## 6. Data Model
 
-### 6.1 ClickHouse Tables
+### 6.1 ClickHouse Databases
 
-**Database: `equity_raw`** — Source-of-truth ingested data
+`equity_raw` contains source-like ingested data. `equity_derived` contains
+rebuildable computed data.
 
-```sql
--- Daily OHLCV for all tickers (single table, partitioned by ticker)
-CREATE TABLE equity_raw.ohlcv_raw (
-    ticker       LowCardinality(String),
-    date         Date,
-    open         Float64,
-    high         Float64,
-    low          Float64,
-    close        Float64,
-    adj_close    Float64,
-    volume       UInt64,
-    fetched_at   DateTime DEFAULT now()
-) ENGINE = ReplacingMergeTree(fetched_at)
-PARTITION BY ticker
-ORDER BY (ticker, date);
-```
+All tables use `ReplacingMergeTree`. FastAPI queries must use `FINAL` where
+duplicate replacement state would change user-visible results.
+
+### 6.2 `equity_raw.ohlcv_raw`
+
+Daily OHLCV bars from yfinance. SPY may be included in OHLCV-only benchmark
+paths, but fundamentals and agent analysis are restricted to the 10 covered
+equities.
+
+Key columns:
 
 ```sql
--- Quarterly/annual fundamental data
-CREATE TABLE equity_raw.fundamentals (
-    ticker              LowCardinality(String),
-    period_end          Date,
-    period_type         LowCardinality(String),  -- 'quarterly' | 'annual'
-    revenue             Float64,
-    gross_profit        Float64,
-    net_income          Float64,
-    total_assets        Float64,
-    total_liabilities   Float64,
-    current_assets      Float64,
-    current_liabilities Float64,
-    free_cash_flow      Float64,
-    ebitda              Float64,                -- from yfinance .info['ebitda'], required for EV/EBITDA
-    total_debt          Float64,                -- required for enterprise_value = market_cap + total_debt - cash
-    cash_and_equivalents Float64,              -- required for enterprise_value
-    shares_outstanding  UInt64,
-    market_cap          Float64,                -- point-in-time snapshot from .info (not period-specific)
-    fetched_at          DateTime DEFAULT now()
-) ENGINE = ReplacingMergeTree(fetched_at)
-PARTITION BY ticker
-ORDER BY (ticker, period_end, period_type);
+ticker LowCardinality(String)
+date Date
+open Float64
+high Float64
+low Float64
+close Float64
+adj_close Float64
+volume UInt64
+fetched_at DateTime
 ```
 
-> **Note — `.info` vs financial statement data**: Fields like `revenue`, `net_income`, `total_assets` come from yfinance financial statements and are period-specific (aligned to `period_end`). Fields like `market_cap`, `shares_outstanding`, `ebitda` come from `.info` and are current-point-in-time snapshots. The `fundamental_summary` asset should compute market cap dynamically as `ohlcv_raw.adj_close * shares_outstanding` for accurate EV/EBITDA calculations, rather than using the stored `.info` snapshot.
+Engine:
 
 ```sql
--- Raw news articles before embedding (source of truth for Qdrant)
-CREATE TABLE equity_raw.news_raw (
-    id              UInt64,                     -- sipHash64(concat(ticker, url)) for dedup (UInt64, not String — more efficient for CH)
-    ticker          LowCardinality(String),
-    headline        String,
-    body            String,                     -- article text when available (embedding uses headline, not body)
-    source          String,
-    url             String,
-    published_at    DateTime,
-    fetched_at      DateTime DEFAULT now()
-) ENGINE = ReplacingMergeTree(fetched_at)
+ReplacingMergeTree(fetched_at)
 PARTITION BY ticker
-ORDER BY (ticker, published_at, id);
+ORDER BY (ticker, date)
 ```
 
-**Database: `equity_derived`** — Computed indicators and summaries
+### 6.3 `equity_raw.fundamentals`
+
+Quarterly and annual statement data from yfinance.
+
+Key columns:
 
 ```sql
--- Pre-computed technical indicators (daily, weekly, monthly — same schema, separate tables)
--- Daily indicators: computed from ohlcv_raw
-CREATE TABLE equity_derived.technical_indicators_daily (
-    ticker       LowCardinality(String),
-    date         Date,
-    sma_20       Nullable(Float64),
-    sma_50       Nullable(Float64),
-    ema_12       Nullable(Float64),
-    ema_26       Nullable(Float64),
-    rsi_14       Nullable(Float64),
-    macd         Nullable(Float64),
-    macd_signal  Nullable(Float64),
-    macd_hist    Nullable(Float64),
-    bb_upper     Nullable(Float64),
-    bb_middle    Nullable(Float64),
-    bb_lower     Nullable(Float64),
-    computed_at  DateTime DEFAULT now()
-) ENGINE = ReplacingMergeTree(computed_at)
-PARTITION BY ticker
-ORDER BY (ticker, date);
-
--- Weekly indicators: computed from ohlcv_weekly
-CREATE TABLE equity_derived.technical_indicators_weekly (
-    ticker       LowCardinality(String),
-    week_start   Date,
-    sma_20       Nullable(Float64),
-    sma_50       Nullable(Float64),
-    ema_12       Nullable(Float64),
-    ema_26       Nullable(Float64),
-    rsi_14       Nullable(Float64),
-    macd         Nullable(Float64),
-    macd_signal  Nullable(Float64),
-    macd_hist    Nullable(Float64),
-    bb_upper     Nullable(Float64),
-    bb_middle    Nullable(Float64),
-    bb_lower     Nullable(Float64),
-    computed_at  DateTime DEFAULT now()
-) ENGINE = ReplacingMergeTree(computed_at)
-PARTITION BY ticker
-ORDER BY (ticker, week_start);
-
--- Monthly indicators: computed from ohlcv_monthly
-CREATE TABLE equity_derived.technical_indicators_monthly (
-    ticker       LowCardinality(String),
-    month_start  Date,
-    sma_20       Nullable(Float64),
-    sma_50       Nullable(Float64),
-    ema_12       Nullable(Float64),
-    ema_26       Nullable(Float64),
-    rsi_14       Nullable(Float64),
-    macd         Nullable(Float64),
-    macd_signal  Nullable(Float64),
-    macd_hist    Nullable(Float64),
-    bb_upper     Nullable(Float64),
-    bb_middle    Nullable(Float64),
-    bb_lower     Nullable(Float64),
-    computed_at  DateTime DEFAULT now()
-) ENGINE = ReplacingMergeTree(computed_at)
-PARTITION BY ticker
-ORDER BY (ticker, month_start);
+ticker LowCardinality(String)
+period_end Date
+period_type LowCardinality(String)
+revenue Float64
+gross_profit Float64
+net_income Float64
+total_assets Float64
+total_liabilities Float64
+current_assets Float64
+current_liabilities Float64
+free_cash_flow Float64
+ebitda Float64
+total_debt Float64
+cash_and_equivalents Float64
+shares_outstanding UInt64
+market_cap Float64
+fetched_at DateTime
 ```
+
+Statement fields are period-specific. Fields from `Ticker.info`, such as market
+cap and shares outstanding, are point-in-time snapshots and must be interpreted
+accordingly.
+
+### 6.4 `equity_raw.news_raw`
+
+Finnhub `/company-news` articles after per-ticker relevance filtering.
+
+Current columns:
 
 ```sql
--- Weekly OHLCV aggregated from daily bars
-CREATE TABLE equity_derived.ohlcv_weekly (
-    ticker       LowCardinality(String),
-    week_start   Date,              -- Monday of the week
-    open         Float64,
-    high         Float64,
-    low          Float64,
-    close        Float64,
-    adj_close    Float64,
-    volume       UInt64,
-    computed_at  DateTime DEFAULT now()
-) ENGINE = ReplacingMergeTree(computed_at)
-PARTITION BY ticker
-ORDER BY (ticker, week_start);
+id UInt64
+ticker LowCardinality(String)
+headline String
+body String
+source String
+url String
+published_at DateTime
+fetched_at DateTime
+publisher_name LowCardinality(String)
+image_url String
+sentiment_label LowCardinality(String)
+resolved_host LowCardinality(String)
 ```
+
+Rows are keyed by ticker, publication time, and URL hash. Cross-mentioned URLs
+are allowed to exist once per ticker.
+
+### 6.5 Derived OHLCV Tables
+
+`equity_derived.ohlcv_weekly` and `equity_derived.ohlcv_monthly` are derived
+from daily OHLCV. They are not fetched separately.
+
+Aggregation rules:
+
+- `open`: first bar in period.
+- `close`: last bar in period.
+- `adj_close`: last adjusted close in period.
+- `high`: max.
+- `low`: min.
+- `volume`: sum.
+- Skip incomplete current periods where required to avoid distorted indicators.
+
+### 6.6 Technical Indicator Tables
+
+Technical indicators exist for daily, weekly, and monthly timeframes.
+
+Core columns:
 
 ```sql
--- Monthly OHLCV aggregated from daily bars
-CREATE TABLE equity_derived.ohlcv_monthly (
-    ticker       LowCardinality(String),
-    month_start  Date,              -- First of the month
-    open         Float64,
-    high         Float64,
-    low          Float64,
-    close        Float64,
-    adj_close    Float64,
-    volume       UInt64,
-    computed_at  DateTime DEFAULT now()
-) ENGINE = ReplacingMergeTree(computed_at)
-PARTITION BY ticker
-ORDER BY (ticker, month_start);
+sma_20 Nullable(Float64)
+sma_50 Nullable(Float64)
+sma_200 Nullable(Float64)
+ema_12 Nullable(Float64)
+ema_26 Nullable(Float64)
+rsi_14 Nullable(Float64)
+macd Nullable(Float64)
+macd_signal Nullable(Float64)
+macd_hist Nullable(Float64)
+macd_bullish_cross UInt8
+bb_upper Nullable(Float64)
+bb_middle Nullable(Float64)
+bb_lower Nullable(Float64)
+bb_pct_b Nullable(Float64)
+adx_14 Nullable(Float64)
+atr_14 Nullable(Float64)
+obv Nullable(Float64)
+computed_at DateTime
 ```
+
+Warm-up periods emit rows with null indicators. Consumers must render nulls as
+insufficient data, not as zero.
+
+### 6.7 `equity_derived.fundamental_summary`
+
+Computed ratios and TTM aggregates:
 
 ```sql
--- Pre-computed fundamental ratios (15 ratios across 5 categories)
-CREATE TABLE equity_derived.fundamental_summary (
-    ticker              LowCardinality(String),
-    period_end          Date,
-    period_type         LowCardinality(String),
-    -- Valuation
-    pe_ratio            Nullable(Float64),
-    ev_ebitda           Nullable(Float64),
-    price_to_book       Nullable(Float64),
-    price_to_sales      Nullable(Float64),
-    eps                 Nullable(Float64),
-    -- Growth
-    revenue_yoy_pct     Nullable(Float64),
-    net_income_yoy_pct  Nullable(Float64),
-    fcf_yoy_pct         Nullable(Float64),
-    -- Profitability
-    net_margin_pct      Nullable(Float64),
-    gross_margin_pct    Nullable(Float64),
-    roe                 Nullable(Float64),
-    roa                 Nullable(Float64),
-    -- Cash
-    fcf_yield           Nullable(Float64),
-    -- Leverage
-    debt_to_equity      Nullable(Float64),
-    -- Liquidity
-    current_ratio       Nullable(Float64),
-    computed_at         DateTime DEFAULT now()
-) ENGINE = ReplacingMergeTree(computed_at)
-PARTITION BY ticker
-ORDER BY (ticker, period_end, period_type);
+pe_ratio Nullable(Float64)
+ev_ebitda Nullable(Float64)
+price_to_book Nullable(Float64)
+price_to_sales Nullable(Float64)
+eps Nullable(Float64)
+revenue_yoy_pct Nullable(Float64)
+net_income_yoy_pct Nullable(Float64)
+fcf_yoy_pct Nullable(Float64)
+net_margin_pct Nullable(Float64)
+gross_margin_pct Nullable(Float64)
+ebitda_margin_pct Nullable(Float64)
+gross_margin_bps_yoy Nullable(Float64)
+net_margin_bps_yoy Nullable(Float64)
+roe Nullable(Float64)
+roa Nullable(Float64)
+fcf_yield Nullable(Float64)
+debt_to_equity Nullable(Float64)
+current_ratio Nullable(Float64)
+revenue_ttm Nullable(Float64)
+net_income_ttm Nullable(Float64)
+fcf_ttm Nullable(Float64)
+computed_at DateTime
 ```
 
-> **Recommendation**: Splitting into `equity_raw` and `equity_derived` databases keeps lineage clean. Raw data has independent retention policies, and you can rebuild `equity_derived` at any time by re-running Dagster assets.
-
-> **Important — `FINAL` keyword**: All FastAPI queries against `ReplacingMergeTree` tables **must** use `SELECT ... FROM table FINAL` to get deduplicated results. Without `FINAL`, ClickHouse may return stale duplicate rows until a background merge runs. This is a consistent-read requirement — see ADR-001.
-
-### 6.2 Qdrant Collection
-
-```
-Collection: equity_news
-  - Model: sentence-transformers/all-MiniLM-L6-v2 (decided — free, runs as Python library in Dagster container via `pip install sentence-transformers`, 384-dim, fast. NOT an Ollama model.)
-  - Vector: 384-dim Float32
-  - Payload fields:
-    - ticker: string         (filter: get news for a specific ticker)
-    - headline: string       (what was embedded)
-    - source: string
-    - published_at: datetime (filter: date range)
-    - url: string
-```
-
----
-
-## 7. Infrastructure & Deployment
-
-### 7.1 Local Development (M4)
-
-```
-MacBook M4 ──SSH Tunnel──▶ Hetzner ClickHouse (port 8123)
-     │
-     ├── Dagster UI (localhost:3000)     # Native, hot-reload
-     ├── FastAPI   (localhost:8000)      # Native, hot-reload
-     ├── LiteLLM   (localhost:4000)      # Native (needed from Phase 5 onward)
-     ├── Next.js   (localhost:3001)      # npm run dev, hot-reload
-     ├── Agent REPL                      # Native
-     └── Qdrant Cloud (remote)           # Direct HTTPS
-```
-
-- Dagster, FastAPI, LiteLLM, and Next.js run natively on macOS for instant hot-reloads
-- **LiteLLM** (needed from Phase 5): `litellm --config litellm_config.yaml --port 4000` — routes to Groq by default (see ADR-011). Not needed for Phases 0-4.
-- Next.js calls FastAPI at `localhost:8000` during dev (configured via `NEXT_PUBLIC_API_URL`)
-- ClickHouse accessed via SSH tunnel: `ssh -L 8123:localhost:8123 hetzner`
-- Environment variable: `CLICKHOUSE_HOST=localhost` when `ENV=dev`
-
-### 7.2 Production (Hetzner CX41 + Vercel)
-
-**Backend** (Hetzner): Dagster, FastAPI, ClickHouse, LiteLLM — Docker Compose (no local model inference — LLM calls go to Groq / Gemini via LiteLLM, see ADR-011)
-**Frontend** (Vercel): Next.js — auto-deployed on push to `main`, preview deploys on PR
-
-```yaml
-# docker-compose.yml (prod profile)
-services:
-  clickhouse:
-    image: clickhouse/clickhouse-server:24-alpine
-    volumes:
-      - clickhouse_data:/var/lib/clickhouse    # CRITICAL — without this, all data is lost on container restart
-    deploy:
-      resources:
-        limits:
-          memory: 4G
-    # ...
-
-  dagster:
-    build:
-      context: .
-      target: dagster                 # Dockerfile multi-stage target: base → dagster
-    command: dagster-webserver -m dagster_pipelines.definitions -h 0.0.0.0 -p 3000
-    env_file: .env
-    depends_on: [clickhouse]
-    # ...
-
-  dagster-daemon:
-    build:
-      context: .
-      target: dagster                 # Same image as dagster webserver, different command
-    command: dagster-daemon run -m dagster_pipelines.definitions
-    env_file: .env
-    depends_on: [clickhouse]
-    # ...
-
-  api:
-    build:
-      context: .
-      target: api                     # Dockerfile multi-stage target: base → api
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
-    env_file: .env                    # passes QDRANT_API_KEY, SENTRY_DSN, LANGFUSE_*, etc. to container
-    depends_on: [clickhouse]
-    # ...
-
-  litellm:
-    image: litellm/litellm:v1.81.14-stable   # pin — do NOT use :main-latest (March 2026 supply-chain incident)
-    command: --config /app/config.yaml --port 4000
-    env_file: .env                    # passes GROQ_API_KEY, GEMINI_API_KEY to container
-    volumes:
-      - ./litellm_config.yaml:/app/config.yaml
-    # Port 4000 on Docker network only — NOT exposed externally
-    # Routes to Groq (https://api.groq.com/openai/v1) by default — see ADR-011
-    # ...
-
-  cloudflared:
-    image: cloudflare/cloudflared:2026.3.0
-    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
-    # ⚠ stale (above command is the named-tunnel form; original quick-tunnel below is superseded):
-    # command: tunnel --no-autoupdate --url http://api:8000  (quick-tunnel, hostname rotates)
-    # Named tunnel (QNT-177 / ADR-018): hostname is stable at api.<domain>, no rotation.
+Financial display conventions:
 
-  # ⚠ stale — prod-caddy profile and Caddyfile have been removed (QNT-177). Caddy is no
-  # longer retained. Named-tunnel ingress via cloudflared is the production path.
+- P/E should be null/NM when EPS is near zero.
+- Quarterly P/E should use TTM earnings, not single-quarter annualized EPS.
+- Frontend quarterly views may present TTM P/E, ROE, ROA, and FCF yield where
+  that matches market convention.
 
-volumes:
-  clickhouse_data:   # persists ClickHouse data across container restarts (CRITICAL — omitting this loses all market data on `docker compose down`)
-```
+### 6.8 Qdrant Collection
 
-- Environment variable: `CLICKHOUSE_HOST=clickhouse` when `ENV=prod` (Docker network)
-- **HTTPS in production (ADR-018, updated QNT-177)**: Vercel serves the frontend over HTTPS. FastAPI port :8000 is bound to **loopback only** (`127.0.0.1:8000`) on Hetzner — no public ingress port. The `cloudflared` service runs a **named tunnel** anchored to `api.<your-domain>`, exposing the API at a stable HTTPS hostname. End-to-end TLS, free Cloudflare WAF + DDoS protection, $0 cost. ~~The trade-off is a hostname that rotates on cloudflared restart~~ — ⚠ stale: hostname is **permanent** with a named tunnel; `NEXT_PUBLIC_API_URL` is set once in Vercel and never rotates. See `docs/guides/vercel-deploy.md`.
-- **Dagster UI is internal only**: Do NOT expose port 3000 externally. Access via SSH tunnel (`ssh -L 3000:localhost:3000 hetzner`) when needed. No public auth is configured.
-- **Port exposure policy**:
-  - **Externally accessible**: 22 (SSH) only — `cloudflared` makes outbound connections, no inbound port required.
-  - **Bound to host loopback only** (`127.0.0.1`): 8000 (FastAPI), 3000 (Dagster webserver), 8123 (ClickHouse for SSH-tunnel dev access).
-  - **Docker-internal only** (not bound to host at all): 4000 (LiteLLM).
-  - **Recommendation**: Configure Hetzner firewall to allow only 22 inbound. No port exposure beyond SSH.
+Collection: `equity_news`
 
-> **Recommendation**: Use Docker Compose **profiles**. The `dev` profile starts only ClickHouse (for when you want a local DB but run services natively). The `prod` profile starts everything including cloudflared. ~~The dormant `prod-caddy` profile activates Caddy if/when you upgrade to a named tunnel + own domain.~~ ⚠ stale: `prod-caddy` profile has been removed; named-tunnel ingress via cloudflared is the production path (QNT-177).
+Requirements:
 
-### 7.3 CI/CD (GitHub Actions + Vercel)
-
-**On Pull Request:**
-- Backend: Lint (`ruff check`) + Type check (`pyright`) + Unit tests (`pytest`)
-- Frontend: Lint (`npm run lint`) + Type check (`npx tsc --noEmit`) + Vercel preview deploy
-
-**On Push to `main`:**
-```
-Backend (GitHub Actions):
-  └── SSH into Hetzner
-        └── cd /opt/equity-data-agent
-              └── git pull origin main
-                    └── docker compose --profile prod up -d --build
-                          └── Apply migrations/*.sql over HTTP (idempotent, QNT-146)
-                                └── Verify deploy: curl /health with 60s retry loop
-
-Frontend (Vercel):
-  └── Auto-deploy from main (zero-config, triggered by GitHub push)
-```
-
-**Rollback:** If a deploy breaks prod, `make rollback` SSHs to Hetzner, checks out `HEAD~1`, rebuilds Docker, and verifies health. The `/ship` command suggests this automatically if post-deploy verification fails.
-
-**Health Monitoring:** `scripts/health-monitor.sh` runs every 15 minutes on Hetzner via cron. Checks API `/health` + Docker service status, logs failures to `health-monitor.log`. The Claude session-start hook reads this log and warns on failures. Install: `make monitor-install`. Check: `make monitor-log`.
-
-### 7.4 Environment Switching
-
-> ⚠ **stale snippet** — The schema below shows the Phase-0 field set. The live `packages/shared/src/shared/config.py` uses uppercase env-var names and has grown to include additional fields (`API_BASE_URL`, `FINNHUB_API_KEY`, `DISCORD_WEBHOOK_URL`, `DAGSTER_BASE_URL`, `ENABLE_SENTRY_TEST`, provenance settings). The *pattern* (pydantic-settings with env-file support, dev-vs-prod toggle) is still accurate; the field list is not. Read the source file for the current contract.
-
-```python
-# packages/shared/src/shared/config.py — illustrative pattern, not current field list
-from pydantic_settings import BaseSettings, SettingsConfigDict
-
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env")  # pydantic-settings v2 syntax
-
-    env: str = "dev"
-    clickhouse_host: str = "localhost"       # dev default
-    clickhouse_port: int = 8123
-    qdrant_url: str = ""
-    qdrant_api_key: str = ""
-    litellm_base_url: str = "http://localhost:4000"   # dev: localhost (native). prod: set LITELLM_BASE_URL=http://litellm:4000 in .env (Docker service name)
-    groq_api_key: str = ""                 # Groq API key (https://console.groq.com — default LLM provider, see ADR-011)
-    gemini_api_key: str = ""               # Google AI Studio Gemini key — override: when set, LiteLLM can route to Gemini 2.5 Flash instead of Groq (see ADR-011 + QNT-123)
-    sentry_dsn: str = ""                     # FastAPI error tracking (Phase 7)
-    langfuse_public_key: str = ""            # Agent tracing (Phase 7)
-    langfuse_secret_key: str = ""
-    langfuse_base_url: str = "https://us.cloud.langfuse.com"  # match the region where the Langfuse project was created; wrong region silently drops traces (QNT-61 finding)
-    # ... additional fields in the live file — see packages/shared/src/shared/config.py
-```
-
-### 7.5 LiteLLM Model Routing
-
-See [ADR-011](decisions/011-llm-routing-groq-default-claude-override.md) for the selection rationale (why Groq over Ollama Cloud / Gemini / OpenAI / self-hosted).
-
-> ⚠ **stale snippet** — The snippet below shows the Phase-5 baseline. The live `litellm_config.yaml` has grown to include a Llama-4-Scout fallback alias and 8 bench aliases for the eval harness. The *routing pattern* (single `equity-agent/default` alias decoupling agent code from provider) is still accurate; the full model_list is not. Read the source file for the current config.
-
-```yaml
-# litellm_config.yaml — illustrative pattern, not full current model_list
-model_list:
-  - model_name: equity-agent/default       # alias used by agent code
-    litellm_params:
-      model: openai/llama-3.3-70b-versatile   # Groq via OpenAI-compat API
-      api_base: https://api.groq.com/openai/v1
-      api_key: os.environ/GROQ_API_KEY      # reads from environment variable
-
-  # Fallback alias and bench aliases also defined — see litellm_config.yaml for full list
-```
-
-The agent graph references only the alias `equity-agent/default` — never a provider-specific model name. Switching from Groq to Gemini is a config-only change (edit YAML, restart LiteLLM). QNT-67 eval harness logs a per-provider column so the split is a measurable eval axis, not an invisible default.
-
----
-
-## 8. Phased Project Plan
-
-See [`docs/project-plan.md`](project-plan.md) for the phase-by-phase delivery checklists, kept in sync with Linear via `/ship` and `/sync-docs`.
-
----
-
-## 9. Data Governance
-
-### Ingestion Strategy: Batch Only
-All data ingestion uses batch processing — no streaming. Rationale:
-- yfinance provides daily bars after market close, not real-time feeds
-- 10 tickers × daily batch = ~15-20 seconds total runtime
-- Streaming infrastructure (Kafka/Redis Streams) is overengineered for this scale
-
-### Backfill vs Incremental
-| Mode | When | What happens |
-|---|---|---|
-| **Backfill** | First run, or re-seeding | Materialize all ticker partitions with `period="2y"` |
-| **Incremental (OHLCV)** | Daily schedule | Fetch last 5 trading days, `ReplacingMergeTree` deduplicates overlap |
-| **Incremental (Fundamentals)** | Weekly schedule | Fetch all available quarters, `ReplacingMergeTree` deduplicates |
-
-Both modes use the same Dagster asset code — the difference is just the `period` parameter. No "last fetched" tracking needed.
-
-### Multi-Timeframe Derivation
-Daily OHLCV is the single source of truth. Weekly and monthly bars are derived via aggregation in Dagster assets (not separate ingestion). This means:
-- Rebuild any timeframe by re-running the Dagster asset
-- No risk of daily/weekly/monthly data drifting out of sync
-- Full lineage visible:
-  - `ohlcv_raw` → `technical_indicators_daily`
-  - `ohlcv_raw` → `ohlcv_weekly` → `technical_indicators_weekly`
-  - `ohlcv_raw` → `ohlcv_monthly` → `technical_indicators_monthly`
-  - `fundamentals` + `ohlcv_raw` → `fundamental_summary` (price-based ratios need close price)
-
-### Idempotency Strategy
-- `ReplacingMergeTree` with `fetched_at` / `computed_at` version columns
-- Same data fetched twice → ClickHouse keeps the latest version after merge
-- Dagster assets are safe to re-run at any time
-
-### Ticker Registry
-Single source of truth in `packages/shared/src/shared/tickers.py`:
-```python
-TICKERS: list[str] = [
-    "NVDA", "AAPL", "MSFT", "GOOGL", "AMZN",
-    "META", "TSLA", "JPM", "V", "UNH",
-]
-```
-All assets, schedules, and partitions derive from this list. Adding a ticker = adding one string.
-
-### yfinance Rate Limiting
-- 1-2 second sleep between individual ticker requests
-- Exponential backoff on HTTP 429 responses
-- Dagster retry policy: 3 attempts with increasing delay
-
-### Data Retention
-- **Raw OHLCV** (`equity_raw.ohlcv_raw`): Kept indefinitely. ~500 MB for 10 tickers × 2 years (250 trading days/year). Growth is linear and slow.
-- **Raw News** (`equity_raw.news_raw`): Kept indefinitely at current scale. At 10 tickers with headline-only ingestion, ~2 GB/year.
-- **Derived tables** (`equity_derived.*`): Rebuildable from raw data. No independent retention requirement — can be dropped and recomputed via Dagster at any time.
-- **Qdrant vectors**: Grow with `news_raw`. Qdrant Cloud free tier has a storage cap — monitor usage in Phase 4.
-- **ClickHouse disk estimate**: ~5 GB baseline at 2 years, growing ~3 GB/year. Well within CX41 disk capacity (160 GB). No cleanup automation needed at 10-ticker scale.
-
----
-
-## 10. Development Workflow
-
-### The "M4-First" Rule
-- **Fast feedback**: Dagster UI and FastAPI run natively on macOS during development
-- **Production parity**: Docker environment on Hetzner matches local Python version (managed by uv)
-- **SSH tunnel**: `ssh -L 8123:localhost:8123 hetzner` for ClickHouse access
-
-### Issue-Driven Development
-- All features and bugs tracked in Linear
-- Before starting work: ensure a corresponding Linear issue exists
-- When using AI tools: provide the Linear issue description for full context
-
-### Branch Strategy
-- `main` — production, auto-deploys to Hetzner
-- Feature branches — PR-based, CI must pass before merge
-
----
-
-## 11. Production Bootstrap (First Deploy)
-
-One-time setup for a fresh Hetzner CX41. After this, the CI/CD pipeline in Section 7.3 handles all subsequent deployments.
-
-1. **Provision VPS**: Create Hetzner CX41 (16GB), add SSH key, note public IP
-2. **Install runtime**: SSH in, install Docker Engine + Docker Compose + git
-3. **Clone repo**: `git clone https://github.com/noahwins-ng/equity-data-agent.git /opt/equity-data-agent`
-4. **Configure secrets**: Copy `.env.example` → `.env`, fill in production values:
-   - `ENV=prod`
-   - `CLICKHOUSE_HOST=clickhouse`
-   - `LITELLM_BASE_URL=http://litellm:4000` (Docker service name — not localhost)
-   - `GROQ_API_KEY=<from https://console.groq.com — default LLM provider, see ADR-011>`
-   - `GEMINI_API_KEY=<optional, for Gemini 2.5 Flash override — free tier, see ADR-011 + QNT-123>`
-   - `QDRANT_URL=<Qdrant Cloud cluster URL>`
-   - `QDRANT_API_KEY=<from Qdrant Cloud dashboard>`
-   - `SENTRY_DSN=<from Sentry project settings>`
-   - `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` (from Langfuse dashboard)
-   - `NEXT_PUBLIC_API_URL=https://api.<your-domain>` (set once — permanent with named tunnel; ~~`trycloudflare-url`~~ ⚠ stale: quick-tunnel hostname rotation no longer applies post-QNT-177)
-   - **Never commit `.env` to git** — it's in `.gitignore`
-5. **HTTPS ingress (ADR-018, named-tunnel migration QNT-177)**: No Let's Encrypt configuration is required. The `cloudflared` service runs a Cloudflare named tunnel anchored to `api.<your-domain>` (configured dashboard-side in Cloudflare Zero Trust). The connector token in `CLOUDFLARE_TUNNEL_TOKEN` authenticates the connector; the public hostname mapping is dashboard-side. Set Vercel's `NEXT_PUBLIC_API_URL` to `https://api.<your-domain>` once and the value is permanent across reboots. Full setup runbook in `docs/guides/vercel-deploy.md`.
-6. **Start services**: `docker compose --profile prod up -d --build`
-7. **Wait for ClickHouse**: `docker compose exec clickhouse clickhouse-client --query "SELECT 1"` — retry until it responds
-8. **Run migrations**: `make migrate` — creates databases and tables (migrations are idempotent — safe to re-run)
-9. **Backfill data**: Open Dagster UI via SSH tunnel (`ssh -L 3000:localhost:3000 hetzner`), manually materialize all partitions of `ohlcv_raw` with `period="2y"` asset config. Then trigger `fundamentals`, `ohlcv_weekly`, `ohlcv_monthly`, `technical_indicators_*`, and `fundamental_summary` in dependency order.
-10. **Verify**:
-    - `curl https://api.<your-domain>/api/v1/health` returns `{"status": "ok"}`
-    - `curl https://api.<your-domain>/api/v1/dashboard/summary` returns 10 tickers
-    - Dagster UI shows all schedules registered and next run times
-    - Vercel frontend loads and displays dashboard
-
----
-
-## 12. Error Handling & Graceful Degradation
-
-### External Service Failure Modes
-
-| Failure | Impact | Handling |
-|---|---|---|
-| **yfinance 429/timeout** | OHLCV/fundamentals data stale | Dagster retry policy: 3 attempts with exponential backoff. Data stays stale until next successful run. No user-visible error — dashboard shows last-known-good data. |
-| **Groq down / rate-limited** | Agent can't generate thesis | `POST /agent/chat` returns HTTP 503. Frontend shows "Agent temporarily unavailable." If `GEMINI_API_KEY` is set, flip `EQUITY_AGENT_PROVIDER=gemini` to route to Gemini 2.5 Flash via the same alias (config-only fallback, see ADR-011 + QNT-123). |
-| **Qdrant Cloud unreachable** | News search unavailable | `GET /search/news` returns HTTP 503. `GET /reports/news/{ticker}` returns 200 with partial report (headlines from ClickHouse, no semantic search). Agent `search_news` tool returns empty results. |
-| **ClickHouse unreachable** | All data API endpoints fail | `GET /health` returns HTTP 503. All data/report endpoints return 503. Frontend shows offline banner. |
-| **News API rate-limited** | News ingestion stale | Dagster retry + stale data is acceptable — news is not real-time. |
-| **Bad deploy breaks prod** | Services crash or /health fails | Health monitor detects within 15 min and logs failure. `make rollback` reverts to previous commit + rebuilds. `/ship` suggests rollback automatically if post-deploy verification fails. |
-
-### Health Endpoint Contract
-
-`GET /api/v1/health` returns:
+- Embedding model: Qdrant Cloud Inference using
+  `sentence-transformers/all-minilm-l6-v2`.
+- Vector dimension: 384.
+- Distance: cosine.
+- Point ID: deterministic hash namespaced by ticker and article URL id.
+- Payload: ticker, published timestamp, URL, headline, source/publisher fields.
+- Re-embed window: trailing recent news window per ticker.
+
+## 7. Dagster Requirements
+
+### 7.1 Assets
+
+Core asset groups:
+
+- `ohlcv_raw`: yfinance OHLCV ingestion.
+- `fundamentals`: yfinance financial statement ingestion.
+- `ohlcv_weekly` and `ohlcv_monthly`: multi-timeframe aggregation.
+- `technical_indicators`: daily, weekly, and monthly indicator computation.
+- `fundamental_summary`: derived financial ratios and TTM metrics.
+- `news_raw`: Finnhub news ingestion and relevance filtering.
+- `news_embeddings`: ClickHouse news rows to Qdrant vectors.
+
+### 7.2 Partitioning
+
+Per-ticker assets should use `StaticPartitionsDefinition` over the supported
+ticker universe. The run coordinator and tags must prevent unbounded fan-out on
+the single-host production box (see QNT-114 / QNT-116 ghost-run incident and
+[ADR-010](decisions/010-dagster-production-topology.md) for the production
+topology choice).
+
+### 7.3 Schedules And Sensors
+
+Required recurring work:
+
+- Daily OHLCV ingestion after US market close.
+- Downstream recomputation for derived OHLCV, indicators, and price-dependent
+  fundamental summaries.
+- Weekly fundamentals refresh.
+- News ingestion and embedding refresh.
+- Vercel deploy hook after successful freshness-driving ingest cycles.
+
+Schedules and sensors should default to running in code where production
+expects them to be active.
+
+### 7.4 Asset Checks
+
+Asset checks should validate both shape and domain expectations:
+
+- Row counts and freshness.
+- No future dates.
+- OHLCV sanity: valid prices and volumes.
+- Indicator bounds: RSI 0-100, coherent MACD/signal fields, valid null warm-up
+  behavior.
+- Fundamental domain bounds: margins, P/E bands, TTM aggregates, no divide-by
+  zero artifacts.
+- News integrity: headline/URL presence, publisher fields, pending sentiment
+  age.
+- Qdrant integrity: vector dimension, vector count, no orphan points.
+
+Checks that catch real financial calibration issues should be preserved, not
+watered down into generic smoke tests.
+
+## 8. FastAPI Requirements
+
+### 8.1 Application
+
+FastAPI serves four categories:
+
+- Report endpoints for the agent.
+- JSON data endpoints for the frontend.
+- Search endpoints for semantic news.
+- Public chat SSE endpoint that runs the agent graph.
+
+The app also owns health, CORS, Sentry initialization, rate-limit handling, and
+startup cache warming.
+
+### 8.2 Report Endpoints
+
+Reports are plain text consumed by the agent:
+
+- `GET /api/v1/reports/company/{ticker}`
+- `GET /api/v1/reports/technical/{ticker}`
+- `GET /api/v1/reports/fundamental/{ticker}`
+- `GET /api/v1/reports/news/{ticker}`
+- `GET /api/v1/reports/summary/{ticker}`
+
+Report requirements:
+
+- Structured sections, not walls of prose.
+- Explicit source/report family naming.
+- Numeric values printed in stable formats so evals can compare generated
+  answers against report text.
+- Domain context such as RSI 70/30 and valuation bands must live in templates,
+  not in the system prompt.
+- Missing data should produce a useful report string instead of an exception
+  where possible.
+
+### 8.3 Data Endpoints
+
+Frontend-facing endpoints:
+
+- `GET /api/v1/dashboard/summary`
+- `GET /api/v1/ohlcv/{ticker}?timeframe=daily|weekly|monthly`
+- `GET /api/v1/indicators/{ticker}?timeframe=daily|weekly|monthly`
+- `GET /api/v1/fundamentals/{ticker}`
+- `GET /api/v1/news/{ticker}?days={n}&limit={n}`
+- `GET /api/v1/quote/{ticker}`
+- `GET /api/v1/logos`
+- `GET /api/v1/tickers`
+- `GET /api/v1/health`
+
+Data endpoint requirements:
+
+- Validate tickers against the shared registry or OHLCV-specific registry.
+- Use parameterized ClickHouse queries.
+- Use `FINAL` on ReplacingMergeTree tables when consistent user-visible reads
+  require it.
+- Convert date/datetime objects to ISO strings.
+- Preserve nulls for unavailable financial values.
+- Return 404 for unknown ticker paths.
+
+### 8.4 Search Endpoint
+
+`GET /api/v1/search/news`
+
+Requirements:
+
+- Filter by ticker.
+- Limit result count.
+- Use Qdrant semantic search over the same embedding space as ingestion.
+- Return empty results for no matches or degraded vector search paths where the
+  UI should not distinguish outage from empty state.
+
+### 8.5 Health Endpoint
+
+`GET` and `HEAD` must be supported for both:
+
+- `/api/v1/health`
+- `/health`
+
+Payload requirements:
+
 ```json
 {
-  "status": "ok" | "degraded" | "down",
+  "status": "ok | degraded | down",
   "services": {
-    "clickhouse": "ok" | "down",
-    "qdrant": "ok" | "down"
+    "clickhouse": "ok | down",
+    "qdrant": "ok | down"
   },
   "deploy": {
-    "git_sha": "abc1234",
-    "dagster_assets": 12,
-    "dagster_checks": 17
+    "git_sha": "string",
+    "dagster_assets": 0,
+    "dagster_checks": 0
+  },
+  "provenance": {
+    "sources": ["yfinance", "Finnhub", "Qdrant"],
+    "jobs": {
+      "runtime": "Dagster",
+      "schedule": "daily",
+      "next_ingest_local": "17:00 ET"
+    }
   }
 }
 ```
-- **HTTP 200**: `status` is `"ok"` (all services up) or `"degraded"` (Qdrant down, ClickHouse up — read-only data still available)
-- **HTTP 503**: `status` is `"down"` (ClickHouse unreachable — no data can be served)
-- **`deploy` block**: Exposes runtime identity so monitoring can detect stale deploys (Phase 2 lesson — QNT-88/89: CD green + `/health` 200 while prod was 17 commits behind). `git_sha` read from env var set at build time; `dagster_assets`/`dagster_checks` counted from the loaded definitions module.
 
-### Empty Data Contracts
+Status semantics:
 
-When data is not yet available (e.g., Phase 4 not deployed, or fresh install before backfill):
-- Report endpoints return HTTP 200 with a descriptive message: `{"report": "No news data available."}`
-- Data endpoints return HTTP 200 with empty arrays: `[]`
-- Dashboard returns HTTP 200 with available tickers only (missing indicators show as `null`)
-- Agent tools handle empty responses gracefully — the agent notes "No news data available" in its thesis rather than erroring
+- `ok`: ClickHouse and Qdrant reachable.
+- `degraded`: ClickHouse reachable, Qdrant unavailable.
+- `down`: ClickHouse unavailable. HTTP status should be 503.
+
+## 9. Agent Requirements
+
+### 9.1 Graph Shape
+
+The graph is linear:
+
+```text
+classify -> plan -> gather -> synthesize
+```
+
+### 9.2 Supported Intents
+
+Supported response shapes:
+
+- `thesis`: setup, bull case, bear case, verdict.
+- `quick_fact`: short answer with one cited value.
+- `comparison`: two covered tickers, side-by-side cited values, differences.
+- `conversational`: greeting, capability answer, or off-domain redirect.
+- `fundamental`: focused fundamental analysis.
+- `technical`: focused technical analysis.
+- `news_sentiment`: focused news/sentiment analysis.
+
+### 9.3 Tool Surface
+
+Default report tools:
+
+- `company`
+- `technical`
+- `fundamental`
+- `news`
+
+The graph should accept tools as an injected mapping so unit tests can run
+offline with fakes.
+
+### 9.4 Failure Behavior
+
+Required behavior:
+
+- Classifier failures default to thesis.
+- Conversational path skips tool gathering.
+- Optional news failures should not crash broad thesis generation.
+- Required report failures are surfaced as degraded state or client-visible
+  tool errors without leaking raw internal exception detail.
+- Any synthesize failure must produce a deterministic conversational fallback
+  instead of a blank panel.
+- Top-level chat timeout must stop streaming and emit a stable user-facing
+  timeout error.
+
+### 9.5 Numeric Provenance Contract
+
+The agent should not introduce numeric financial claims that are absent from
+retrieved report strings. The eval harness extracts numeric literals from
+generated answers and compares them to the tool-output reports.
+
+This is the measurable form of the
+[§2.1 Mathematical Isolation](#21-mathematical-isolation) principle: §2.1
+defines where math is allowed to happen; §9.5 defines how that boundary is
+checked behaviourally.
+
+This is a provenance guarantee, not a claim that the model always chooses the
+best number for the question. Correctness is tracked separately by judge scores
+and golden-set evaluation.
+
+## 10. Public Chat Abuse Controls
+
+`POST /api/v1/agent/chat` is public by design. There is no login or API key for
+the portfolio demo — see
+[ADR-017](decisions/017-public-chat-truly-public-no-auth.md) for the threat
+model and why auth was rejected.
+
+Required controls:
+
+| Control | Requirement |
+|---|---|
+| CORS | Explicit allowed origins plus project-pinned Vercel preview regex |
+| Rate limit | Per-IP SlowAPI moving-window limits |
+| Token budget | Per-IP daily and global daily token counters |
+| Fail closed | LiteLLM aliases on chat path must stay on free-tier providers |
+| Input filter | Reject control characters and overlong tokens |
+| Alerts | Burst 429s and global breaker trips should reach Sentry/logs |
+| Safe errors | Client must see stable messages, not raw provider/internal errors |
+
+Budget exhaustion should return a normal SSE conversational redirect, not an
+HTTP 500 and not an LLM call.
+
+## 11. Frontend Requirements
+
+### 11.1 Product Shell
+
+The UI is a three-pane terminal-style workspace:
+
+- Left: watchlist.
+- Center: route slot.
+- Right: persistent chat panel.
+
+The chat panel must persist across ticker navigation so in-flight SSE streams
+are not torn down by route changes.
+
+### 11.2 Routes
+
+Required routes:
+
+- `/`: landing/empty center state.
+- `/ticker/[symbol]`: ticker detail page.
+
+Chat lives as a persistent panel in the root layout, not on a dedicated route,
+so SSE streams survive ticker navigation.
+
+### 11.3 Ticker Detail
+
+Ticker detail must include:
+
+- Quote header with logo, sector/industry context, price, daily range, volume,
+  market cap, and P/E.
+- Price chart with OHLCV and indicator support.
+- Technicals card.
+- Fundamentals card.
+- News card.
+- Provenance strip.
+
+### 11.4 Rendering And Freshness
+
+Rendering model (see
+[ADR-014](decisions/014-nextjs-rendering-mode-per-page.md) for the per-page
+mode choice):
+
+- Ticker detail pages are statically rendered.
+- `generateStaticParams()` reads the canonical ticker universe from the API.
+- Freshness is driven by Vercel deploy hooks after ingest cycles.
+- Client-side interactive fetches may use `cache: "no-store"` where needed.
+- Server-side fetches must declare cache behavior explicitly.
+
+### 11.5 Chat UI
+
+Chat requirements:
+
+- Reads active ticker from the route.
+- Sends `POST /api/v1/agent/chat` requests.
+- Parses SSE frames without the Vercel AI SDK.
+- Renders tool calls/results, prose chunks, structured thesis, quick fact,
+  comparison, conversational, and focused payloads.
+- Provides useful cold-start and fallback suggestions.
+- Handles rate-limit, timeout, and unknown-ticker errors gracefully.
+
+## 12. Infrastructure Requirements
+
+### 12.1 Local Development
+
+Expected local services:
+
+- FastAPI: `localhost:8000`
+- Next.js: `localhost:3001`
+- Dagster UI: `localhost:3000`
+- LiteLLM: `localhost:4000`
+- ClickHouse: local compose profile or SSH tunnel to Hetzner
+
+Useful Make targets:
+
+- `make setup`
+- `make dev-api`
+- `make dev-frontend`
+- `make dev-dagster`
+- `make dev-litellm`
+- `make tunnel`
+- `make test`
+- `make lint`
+
+### 12.2 Production Backend
+
+Production backend runs on Hetzner CX41 using Docker Compose.
+
+Long-running services:
+
+- `clickhouse`
+- `dagster-code-server`
+- `dagster`
+- `dagster-daemon`
+- `api`
+- `litellm`
+- `cloudflared`
+- observability stack services
+
+Dagster production topology:
+
+- User code loads in `dagster-code-server`.
+- Webserver and daemon communicate with the code server via workspace config.
+- Run workers are launched through DockerRunLauncher.
+- Run monitoring must remain enabled to recover orphaned runs.
+
+### 12.3 Production Frontend
+
+Vercel hosts the frontend. It reads `NEXT_PUBLIC_API_URL` from environment
+configuration and calls the backend through the Cloudflare named tunnel.
+
+### 12.4 Ingress
+
+FastAPI is not exposed through a public host port. Cloudflare named tunnel
+connects outbound from the backend host and exposes `api.<domain>` over HTTPS.
+See [ADR-018](decisions/018-cloudflare-quick-tunnel-for-https-ingress.md) for
+the ingress choice and the QNT-177 migration that moved from quick tunnel to
+named tunnel.
+
+Port policy:
+
+- Public inbound: SSH only.
+- Host loopback: FastAPI, Dagster UI, ClickHouse for local/tunnel access.
+- Docker network only: LiteLLM and internal service-to-service traffic.
+
+### 12.5 Deployment Gates
+
+Production deploys must include the following gates. Each was paid for by a
+specific incident — see Phase 2 and Phase 3 retros for the originating
+failures:
+
+- SOPS decrypt for secrets.
+- Git SHA identity check (catches "deploy succeeded but prod runs old code"
+  — Phase 2 retro / QNT-88, QNT-89).
+- Docker Compose build/up.
+- Idempotent ClickHouse migrations.
+- API health loop.
+- Dagster definitions-load gate (catches "code-server up but graph broken"
+  — Phase 3 retro).
+- Config bind-mount restart handling (catches stale config from named-volume
+  shadowing — QNT-110 / QNT-112).
+- Observability smoke checks for infra/observability changes (catches
+  "shipped infra, every signal green, nothing actually working" — QNT-103
+  obs follow-up).
+
+## 13. LLM Routing And Evaluation
+
+### 13.1 Routing
+
+The agent references a LiteLLM model alias, not provider-specific model names.
+See [ADR-011](decisions/011-llm-routing-groq-default-gemini-override.md) for
+the routing decision (Groq default, Gemini override).
+
+Current production pattern:
+
+- Default: Groq Llama-3.3-70B.
+- Groq fallback: Llama-4-Scout-17B.
+- Optional override: Gemini 2.5 Flash.
+- Bench aliases: available for eval comparisons.
+
+The public chat path must remain fail-closed to free-tier providers. Tests
+should fail if a paid fallback is added to the reachable alias chain.
+
+### 13.2 Evaluation
+
+The eval harness must preserve:
+
+- Golden questions covering all supported response shapes.
+- Tool-call correctness checks.
+- Numeric provenance/hallucination checks.
+- Judge/correctness signal.
+- History CSV for model and prompt comparisons.
+
+README-level model benchmark tables should be updated only when the benchmark
+set or production default changes.
+
+## 14. Observability And Operations
+
+Required observability layers:
+
+| Layer | Tooling | Answers |
+|---|---|---|
+| Logs | Dozzle, Docker logs | What did services print? |
+| Metrics | Prometheus, Grafana, cAdvisor, node_exporter | What is resource health? |
+| Errors | Sentry | Which API/chat failures happened? |
+| Traces | Langfuse | What did the agent do? |
+| Orchestration | Dagster UI | Which assets, checks, runs, schedules failed? |
+
+Required alert paths:
+
+- External uptime probe on `/api/v1/health`.
+- Docker event notifications.
+- Dagster run-failure sensor.
+- Grafana alert rules for memory, disk, and restarts.
+- Sentry alerts for chat burst and global breaker patterns.
+
+Operational docs:
+
+- Failure-mode catalog: `docs/guides/ops-runbook.md`
+- Vercel/Cloudflare deploy guide: `docs/guides/vercel-deploy.md`
+- Local development setup: `docs/guides/local-dev-setup.md`
+- Uptime monitoring: `docs/guides/uptime-monitoring.md`
+
+## 15. Quality And Security Gates
+
+### 15.1 Backend
+
+Required checks:
+
+- `ruff check`
+- `pyright`
+- `pytest`
+- integration tests where ClickHouse is available
+
+### 15.2 Frontend
+
+Required checks:
+
+- `npm run lint`
+- `npm run typecheck`
+- targeted unit tests where present
+
+Frontend browser behavior is validated through manual review and Vercel preview
+deploys at this project scale.
+
+### 15.3 Security
+
+Required scanner suite:
+
+- `pip-audit`
+- `bandit`
+- `gitleaks`
+- `npm audit --audit-level=high`
+- Trivy image scans
+
+Secrets must stay out of git. Production secrets are SOPS-encrypted and
+decrypted during deploy.
+
+## 16. Data Governance
+
+### 16.1 Batch-Only Ingestion
+
+The system is not a real-time trading system. It uses batch ingestion:
+
+- OHLCV after market close.
+- Fundamentals on a slower cadence.
+- News on a scheduled cadence.
+
+This avoids unnecessary streaming infrastructure for the current scope.
+
+### 16.2 Backfill And Incremental Strategy
+
+| Mode | Purpose | Behavior |
+|---|---|---|
+| Backfill | Initial seed or rebuild | Materialize ticker partitions over a larger historical window |
+| OHLCV incremental | Daily freshness | Fetch recent days; ReplacingMergeTree deduplicates overlap |
+| Fundamentals incremental | Statement refresh | Fetch available quarterly/annual periods; deduplicate overlap |
+| News incremental | Narrative freshness | Fetch recent Finnhub articles; relevance filter and deduplicate |
+
+### 16.3 Retention
+
+At the current 10-ticker scale:
+
+- Raw OHLCV can be kept indefinitely.
+- Raw fundamentals can be kept indefinitely.
+- Raw news can be kept indefinitely unless Qdrant or ClickHouse cost changes.
+- Derived ClickHouse tables are rebuildable from raw tables.
+- Qdrant vectors are rebuildable from `news_raw`.
+
+### 16.4 Source Caveats
+
+The project uses free/low-cost data sources. It is a portfolio research tool,
+not a licensed market-data product. Documentation and UI should avoid implying
+real-time or institutional data entitlements.
+
+## 17. Graceful Degradation
+
+| Failure | Expected behavior |
+|---|---|
+| yfinance rate limit or timeout | Dagster retries; frontend continues showing last-known-good data |
+| Finnhub failure | News becomes older or sparse; price and fundamentals continue |
+| Qdrant unavailable | Health degrades; search/news semantic paths degrade |
+| ClickHouse unavailable | Health down; warehouse-backed endpoints fail |
+| LLM provider unavailable | Chat emits stable friendly error or deterministic fallback |
+| Token budget exhausted | Chat emits demo-limit conversational redirect without LLM call |
+| Unknown ticker | API returns 404 or chat emits unknown-ticker SSE error |
+| Empty data during fresh install | Endpoints return empty arrays or clear report messages where appropriate |
+
+No user-facing path should expose raw stack traces, provider secrets, internal
+URLs, or unbounded exception messages.
+
+## 18. Production Bootstrap
+
+For a fresh deployment:
+
+1. Provision Hetzner host and install Docker, Compose, git, and required system
+   packages.
+2. Clone the repo under `/opt/equity-data-agent`.
+3. Configure SOPS/age secrets and production `.env` values.
+4. Configure Cloudflare named tunnel and set `CLOUDFLARE_TUNNEL_TOKEN`.
+5. Configure Vercel project and `NEXT_PUBLIC_API_URL`.
+6. Start backend services with the `prod` profile.
+7. Run idempotent migrations.
+8. Backfill OHLCV and fundamentals through Dagster.
+9. Materialize downstream derived assets.
+10. Verify health, dashboard summary, ticker pages, chat, alerts, and traces.
+
+Detailed procedural steps belong in `docs/guides/hetzner-bootstrap.md` and
+`docs/guides/vercel-deploy.md`; this section defines the required outcomes.
+
+## 19. Documentation Ownership
+
+Documentation roles:
+
+- `README.md`: public project story and reviewer path.
+- `docs/project-requirement.md`: current product and architecture requirements.
+- `docs/architecture/system-overview.md`: concise system reference.
+- `docs/decisions/`: durable ADRs and tradeoffs.
+- `docs/project-plan.md`: delivery history.
+- `docs/retros/`: phase retrospectives and lessons.
+- `docs/guides/`: operational procedures.
+- `docs/patterns.md`: implementation recipes and repo conventions.
+
+When current production behavior changes, update this file and the relevant
+ADR/runbook together.
