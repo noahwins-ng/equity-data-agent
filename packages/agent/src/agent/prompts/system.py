@@ -546,6 +546,18 @@ not a buy/sell call.
 """
 
 
+def _strip_signal_section(report_text: str) -> str:
+    """Remove the ## SIGNAL footer before focused synthesis.
+
+    The SIGNAL aggregate ("BULLISH (3/3 indicators agree)") is a meta-verdict
+    produced for the thesis path. Focused synthesis must cite underlying metrics
+    directly; stripping the footer deterministically prevents the LLM from
+    quoting it regardless of temperature.
+    """
+    idx = report_text.find("\n## SIGNAL")
+    return report_text[:idx] if idx >= 0 else report_text
+
+
 def build_focused_prompt(
     focus: str,
     ticker: str,
@@ -560,10 +572,15 @@ def build_focused_prompt(
     explicitly so the LLM has no excuse to mis-tag the output. Mirrors
     :func:`build_synthesis_prompt` for fence sanitisation and system-turn
     delivery.
+
+    The ## SIGNAL section is stripped from each report before synthesis —
+    see :func:`_strip_signal_section`.
     """
     if reports:
         body = "\n\n".join(
-            f"=== {name} report ===\n{_sanitize_report_body(text)}\n=== end {name} report ==="
+            f"=== {name} report ===\n"
+            f"{_sanitize_report_body(_strip_signal_section(text))}\n"
+            f"=== end {name} report ==="
             for name, text in reports.items()
         )
     else:
