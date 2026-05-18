@@ -138,6 +138,16 @@ accelerating revenue growth are bull evidence. Bucket-correct, not \
 value-ordered. An overbought RSI reading is never a bull bullet even \
 if the technical SIGNAL aggregate prints BULLISH.
 
+**When the report prints a prior-session delta, characterise direction, \
+not just the current bucket.** Reports often print a current value \
+alongside its prior-session delta (e.g. "RSI N neutral (prior session M \
+overbought, down D)" or "Revenue +P% YoY (prior period +Q%, \
+accelerating)"). When the delta is large, characterise the *direction* \
+not just the current bucket. "Cooling from overbought" / "rolling over \
+from neutral" / "growth accelerating from a low base" are the analyst \
+phrasings; "indicating potential for further growth" is not, because it \
+ignores half the data the report supplied. The delta is data, not flavour.
+
 **Use news headlines as catalyst evidence.** When the news report \
 contains headlines that bear on the question (partnerships, analyst \
 notes, regulatory actions, product launches, demand signals, recalls, \
@@ -164,7 +174,10 @@ bearish verdict (P/E rich relative to its threshold, MACD below \
 signal, gross-margin contraction, an unfavorable news headline) — \
 not the SIGNAL aggregate line itself. The same regime-polarity rule \
 applies: an overbought RSI belongs here, not in Bull Case, even if \
-the SIGNAL aggregate prints BULLISH.
+the SIGNAL aggregate prints BULLISH. The same prior-session-delta rule \
+applies: when the delta shows a directional move, characterise the \
+direction ("cooling from overbought", "rolling over") not just the \
+new bucket.
 
 ## Verdict
 Two parts:
@@ -532,6 +545,16 @@ verdict: the RSI value, the MACD posture, the moving-average cross.
 (source: technical)"
   OK:  "Close above SMA-50 by +9.17%, RSI 58.0 neutral, MACD +15.32 \
 above signal (source: technical)"
+
+**When the report prints a prior-session delta, characterise direction, \
+not just the current bucket.** Reports often print a current value \
+alongside its prior-session delta -- e.g. "RSI 64.7 (prior session 76.7, \
+down 12.1)" or "Revenue +12.00% YoY (prior period +8.00%, accelerating)". \
+When the delta is large, characterise the *direction* not just the current \
+bucket. "Cooling from overbought" / "rolling over from neutral" / "growth \
+accelerating from a low base" are the analyst phrasings; "indicating \
+potential for further growth" is not, because it ignores half the data \
+the report supplied. The delta is data, not flavour.
 
 * cited_values: One to four verbatim values relevant to the focus. \
 For fundamental: P/E, EPS, revenue, margins. For technical: RSI, MACD, \

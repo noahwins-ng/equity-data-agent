@@ -424,3 +424,30 @@ questions:
       RSI is higher". Each per-ticker section cites its own technical
       report verbatim. The differences paragraph introduces no new
       numbers and uses regime language to characterise the contrast.
+
+  # QNT-185: prior-session momentum-delta golden. Thesis question where the
+  # technical report prints a current RSI with a prior-session delta showing
+  # a drop from overbought into the neutral band. A correct bull bullet (if
+  # any) characterises the directional move ("cooling from overbought",
+  # "rolling over") rather than reading only the current bucket label.
+  # forbidden_substrings pins the exact anti-pattern observed in the
+  # 2026-05-18 analyst-quality assessment sample 1 (NVDA thesis).
+  - id: nvda-rsi-momentum-delta
+    ticker: NVDA
+    question: "Give me a balanced thesis on NVDA — is the technical momentum supporting further upside?"
+    expected_tools:
+      - technical
+    forbidden_substrings:
+      - "potential for further growth"
+    reference_thesis: |
+      A correct thesis for a ticker where RSI has dropped from the
+      overbought zone into the neutral band names the directional move,
+      not just the current bucket. Bull bullets do NOT say "RSI is
+      neutral, indicating potential for further growth" — they say
+      "RSI cooling from overbought" or "RSI rolling over from the 70+
+      zone", citing both the current and prior-session values verbatim
+      from the technical report. The prior-session delta is data, not
+      flavour: a large downward move signals mean-reversion risk and
+      belongs in context (bear case or verdict), not as upside evidence.
+      Each bullet cites (source: technical) and avoids re-quoting the
+      SIGNAL aggregate footer.

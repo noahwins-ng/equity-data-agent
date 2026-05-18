@@ -450,6 +450,40 @@ def test_comparison_prompt_regime_mirror_present() -> None:
     assert '"approaching overbought"' in text
 
 
+def test_system_prompt_prior_session_delta_rule_present() -> None:
+    """QNT-185: prior-session momentum-delta rule. The rule must be on the wire
+    in both SYSTEM_PROMPT (Bull/Bear) and FOCUSED_SYSTEM_PROMPT (summary/key_points)
+    so the model characterises the delta direction rather than reading only the
+    current bucket.
+
+    Pins three invariants per prompt:
+    * The rule header names what to do (characterise direction, not just the bucket).
+    * The correct analyst phrasings are present.
+    * The forbidden phrasing is named ("indicating potential for further growth").
+    """
+    from agent.prompts.system import FOCUSED_SYSTEM_PROMPT
+
+    for name, text in [
+        ("SYSTEM_PROMPT", SYSTEM_PROMPT),
+        ("FOCUSED_SYSTEM_PROMPT", FOCUSED_SYSTEM_PROMPT),
+    ]:
+        assert "prior-session delta" in text, f"{name}: missing 'prior-session delta'"
+        assert "characterise direction" in text or "characterise the direction" in text, (
+            f"{name}: missing direction-characterisation rule"
+        )
+        # Correct analyst phrasings the rule mandates.
+        assert "Cooling from overbought" in text, f"{name}: missing 'Cooling from overbought'"
+        assert "rolling over from neutral" in text, f"{name}: missing 'rolling over from neutral'"
+        # The forbidden phrasing must be named so the LLM pattern-matches against it.
+        assert "indicating potential for further growth" in text, (
+            f"{name}: missing the forbidden phrasing counter-example"
+        )
+        # The delta-is-data conclusion.
+        assert "The delta is data, not flavour" in text, (
+            f"{name}: missing 'delta is data' conclusion"
+        )
+
+
 def test_focused_prompt_anti_signal_rule_present() -> None:
     """QNT-184: FOCUSED_SYSTEM_PROMPT must contain the explicit anti-SIGNAL
     rule with a BAD/OK counter-example pair so the LLM cannot paraphrase the
