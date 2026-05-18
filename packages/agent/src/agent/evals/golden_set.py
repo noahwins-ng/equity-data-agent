@@ -79,6 +79,12 @@ class GoldenRecord:
     classifier decide and just scores whatever shape comes out. Setting it
     explicitly is informational; the conversational shape additionally
     permits an empty ``expected_tools`` list (the path skips gather).
+
+    ``forbidden_substrings`` (QNT-184): if non-empty, any substring present
+    in the rendered thesis output (case-insensitive) is treated as a hard
+    contract violation and folds into ``hallucination_ok=False``. Use for
+    anti-pattern regression tests (e.g. "indicators agree" guards the
+    anti-SIGNAL-footer rule).
     """
 
     id: str
@@ -87,6 +93,7 @@ class GoldenRecord:
     expected_tools: tuple[str, ...]
     reference_thesis: str
     expected_intent: str = "auto"
+    forbidden_substrings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -131,6 +138,7 @@ def load_goldens(path: Path = GOLDENS_PATH) -> list[GoldenRecord]:
         except KeyError as exc:
             raise ValueError(f"{path}: question missing field {exc}") from exc
         expected_intent = str(entry.get("expected_intent", "auto"))
+        forbidden = tuple(str(s) for s in entry.get("forbidden_substrings", []))
         if rec_id in seen_ids:
             raise ValueError(f"{path}: duplicate question id {rec_id!r}")
         if ticker not in TICKERS:
@@ -144,6 +152,7 @@ def load_goldens(path: Path = GOLDENS_PATH) -> list[GoldenRecord]:
                 expected_tools=expected,
                 reference_thesis=reference,
                 expected_intent=expected_intent,
+                forbidden_substrings=forbidden,
             )
         )
     return records
@@ -275,12 +284,24 @@ def run_record(record: GoldenRecord, *, llm_for_judge: Any | None = None) -> Eva
     )
     cosine_score = cosine(thesis, record.reference_thesis)
 
+    # QNT-184: forbidden_substrings — policy-violation check folded into
+    # hallucination_ok so it gates the same hard exit-code path without
+    # adding a new CSV column or EvalOutcome field.
+    thesis_lower = thesis.lower()
+    violated = [s for s in record.forbidden_substrings if s.lower() in thesis_lower]
+    if violated:
+        hallucination_ok = False
+        hallucination_reason = f"forbidden: {', '.join(repr(s) for s in violated)}"
+    else:
+        hallucination_ok = hresult.ok
+        hallucination_reason = hresult.reason()
+
     return EvalOutcome(
         record=record,
         thesis=thesis,
         actual_tools=tuple(recorder),
-        hallucination_ok=hresult.ok,
-        hallucination_reason=hresult.reason(),
+        hallucination_ok=hallucination_ok,
+        hallucination_reason=hallucination_reason,
         tool_call_ok=tresult.ok,
         tool_call_reason=tresult.reason(),
         judge_score=judge_score,
