@@ -395,3 +395,53 @@ run_id,git_sha,prompt_version,ticker,question_id,question,judge_score,cosine,too
 20260509T071059Z-dedad3-bench-gptoss20b,80f6d56,b6537a1e8b,JPM,jpm-fundamental-deepdive,Walk me through JPM's fundamentals — valuation deep dive.,4,0.4443,1,1,20883
 20260509T071059Z-dedad3-bench-gptoss20b,80f6d56,b6537a1e8b,V,v-technical-analysis,Give me a technical analysis of V — chart setup and indicators.,5,0.533,1,1,27809
 20260509T071059Z-dedad3-bench-gptoss20b,80f6d56,b6537a1e8b,UNH,unh-news-sentiment,What's the news sentiment on UNH — any concerning headlines?,4,0.5064,1,1,26955
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,NVDA,nvda-technical,Is NVDA overbought right now? Walk me through the technical setup.,7,0.4344,1,1,3043
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,NVDA,nvda-fundamental,What does NVDA's most recent fundamental picture look like?,8,0.3209,1,1,1940
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,AAPL,aapl-fundamental,How is AAPL valued relative to its earnings?,4,0.3327,1,1,2017
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,AAPL,aapl-technical,Where is AAPL on the price chart — is the trend intact?,8,0.4558,1,1,11773
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,MSFT,msft-news,What's the recent news sentiment around MSFT?,8,0.4207,1,1,13518
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,GOOGL,googl-technical,How is GOOGL trending technically over the recent window?,8,0.4694,1,1,15018
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,GOOGL,googl-combined,Give me a balanced thesis on GOOGL — fundamentals plus technicals.,8,0.5043,1,1,17684
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,AMZN,amzn-fundamental,What's the fundamental case for AMZN at the moment?,8,0.4301,1,1,17105
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,META,meta-combined,Should I be cautious about META based on the latest data?,8,0.3907,1,1,26205
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,META,meta-news,What's driving recent META headlines?,8,0.4899,1,1,19145
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,TSLA,tsla-technical,Is TSLA breaking out or breaking down on the charts?,8,0.4316,1,1,15104
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,TSLA,tsla-news,What's the recent news flow around TSLA?,8,0.5247,1,1,18437
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,JPM,jpm-fundamental,How is JPM valued versus its latest earnings?,8,0.3903,1,1,16420
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,V,v-combined,Give me a balanced thesis on V right now.,8,0.3809,1,1,20381
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,UNH,unh-fundamental,What is UNH's current fundamental health?,8,0.3843,1,1,15899
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,UNH,unh-news,Are there any concerning news items on UNH lately?,8,0.38,1,1,20905
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,NVDA,nvda-quickfact-rsi,What's NVDA's RSI right now?,9,0.3922,1,1,7570
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,NVDA,nvda-vs-aapl-fundamental,Compare NVDA vs AAPL on valuation and fundamentals.,8,0.3497,1,1,46053
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,NVDA,conversational-off-domain-weather,What's the weather like today?,8,0.28,1,1,450
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,JPM,jpm-fundamental-deepdive,Walk me through JPM's fundamentals — valuation deep dive.,9,0.5138,1,1,1997
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,V,v-technical-analysis,Give me a technical analysis of V — chart setup and indicators.,8,0.5414,1,1,8951
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,UNH,unh-news-sentiment,What's the news sentiment on UNH — any concerning headlines?,8,0.4298,1,1,14928
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,TSLA,tsla-overbought-rsi-regime,Give me a thesis on TSLA — is the technical setup bullish?,6,0.5245,1,1,7284
+20260518T182827Z-09b8ef,2d883af,68b102fbd9,NVDA,nvda-msft-rsi-regime-contrast,Compare NVDA vs MSFT on technical momentum.,6,0.3174,1,1,8518
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,NVDA,nvda-technical,Is NVDA overbought right now? Walk me through the technical setup.,6,0.5203,1,1,7024
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,NVDA,nvda-fundamental,What does NVDA's most recent fundamental picture look like?,6,0.3366,1,1,12052
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,AAPL,aapl-fundamental,How is AAPL valued relative to its earnings?,6,0.3705,1,1,12766
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,AAPL,aapl-technical,Where is AAPL on the price chart — is the trend intact?,8,0.4517,1,1,12246
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,MSFT,msft-news,What's the recent news sentiment around MSFT?,7,0.2649,1,1,6227
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,GOOGL,googl-technical,How is GOOGL trending technically over the recent window?,8,0.4626,1,1,11773
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,GOOGL,googl-combined,Give me a balanced thesis on GOOGL — fundamentals plus technicals.,7,0.4676,1,1,8256
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,AMZN,amzn-fundamental,What's the fundamental case for AMZN at the moment?,6,0.4516,1,1,12583
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,META,meta-combined,Should I be cautious about META based on the latest data?,8,0.3857,1,1,12980
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,META,meta-news,What's driving recent META headlines?,7,0.4243,1,1,11409
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,TSLA,tsla-technical,Is TSLA breaking out or breaking down on the charts?,8,0.4868,1,1,12835
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,TSLA,tsla-news,What's the recent news flow around TSLA?,7,0.4031,1,1,11839
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,JPM,jpm-fundamental,How is JPM valued versus its latest earnings?,7,0.4698,1,1,11785
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,V,v-combined,Give me a balanced thesis on V right now.,8,0.2452,1,1,7498
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,UNH,unh-fundamental,What is UNH's current fundamental health?,6,0.4438,1,1,12742
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,UNH,unh-news,Are there any concerning news items on UNH lately?,7,0.2626,1,1,11419
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,NVDA,nvda-quickfact-rsi,What's NVDA's RSI right now?,9,0.3922,1,1,6020
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,NVDA,nvda-vs-aapl-fundamental,Compare NVDA vs AAPL on valuation and fundamentals.,6,0.354,1,1,9394
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,NVDA,conversational-off-domain-weather,What's the weather like today?,8,0.2917,1,1,5669
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,JPM,jpm-fundamental-deepdive,Walk me through JPM's fundamentals — valuation deep dive.,8,0.5358,1,1,6980
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,V,v-technical-analysis,Give me a technical analysis of V — chart setup and indicators.,9,0.5073,1,1,6310
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,UNH,unh-news-sentiment,What's the news sentiment on UNH — any concerning headlines?,7,0.3481,1,1,5380
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,TSLA,tsla-overbought-rsi-regime,Give me a thesis on TSLA — is the technical setup bullish?,6,0.3627,1,1,7741
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,TSLA,tsla-focused-technical-no-signal-quote,Give me a technical analysis on TSLA.,8,0.5144,1,1,6834
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,NVDA,nvda-msft-rsi-regime-contrast,Compare NVDA vs MSFT on technical momentum.,3,0.2851,1,1,9008
+20260518T203249Z-f41b28,cf91e5c,ae0400ebb7,NVDA,nvda-rsi-momentum-delta,Give me a balanced thesis on NVDA — is the technical momentum supporting further upside?,7,0.3799,1,1,7101

@@ -56,11 +56,14 @@ def test_record_count_within_target_band() -> None:
     # AC: originally "15-20 curated records" (QNT-67). Bumped to 15-25 in
     # QNT-176 to make room for one record per supported intent shape — the
     # focused trio (fundamental / technical / news_sentiment) added 3 rows.
+    # Bumped to 15-30 in QNT-185 to make room for prompt-rule regression
+    # fixtures (regime-polarity, anti-SIGNAL, momentum-delta) and upcoming
+    # QNT-190 golden-set expansion.
     # Lower bound is the substantive guarantee (anything fewer is too thin);
     # upper bound is a soft cap so the suite stays fast enough to run on
     # every prompt edit.
     records = load_goldens()
-    assert 15 <= len(records) <= 25, f"record count {len(records)} outside 15-25 band"
+    assert 15 <= len(records) <= 30, f"record count {len(records)} outside 15-30 band"
 
 
 def test_every_intent_has_at_least_one_golden() -> None:
