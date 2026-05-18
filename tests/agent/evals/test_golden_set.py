@@ -180,6 +180,63 @@ class TestRunRecord:
         # output shape.
         assert "technical" in outcome.actual_tools
 
+    def test_forbidden_substring_triggers_hallucination_failure(
+        self,
+        stub_graph: Callable[[dict[str, Any]], None],
+        stub_judge: MagicMock,  # noqa: ARG002
+    ) -> None:
+        """QNT-184: a thesis that contains a forbidden substring must fail
+        hallucination_ok even if the numeric hallucination check passes."""
+        # Use a thesis with no numbers so only the forbidden-substring path
+        # can fire — prevents the numeric hallucination check from also
+        # failing and masking which assertion is actually gating.
+        stub_graph(
+            {
+                "thesis": _thesis("All indicators agreeing (source: technical)."),
+                "reports": {"technical": "All indicators in agreement today."},
+                "errors": {},
+            }
+        )
+        record = GoldenRecord(
+            id="test-forbidden",
+            ticker="NVDA",
+            question="Is NVDA trending up?",
+            expected_tools=("technical",),
+            reference_thesis="A useful answer cites RSI and trend.",
+            forbidden_substrings=("indicators agree",),
+        )
+        outcome = run_record(record)
+        assert not outcome.hallucination_ok
+        assert "forbidden" in outcome.hallucination_reason
+        assert "indicators agree" in outcome.hallucination_reason
+
+    def test_forbidden_substring_absent_does_not_fail(
+        self,
+        stub_graph: Callable[[dict[str, Any]], None],
+        stub_judge: MagicMock,  # noqa: ARG002
+    ) -> None:
+        """A thesis that does NOT contain the forbidden substring must pass."""
+        stub_graph(
+            {
+                "thesis": _thesis(
+                    "RSI is 72.5, trend up (source: technical). MACD above signal line.",
+                    bull=["RSI 72.5 (source: technical)"],
+                ),
+                "reports": {"technical": "RSI is 72.5 today. MACD above signal line."},
+                "errors": {},
+            }
+        )
+        record = GoldenRecord(
+            id="test-forbidden-absent",
+            ticker="NVDA",
+            question="Is NVDA trending up?",
+            expected_tools=("technical",),
+            reference_thesis="A useful answer cites RSI.",
+            forbidden_substrings=("indicators agree",),
+        )
+        outcome = run_record(record)
+        assert outcome.hallucination_ok, outcome.hallucination_reason
+
     def test_quick_fact_with_unsupported_number_fails_hallucination(
         self,
         stub_graph: Callable[[dict[str, Any]], None],

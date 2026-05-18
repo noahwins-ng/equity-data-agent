@@ -378,6 +378,31 @@ questions:
       condition as a risk factor with its label cited verbatim from the
       report.
 
+  # QNT-184: anti-SIGNAL-footer regression. Focused-technical question
+  # supplied a technical report that ends with "## SIGNAL\nBULLISH (X/Y
+  # indicators agree)". The FOCUSED_SYSTEM_PROMPT anti-SIGNAL rule forbids
+  # quoting that footer; forbidden_substrings pins it as a hard gate.
+  # "indicators agree" is used rather than bare "signal" to avoid false
+  # positives from legitimate MACD phrases like "MACD above signal line".
+  - id: tsla-focused-technical-no-signal-quote
+    ticker: TSLA
+    question: "Give me a technical analysis on TSLA."
+    expected_tools:
+      - company
+      - technical
+    expected_intent: technical
+    forbidden_substrings:
+      - "indicators agree"
+    reference_thesis: |
+      A useful answer is a focused technical read with 2-4 sentences naming
+      the trend direction, RSI bucket, and MACD posture pulled VERBATIM from
+      the technical report. Key-point bullets cite specific metric values
+      (e.g. "RSI 58.0 neutral", "close above SMA-50 by +9.17%", "MACD
+      +15.32 above signal line") — NOT the SIGNAL aggregate footer
+      ("3/3 indicators agree" or "the overall signal is bullish"). The
+      output must not contain the phrase "indicators agree" or paraphrase
+      the SIGNAL footer as a bullet or summary sentence.
+
   # QNT-183: regime-contrast comparison golden. Two-ticker comparison where
   # one ticker has an overbought RSI and the other is neutral/oversold.
   # A correct differences paragraph does NOT pair "stronger momentum" with
