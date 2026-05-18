@@ -448,3 +448,78 @@ def test_comparison_prompt_regime_mirror_present() -> None:
     # Correct alternatives the rule provides.
     assert '"more stretched"' in text
     assert '"approaching overbought"' in text
+
+
+def test_focused_prompt_anti_signal_rule_present() -> None:
+    """QNT-184: FOCUSED_SYSTEM_PROMPT must contain the explicit anti-SIGNAL
+    rule with a BAD/OK counter-example pair so the LLM cannot paraphrase the
+    SIGNAL aggregate footer as a bullet or summary sentence.
+
+    Pins three invariants:
+    * The rule names the forbidden pattern ("Never quote the SIGNAL aggregate").
+    * A concrete BAD example is present showing the forbidden form.
+    * A concrete OK example is present showing the correct metric-citation form.
+    """
+    from agent.prompts.system import FOCUSED_SYSTEM_PROMPT
+
+    text = FOCUSED_SYSTEM_PROMPT
+    assert "Never quote the SIGNAL aggregate line" in text
+    # BAD/OK labels must be present so the LLM has paired examples.
+    assert "BAD:" in text
+    assert "OK:" in text
+    # The forbidden form the BAD example illustrates.
+    assert "indicators agree" in text.lower()
+
+
+def test_strip_signal_section_removes_signal_footer() -> None:
+    """QNT-184: _strip_signal_section must excise the ## SIGNAL block so the
+    focused synthesizer never sees the aggregate verdict string."""
+    from agent.prompts.system import _strip_signal_section
+
+    report = (
+        "# TECHNICAL REPORT — TSLA\n"
+        "## PRICE ACTION\nClose: 422.24\n\n"
+        "## MOMENTUM\nRSI-14: 58.0 neutral\n\n"
+        "## SIGNAL\n"
+        "BULLISH (3/3 indicators agree)"
+    )
+    stripped = _strip_signal_section(report)
+    assert "## SIGNAL" not in stripped
+    assert "indicators agree" not in stripped
+    # Content before the section is preserved.
+    assert "RSI-14: 58.0 neutral" in stripped
+
+
+def test_strip_signal_section_noop_on_no_signal() -> None:
+    """A report without a ## SIGNAL section is returned unchanged."""
+    from agent.prompts.system import _strip_signal_section
+
+    report = "# FUNDAMENTAL REPORT — AAPL\n## EARNINGS\nEPS 1.40\n"
+    assert _strip_signal_section(report) == report
+
+
+def test_build_focused_prompt_strips_signal_from_report() -> None:
+    """QNT-184: the focused prompt builder must strip ## SIGNAL so the LLM
+    never reads the aggregate verdict in the user (report) turn."""
+    from agent.prompts.system import build_focused_prompt
+    from langchain_core.messages import HumanMessage
+
+    tech_report = (
+        "## PRICE ACTION\nClose: 422.24\n\n"
+        "## MOMENTUM\nRSI-14: 58.0 neutral\n\n"
+        "## SIGNAL\nBULLISH (3/3 indicators agree)"
+    )
+    messages = build_focused_prompt(
+        "technical", "TSLA", "technicals on TSLA", {"technical": tech_report}
+    )
+    # Only check the user (report) turn — the system prompt contains "indicators
+    # agree" in the BAD example, which is intentional and correct.
+    user_text = next(
+        m.content
+        for m in messages
+        if isinstance(m, HumanMessage)  # type: ignore[union-attr]
+    )
+    assert "indicators agree" not in user_text
+    assert "## SIGNAL" not in user_text
+    # The underlying metric data must still be present.
+    assert "RSI-14" in user_text
