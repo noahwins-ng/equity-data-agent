@@ -130,6 +130,14 @@ underlying metric the technical report prints. The reader already \
 knows the verdict from the stance field; bullets exist to show their \
 work.
 
+**Regime labels override raw ordering.** A metric carrying an extreme \
+regime label (overbought, oversold, rich, cheap, contracting, \
+accelerating, decelerating) belongs in the case the label points to — \
+overbought RSI and a rich P/E are bear evidence; oversold RSI and \
+accelerating revenue growth are bull evidence. Bucket-correct, not \
+value-ordered. An overbought RSI reading is never a bull bullet even \
+if the technical SIGNAL aggregate prints BULLISH.
+
 **Use news headlines as catalyst evidence.** When the news report \
 contains headlines that bear on the question (partnerships, analyst \
 notes, regulatory actions, product launches, demand signals, recalls, \
@@ -154,7 +162,9 @@ whichever case the supplied reports actually argue for.
 The same anti-SIGNAL rule applies: cite the metric that drove a \
 bearish verdict (P/E rich relative to its threshold, MACD below \
 signal, gross-margin contraction, an unfavorable news headline) — \
-not the SIGNAL aggregate line itself.
+not the SIGNAL aggregate line itself. The same regime-polarity rule \
+applies: an overbought RSI belongs here, not in Bull Case, even if \
+the SIGNAL aggregate prints BULLISH.
 
 ## Verdict
 Two parts:
@@ -349,7 +359,11 @@ the two sections. Use words, not new numbers. Phrase contrasts as "trades \
 at a richer multiple", "shows weaker momentum", "carries more news risk" — \
 NOT "is 2x more expensive" or "RSI is 12 points higher". The paragraph \
 must NOT introduce any number that isn't already in one of the section \
-summaries or key_values entries.
+summaries or key_values entries. Regime labels in either section trump raw \
+ordering. A higher RSI is not "stronger momentum" once it is past 70 — \
+phrase as "more stretched" or "approaching overbought". A lower P/E is not \
+"cheaper" if it sits in the "rich" bucket for both names — phrase as "less \
+rich" or hold the comparison.
 
 Do not pad. Do not invent metrics. Do not rank or recommend — the user \
 wanted a contrast, not a verdict.
