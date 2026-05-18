@@ -22,6 +22,7 @@ import pytest
 from agent import graph as graph_module
 from agent.graph import REPORT_TOOLS, build_graph
 from agent.prompts import (
+    COMPARISON_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     THESIS_SECTIONS,
     build_synthesis_prompt,
@@ -407,3 +408,43 @@ def test_prompts_module_lives_under_agent_package() -> None:
     spec = importlib.util.find_spec("agent.prompts.system")
     assert spec is not None and spec.origin is not None
     assert "packages/agent/src/agent/prompts/" in spec.origin, spec.origin
+
+
+def test_system_prompt_regime_polarity_rule_present() -> None:
+    """QNT-183: overbought-RSI fixture. The regime-polarity rule must be on
+    the wire so the model classifies extreme-regime metrics into the correct
+    bull/bear bucket instead of treating them as ordered scalars.
+
+    Pins three invariants:
+    * The rule names the canonical extreme-regime labels.
+    * The rule names the correct case assignment (overbought → bear).
+    * The rule explicitly states an overbought reading is never a bull bullet.
+    """
+    text = SYSTEM_PROMPT
+    assert "Regime labels override raw ordering" in text
+    # Canonical extreme-regime labels the rule covers.
+    assert "overbought" in text
+    assert "oversold" in text
+    # Correct case assignment must be stated so the LLM knows which bucket.
+    assert "overbought RSI and a rich P/E are bear evidence" in text
+    # The hard exclusion — not even if SIGNAL says BULLISH.
+    assert "overbought RSI reading is never a bull bullet" in text
+
+
+def test_comparison_prompt_regime_mirror_present() -> None:
+    """QNT-183: comparison regime-contrast fixture. The COMPARISON_SYSTEM_PROMPT
+    must contain the regime-mirror rule so the differences paragraph does not
+    describe a higher-but-overbought RSI as 'stronger momentum'.
+
+    Pins three invariants:
+    * The rule states regime labels trump raw ordering in the differences paragraph.
+    * The rule names the forbidden phrasing for an overbought RSI.
+    * The rule provides the correct phrasing alternatives.
+    """
+    text = COMPARISON_SYSTEM_PROMPT
+    assert "Regime labels in either section trump raw ordering" in text
+    # Forbidden phrasing the rule explicitly bans.
+    assert '"stronger momentum"' in text
+    # Correct alternatives the rule provides.
+    assert '"more stretched"' in text
+    assert '"approaching overbought"' in text

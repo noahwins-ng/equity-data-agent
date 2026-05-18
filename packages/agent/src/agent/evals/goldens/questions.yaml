@@ -353,3 +353,49 @@ questions:
       numeric metrics from technical / fundamental — those reports were
       not gathered for this focus. NO four-section thesis, NO buy/sell
       verdict.
+
+  # QNT-183: regime-polarity golden. Single-ticker thesis question where the
+  # technical report prints an overbought RSI. A correct answer places the
+  # overbought reading in the BEAR case (or omits the technical section
+  # from bull entirely) — it must NOT cite the overbought RSI as a bull
+  # bullet even if the SIGNAL aggregate prints BULLISH. This record pins
+  # the regime-polarity rule added in QNT-183.
+  - id: tsla-overbought-rsi-regime
+    ticker: TSLA
+    question: "Give me a thesis on TSLA — is the technical setup bullish?"
+    expected_tools:
+      - technical
+    reference_thesis: |
+      A correct thesis for a ticker whose RSI sits in the overbought
+      bucket does NOT list the overbought RSI reading as a bull-case
+      bullet. Overbought RSI is regime-labeled bear evidence (mean-
+      reversion risk) — it belongs in the bear case or is noted as a
+      caution in the verdict, never padded into the bull section. The
+      bull case draws only on metrics that genuinely support upside:
+      trend direction, SMA alignment, MACD posture relative to signal.
+      Each bullet cites (source: technical) and avoids re-quoting the
+      SIGNAL aggregate line. Bear case explicitly names the overbought
+      condition as a risk factor with its label cited verbatim from the
+      report.
+
+  # QNT-183: regime-contrast comparison golden. Two-ticker comparison where
+  # one ticker has an overbought RSI and the other is neutral/oversold.
+  # A correct differences paragraph does NOT pair "stronger momentum" with
+  # the higher-but-overbought RSI — it phrases the contrast as "more
+  # stretched" or "approaching overbought" per the regime-mirror rule.
+  - id: nvda-msft-rsi-regime-contrast
+    ticker: NVDA
+    question: "Compare NVDA vs MSFT on technical momentum."
+    expected_tools:
+      - technical
+    expected_intent: comparison
+    reference_thesis: |
+      A correct comparison differences paragraph contrasts two tickers
+      with RSIs in different regime buckets WITHOUT framing the higher
+      RSI as "stronger momentum" when that RSI sits in the overbought
+      zone. Correct phrasing: "more stretched technically", "approaching
+      overbought", "NVDA's RSI is in overbought territory while MSFT's
+      sits in neutral" — NOT "NVDA shows stronger momentum because its
+      RSI is higher". Each per-ticker section cites its own technical
+      report verbatim. The differences paragraph introduces no new
+      numbers and uses regime language to characterise the contrast.

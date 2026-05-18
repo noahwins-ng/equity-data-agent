@@ -196,6 +196,9 @@ test: ## Run unit tests (no infrastructure required)
 test-integration: ## Run integration tests (requires: make tunnel)
 	uv run pytest -m integration -v
 
+eval: ## Run golden-set eval against live agent (requires: make tunnel + running API)
+	uv run python -m agent.evals
+
 lint: ## Run linter + type checker
 	uv run ruff check .
 	uv run pyright
