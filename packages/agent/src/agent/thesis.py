@@ -1,4 +1,4 @@
-"""Structured thesis output: Setup / Bull Case / Bear Case / Verdict (QNT-133).
+"""Structured thesis output: Setup / Bull Case / Bear Case / Verdict (QNT-133, QNT-195).
 
 The synthesize node forces the LLM through this schema with
 ``with_structured_output`` so the API can stream the four sections to the
@@ -28,6 +28,8 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic import BaseModel, Field
+
+from agent.disclaimer import DISCLAIMER
 
 VerdictStance = Literal["constructive", "cautious", "negative", "mixed"]
 
@@ -115,6 +117,7 @@ class Thesis(BaseModel):
         parts.append(f"**Stance:** {self.verdict_stance}")
         parts.append(self.verdict_action.strip() or "_(no action guidance supplied)_")
 
+        parts.append(f"\n{DISCLAIMER}")
         return "\n".join(parts)
 
 

@@ -27,6 +27,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from agent.disclaimer import DISCLAIMER
+
 # QNT-175: kept aligned with ``REPORT_TOOLS`` (which now includes ``company``)
 # so the Pydantic boundary is the superset, not a subset of the runtime tool
 # registry. The plan layer strips ``company`` for quick-fact intent, so the
@@ -83,7 +85,7 @@ class QuickFactAnswer(BaseModel):
         body = self.answer.strip() or "_(no answer supplied)_"
         if self.cited_value and self.source:
             body = f"{body}\n\n**Value:** {self.cited_value} (source: {self.source})"
-        return body
+        return f"{body}\n\n{DISCLAIMER}"
 
 
 __all__ = ["QuickFactAnswer", "QuickFactSource"]
