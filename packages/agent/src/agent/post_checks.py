@@ -48,6 +48,19 @@ _BEAR_DELTA_RE = re.compile(
     r"\b(trending down|declining from|falling from|down from)\b", re.IGNORECASE
 )
 
+# ── Verdict-shape patterns (QNT-194) ───────────────────────────────────────
+
+# Allowlist of conditional-action verbs; at least one must appear for a
+# trigger-shaped action.
+_SHAPE_VERB_RE = re.compile(
+    r"\b(trim|add|hold|exit|defend|watch|reduce|accumulate|stop)\b",
+    re.IGNORECASE,
+)
+
+# Explicit escape hatch: the canonical phrase the system prompt instructs
+# the model to write when no differentiable trigger level exists.
+_SHAPE_ESCAPE_RE = re.compile(r"no action level differentiable", re.IGNORECASE)
+
 # ── Framing-word patterns ───────────────────────────────────────────────────
 
 # These framing words imply the associated level should be ABOVE the current
@@ -153,6 +166,24 @@ def check_verdict_direction(thesis: Thesis, technical_report: str) -> tuple[bool
     return True, "ok"
 
 
+def check_verdict_shape(thesis: Thesis) -> tuple[bool, str]:
+    """Check that verdict_action is trigger-shaped (contains a conditional verb).
+
+    Returns (ok, comment):
+      ok=True  — action contains an allowlisted verb or the explicit escape hatch.
+      ok=False — action is state-shaped; comment is "action is state-shaped, not trigger-shaped".
+
+    Allowlist: trim, add, hold, exit, defend, watch, reduce, accumulate, stop.
+    Escape hatch: "no action level differentiable from current price (source: technical)".
+    """
+    action = thesis.verdict_action
+    if _SHAPE_ESCAPE_RE.search(action):
+        return True, "explicit escape hatch"
+    if _SHAPE_VERB_RE.search(action):
+        return True, "ok"
+    return False, "action is state-shaped, not trigger-shaped"
+
+
 def _fire_discord_alert(count: int) -> None:
     """POST a Discord notification when the mismatch threshold is exceeded.
 
@@ -243,4 +274,9 @@ def enforce_bull_polarity(thesis: Thesis) -> Thesis:
     )
 
 
-__all__ = ["check_verdict_direction", "enforce_bull_polarity", "record_mismatch"]
+__all__ = [
+    "check_verdict_direction",
+    "check_verdict_shape",
+    "enforce_bull_polarity",
+    "record_mismatch",
+]
