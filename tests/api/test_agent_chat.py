@@ -1234,8 +1234,9 @@ def test_eval_scores_pushed_on_happy_path(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Both ``hallucination_ok`` and ``plan_adherence`` are pushed onto the
-    Langfuse trace when the graph completes successfully (QNT-182 AC #1, #3).
+    """``hallucination_ok``, ``plan_adherence``, and ``verdict_direction_ok`` are
+    pushed onto the Langfuse trace when the graph completes with a thesis
+    (QNT-182 AC #1, #3; QNT-193 AC #4).
 
     Uses a local graph stub whose reports contain the numbers the stubbed
     thesis cites — otherwise ``hallucination_ok`` would correctly flag them
@@ -1288,7 +1289,7 @@ def test_eval_scores_pushed_on_happy_path(
 
     score_calls = fake_lf.create_score.call_args_list
     score_names = {call.kwargs["name"] for call in score_calls}
-    assert score_names == {"hallucination_ok", "plan_adherence"}
+    assert score_names == {"hallucination_ok", "plan_adherence", "verdict_direction_ok"}
 
     for call in score_calls:
         assert call.kwargs["value"] == 1.0
