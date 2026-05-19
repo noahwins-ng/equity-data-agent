@@ -67,6 +67,52 @@ logger = logging.getLogger(__name__)
 
 ToolFn = Callable[[str], str]
 
+
+def _prompt_version() -> str:
+    """Stable 10-char hash of all system prompts + tool registry.
+
+    Mirrors the implementation in agent.evals.golden_set but lives here to
+    avoid a circular import (golden_set imports build_graph). Computed once
+    at module load and cached in _PROMPT_VERSION.
+    """
+    from hashlib import sha256
+
+    from agent.prompts import (
+        COMPARISON_SYSTEM_PROMPT,
+        CONVERSATIONAL_SYSTEM_PROMPT,
+        FOCUSED_SYSTEM_PROMPT,
+        QUICK_FACT_SYSTEM_PROMPT,
+        SYSTEM_PROMPT,
+    )
+
+    payload = (
+        SYSTEM_PROMPT
+        + "\n"
+        + QUICK_FACT_SYSTEM_PROMPT
+        + "\n"
+        + COMPARISON_SYSTEM_PROMPT
+        + "\n"
+        + CONVERSATIONAL_SYSTEM_PROMPT
+        + "\n"
+        + FOCUSED_SYSTEM_PROMPT
+        + "\n"
+        + ",".join(sorted(REPORT_TOOLS))
+    )
+    return sha256(payload.encode("utf-8")).hexdigest()[:10]
+
+
+# Computed once at module load — deterministic over a process lifetime.
+# Propagated to every LLM call's config metadata so Langfuse traces are
+# filterable by prompt version (QNT-187).
+_PROMPT_VERSION: str = _prompt_version()
+
+
+def _versioned_config(config: RunnableConfig) -> RunnableConfig:
+    """Merge prompt_version into config metadata without disturbing callbacks."""
+    existing: dict[str, object] = config.get("metadata") or {}
+    return {**config, "metadata": {**existing, "prompt_version": _PROMPT_VERSION}}
+
+
 # QNT-159: optional event emitter for streaming intermediate state out of the
 # graph as it runs, NOT after it completes. The classify node fires this with
 # ``("intent", {"intent": <intent>})`` as soon as the classifier resolves so
@@ -415,7 +461,7 @@ def build_graph(
         # contract here so the bias-to-thesis invariant the rest of the
         # graph relies on cannot be defeated by an unrelated dependency.
         try:
-            intent: Intent = classify_intent(question, config=config)
+            intent: Intent = classify_intent(question, config=_versioned_config(config))
         except Exception as exc:  # noqa: BLE001 — preserve the safe default
             logger.warning("classify %s: defaulting to thesis: %s", ticker, exc)
             intent = "thesis"
@@ -496,7 +542,7 @@ def build_graph(
             plan = [t for t in available if t in wanted]
         elif intent == "quick_fact":
             prompt = _build_plan_prompt(ticker, question, available, intent)
-            response = get_llm(temperature=0.0).invoke(prompt, config=config)
+            response = get_llm(temperature=0.0).invoke(prompt, config=_versioned_config(config))
             content = response.content if hasattr(response, "content") else str(response)
             plan = _parse_plan(str(content), available, intent)
         else:
@@ -613,7 +659,7 @@ def build_graph(
             prompt = build_conversational_prompt(question)
             structured_llm = get_llm().with_structured_output(ConversationalAnswer)
             try:
-                response = structured_llm.invoke(prompt, config=config)
+                response = structured_llm.invoke(prompt, config=_versioned_config(config))
             except Exception as exc:  # noqa: BLE001 — fall back to deterministic redirect
                 logger.warning(
                     "synthesize %s: conversational structured output failed: %s",
@@ -646,7 +692,7 @@ def build_graph(
             prompt = build_comparison_prompt(comparison_tickers, question, reports_by_ticker)
             structured_llm = get_llm().with_structured_output(ComparisonAnswer)
             try:
-                response = structured_llm.invoke(prompt, config=config)
+                response = structured_llm.invoke(prompt, config=_versioned_config(config))
             except Exception as exc:  # noqa: BLE001 — fall back to redirect
                 logger.warning(
                     "synthesize %s: comparison structured output failed: %s",
@@ -675,7 +721,7 @@ def build_graph(
             prompt = build_focused_prompt(intent, ticker, question, reports)
             structured_llm = get_llm().with_structured_output(FocusedAnalysis)
             try:
-                response = structured_llm.invoke(prompt, config=config)
+                response = structured_llm.invoke(prompt, config=_versioned_config(config))
             except Exception as exc:  # noqa: BLE001 — surface as fallback redirect
                 logger.warning(
                     "synthesize %s: focused (%s) structured output failed: %s",
@@ -707,7 +753,7 @@ def build_graph(
             prompt = build_quick_fact_prompt(ticker, question, reports)
             structured_llm = get_llm().with_structured_output(QuickFactAnswer)
             try:
-                response = structured_llm.invoke(prompt, config=config)
+                response = structured_llm.invoke(prompt, config=_versioned_config(config))
             except Exception as exc:  # noqa: BLE001 — surface as fallback redirect
                 logger.warning(
                     "synthesize %s: quick-fact structured output failed: %s", ticker, exc
@@ -735,7 +781,7 @@ def build_graph(
         # rather than crashing the whole run.
         structured_llm = get_llm().with_structured_output(Thesis)
         try:
-            response = structured_llm.invoke(prompt, config=config)
+            response = structured_llm.invoke(prompt, config=_versioned_config(config))
         except Exception as exc:  # noqa: BLE001 — surface as fallback redirect
             logger.warning("synthesize %s: structured output failed: %s", ticker, exc)
             response = None

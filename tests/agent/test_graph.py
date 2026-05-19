@@ -332,6 +332,62 @@ def test_llm_is_injected_via_get_llm_factory(
     assert factory.call_count >= 1  # plan + synthesize both call get_llm()
 
 
+def _extract_config_metadata(call_args: Any) -> dict[str, object]:
+    """Pull the metadata dict out of an invoke call_args, whether config was
+    passed as a keyword or (unlikely) positional second argument."""
+    cfg: dict[str, object] = call_args.kwargs.get("config") or (
+        call_args.args[1] if len(call_args.args) > 1 else {}
+    )
+    return cfg.get("metadata") or {}  # type: ignore[return-value]
+
+
+def test_llm_calls_carry_prompt_version_in_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-187: thesis-path synthesize LLM call must embed prompt_version in
+    config metadata so Langfuse traces are filterable by prompt hash."""
+    from agent.graph import _PROMPT_VERSION
+
+    llm = _StructuredLLM()
+    llm.invoke.return_value = AIMessage(content="technical")
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+
+    graph = build_graph({"technical": _mock_tool("tech")})
+    _run(graph)
+
+    metadata = _extract_config_metadata(llm._structured_runnable.invoke.call_args)
+    assert isinstance(metadata, dict), f"config['metadata'] must be a dict; got {metadata!r}"
+    assert "prompt_version" in metadata, f"config metadata missing prompt_version; got {metadata!r}"
+    assert metadata["prompt_version"] == _PROMPT_VERSION
+
+
+def test_plan_llm_call_carries_prompt_version_in_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-187: the quick_fact plan-LLM call (non-structured get_llm().invoke)
+    must also embed prompt_version — it's the only path where the plan node
+    calls the LLM directly rather than skipping to the deterministic branch."""
+    from agent import intent as intent_module
+    from agent.graph import _PROMPT_VERSION
+
+    llm = _StructuredLLM()
+    llm.invoke.return_value = AIMessage(content="technical")
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+    monkeypatch.setattr(intent_module, "get_llm", lambda *_a, **_kw: llm)
+
+    graph = build_graph({name: _mock_tool(name) for name in REPORT_TOOLS})
+    graph.invoke({"ticker": "NVDA", "question": "What's NVDA's RSI?"})
+
+    # quick_fact fires the plan-LLM call (raw .invoke) then a structured synthesize.
+    # Call index 0 is the plan call.
+    assert llm.invoke.call_count >= 1, "quick_fact must fire the plan-LLM call"
+    plan_metadata = _extract_config_metadata(llm.invoke.call_args_list[0])
+    assert "prompt_version" in plan_metadata, (
+        f"plan-LLM config metadata missing prompt_version; got {plan_metadata!r}"
+    )
+    assert plan_metadata["prompt_version"] == _PROMPT_VERSION
+
+
 def test_llm_calls_carry_runtime_config_for_callback_propagation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
