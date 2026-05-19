@@ -220,9 +220,23 @@ action line keeps the decimal point — do not strip the dot, do not \
 round to an integer, do not split the integer and fractional parts \
 into a single concatenated number. Stripping the decimal from a price \
 level turns a real support level into a fictitious target orders of \
-magnitude away. If no actionable level is present in the reports, \
-write "no action level supported by current data" instead of \
-fabricating one.
+magnitude away.
+
+**The action states what to *do*, not what *is*.** It has a conditional \
+shape: a trigger condition (a price level, an indicator threshold, an \
+event) followed by a position action (trim, add, hold, exit, defend, \
+watch). "Close above the moving average" describes the present and is \
+not an action — at minimum, qualify it with what to do at that level \
+or on its break.
+
+  BAD: "Close above the moving average, with a potential target at the next resistance level"
+  BAD: "Close above the support zone -- potential breakout level"
+  OK:  "Trim above resistance; defend the moving average as trend invalidation."
+  OK:  "Hold; reduce on close below moving-average support given recent macro overhang."
+
+If no trigger level is meaningfully different from the current price, \
+write "no action level differentiable from current price (source: technical)" \
+rather than restating the present.
 
 # Confidence
 Confidence is computed separately from your output, based on how many of the \

@@ -13,6 +13,7 @@ from agent.post_checks import (
     _ESCALATE_THRESHOLD,
     _mismatch_timestamps,
     check_verdict_direction,
+    check_verdict_shape,
     enforce_bull_polarity,
     record_mismatch,
 )
@@ -110,6 +111,54 @@ class TestCheckVerdictDirection:
         ok, comment = check_verdict_direction(thesis, _TECHNICAL_REPORT_225)
         assert not ok
         assert "210.30" in comment
+
+
+# ── check_verdict_shape ───────────────────────────────────────────────────────
+
+
+class TestCheckVerdictShape:
+    def test_no_verb_scores_zero(self) -> None:
+        """AC unit test 1: state-shaped action with no trigger verb → score 0."""
+        thesis = _thesis("Close above SMA-50 at 193.07")
+        ok, comment = check_verdict_shape(thesis)
+        assert not ok
+        assert "state-shaped" in comment
+
+    def test_verb_action_scores_one(self) -> None:
+        """AC unit test 2: action containing a trigger verb → score 1."""
+        thesis = _thesis("Trim above 250; defend SMA-50 at 193.07")
+        ok, comment = check_verdict_shape(thesis)
+        assert ok, comment
+
+    def test_escape_hatch_scores_one(self) -> None:
+        """AC unit test 3: explicit escape hatch phrase → score 1."""
+        thesis = _thesis("no action level differentiable from current price (source: technical)")
+        ok, comment = check_verdict_shape(thesis)
+        assert ok, comment
+        assert "escape" in comment
+
+    def test_each_allowlist_verb_passes(self) -> None:
+        """Every verb in the allowlist independently satisfies the check."""
+        for verb in (
+            "trim",
+            "add",
+            "hold",
+            "exit",
+            "defend",
+            "watch",
+            "reduce",
+            "accumulate",
+            "stop",
+        ):
+            thesis = _thesis(f"{verb.capitalize()} at current levels; reassess on close.")
+            ok, _ = check_verdict_shape(thesis)
+            assert ok, f"verb '{verb}' failed shape check"
+
+    def test_state_description_with_target_word_scores_zero(self) -> None:
+        """State-shaped action with 'target' (a noun, not a verb) still scores 0."""
+        thesis = _thesis("Close above SMA-20 (369.53) by +6.58% -- potential support level")
+        ok, _ = check_verdict_shape(thesis)
+        assert not ok
 
 
 # ── record_mismatch + Discord escalation ─────────────────────────────────────
