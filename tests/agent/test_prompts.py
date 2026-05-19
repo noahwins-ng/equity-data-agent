@@ -557,3 +557,41 @@ def test_build_focused_prompt_strips_signal_from_report() -> None:
     assert "## SIGNAL" not in user_text
     # The underlying metric data must still be present.
     assert "RSI-14" in user_text
+
+
+def test_system_prompt_declining_rsi_delta_is_bear_only() -> None:
+    """QNT-198: declining-momentum-delta polarity rule. A downward RSI delta
+    — even from a neutral level — is a bearish signal and must be placed
+    in the bear case only, never as a bull bullet.
+
+    Pins three invariants:
+    * The rule explicitly names the declining-delta → bear-only contract.
+    * The polarity-inversion framing is present so the LLM recognises
+      "neutral but trending down" as the forbidden bull pattern.
+    * The rule covers any absolute level (not just overbought), preventing
+      the QNT-198 regression where RSI 61.7 trending down appeared in bull.
+    """
+    text = SYSTEM_PROMPT
+    assert "A declining momentum delta belongs in the bear case" in text
+    # The rule must name the specific forbidden pattern (neutral but trending down
+    # as a bull bullet) — this phrase is unique to the new rule and won't pass
+    # trivially from FOCUSED_SYSTEM_PROMPT which already contained "trending down".
+    assert '"RSI neutral but trending down" as a bull bullet is a polarity inversion' in text
+    assert "polarity inversion" in text
+
+
+def test_system_prompt_no_cross_case_duplication_rule_present() -> None:
+    """QNT-198: no-cross-case-duplication rule. An indicator placed in the
+    bear case must not also appear in the bull case, and vice versa.
+
+    Pins two invariants:
+    * The rule is stated in the Bull Case section.
+    * The mirror is stated in the Bear Case section.
+    """
+    text = SYSTEM_PROMPT
+    # Bull Case section carries the full bidirectional rule.
+    assert "No indicator may appear in both the bull case and the bear case" in text
+    # Bear Case section mirrors it in both directions — "bear→not-in-bull" AND
+    # "bull→not-in-bear" must both be stated so the LLM can't read it as one-way.
+    assert "no-cross-case-duplication rule" in text
+    assert "an indicator placed in the bull case must not appear here" in text
