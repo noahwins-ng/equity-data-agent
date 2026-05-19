@@ -48,6 +48,7 @@ from agent.conversational import ConversationalAnswer, domain_redirect
 from agent.focused import FocusedAnalysis
 from agent.intent import Intent, classify_intent, extract_tickers
 from agent.llm import get_llm
+from agent.post_checks import enforce_bull_polarity
 from agent.prompts import (
     REPORT_TOOLS,
     build_comparison_prompt,
@@ -741,6 +742,7 @@ def build_graph(
         thesis = _coerce_thesis(response)
         if thesis is None:
             return _fallback("I had trouble pulling a thesis together for that.")
+        thesis = enforce_bull_polarity(thesis)
         payload = _empty_payload()
         payload["thesis"] = thesis
         logger.info("synthesize %s: confidence=%s thesis=ok", ticker, confidence)
