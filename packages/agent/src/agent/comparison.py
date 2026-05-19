@@ -27,6 +27,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from agent.disclaimer import DISCLAIMER
+
 # QNT-175: ``company`` joins the source enum because the comparison prompt now
 # tells the LLM to cite (source: company) for qualitative business-context
 # claims. Pydantic validates this Literal at structured-output parse time —
@@ -136,6 +138,7 @@ class ComparisonAnswer(BaseModel):
 
         parts.append("## Differences")
         parts.append(self.differences.strip() or "_(no differences supplied)_")
+        parts.append(f"\n{DISCLAIMER}")
         return "\n".join(parts).strip()
 
 

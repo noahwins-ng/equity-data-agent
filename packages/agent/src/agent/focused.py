@@ -30,6 +30,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from agent.disclaimer import DISCLAIMER
+
 # Same source enum as comparison.py / quick_fact.py — Pydantic validates the
 # Literal at structured-output parse time, and the LLM is told to cite
 # (source: company) for qualitative business context.
@@ -120,6 +122,7 @@ class FocusedAnalysis(BaseModel):
             parts.append("")
             for kv in self.cited_values:
                 parts.append(f"- **{kv.label}:** {kv.value} (source: {kv.source})")
+        parts.append(f"\n{DISCLAIMER}")
         return "\n".join(parts).strip()
 
 

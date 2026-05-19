@@ -33,6 +33,8 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
+from agent.disclaimer import DISCLAIMER
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
@@ -93,6 +95,7 @@ class ConversationalAnswer(BaseModel):
         if self.suggestions:
             parts.append("\n**You could ask:**")
             parts.extend(f"- {s.strip()}" for s in self.suggestions if s.strip())
+        parts.append(f"\n{DISCLAIMER}")
         return "\n".join(parts)
 
 

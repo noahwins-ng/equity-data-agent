@@ -847,6 +847,19 @@ function RunBlock({
         />
       )}
 
+      {/* Disclaimer footer (QNT-195) — shown once any result card is present */}
+      {(run.comparison ||
+        run.quickFact ||
+        run.focused ||
+        run.thesis ||
+        run.conversational) &&
+        !isStreaming && (
+          <p className="font-mono text-[10px] italic text-zinc-500">
+            Informational only — not investment advice. Figures are from the
+            supplied reports and may be stale; verify before acting.
+          </p>
+        )}
+
       {/* Status footer */}
       <div className="flex items-baseline justify-end gap-2 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
         {isStreaming ? (
