@@ -11,8 +11,8 @@ This module classifies an inbound question into one of four response shapes:
   Bear / Verdict). Default for open-ended asks ("should I be cautious about
   META?", "give me a balanced thesis on V").
 * ``quick_fact`` — a short prose answer plus a single cited value, no
-  thesis card. For single-metric lookups ("what's NVDA's P/E?", "is AAPL
-  overbought?").
+  thesis card. For single-metric lookups ("what's NVDA's P/E?",
+  "what's the volume?").
 * ``comparison`` — a side-by-side ComparisonAnswer for multi-ticker asks
   ("Compare NVDA vs AAPL", "How does META stack up against GOOGL?"). The
   graph clips to 2 tickers; 3+ falls back to a conversational redirect.
@@ -192,18 +192,31 @@ _CONVERSATIONAL_TOKENS: tuple[str, ...] = (
 #  * "fundamental analysis", "fundamentals" -- the canonical English asks.
 #  * "valuation deep dive", "valuation breakdown", "earnings deep dive" --
 #    the user has already named the report family in plain English.
+#  * "valuation read", "what does the balance sheet say", "expensive" --
+#    natural-language framings observed in analyst-quality assessment (QNT-186).
 #  * "technical analysis", "technicals", "ta on", "ta for" -- the abbreviated
 #    "TA" form is finance-domain shorthand the chat sees often.
-#  * "chart setup" -- common phrasing for "what does the chart say?".
-#  * "news sentiment", "sentiment on", "what is the sentiment" -- the
+#  * "chart setup", "technical setup" -- "walk me through TSLA technical setup"
+#    fails the heuristic without "technical setup"; "chart setup" for the
+#    literal ask.
+#  * "overbought", "oversold" -- RSI-level questions are technical reads, not
+#    quick-fact single-value answers; routing them here is more accurate.
+#  * "what do the charts say" -- explicit chart ask (QNT-186).
+#  * "news sentiment", "what is the sentiment", "what's the sentiment" -- the
 #    structured sentiment question.
-#  * "headlines on", "news read" -- shorter framings of the same ask.
+#  * "news read" -- shorter framing of the same ask.
+#  * "what's the news say", "how is sentiment", "any catalysts" --
+#    natural-language variants observed in analyst-quality assessment (QNT-186).
 _FUNDAMENTAL_TOKENS: tuple[str, ...] = (
     "fundamental analysis",
     "fundamentals",
     "valuation deep dive",
     "valuation breakdown",
     "earnings deep dive",
+    "valuation read",
+    "what does the balance sheet say",
+    "expensive",
+    "fundamental picture",
 )
 
 _TECHNICAL_ANALYSIS_TOKENS: tuple[str, ...] = (
@@ -212,6 +225,10 @@ _TECHNICAL_ANALYSIS_TOKENS: tuple[str, ...] = (
     "ta on",
     "ta for",
     "chart setup",
+    "technical setup",
+    "what do the charts say",
+    "overbought",
+    "oversold",
 )
 
 # Tightened on review: bare ``sentiment on`` matched non-ticker phrasings like
@@ -226,6 +243,9 @@ _NEWS_SENTIMENT_TOKENS: tuple[str, ...] = (
     "what is the sentiment",
     "what's the sentiment",
     "news read",
+    "what's the news say",
+    "how is sentiment",
+    "any catalysts",
 )
 
 # Short questions are more likely quick-fact. Tuned conservatively: a 12-word
@@ -343,8 +363,8 @@ _CLASSIFY_PROMPT = """You classify a user's question to pick an answer shape.
 Respond with the structured field 'intent' set to one of:
 
 * "quick_fact" — the user is asking for a single value or a yes/no read on \
-one metric (e.g. "What's the RSI?", "Is AAPL overbought?", "What's MSFT's \
-P/E?"). The answer is one or two sentences plus one cited number.
+one metric (e.g. "What's the RSI?", "What's MSFT's P/E?", "What's the \
+volume today?"). The answer is one or two sentences plus one cited number.
 * "thesis" — the user is asking for a balanced, multi-source view, an \
 investment recommendation, or a walk-through (e.g. "Should I be cautious \
 about META?", "Give me a balanced thesis on V", "Walk me through NVDA's \
@@ -360,17 +380,21 @@ The agent should answer briefly and redirect to its actual capabilities; \
 it must NOT fabricate an equities answer.
 * "fundamental" — the user asked for a fundamental deep dive on one ticker \
 (e.g. "walk me through META's fundamentals", "valuation deep dive on AAPL", \
-"how is MSFT valued?"). The answer is a focused multi-sentence read on \
-valuation, earnings, and margins for that ticker — narrower than a full \
-thesis, deeper than a single number.
+"how is MSFT valued?", "valuation read on TSLA", "is NVDA expensive?", \
+"what does the balance sheet say about AAPL?"). The answer is a focused \
+multi-sentence read on valuation, earnings, and margins for that ticker — \
+narrower than a full thesis, deeper than a single number.
 * "technical" — the user asked for a technical analysis on one ticker \
 (e.g. "give me the technical analysis of NVDA", "how do the technicals \
-look on AAPL?", "chart setup for TSLA"). The answer is a focused read on \
-price action, indicators, and trend.
+look on AAPL?", "chart setup for TSLA", "Walk me through TSLA technical \
+setup", "what do the charts say for META?", "is AAPL overbought?", \
+"is TSLA oversold?"). The answer is a focused read on price action, \
+indicators, and trend.
 * "news_sentiment" — the user asked for a news / headline / sentiment \
 read on one ticker (e.g. "what's the news sentiment on AAPL?", "headlines \
-on META", "any concerning news for UNH?"). The answer is a focused read \
-on recent headlines and their sentiment.
+on META", "any concerning news for UNH?", "what's the news say on NVDA?", \
+"how is sentiment on META?", "any catalysts for TSLA?"). The answer is a \
+focused read on recent headlines and their sentiment.
 
 If you are uncertain between "thesis" and "quick_fact", default to "thesis" \
 — that path is the existing safe shape. Pick "comparison" only when there \
