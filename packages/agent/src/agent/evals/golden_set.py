@@ -85,6 +85,12 @@ class GoldenRecord:
     contract violation and folds into ``hallucination_ok=False``. Use for
     anti-pattern regression tests (e.g. "indicators agree" guards the
     anti-SIGNAL-footer rule).
+
+    ``forbidden_bull_substrings`` (QNT-183): same contract but checked only
+    against the ``bull_case`` bullets of a Thesis response. Use when a term
+    is correct in the bear section but forbidden in the bull section (e.g.
+    "overbought" must not appear as a bull bullet even though it belongs in
+    the bear case). No-op for non-Thesis response shapes.
     """
 
     id: str
@@ -94,6 +100,7 @@ class GoldenRecord:
     reference_thesis: str
     expected_intent: str = "auto"
     forbidden_substrings: tuple[str, ...] = ()
+    forbidden_bull_substrings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -139,6 +146,7 @@ def load_goldens(path: Path = GOLDENS_PATH) -> list[GoldenRecord]:
             raise ValueError(f"{path}: question missing field {exc}") from exc
         expected_intent = str(entry.get("expected_intent", "auto"))
         forbidden = tuple(str(s) for s in entry.get("forbidden_substrings", []))
+        forbidden_bull = tuple(str(s) for s in entry.get("forbidden_bull_substrings", []))
         if rec_id in seen_ids:
             raise ValueError(f"{path}: duplicate question id {rec_id!r}")
         if ticker not in TICKERS:
@@ -153,6 +161,7 @@ def load_goldens(path: Path = GOLDENS_PATH) -> list[GoldenRecord]:
                 reference_thesis=reference,
                 expected_intent=expected_intent,
                 forbidden_substrings=forbidden,
+                forbidden_bull_substrings=forbidden_bull,
             )
         )
     return records
@@ -292,6 +301,18 @@ def run_record(record: GoldenRecord, *, llm_for_judge: Any | None = None) -> Eva
     if violated:
         hallucination_ok = False
         hallucination_reason = f"forbidden: {', '.join(repr(s) for s in violated)}"
+    elif record.forbidden_bull_substrings and isinstance(thesis_obj, Thesis):
+        # QNT-183: forbidden_bull_substrings — same contract but scoped to the
+        # bull_case list so bear-section occurrences of the same term don't
+        # trigger a false positive (e.g. "overbought" is correct in bear case).
+        bull_text = " ".join(thesis_obj.bull_case).lower()
+        bull_violated = [s for s in record.forbidden_bull_substrings if s.lower() in bull_text]
+        if bull_violated:
+            hallucination_ok = False
+            hallucination_reason = f"forbidden in bull: {', '.join(repr(s) for s in bull_violated)}"
+        else:
+            hallucination_ok = hresult.ok
+            hallucination_reason = hresult.reason()
     else:
         hallucination_ok = hresult.ok
         hallucination_reason = hresult.reason()

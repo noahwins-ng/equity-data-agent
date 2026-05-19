@@ -365,6 +365,8 @@ questions:
     question: "Give me a thesis on TSLA — is the technical setup bullish?"
     expected_tools:
       - technical
+    forbidden_bull_substrings:
+      - "overbought"
     reference_thesis: |
       A correct thesis for a ticker whose RSI sits in the overbought
       bucket does NOT list the overbought RSI reading as a bull-case
@@ -414,6 +416,8 @@ questions:
     expected_tools:
       - technical
     expected_intent: comparison
+    forbidden_substrings:
+      - "stronger momentum"
     reference_thesis: |
       A correct comparison differences paragraph contrasts two tickers
       with RSIs in different regime buckets WITHOUT framing the higher

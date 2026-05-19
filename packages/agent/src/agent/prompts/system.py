@@ -136,7 +136,14 @@ accelerating, decelerating) belongs in the case the label points to — \
 overbought RSI and a rich P/E are bear evidence; oversold RSI and \
 accelerating revenue growth are bull evidence. Bucket-correct, not \
 value-ordered. An overbought RSI reading is never a bull bullet even \
-if the technical SIGNAL aggregate prints BULLISH.
+if the technical SIGNAL aggregate prints BULLISH. Do not argue past \
+the label — "overbought but in an uptrend" is not a valid bull \
+re-framing; it is still a bear bucket signal.
+
+  BAD: "RSI indicating an overbought condition — which can signal \
+bullish continuation in an uptrend (source: technical)"
+  OK:  "RSI pulling back from overbought territory, mean-reversion risk \
+(source: technical)" — move to Bear Case
 
 **When the report prints a prior-session delta, characterise direction, \
 not just the current bucket.** Reports often print a current value \

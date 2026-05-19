@@ -237,6 +237,74 @@ class TestRunRecord:
         outcome = run_record(record)
         assert outcome.hallucination_ok, outcome.hallucination_reason
 
+    def test_forbidden_bull_substring_in_bull_fails(
+        self,
+        stub_graph: Callable[[dict[str, Any]], None],
+        stub_judge: MagicMock,  # noqa: ARG002
+    ) -> None:
+        """QNT-183: a thesis whose bull_case contains a forbidden_bull_substring
+        must fail hallucination_ok even if the bear case uses the same term
+        correctly."""
+        stub_graph(
+            {
+                "thesis": Thesis(
+                    setup="RSI is 71.6 (source: technical).",
+                    bull_case=[
+                        "RSI 71.6 overbought but bullish continuation"
+                        " in uptrend (source: technical)"
+                    ],
+                    bear_case=["RSI pulling back from overbought territory (source: technical)"],
+                    verdict_stance="cautious",
+                    verdict_action="No action level supported by current data.",
+                ),
+                "reports": {"technical": "RSI is 71.6 overbought territory today"},
+                "errors": {},
+            }
+        )
+        record = GoldenRecord(
+            id="test-forbidden-bull",
+            ticker="NVDA",
+            question="Is NVDA overbought?",
+            expected_tools=("technical",),
+            reference_thesis="Bear case cites overbought RSI; bull case omits it.",
+            forbidden_bull_substrings=("overbought",),
+        )
+        outcome = run_record(record)
+        assert not outcome.hallucination_ok
+        assert "forbidden in bull" in outcome.hallucination_reason
+        assert "overbought" in outcome.hallucination_reason
+
+    def test_forbidden_bull_substring_in_bear_only_passes(
+        self,
+        stub_graph: Callable[[dict[str, Any]], None],
+        stub_judge: MagicMock,  # noqa: ARG002
+    ) -> None:
+        """QNT-183: the same term appearing only in the bear case must NOT
+        fail — the bear case is the correct home for overbought RSI."""
+        stub_graph(
+            {
+                "thesis": Thesis(
+                    setup="RSI is 71.6 (source: technical).",
+                    bull_case=["Uptrend intact (source: technical)"],
+                    bear_case=["RSI pulling back from overbought territory (source: technical)"],
+                    verdict_stance="cautious",
+                    verdict_action="No action level supported by current data.",
+                ),
+                "reports": {"technical": "RSI is 71.6 overbought territory today"},
+                "errors": {},
+            }
+        )
+        record = GoldenRecord(
+            id="test-forbidden-bull-absent",
+            ticker="NVDA",
+            question="Is NVDA overbought?",
+            expected_tools=("technical",),
+            reference_thesis="Bear case cites overbought RSI; bull case omits it.",
+            forbidden_bull_substrings=("overbought",),
+        )
+        outcome = run_record(record)
+        assert outcome.hallucination_ok, outcome.hallucination_reason
+
     def test_quick_fact_with_unsupported_number_fails_hallucination(
         self,
         stub_graph: Callable[[dict[str, Any]], None],
