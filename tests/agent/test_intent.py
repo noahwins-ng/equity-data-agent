@@ -51,7 +51,6 @@ def test_heuristic_classifies_known_phrases(question: str, expected: str) -> Non
 @pytest.mark.parametrize(
     "question",
     [
-        "What does NVDA's most recent fundamental picture look like?",
         "Triangulate technicals fundamentals and news for META",
         "Tell me about UNH",  # ambiguous open-ended
     ],
@@ -89,10 +88,10 @@ def test_heuristic_quick_fact_token_in_long_question_defers_to_llm() -> None:
         "including RSI, MACD, and trend, the fundamental picture, and recent "
         "news flow for NVDA so I can decide on a position."
     )
-    # Word count exceeds the short-question limit AND contains a thesis token
-    # ("walk-through" doesn't match exactly, but the bias-to-thesis arm of
-    # the heuristic kicks in only on explicit thesis tokens). Without a
-    # thesis token it defers to the LLM.
+    # The question mentions both "technical setup" and "fundamental picture",
+    # so focused_hits = ["technical", "fundamental"]. The mutual-exclusivity
+    # guard (len > 1) prevents any focused intent from firing, and no thesis
+    # token matches either, so the heuristic defers to the LLM.
     assert _heuristic_intent(long_q) is None
 
 
@@ -363,3 +362,41 @@ def test_llm_fallback_returns_focused(monkeypatch: pytest.MonkeyPatch) -> None:
     """Heuristic returns None → LLM picks one of the focused intents."""
     _patch_llm_pipeline(monkeypatch, IntentDecision(intent="fundamental"))
     assert classify_intent("How is MSFT looking from a value angle?") == "fundamental"
+
+
+# ─── QNT-186: heuristic-token expansion ──────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "question,expected",
+    [
+        # Technical: new phrasings from QNT-186 scope
+        ("Walk me through TSLA technical setup", "technical"),
+        ("what do the charts say for NVDA?", "technical"),
+        ("is AAPL overbought?", "technical"),
+        ("is TSLA oversold right now?", "technical"),
+        # Fundamental: new phrasings from QNT-186 scope
+        ("valuation read on META", "fundamental"),
+        ("what does the balance sheet say about AAPL?", "fundamental"),
+        ("is NVDA expensive?", "fundamental"),
+        # News sentiment: new phrasings from QNT-186 scope
+        ("what's the news say on META?", "news_sentiment"),
+        ("how is sentiment on AAPL?", "news_sentiment"),
+        ("any catalysts for TSLA?", "news_sentiment"),
+    ],
+)
+def test_heuristic_classifies_qnt186_expanded_phrasings(question: str, expected: str) -> None:
+    """QNT-186 natural-language phrasings route to the correct focused intent
+    without an LLM call."""
+    from agent.intent import _heuristic_intent
+
+    assert _heuristic_intent(question) == expected
+
+
+def test_heuristic_walk_through_without_technical_stays_thesis() -> None:
+    """'Walk me through NVDA's setup' still routes to thesis — the new
+    'technical setup' token must not capture a generic walk-through ask
+    that lacks the word 'technical'."""
+    from agent.intent import _heuristic_intent
+
+    assert _heuristic_intent("Walk me through NVDA's setup") == "thesis"
