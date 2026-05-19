@@ -13,6 +13,7 @@ from agent.post_checks import (
     _ESCALATE_THRESHOLD,
     _mismatch_timestamps,
     check_verdict_direction,
+    enforce_bull_polarity,
     record_mismatch,
 )
 from agent.thesis import Thesis
@@ -145,3 +146,98 @@ class TestRecordMismatch:
         with patch("agent.post_checks._fire_discord_alert") as mock_alert:
             record_mismatch()  # one fresh event, threshold not hit
             mock_alert.assert_not_called()
+
+
+# ── enforce_bull_polarity ─────────────────────────────────────────────────────
+
+
+def _make_thesis(bull: list[str], bear: list[str]) -> Thesis:
+    return Thesis(
+        setup="Setup.",
+        bull_case=bull,
+        bear_case=bear,
+        verdict_stance="cautious",
+        verdict_action="Hold current position.",
+    )
+
+
+class TestEnforceBullPolarity:
+    def test_trending_down_moves_to_bear(self) -> None:
+        """QNT-198 regression: 'RSI neutral but trending down' must leave bull."""
+        thesis = _make_thesis(
+            bull=["RSI-14 neutral at 61.7, but trending down from 64.7 (source: technical)"],
+            bear=["P/E 44.85, indicating a rich valuation (source: fundamental)"],
+        )
+        result = enforce_bull_polarity(thesis)
+        assert result.bull_case == []
+        assert any("trending down" in b for b in result.bear_case)
+        assert len(result.bear_case) == 2
+
+    def test_clean_bull_unchanged(self) -> None:
+        """Bull bullets with no bearish delta phrases are untouched."""
+        thesis = _make_thesis(
+            bull=["MACD bullish with MACD above signal (source: technical)"],
+            bear=["RSI trending down from overbought (source: technical)"],
+        )
+        result = enforce_bull_polarity(thesis)
+        assert result is thesis  # no-op returns same object
+
+    def test_declining_phrase_moves_to_bear(self) -> None:
+        thesis = _make_thesis(
+            bull=["Revenue declining from prior quarter (source: fundamental)"],
+            bear=[],
+        )
+        result = enforce_bull_polarity(thesis)
+        assert result.bull_case == []
+        assert len(result.bear_case) == 1
+
+    def test_falling_phrase_moves_to_bear(self) -> None:
+        thesis = _make_thesis(
+            bull=["Gross margin falling from prior period (source: fundamental)"],
+            bear=[],
+        )
+        result = enforce_bull_polarity(thesis)
+        assert result.bull_case == []
+        assert len(result.bear_case) == 1
+
+    def test_down_from_phrase_moves_to_bear(self) -> None:
+        thesis = _make_thesis(
+            bull=["RSI-14 down from 71.6 to 61.7 (source: technical)"],
+            bear=[],
+        )
+        result = enforce_bull_polarity(thesis)
+        assert result.bull_case == []
+        assert len(result.bear_case) == 1
+
+    def test_mixed_bull_only_moves_bearish_bullets(self) -> None:
+        """Legitimate bull bullets stay; only misclassified ones move."""
+        thesis = _make_thesis(
+            bull=[
+                "Close above SMA-50, trend intact (source: technical)",
+                "RSI-14 trending down from 71.6, momentum fading (source: technical)",
+                "Revenue +73% YoY (source: fundamental)",
+            ],
+            bear=[],
+        )
+        result = enforce_bull_polarity(thesis)
+        assert len(result.bull_case) == 2
+        assert len(result.bear_case) == 1
+        assert "trending down" in result.bear_case[0]
+
+    def test_empty_bull_case_is_noop(self) -> None:
+        thesis = _make_thesis(bull=[], bear=["RSI overbought (source: technical)"])
+        result = enforce_bull_polarity(thesis)
+        assert result is thesis
+
+    def test_bare_falling_and_declining_do_not_fire(self) -> None:
+        """Falling/declining without 'from' must not match — avoids false positives
+        on bull language like 'Falling rates support growth equities'."""
+        thesis = _make_thesis(
+            bull=[
+                "Falling rates reduce discount rate, boosting valuations (source: fundamental)",
+                "Declining inflation reduces Fed rate-hike pressure (source: fundamental)",
+            ],
+            bear=[],
+        )
+        result = enforce_bull_polarity(thesis)
+        assert result is thesis

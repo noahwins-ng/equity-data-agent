@@ -37,6 +37,19 @@ logger = logging.getLogger(__name__)
 
 # ── Framing-word patterns ───────────────────────────────────────────────────
 
+# ── Polarity-enforcement pattern (QNT-198) ─────────────────────────────────
+
+# Downward-delta phrases that classify a momentum bullet as bear-only
+# regardless of the indicator's absolute level. A bull bullet that contains
+# any of these is a polarity inversion — move it to bear_case.
+# "declining from" / "falling from" require the directional qualifier to avoid
+# matching legitimate bull language like "Falling rates support growth equities."
+_BEAR_DELTA_RE = re.compile(
+    r"\b(trending down|declining from|falling from|down from)\b", re.IGNORECASE
+)
+
+# ── Framing-word patterns ───────────────────────────────────────────────────
+
 # These framing words imply the associated level should be ABOVE the current
 # close (a target or resistance the price has not yet reached).
 _UPSIDE_RE = re.compile(r"\b(target|resistance)\b", re.IGNORECASE)
@@ -197,4 +210,37 @@ def record_mismatch() -> None:
         _mismatch_timestamps.clear()  # reset after alert to avoid re-firing every subsequent event
 
 
-__all__ = ["check_verdict_direction", "record_mismatch"]
+def enforce_bull_polarity(thesis: Thesis) -> Thesis:
+    """Move bull bullets containing bearish momentum phrases to the bear case.
+
+    Deterministic post-synthesis enforcement for QNT-198: a declining RSI
+    delta (or any momentum indicator "trending down") is a bearish signal and
+    must appear in the bear case only. Prompt rules are probabilistic; this
+    function is the hard gate after structured output returns.
+
+    Returns a new Thesis with misclassified bullets removed from bull_case
+    and appended to bear_case. No-op when no misclassified bullets exist.
+    """
+    stay_bull: list[str] = []
+    to_bear: list[str] = []
+    for bullet in thesis.bull_case:
+        if _BEAR_DELTA_RE.search(bullet):
+            to_bear.append(bullet)
+        else:
+            stay_bull.append(bullet)
+    if not to_bear:
+        return thesis
+    logger.info(
+        "enforce_bull_polarity: moved %d bull bullet(s) to bear: %s",
+        len(to_bear),
+        [b[:60] for b in to_bear],
+    )
+    return thesis.model_copy(
+        update={
+            "bull_case": stay_bull,
+            "bear_case": thesis.bear_case + to_bear,
+        }
+    )
+
+
+__all__ = ["check_verdict_direction", "enforce_bull_polarity", "record_mismatch"]
