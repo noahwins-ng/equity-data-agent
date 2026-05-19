@@ -34,6 +34,7 @@ from agent.conversational import ConversationalAnswer
 from agent.evals.hallucination import HallucinationResult
 from agent.evals.hallucination import check as check_hallucination
 from agent.focused import FocusedAnalysis
+from agent.post_checks import check_verdict_direction, record_mismatch
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 from agent.tracing import langfuse
@@ -178,6 +179,22 @@ def push_to_trace_id(state: dict[str, Any], trace_id: str | None) -> None:
             data_type="NUMERIC",
             comment=(f"missing: {', '.join(sorted(missing_tools))}" if missing_tools else "clean"),
         )
+        # QNT-193: verdict-direction check — only for thesis responses that
+        # include a technical report (the only shape with verdict_action today).
+        thesis = state.get("thesis")
+        if isinstance(thesis, Thesis):
+            technical_report = (state.get("reports") or {}).get("technical", "")
+            direction_ok, direction_comment = check_verdict_direction(thesis, technical_report)
+            langfuse.create_score(
+                trace_id=trace_id,
+                name="verdict_direction_ok",
+                value=1.0 if direction_ok else 0.0,
+                data_type="NUMERIC",
+                comment=direction_comment,
+            )
+            if not direction_ok:
+                logger.warning("verdict_direction_ok=0 trace=%s: %s", trace_id, direction_comment)
+                record_mismatch()
     except Exception as exc:  # noqa: BLE001 — telemetry must not crash the request
         logger.warning("eval-score push failed: %s", exc)
 

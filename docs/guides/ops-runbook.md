@@ -766,6 +766,25 @@ CX41 totals: 16 GiB RAM. Pre-QNT-103 mem_limit allocation was 13.06 GiB (clickho
 
 ---
 
+## Deterministic post-graph tripwires (QNT-193)
+
+### `verdict_direction_ok` — direction-mismatch tripwire
+
+**What it catches**: price levels in `Thesis.verdict_action` that are directionally inconsistent with the current close. Classic symptom: "potential target of SMA-20 at 210.30" when close is already 225.32 — the target has already been exceeded, making the guidance stale. Numbers are real (the hallucination scorer passes), but the semantic relation to close is wrong. Implemented in `packages/agent/src/agent/post_checks.py` (`check_verdict_direction`); called from `eval_scores.push_to_trace_id()` for every thesis trace.
+
+**Signals**:
+- Langfuse score `verdict_direction_ok = 0` on the offending trace — visible in the Langfuse UI under the trace's Scores tab.
+- `logger.warning("verdict_direction_ok=0 trace=... ...")` in the agent container logs — surfaced by `make monitor-log` or Dozzle at `http://localhost:8082`.
+- Discord notification fires when ≥ 3 mismatches occur within 1 hour (via `DISCORD_WEBHOOK_URL`), indicating a burst rather than a one-off.
+
+**Most likely root causes**:
+1. **Prompt regression** — a recent system-prompt edit weakened the verdict-action grounding rule, allowing the model to write stale or forward-projected action levels.
+2. **Technical-report shape drift** — the `Close: X.XX` header line in `packages/api/src/api/templates/technical.py` changed format, causing `_extract_close()` to return `None` and silently skipping the check (score skipped, not 0). Verify by reading a raw technical report from a recent trace.
+
+**Response**: check Langfuse for the offending trace, read the full `verdict_action` and `reports["technical"]` in the trace payload, and compare the cited levels against the close. If the model is systematically wrong (multiple tickers, not just one), roll back the most recent system-prompt change. If the report shape changed, fix `_CLOSE_RE` in `post_checks.py` and redeploy.
+
+---
+
 ## Security notes
 
 ### Docker socket bind-mount on `dagster-daemon` (QNT-116)
