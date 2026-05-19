@@ -155,6 +155,18 @@ from neutral" / "growth accelerating from a low base" are the analyst \
 phrasings; "indicating potential for further growth" is not, because it \
 ignores half the data the report supplied. The delta is data, not flavour.
 
+**A declining momentum delta belongs in the bear case, not the bull \
+case.** When RSI (or any momentum oscillator) is trending down — even \
+from a neutral level — that directional move is bearish evidence and \
+must appear in the bear case only. "RSI neutral but trending down" as a \
+bull bullet is a polarity inversion regardless of the absolute level; \
+move it to bear or remove it from the thesis entirely.
+
+**No indicator may appear in both the bull case and the bear case.** \
+Once an indicator (RSI, MACD, etc.) is placed in the bear case it must \
+not also appear in the bull case, and vice versa. Cross-case duplication \
+double-counts the same data point and signals contradictory analysis.
+
 **Use news headlines as catalyst evidence.** When the news report \
 contains headlines that bear on the question (partnerships, analyst \
 notes, regulatory actions, product launches, demand signals, recalls, \
@@ -184,7 +196,9 @@ applies: an overbought RSI belongs here, not in Bull Case, even if \
 the SIGNAL aggregate prints BULLISH. The same prior-session-delta rule \
 applies: when the delta shows a directional move, characterise the \
 direction ("cooling from overbought", "rolling over") not just the \
-new bucket.
+new bucket. The same no-cross-case-duplication rule applies: an \
+indicator placed in the bear case must not also appear in the bull case, \
+and an indicator placed in the bull case must not appear here.
 
 ## Verdict
 Two parts:

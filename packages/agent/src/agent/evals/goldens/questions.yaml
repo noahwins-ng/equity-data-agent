@@ -455,3 +455,24 @@ questions:
       belongs in context (bear case or verdict), not as upside evidence.
       Each bullet cites (source: technical) and avoids re-quoting the
       SIGNAL aggregate footer.
+
+  # QNT-198: neutral-RSI-trending-down polarity regression. The technical
+  # report prints RSI at a neutral level but declining from a higher prior-
+  # session value. A correct thesis places the declining RSI in the BEAR
+  # case only — not as a bull bullet, and not in both cases.
+  - id: nvda-rsi-neutral-trending-down
+    ticker: NVDA
+    question: "Give me a thesis on NVDA — what does the RSI trend say about near-term momentum?"
+    expected_tools:
+      - technical
+    forbidden_bull_substrings:
+      - "trending down"
+    reference_thesis: |
+      A correct thesis where RSI is in the neutral zone but declining
+      places that directional signal in the BEAR case only. "RSI neutral
+      but trending down" is a bearish momentum signal — it appears
+      exclusively as a bear bullet (e.g., "RSI rolling over from the
+      neutral zone, momentum fading (source: technical)"). The bull case
+      draws on other supporting metrics (SMA alignment, MACD posture)
+      if available, or stays empty if no genuine bull evidence exists.
+      The RSI indicator does not appear in both bull and bear bullets.
