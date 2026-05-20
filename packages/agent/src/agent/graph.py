@@ -118,8 +118,9 @@ def _prompt_cfg(config: RunnableConfig, prompt_name: str) -> RunnableConfig:
     from agent.tracing import get_langfuse_prompt
 
     existing: dict[str, object] = config.get("metadata") or {}
-    new_meta: dict[str, object] = {**existing, "prompt_version": _PROMPT_VERSION}
     prompt_obj = get_langfuse_prompt(prompt_name)
+    version = str(prompt_obj.version) if prompt_obj is not None else _PROMPT_VERSION
+    new_meta: dict[str, object] = {**existing, "prompt_version": version}
     if prompt_obj is not None:
         new_meta["langfuse_prompt"] = prompt_obj
     return {**config, "metadata": new_meta}
