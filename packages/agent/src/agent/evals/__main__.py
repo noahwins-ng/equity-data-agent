@@ -95,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
     if threshold is not None:
         judged = [o.judge_score for o in outcomes if o.judge_score is not None]
         if judged:
-            avg = sum(judged) / len(judged)
+            avg = sum(js.composite for js in judged) / len(judged)
             if avg < threshold:
                 print(
                     f"\n[fail] avg_judge {avg:.2f} < EVAL_MIN_JUDGE {threshold}",

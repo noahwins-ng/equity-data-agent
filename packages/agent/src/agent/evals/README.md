@@ -21,10 +21,10 @@ For every thesis the agent produces, regex every numeric claim out of the text a
 Per run, for each record:
 1. Invoke `build_graph(...).invoke(...)` in-process with recording-wrapped tools (so the tool-call eval can see what was actually called).
 2. Score the generated thesis against the reference thesis via:
-   - **LLM-as-judge** score (0–10) using the agent's own LLM via the LiteLLM proxy at `temperature=0.0`.
+   - **LLM-as-judge** per-axis scores (0–10 each) using the agent's own LLM via the LiteLLM proxy at `temperature=0.0`. Four axes: `faithfulness`, `structure`, `correctness`, `analyst_logic`. A `composite` column holds the rounded average of all four.
    - **Cosine similarity** over normalised term-frequency vectors. The original spec called for `all-MiniLM-L6-v2` embeddings; we ship the lighter zero-dep equivalent (same operation in a different vector space) to keep the harness portable. Swap `similarity.cosine` for an embedding-backed implementation behind the same signature when MiniLM is on the path.
 3. Append one row per record to `history.csv`:
-   `run_id, git_sha, prompt_version, ticker, question_id, question, judge_score, cosine, tool_call_ok, hallucination_ok, elapsed_ms`.
+   `run_id, git_sha, prompt_version, ticker, question_id, question, faithfulness, structure, correctness, analyst_logic, composite, cosine, tool_call_ok, hallucination_ok, elapsed_ms`.
 4. `history.csv` is committed so prompt-version quality is visible in `git log -p packages/agent/src/agent/evals/history.csv`.
 
 ### (c) Tool-call correctness — `tool_calls.py`
@@ -51,6 +51,24 @@ Exit codes:
 - `1` — any record failed a hard contract, OR (if `EVAL_MIN_JUDGE` is set) the average judge score fell below the threshold.
 
 The judge score is treated as a **soft** signal by default — the gate is on hard contracts (hallucination, tool-call). Set `EVAL_MIN_JUDGE=7` once `history.csv` shows enough baseline runs to trust a number.
+
+## Judge axes (QNT-191)
+
+The LLM-as-judge scores four axes independently (each 0–10):
+
+| Axis | What it measures |
+|---|---|
+| `faithfulness` | Every number in the thesis appears verbatim in the reports. 10 = no fabricated figures. |
+| `structure` | All required sections present (Setup, Bull, Bear, Verdict). 10 = fully covered. |
+| `correctness` | Conclusions and citations align with the reference thesis. 10 = fully aligned. |
+| `analyst_logic` | Four analyst-logic rules respected: |
+| | **B-1** Overbought indicators (RSI ≥ 70) must NOT appear as bull-case bullets. |
+| | **B-2** SIGNAL-aggregate phrases ("all indicators agree") must NOT appear in a FOCUSED summary. |
+| | **B-3** Prior-session delta information must be characterised when present in the report. |
+| | **B-8** Verdict-action with a specific level must carry a conditional verb ("if", "should consider"). |
+
+`composite` is the rounded average of all four axes, kept for backwards-compatible trend lines.
+Historical rows (before QNT-191) have empty axis columns and carry the old single score in `composite`.
 
 ## Reading `history.csv`
 

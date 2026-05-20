@@ -1,8 +1,16 @@
-"""LLM-as-judge rubric scoring for golden-set evaluation (QNT-67).
+"""LLM-as-judge rubric scoring for golden-set evaluation (QNT-67, QNT-191).
 
 Given a (question, generated_thesis, reference_thesis) triple, ask the
-agent's own LLM to score the generated thesis against the reference on a
-0-10 rubric and return the integer score.
+agent's own LLM to score the generated thesis against the reference on four
+axes (faithfulness, structure, correctness, analyst_logic), each 0-10, via
+``with_structured_output`` against a Pydantic schema.
+
+Why per-axis?
+    A single composite integer conflates four distinct failure modes. A drop
+    from 8 → 6 could mean fabricated numbers (faithfulness), dropped sections
+    (structure), wrong conclusions (correctness), or analyst-logic violations
+    (analyst_logic) — each with a different fix. Four separate axes make
+    regressions actionable.
 
 Why the agent's LLM?
     Reusing the LiteLLM proxy keeps the eval framework dependency-free —
@@ -10,8 +18,8 @@ Why the agent's LLM?
     so two consecutive scores on the same triple are reproducible.
 
 When the LLM is unreachable:
-    The judge returns ``None`` instead of raising. The eval loop records
-    ``judge_score`` as empty in history.csv and the run still produces
+    The judge returns ``None`` instead of raising. The eval loop records the
+    axis columns as empty in history.csv and the run still produces
     hallucination + tool-call signals. This matches how the agent itself
     handles upstream outages — degrade, don't crash.
 
@@ -29,24 +37,71 @@ Prompt-injection note:
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any
+
+from pydantic import BaseModel, Field
 
 from agent.llm import get_llm
 
 logger = logging.getLogger(__name__)
 
-_RUBRIC_PROMPT = """You are an evaluator scoring an AI-generated investment thesis \
-against a reference thesis.
 
-Score the GENERATED thesis from 0 to 10 on this rubric:
-- 0-2: off-topic, unsupported claims, missing required structure.
-- 3-5: covers some of the right ground but skips key sections, makes \
-unsupported numeric claims, or contradicts the reference.
-- 6-8: covers the structure required by the reference, cites sources, \
-avoids unsupported numbers; minor gaps vs. the reference.
-- 9-10: fully covers the reference's structure and substance, with clear \
-citations and no fabricated numbers.
+class JudgeScore(BaseModel):
+    """Per-axis judge scores, each 0-10."""
+
+    faithfulness: int = Field(
+        ge=0,
+        le=10,
+        description=(
+            "How well the thesis avoids fabricated or unsupported numbers. "
+            "10 = every number in the thesis appears verbatim in the reports; "
+            "0 = multiple fabricated figures."
+        ),
+    )
+    structure: int = Field(
+        ge=0,
+        le=10,
+        description=(
+            "Whether the thesis covers the required sections (Setup, Bull case, "
+            "Bear case, Verdict). 10 = all sections present and substantive; "
+            "0 = missing major sections."
+        ),
+    )
+    correctness: int = Field(
+        ge=0,
+        le=10,
+        description=(
+            "Whether conclusions, citations, and directional claims match the "
+            "reference thesis. 10 = fully aligned; 0 = contradicts the reference."
+        ),
+    )
+    analyst_logic: int = Field(
+        ge=0,
+        le=10,
+        description=(
+            "Whether the thesis follows analyst-logic rules: "
+            "(B-1) overbought metrics (RSI >= 70) must NOT appear as bull-case "
+            "bullets — they belong in the bear case or are omitted; "
+            "(B-2) SIGNAL-aggregate lines ('indicators agree', 'all signals') must "
+            "NOT be quoted in a FOCUSED summary or key_points section; "
+            "(B-3) prior-session deltas (yesterday's move, day-over-day change) must "
+            "be characterised when present in the report, not silently dropped; "
+            "(B-8) verdict-action must carry a conditional verb ('if', 'should', "
+            "'consider') when a specific action level is stated. "
+            "10 = all four rules respected; score down 2-3 points per rule violated."
+        ),
+    )
+
+    @property
+    def composite(self) -> int:
+        """Average of the four axes, rounded to the nearest integer."""
+        return round(
+            (self.faithfulness + self.structure + self.correctness + self.analyst_logic) / 4
+        )
+
+
+_RUBRIC_PROMPT = """You are an evaluator scoring an AI-generated investment thesis \
+against a reference thesis across four axes. Return a structured score.
 
 Question asked of the agent:
 {question}
@@ -57,26 +112,30 @@ REFERENCE thesis:
 GENERATED thesis:
 {generated}
 
-Respond with ONLY the integer score (0-10), nothing else."""
+Score each axis from 0 to 10:
 
+faithfulness — Does every number in the GENERATED thesis appear verbatim in \
+the reports the agent received? (10 = zero fabricated figures; 0 = many \
+fabricated figures)
 
-_SCORE_RE = re.compile(r"\b([0-9]|10)\b")
+structure — Does the GENERATED thesis include all required sections \
+(Setup, Bull case, Bear case, Verdict)? (10 = fully covered; 0 = missing \
+major sections)
 
+correctness — Do the conclusions, citations, and directional claims in the \
+GENERATED thesis match the REFERENCE? (10 = fully aligned; 0 = contradicts \
+the reference)
 
-def _parse_score(raw: str) -> int | None:
-    """Pull an int 0-10 out of an LLM response.
-
-    Permissive — the model sometimes writes "Score: 7" or "7/10". We take
-    the first 0-10 integer the regex finds; anything else returns None.
-    """
-    match = _SCORE_RE.search(raw.strip())
-    if match is None:
-        return None
-    try:
-        value = int(match.group(1))
-    except ValueError:
-        return None
-    return value if 0 <= value <= 10 else None
+analyst_logic — Does the GENERATED thesis follow these four analyst-logic rules?
+  B-1: Overbought indicators (e.g. RSI >= 70) must NOT appear as bull-case \
+bullets. They belong in the bear case or are omitted from the bull bullets.
+  B-2: SIGNAL-aggregate phrases ("all indicators agree", "indicators confirm", \
+"signals align") must NOT appear in a FOCUSED summary or key_points block.
+  B-3: Prior-session delta information (yesterday's move, day-over-day change) \
+must be characterised when that data is present in the report — not silently dropped.
+  B-8: When the verdict-action names a specific action level (e.g. "buy above $X"), \
+the sentence must carry a conditional verb (e.g. "if", "should consider", "may").
+Score 10 if all four rules are respected; deduct 2-3 points per rule violated."""
 
 
 def score(
@@ -85,13 +144,14 @@ def score(
     reference: str,
     *,
     llm: Any | None = None,
-) -> int | None:
-    """Return a 0-10 judge score, or ``None`` on LLM error.
+) -> JudgeScore | None:
+    """Return a per-axis ``JudgeScore``, or ``None`` on LLM error.
 
     ``llm`` is injectable for tests; production passes ``None`` and we
     construct one via ``get_llm(temperature=0.0)`` for reproducibility.
     """
-    judge_llm = llm if llm is not None else get_llm(temperature=0.0)
+    base_llm = llm if llm is not None else get_llm(temperature=0.0)
+    judge_llm = base_llm.with_structured_output(JudgeScore)
     prompt = _RUBRIC_PROMPT.format(
         question=question.strip() or "(general thesis)",
         reference=reference.strip(),
@@ -105,8 +165,14 @@ def score(
     except Exception as exc:  # noqa: BLE001 — judge errors must not crash the eval loop
         logger.warning("eval-judge failed: %s", exc)
         return None
-    raw = response.content if hasattr(response, "content") else str(response)
-    return _parse_score(str(raw))
+    if isinstance(response, JudgeScore):
+        return response
+    if isinstance(response, dict):
+        parsed = response.get("parsed")
+        if isinstance(parsed, JudgeScore):
+            return parsed
+    logger.warning("eval-judge returned unexpected shape: %r", type(response))
+    return None
 
 
-__all__ = ["score"]
+__all__ = ["JudgeScore", "score"]
