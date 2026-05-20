@@ -46,6 +46,23 @@ def make_callback_handler() -> CallbackHandler | None:
     return CallbackHandler() if langfuse is not None else None
 
 
+def get_langfuse_prompt(name: str) -> object | None:
+    """Return a Langfuse prompt object for native trace linking, or None.
+
+    Uses the Langfuse SDK's built-in in-process cache (1-hour TTL) so
+    repeated calls within the same process are free. Returns None when keys
+    are unset or the named prompt does not yet exist in Langfuse (first deploy
+    before push_prompts.py has run); graph.py falls back to content-hash
+    metadata in that case (QNT-199).
+    """
+    if langfuse is None:
+        return None
+    try:
+        return langfuse.get_prompt(name, cache_ttl_seconds=3600)
+    except Exception:  # noqa: BLE001 -- prompt not yet pushed; hash fallback active
+        return None
+
+
 def flush() -> None:
     """Block until queued events reach Langfuse; call at process exit."""
     if langfuse is not None:
@@ -55,6 +72,7 @@ def flush() -> None:
 __all__ = [
     "CallbackHandler",
     "flush",
+    "get_langfuse_prompt",
     "langfuse",
     "make_callback_handler",
     "observe",
