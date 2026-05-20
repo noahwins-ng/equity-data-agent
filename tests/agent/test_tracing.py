@@ -84,7 +84,15 @@ def test_flush_calls_client_flush_when_enabled(monkeypatch: pytest.MonkeyPatch) 
     fake.flush.assert_called_once_with()
 
 
-# ─── Architectural invariant: llm.invoke must carry config= for tracing ─────
+# ─── Architectural invariant: all LLM calls carry config= for tracing ────────
+#
+# Synthesis LLM calls go through _linked_invoke(runnable, prompt, config, name)
+# which always passes config to the chain or direct invoke. Non-synthesis calls
+# (plan-LLM, classify) use direct llm.invoke(prompt, config=config).
+#
+# Two scanners enforce this:
+#   _find_llm_invokes_missing_config  — direct llm.invoke / ainvoke without config=
+#   _find_linked_invokes_missing_config — _linked_invoke() without a config arg
 
 
 def _is_get_llm_call(node: ast.AST) -> bool:
@@ -100,9 +108,7 @@ def _contains_get_llm_call(node: ast.AST) -> bool:
 def _find_llm_invokes_missing_config(source: str) -> list[int]:
     """Return line numbers of ``.invoke()`` / ``.ainvoke()`` calls whose
     receiver is bound to (or is itself) ``get_llm()`` AND that omit the
-    ``config=`` keyword. The CallbackHandler attached at graph entry only
-    propagates to LLM-level generation observations when ``config`` reaches
-    the LLM call — a missing kwarg silently drops the trace."""
+    ``config=`` keyword."""
     tree = ast.parse(source)
 
     llm_names: set[str] = set()
@@ -137,10 +143,32 @@ def _find_llm_invokes_missing_config(source: str) -> list[int]:
     return offenders
 
 
+def _find_linked_invokes_missing_config(source: str) -> list[int]:
+    """Return line numbers of ``_linked_invoke()`` calls that omit config.
+
+    Signature: ``_linked_invoke(runnable, prompt, config, prompt_name)``
+    Config is the 3rd positional arg (index 2) or a ``config=`` kwarg.
+    """
+    tree = ast.parse(source)
+    offenders: list[int] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_linked_invoke"
+        ):
+            continue
+        has_config = len(node.args) >= 4 or any(kw.arg == "config" for kw in node.keywords)
+        if not has_config:
+            offenders.append(node.lineno)
+    return offenders
+
+
 def test_llm_invoke_calls_pass_config_kwarg() -> None:
-    """Architectural invariant (QNT-181): every ``llm.invoke()`` /
+    """Architectural invariant (QNT-181): every direct ``llm.invoke()`` /
     ``.ainvoke()`` in the agent package must pass ``config=...`` so the
-    LangGraph CallbackHandler propagates. Allowlist:
+    LangGraph CallbackHandler propagates. Synthesis calls go through
+    ``_linked_invoke`` (enforced separately). Allowlist:
 
     * ``tracing.py`` — owns the singleton, no LLM calls of its own.
     * ``evals/`` — eval bench __main__ env-strips Langfuse keys at import
@@ -158,6 +186,21 @@ def test_llm_invoke_calls_pass_config_kwarg() -> None:
     assert not offenders, (
         "LLM invoke call missing config= kwarg — Langfuse CallbackHandler "
         "won't propagate to the generation observation:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_linked_invoke_calls_pass_config() -> None:
+    """Architectural invariant (QNT-199): every ``_linked_invoke()`` call in
+    graph.py must pass config as the 3rd positional argument so the
+    CallbackHandler propagates and Langfuse Prompt panel linking works."""
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    graph_py = repo_root / "packages" / "agent" / "src" / "agent" / "graph.py"
+    offenders = [
+        f"graph.py:{lineno}" for lineno in _find_linked_invokes_missing_config(graph_py.read_text())
+    ]
+    assert not offenders, (
+        "_linked_invoke call missing config argument — prompt linking and "
+        "CallbackHandler propagation won't work:\n  " + "\n  ".join(offenders)
     )
 
 
@@ -202,3 +245,13 @@ def test_ast_scanner_catches_ainvoke_without_config() -> None:
         "    return await llm.ainvoke('hi')\n"
     )
     assert _find_llm_invokes_missing_config(source) == [4]
+
+
+def test_linked_invoke_scanner_flags_missing_config() -> None:
+    source = "_linked_invoke(runnable, prompt, 'system-prompt')\n"
+    assert _find_linked_invokes_missing_config(source) == [1]
+
+
+def test_linked_invoke_scanner_passes_with_config() -> None:
+    source = "_linked_invoke(runnable, prompt, config, 'system-prompt')\n"
+    assert _find_linked_invokes_missing_config(source) == []
