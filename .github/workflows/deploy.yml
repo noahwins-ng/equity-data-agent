@@ -383,6 +383,23 @@ jobs:
             print(f'OK: assets={n} checks={c} schedules={s}')
             "
 
+      - name: Push prompts to Langfuse Prompt Management
+        continue-on-error: true
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HETZNER_HOST }}
+          username: ${{ secrets.HETZNER_USER }}
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          script: |
+            # QNT-199: register the deployed prompt versions in Langfuse Prompt
+            # Management so subsequent traces link natively to the exact version
+            # in use. Exits 0 when LANGFUSE keys are absent (hash fallback stays
+            # active). continue-on-error: true so a Langfuse API blip never
+            # blocks a code deploy — the hash fallback covers the gap until the
+            # next deploy retries.
+            docker exec equity-data-agent-api-1 \
+              /app/.venv/bin/python /app/scripts/push_prompts.py
+
       - name: Close deploy window (remove notifier sentinel)
         if: always()
         uses: appleboy/ssh-action@v1

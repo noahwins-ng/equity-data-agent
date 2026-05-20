@@ -361,14 +361,15 @@ def test_llm_calls_carry_prompt_version_in_metadata(
     assert metadata["prompt_version"] == _PROMPT_VERSION
 
 
-def test_plan_llm_call_carries_prompt_version_in_metadata(
+def test_plan_llm_call_passes_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """QNT-187: the quick_fact plan-LLM call (non-structured get_llm().invoke)
-    must also embed prompt_version — it's the only path where the plan node
-    calls the LLM directly rather than skipping to the deterministic branch."""
+    """QNT-199: the quick_fact plan-LLM call (non-structured get_llm().invoke)
+    uses a dynamically built planning prompt with no named Langfuse equivalent,
+    so it passes config= directly without prompt-version injection. The AST gate
+    (test_llm_invoke_calls_pass_config_kwarg) enforces config= presence; this
+    test verifies the plan-LLM call actually fires on the quick_fact path."""
     from agent import intent as intent_module
-    from agent.graph import _PROMPT_VERSION
 
     llm = _StructuredLLM()
     llm.invoke.return_value = AIMessage(content="technical")
@@ -379,13 +380,7 @@ def test_plan_llm_call_carries_prompt_version_in_metadata(
     graph.invoke({"ticker": "NVDA", "question": "What's NVDA's RSI?"})
 
     # quick_fact fires the plan-LLM call (raw .invoke) then a structured synthesize.
-    # Call index 0 is the plan call.
     assert llm.invoke.call_count >= 1, "quick_fact must fire the plan-LLM call"
-    plan_metadata = _extract_config_metadata(llm.invoke.call_args_list[0])
-    assert "prompt_version" in plan_metadata, (
-        f"plan-LLM config metadata missing prompt_version; got {plan_metadata!r}"
-    )
-    assert plan_metadata["prompt_version"] == _PROMPT_VERSION
 
 
 def test_llm_calls_carry_runtime_config_for_callback_propagation(

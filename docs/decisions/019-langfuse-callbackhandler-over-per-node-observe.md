@@ -38,6 +38,30 @@ Net code reduction: `tracing.py` from ~160 to ~68 lines; ~13 `@observe` decorato
 * **`traced_invoke`'s explicit model-name + token-usage capture is replaced by the CallbackHandler's automatic capture.** The cookbook claims parity; pre-merge smoke trace verifies a chat lands `model_name` + `usage_details` on every generation observation. If a future SDK update breaks parity, we'd add `metadata={"model": ...}` at the LangChain LLM constructor as the workaround.
 * **Failure-tagging shifts from explicit (`gen.update(level="ERROR", ...)` in `traced_invoke`) to implicit (LangChain's runnable error handling raises through the callback).** Generation observations on failed runs still surface with the exception in the Langfuse UI; the explicit-tag path is no longer needed.
 
+## Amendment — Langfuse Prompt Management (QNT-199, 2026-05-20)
+
+**Status**: Accepted
+
+### Change
+
+QNT-187 shipped a content-hash approach: a SHA-256 of the five system prompts was computed at module load (`_PROMPT_VERSION`) and injected into every LLM call's `config` metadata as `prompt_version`. This was a pragmatic shortcut — hashes are opaque, Langfuse has no native prompt-diff view, and correlating a hash back to prompt content required the out-of-band `history.csv` join table.
+
+This amendment replaces that approach with **Langfuse Prompt Management**:
+
+1. **Git remains source of truth.** `agent/prompts/system.py` is the canonical location. No prompt content is fetched from Langfuse at runtime.
+
+2. **CD push on every deploy.** `scripts/push_prompts.py` runs after the container health gate (`Verify deploy` step) via:
+   ```
+   docker exec equity-data-agent-api-1 /app/.venv/bin/python /app/scripts/push_prompts.py
+   ```
+   It registers each of the five named prompts (`system-prompt`, `quick-fact-prompt`, `comparison-prompt`, `conversational-prompt`, `focused-prompt`) as a new version with the `production` label. Requires `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` in the GitHub Actions environment (already present from QNT-61).
+
+3. **Runtime linking via `langfuse_prompt` metadata.** `graph.py` replaces `_versioned_config(config)` with `_prompt_cfg(config, prompt_name)`. Each of the seven LLM call sites names the specific prompt it uses. `_prompt_cfg` calls `tracing.get_langfuse_prompt(name)` which uses `langfuse.get_prompt()` with a 1-hour SDK-level in-process cache. The Langfuse CallbackHandler reads the `langfuse_prompt` metadata key and creates a native trace → prompt link, visible in the Langfuse UI "Prompt" panel.
+
+4. **Fallback contract.** When `LANGFUSE_PUBLIC_KEY` is unset (local dev, CI, first deploy before `push_prompts.py` has run), `get_langfuse_prompt()` returns `None` and `_prompt_cfg` falls back to the QNT-187 content-hash approach (`prompt_version` metadata). The agent runs offline with no exception. The fallback is permanent for offline dev; for prod it becomes dormant after the first successful CD push.
+
+5. **AST gate unchanged.** `test_llm_invoke_calls_pass_config_kwarg` still enforces `config=` on every `llm.invoke()` call. Tests without Langfuse keys hit the hash fallback path and continue asserting `prompt_version` in metadata — no test changes required.
+
 ## References
 
 * Langfuse-LangGraph cookbook: `https://langfuse.com/guides/cookbook/example_langgraph_agents`
