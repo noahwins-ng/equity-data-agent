@@ -46,7 +46,7 @@ from shared.tickers import TICKERS
 from agent.comparison import ComparisonAnswer
 from agent.conversational import ConversationalAnswer, domain_redirect
 from agent.focused import FocusedAnalysis
-from agent.intent import Intent, classify_intent, extract_tickers
+from agent.intent import ClassifierSource, Intent, classify_intent_with_source, extract_tickers
 from agent.llm import get_llm
 from agent.post_checks import enforce_bull_polarity
 from agent.prompts import (
@@ -203,6 +203,7 @@ class AgentState(TypedDict):
     ticker: str
     question: NotRequired[str]
     intent: NotRequired[Intent]
+    classifier_source: NotRequired[ClassifierSource]
     plan: NotRequired[list[str]]
     reports: NotRequired[dict[str, str]]
     comparison_tickers: NotRequired[list[str]]
@@ -492,11 +493,12 @@ def build_graph(
         # contract here so the bias-to-thesis invariant the rest of the
         # graph relies on cannot be defeated by an unrelated dependency.
         try:
-            intent: Intent = classify_intent(question, config=config)
+            intent, classifier_source = classify_intent_with_source(question, config=config)
         except Exception as exc:  # noqa: BLE001 — preserve the safe default
             logger.warning("classify %s: defaulting to thesis: %s", ticker, exc)
             intent = "thesis"
-        logger.info("classify %s: intent=%s", ticker, intent)
+            classifier_source = "fallback"
+        logger.info("classify %s: intent=%s source=%s", ticker, intent, classifier_source)
         # QNT-159: surface the routing decision BEFORE plan/gather/synthesize
         # run. The SSE wrapper provides an emitter that posts to its asyncio
         # queue so the chat panel sees ``intent`` as soon as it's known
@@ -509,7 +511,7 @@ def build_graph(
                 event_emitter("intent", {"intent": intent})
             except Exception as exc:  # noqa: BLE001 — never let SSE plumbing crash the graph
                 logger.warning("classify %s: event_emitter failed: %s (continuing)", ticker, exc)
-        return {"intent": intent}
+        return {"intent": intent, "classifier_source": classifier_source}
 
     def plan_node(state: AgentState, config: RunnableConfig) -> dict[str, object]:
         ticker = state["ticker"]

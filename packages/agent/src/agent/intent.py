@@ -64,6 +64,10 @@ Intent = Literal[
     "news_sentiment",
 ]
 
+# Which code path resolved the intent — written into AgentState by classify_node
+# so Langfuse trace tags carry classifier_source:<value> (QNT-189).
+ClassifierSource = Literal["heuristic", "llm", "fallback"]
+
 
 class IntentDecision(BaseModel):
     """Structured-output schema for the classifier LLM call."""
@@ -409,26 +413,26 @@ Question: {question}
 """
 
 
-def classify_intent(
+def classify_intent_with_source(
     question: str,
     *,
     config: RunnableConfig | None = None,
-) -> Intent:
-    """Return the response shape to use for ``question``.
+) -> tuple[Intent, ClassifierSource]:
+    """Return ``(intent, source)`` for ``question``.
 
-    Pure dispatcher: heuristic first, LLM fallback. Both branches default
-    to ``thesis`` on any failure or ambiguity so callers never see an
-    invalid intent.
+    ``source`` identifies which code path resolved the intent:
+    - ``"heuristic"`` — keyword matcher decided without an LLM call
+    - ``"llm"`` — heuristic abstained; structured-output call succeeded
+    - ``"fallback"`` — LLM call failed/timed out or returned unexpected shape;
+      biased to ``"thesis"`` as the safe default
 
-    QNT-181: ``config`` carries the LangGraph CallbackHandler from the
-    graph entry point so the LLM-fallback path's generation observation
-    nests under the parent ``agent-chat`` trace. ``None`` (the default,
-    used by tests + the heuristic-only direct callers) skips tracing.
+    QNT-181: ``config`` carries the LangGraph CallbackHandler so the
+    LLM-fallback path's generation observation nests under the parent trace.
     """
     heuristic = _heuristic_intent(question)
     if heuristic is not None:
         logger.info("classify intent=%s via=heuristic question=%r", heuristic, question[:80])
-        return heuristic
+        return heuristic, "heuristic"
 
     structured_llm = get_llm(temperature=0.0).with_structured_output(IntentDecision)
     try:
@@ -438,17 +442,39 @@ def classify_intent(
         )
     except Exception as exc:  # noqa: BLE001 — bias to thesis on any failure
         logger.warning("classify llm failed, defaulting to thesis: %s", exc)
-        return "thesis"
+        return "thesis", "fallback"
 
     if isinstance(response, IntentDecision):
         logger.info("classify intent=%s via=llm question=%r", response.intent, question[:80])
-        return response.intent
+        return response.intent, "llm"
     if isinstance(response, dict):
         parsed = response.get("parsed")
         if isinstance(parsed, IntentDecision):
-            return parsed.intent
+            return parsed.intent, "llm"
     logger.warning("classify llm returned unexpected shape, defaulting to thesis")
-    return "thesis"
+    return "thesis", "fallback"
 
 
-__all__ = ["Intent", "IntentDecision", "classify_intent", "extract_tickers"]
+def classify_intent(
+    question: str,
+    *,
+    config: RunnableConfig | None = None,
+) -> Intent:
+    """Return the response shape to use for ``question``.
+
+    Thin wrapper around :func:`classify_intent_with_source` for callers that
+    only need the intent. Use ``classify_intent_with_source`` when the
+    classifier path (heuristic / llm / fallback) also matters.
+    """
+    intent, _ = classify_intent_with_source(question, config=config)
+    return intent
+
+
+__all__ = [
+    "ClassifierSource",
+    "Intent",
+    "IntentDecision",
+    "classify_intent",
+    "classify_intent_with_source",
+    "extract_tickers",
+]
