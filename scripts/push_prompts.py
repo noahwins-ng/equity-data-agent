@@ -54,9 +54,17 @@ def main() -> int:
         base_url=settings.LANGFUSE_BASE_URL,
     )
 
-    pushed = 0
+    pushed = skipped = errors = 0
     for name, text in prompts.items():
         try:
+            try:
+                latest = client.get_prompt(name, cache_ttl_seconds=0)
+                if latest.prompt == text:
+                    print(f"Skipped {name}: content unchanged (version {latest.version})")
+                    skipped += 1
+                    continue
+            except Exception:  # noqa: BLE001 -- prompt doesn't exist yet; create it
+                pass
             result = client.create_prompt(
                 name=name,
                 prompt=text,
@@ -67,11 +75,12 @@ def main() -> int:
             pushed += 1
         except Exception as exc:  # noqa: BLE001
             print(f"ERROR pushing {name}: {exc}", file=sys.stderr)
+            errors += 1
 
     client.flush()
     total = len(prompts)
-    print(f"Done: {pushed}/{total} prompts pushed to Langfuse Prompt Management")
-    return 0 if pushed == total else 1
+    print(f"Done: {pushed} pushed, {skipped} unchanged, {errors} errors (total {total})")
+    return 0 if errors == 0 else 1
 
 
 if __name__ == "__main__":
