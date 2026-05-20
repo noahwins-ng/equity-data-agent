@@ -26,8 +26,19 @@ from agent.evals.golden_set import (
     run_record,
     summarise,
 )
+from agent.evals.judge import JudgeScore
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
+
+
+def _judge(composite: int = 8) -> JudgeScore:
+    """Build a JudgeScore where all axes equal the composite target."""
+    return JudgeScore(
+        faithfulness=composite,
+        structure=composite,
+        correctness=composite,
+        analyst_logic=composite,
+    )
 
 
 def _record(rid: str = "test-1", ticker: str = "NVDA") -> GoldenRecord:
@@ -99,7 +110,7 @@ def stub_graph(monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str, Any]], No
 @pytest.fixture
 def stub_judge(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """Mock judge.score so tests don't need a live LLM."""
-    fake = MagicMock(return_value=8)
+    fake = MagicMock(return_value=_judge(8))
     monkeypatch.setattr(golden_set, "judge_score_fn", fake)
     return fake
 
@@ -111,7 +122,8 @@ class TestRunRecord:
         outcome = run_record(_record())
         assert outcome.hallucination_ok
         assert outcome.tool_call_ok
-        assert outcome.judge_score == 8
+        assert outcome.judge_score is not None
+        assert outcome.judge_score.composite == 8
         assert "technical" in outcome.actual_tools
         assert "fundamental" in outcome.actual_tools
         assert outcome.elapsed_ms >= 0
@@ -340,7 +352,7 @@ class TestAppendHistory:
             hallucination_reason="clean",
             tool_call_ok=True,
             tool_call_reason="clean",
-            judge_score=7,
+            judge_score=_judge(7),
             cosine=0.42,
             elapsed_ms=123,
         )
@@ -350,7 +362,9 @@ class TestAppendHistory:
         assert len(rows) == 1
         assert set(rows[0].keys()) == set(HISTORY_FIELDS)
         assert rows[0]["ticker"] == "NVDA"
-        assert rows[0]["judge_score"] == "7"
+        assert rows[0]["composite"] == "7"
+        assert rows[0]["faithfulness"] == "7"
+        assert rows[0]["analyst_logic"] == "7"
         assert rows[0]["hallucination_ok"] == "1"
 
     def test_appends_to_existing_file_without_duplicating_header(self, tmp_path: Path) -> None:
@@ -388,10 +402,12 @@ class TestAppendHistory:
             elapsed_ms=0,
         )
         append_history([outcome], run_id="rN", history_path=history)
-        text = history.read_text()
-        # Empty string between commas, NOT the literal "None" — keeps the CSV
-        # parseable as a missing-judge row downstream.
-        assert ",,0.0," in text
+        rows = list(csv.DictReader((tmp_path / "history.csv").open()))
+        assert rows[0]["faithfulness"] == ""
+        assert rows[0]["structure"] == ""
+        assert rows[0]["correctness"] == ""
+        assert rows[0]["analyst_logic"] == ""
+        assert rows[0]["composite"] == ""
 
 
 class TestGate:
@@ -404,7 +420,7 @@ class TestGate:
             hallucination_reason="clean",
             tool_call_ok=True,
             tool_call_reason="clean",
-            judge_score=2,  # bad judge but soft signal
+            judge_score=_judge(2),  # bad judge but soft signal
             cosine=0.0,
             elapsed_ms=0,
         )
@@ -416,7 +432,7 @@ class TestGate:
             hallucination_reason="unsupported: 99",
             tool_call_ok=True,
             tool_call_reason="clean",
-            judge_score=10,
+            judge_score=_judge(10),
             cosine=1.0,
             elapsed_ms=0,
         )

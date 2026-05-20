@@ -41,6 +41,7 @@ from shared.tickers import TICKERS
 from agent.comparison import ComparisonAnswer
 from agent.conversational import ConversationalAnswer
 from agent.evals.hallucination import check as check_hallucination
+from agent.evals.judge import JudgeScore
 from agent.evals.judge import score as judge_score_fn
 from agent.evals.similarity import cosine
 from agent.evals.tool_calls import check as check_tool_calls
@@ -63,7 +64,11 @@ HISTORY_FIELDS = (
     "ticker",
     "question_id",
     "question",
-    "judge_score",
+    "faithfulness",
+    "structure",
+    "correctness",
+    "analyst_logic",
+    "composite",
     "cosine",
     "tool_call_ok",
     "hallucination_ok",
@@ -114,7 +119,7 @@ class EvalOutcome:
     hallucination_reason: str
     tool_call_ok: bool
     tool_call_reason: str
-    judge_score: int | None
+    judge_score: JudgeScore | None
     cosine: float
     elapsed_ms: int
 
@@ -360,6 +365,7 @@ def append_history(
         if new_file:
             writer.writeheader()
         for outcome in outcomes:
+            js = outcome.judge_score
             writer.writerow(
                 {
                     "run_id": rid,
@@ -368,7 +374,11 @@ def append_history(
                     "ticker": outcome.record.ticker,
                     "question_id": outcome.record.id,
                     "question": outcome.record.question,
-                    "judge_score": "" if outcome.judge_score is None else outcome.judge_score,
+                    "faithfulness": "" if js is None else js.faithfulness,
+                    "structure": "" if js is None else js.structure,
+                    "correctness": "" if js is None else js.correctness,
+                    "analyst_logic": "" if js is None else js.analyst_logic,
+                    "composite": "" if js is None else js.composite,
                     "cosine": outcome.cosine,
                     "tool_call_ok": "1" if outcome.tool_call_ok else "0",
                     "hallucination_ok": "1" if outcome.hallucination_ok else "0",
@@ -419,23 +429,41 @@ def summarise(outcomes: list[EvalOutcome]) -> str:
     halluc_ok = sum(1 for o in outcomes if o.hallucination_ok)
     tools_ok = sum(1 for o in outcomes if o.tool_call_ok)
     judged = [o.judge_score for o in outcomes if o.judge_score is not None]
-    avg_judge = round(sum(judged) / len(judged), 2) if judged else None
     avg_cosine = round(sum(o.cosine for o in outcomes) / total, 3)
+
+    if judged:
+        avg_composite = round(sum(js.composite for js in judged) / len(judged), 2)
+        avg_faithfulness = round(sum(js.faithfulness for js in judged) / len(judged), 2)
+        avg_structure = round(sum(js.structure for js in judged) / len(judged), 2)
+        avg_correctness = round(sum(js.correctness for js in judged) / len(judged), 2)
+        avg_analyst_logic = round(sum(js.analyst_logic for js in judged) / len(judged), 2)
+        judge_summary = (
+            f"composite={avg_composite} "
+            f"(F={avg_faithfulness} S={avg_structure} "
+            f"C={avg_correctness} A={avg_analyst_logic})"
+        )
+    else:
+        judge_summary = "n/a"
 
     lines = [
         f"records: {total}  hallucination_ok: {halluc_ok}/{total}  "
         f"tool_call_ok: {tools_ok}/{total}  "
-        f"avg_judge: {avg_judge if avg_judge is not None else 'n/a'}  "
+        f"avg_judge: {judge_summary}  "
         f"avg_cosine: {avg_cosine}",
         "",
         "per-record:",
     ]
     for o in outcomes:
-        marks = (
-            ("H" if o.hallucination_ok else "h")
-            + ("T" if o.tool_call_ok else "t")
-            + (f" judge={o.judge_score}" if o.judge_score is not None else " judge=n/a")
-        )
+        js = o.judge_score
+        if js is not None:
+            judge_tag = (
+                f" judge={js.composite}"
+                f"(F={js.faithfulness} S={js.structure}"
+                f" C={js.correctness} A={js.analyst_logic})"
+            )
+        else:
+            judge_tag = " judge=n/a"
+        marks = ("H" if o.hallucination_ok else "h") + ("T" if o.tool_call_ok else "t") + judge_tag
         lines.append(
             f"  [{marks}] {o.record.id:24s} {o.record.ticker:5s} "
             f"cos={o.cosine:.2f} elapsed={o.elapsed_ms}ms — "
