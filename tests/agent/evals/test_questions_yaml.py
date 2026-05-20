@@ -59,11 +59,15 @@ def test_record_count_within_target_band() -> None:
     # Bumped to 15-30 in QNT-185 to make room for prompt-rule regression
     # fixtures (regime-polarity, anti-SIGNAL, momentum-delta) and upcoming
     # QNT-190 golden-set expansion.
+    # Bumped to 15-45 in QNT-190: Wave-2 breadth expansion added 13 records
+    # across quick_fact, comparison, conversational, fundamental, technical,
+    # and news_sentiment intents — bringing the total to 41. Hamel stopping
+    # rule: add until no new failure category; ~45 is the practical ceiling.
     # Lower bound is the substantive guarantee (anything fewer is too thin);
     # upper bound is a soft cap so the suite stays fast enough to run on
     # every prompt edit.
     records = load_goldens()
-    assert 15 <= len(records) <= 30, f"record count {len(records)} outside 15-30 band"
+    assert 15 <= len(records) <= 45, f"record count {len(records)} outside 15-45 band"
 
 
 def test_every_intent_has_at_least_one_golden() -> None:

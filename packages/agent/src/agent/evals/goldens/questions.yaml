@@ -499,3 +499,257 @@ questions:
       draws on other supporting metrics (SMA alignment, MACD posture)
       if available, or stays empty if no genuine bull evidence exists.
       The RSI indicator does not appear in both bull and bear bullets.
+
+  # ── Wave-2 breadth fixtures (QNT-190) ──────────────────────────────────
+  # Intent coverage: 3 × quick_fact, 2 × comparison, 2 × conversational,
+  # 2 × fundamental, 2 × technical (focused), 2 × news_sentiment.
+  # Every record pins expected_intent explicitly so classifier accuracy and
+  # synthesiser quality are decoupled in the score.
+
+  # ── quick_fact ──────────────────────────────────────────────────────────
+
+  # P/E lookup — fundamental report, different metric from the existing RSI
+  # quick-fact. Reference mirrors QuickFactAnswer.to_markdown() shape.
+  - id: aapl-quickfact-pe
+    ticker: AAPL
+    question: "What's AAPL's P/E ratio?"
+    expected_tools:
+      - fundamental
+    expected_intent: quick_fact
+    reference_thesis: |
+      A useful answer states AAPL's trailing P/E ratio verbatim from
+      the fundamental report, labels it qualitatively (rich, in-line,
+      compressed) without computing a peer ratio the report does not
+      supply, and cites (source: fundamental) inline. No thesis
+      sections and no padding with technical or news context — the
+      question is a single-metric lookup.
+
+      **Value:** <P/E value> (source: fundamental)
+
+  # Recent-close lookup — technical report. Tests the quick-fact shape on
+  # a price metric rather than an indicator metric.
+  - id: msft-quickfact-close
+    ticker: MSFT
+    question: "What is MSFT's most recent closing price?"
+    expected_tools:
+      - technical
+    expected_intent: quick_fact
+    reference_thesis: |
+      A useful answer states MSFT's most recent closing price verbatim
+      from the technical report and notes the daily change or trend
+      label if the report supplies it. Cites (source: technical) inline.
+      No thesis sections, no indicator tour — the question is a price
+      lookup, not a technical analysis.
+
+      **Value:** <close price> (source: technical)
+
+  # EPS lookup — fundamental report. Tests quick-fact on an earnings metric.
+  - id: jpm-quickfact-eps
+    ticker: JPM
+    question: "What's JPM's latest EPS?"
+    expected_tools:
+      - fundamental
+    expected_intent: quick_fact
+    reference_thesis: |
+      A useful answer states JPM's most recently reported EPS verbatim
+      from the fundamental report, names the earnings-surprise direction
+      (beat/miss) if the report states it, and cites (source:
+      fundamental) inline. No P/E commentary, no sector comparison,
+      no thesis structure — the question is a single-metric lookup.
+
+      **Value:** <EPS value> (source: fundamental)
+
+  # ── comparison ──────────────────────────────────────────────────────────
+
+  # Fundamental comparison — different ticker pair (AMZN vs META) and
+  # different primary dimension (fundamental) from the existing NVDA/MSFT
+  # technical contrast record.
+  - id: amzn-meta-fundamental
+    ticker: AMZN
+    question: "Compare AMZN vs META — which has the stronger fundamental case?"
+    expected_tools:
+      - fundamental
+    expected_intent: comparison
+    reference_thesis: |
+      A useful answer renders one section per ticker citing verbatim
+      values from each company's fundamental report (latest EPS,
+      revenue, P/E) and a SHORT qualitative differences paragraph that
+      contrasts the two on valuation and earnings trajectory without
+      computing a cross-ticker ratio or delta the reports do not state.
+      Cites only that ticker's report in each section. No technical
+      or news content — the focus is fundamentals only.
+
+  # Technical comparison — different pair (TSLA vs V) and technical
+  # dimension, covering the payments-sector / EV contrast in momentum.
+  - id: tsla-v-technical
+    ticker: TSLA
+    question: "Compare TSLA vs V on technical momentum — who has the stronger chart setup?"
+    expected_tools:
+      - technical
+    expected_intent: comparison
+    reference_thesis: |
+      A useful answer renders one section per ticker citing each
+      ticker's technical report (trend label, RSI bucket, MACD posture,
+      SMA alignment) and a SHORT qualitative differences paragraph that
+      contrasts their momentum postures using regime language (overbought,
+      neutral, oversold) rather than raw ordering. The differences
+      paragraph does NOT call the higher RSI "stronger momentum" when
+      that reading is overbought — it phrases the contrast as "more
+      stretched" or names the bucket difference. Each section cites only
+      its own technical report. No fundamental or news content.
+
+  # ── conversational ──────────────────────────────────────────────────────
+
+  # Clearly off-domain: a coding question. Tests that the agent refuses to
+  # answer and redirects cleanly to its actual capabilities.
+  - id: conversational-off-domain-coding
+    ticker: NVDA
+    question: "Can you help me debug a Python function that's throwing a KeyError?"
+    expected_tools: []
+    expected_intent: conversational
+    reference_thesis: |
+      A useful answer is a polite "that's outside my scope" redirect.
+      It names what the agent CAN do (equity analysis across ten US
+      public companies — technical, fundamental, news; thesis, quick
+      fact, comparison) and offers three suggested equity questions.
+      CONTAINS NO DIGITS — no years, no counts, no percentages. No
+      Python advice, no debugging guidance.
+
+  # Capability ask: user wants to understand what the agent does. Tests that
+  # the agent describes its own capabilities accurately without hallucinating.
+  - id: conversational-capability-ask
+    ticker: AAPL
+    question: "What can you actually help me with?"
+    expected_tools: []
+    expected_intent: conversational
+    reference_thesis: |
+      A useful answer describes the agent's scope concisely: equity
+      analysis for a fixed set of US public companies, covering
+      technical indicators, fundamental metrics, and news sentiment.
+      It names the response shapes available (thesis, quick fact,
+      comparison, focused analysis) and offers three example questions
+      the user could ask. CONTAINS NO DIGITS — no counts of tickers,
+      no years, no percentages.
+
+  # ── fundamental (focused) ───────────────────────────────────────────────
+
+  # AAPL fundamental deep dive — different ticker from the existing JPM
+  # record; exercises the Services/iPhone margin story.
+  - id: aapl-fundamental-analysis
+    ticker: AAPL
+    question: "Walk me through AAPL's fundamentals — how is the business valued?"
+    expected_tools:
+      - company
+      - fundamental
+    expected_intent: fundamental
+    reference_thesis: |
+      A useful answer is a focused fundamental read: 2-4 sentences of
+      summary grounded in AAPL's valuation (P/E vs. qualitative context),
+      latest EPS, revenue, and margin posture pulled VERBATIM from the
+      fundamental report and anchored in AAPL's business segments from
+      the company report. 2-5 key-point bullets cite underlying metrics
+      with (source: fundamental) or (source: company). Cited values list
+      holds 1-4 entries (P/E, EPS, revenue, margin) copied byte-for-byte
+      from the report. NO technical chart talk (RSI, MACD, SMA-50) —
+      focus is fundamentals only. NO four-section thesis, NO verdict.
+
+  # AMZN fundamental — exercises the AWS-as-profit-centre story.
+  - id: amzn-fundamental-analysis
+    ticker: AMZN
+    question: "Break down AMZN's fundamentals — what does the earnings picture look like?"
+    expected_tools:
+      - company
+      - fundamental
+    expected_intent: fundamental
+    reference_thesis: |
+      A useful answer is a focused fundamental read: 2-4 sentences of
+      summary covering AMZN's latest revenue, EPS, and P/E from the
+      fundamental report and AWS/retail segment context from the company
+      report. 2-5 key-point bullets cite underlying values with (source:
+      fundamental) or (source: company). Cited values list holds 1-4
+      entries copied verbatim. Abstains from forward-earnings projections
+      the report does not state. NO technical indicators. NO four-section
+      thesis, NO verdict.
+
+  # ── technical (focused) ─────────────────────────────────────────────────
+
+  # MSFT technical analysis — different ticker from the existing V/TSLA
+  # records; exercises the Azure-growth-narrative company context.
+  - id: msft-technical-analysis
+    ticker: MSFT
+    question: "Give me a technical read on MSFT — what do the indicators say?"
+    expected_tools:
+      - company
+      - technical
+    expected_intent: technical
+    reference_thesis: |
+      A useful answer is a focused technical read: 2-4 sentences naming
+      the trend direction, RSI bucket (with canonical thresholds), and
+      MACD posture relative to its signal line — all VERBATIM from the
+      technical report — grounded in MSFT's business context from the
+      company report. 2-5 key-point bullets cite specific metric values
+      with (source: technical) or (source: company). Cited values list
+      surfaces RSI, MACD, SMA-50, or close price (1-4 entries). NO P/E
+      or earnings talk — focus is technicals only. NO four-section
+      thesis, NO verdict.
+
+  # GOOGL technical deep dive — different ticker from MSFT above; adds
+  # coverage of the search/cloud narrative in the company report context.
+  - id: googl-technical-deepdive
+    ticker: GOOGL
+    question: "Give me a detailed technical analysis on GOOGL — trend, momentum, and chart setup."
+    expected_tools:
+      - company
+      - technical
+    expected_intent: technical
+    reference_thesis: |
+      A useful answer is a focused technical read: 2-4 sentences stating
+      the trend label, RSI bucket, MACD posture, and SMA alignment
+      drawn VERBATIM from the technical report and placed in GOOGL's
+      business context from the company report. 2-5 key-point bullets
+      cite specific values with (source: technical) or (source: company).
+      Cited values list holds 1-4 entries copied byte-for-byte from the
+      technical report. NO P/E, revenue, or earnings talk. NO four-
+      section thesis, NO verdict.
+
+  # ── news_sentiment (focused) ─────────────────────────────────────────────
+
+  # TSLA news sentiment — different ticker from the existing UNH record;
+  # exercises the Musk-narrative and EV-sector headline pattern.
+  - id: tsla-news-sentiment
+    ticker: TSLA
+    question: "What's the current news sentiment on TSLA — any notable headlines?"
+    expected_tools:
+      - company
+      - news
+    expected_intent: news_sentiment
+    reference_thesis: |
+      A useful answer is a focused news-sentiment read: 2-4 sentences
+      capturing the OVERALL TILT of recent TSLA headlines in qualitative
+      language ("constructive", "mixed", "cautious") with (source: news)
+      cites and (source: company) for any business-context grounding.
+      2-5 key-point bullets each quote or summarise one headline with
+      (source: news). Cited values list MAY be empty or hold one
+      qualitative label (e.g. "cautious" with source=news). NO P/E,
+      RSI, or other numeric indicators. NO four-section thesis, NO
+      verdict.
+
+  # META news sentiment — exercises the advertising / Reality Labs
+  # headline pattern and the brand-name relevance filter (META is
+  # headline-scoped in NEWS_RELEVANCE).
+  - id: meta-news-sentiment
+    ticker: META
+    question: "What's the news sentiment around META right now — anything worth flagging?"
+    expected_tools:
+      - company
+      - news
+    expected_intent: news_sentiment
+    reference_thesis: |
+      A useful answer is a focused news-sentiment read: 2-4 sentences
+      capturing the overall tone of recent META coverage in qualitative
+      language with (source: news) cites and (source: company) for any
+      segment-level grounding. 2-5 key-point bullets each surface one
+      headline or theme from the news report with (source: news). Cited
+      values list MAY be empty or hold one qualitative label. NO RSI,
+      MACD, P/E, or other numeric indicators. NO four-section thesis,
+      NO verdict.
