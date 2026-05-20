@@ -108,21 +108,21 @@ _PROMPT_VERSION: str = _prompt_version()
 
 
 def _prompt_cfg(config: RunnableConfig, prompt_name: str) -> RunnableConfig:
-    """Inject Langfuse prompt object for native trace linking (QNT-199).
+    """Inject prompt version metadata and native Langfuse prompt link (QNT-199).
 
-    When Langfuse Prompt Management is available (keys set + prompt pushed via
-    push_prompts.py), attaches the named prompt object as ``langfuse_prompt``
-    metadata so the CallbackHandler links the trace to the exact version in the
-    Langfuse UI. Falls back to content-hash metadata when unavailable (offline
-    dev, CI without keys, or first deploy before push_prompts.py has run).
+    Always sets ``prompt_version`` (content hash) so it's visible in Langfuse
+    metadata regardless of whether Prompt Management is configured. Also attaches
+    ``langfuse_prompt`` when the named prompt has been pushed to Langfuse Prompt
+    Management (prod post-deploy), enabling the native trace → prompt panel link.
     """
     from agent.tracing import get_langfuse_prompt
 
     existing: dict[str, object] = config.get("metadata") or {}
+    new_meta: dict[str, object] = {**existing, "prompt_version": _PROMPT_VERSION}
     prompt_obj = get_langfuse_prompt(prompt_name)
     if prompt_obj is not None:
-        return {**config, "metadata": {**existing, "langfuse_prompt": prompt_obj}}
-    return {**config, "metadata": {**existing, "prompt_version": _PROMPT_VERSION}}
+        new_meta["langfuse_prompt"] = prompt_obj
+    return {**config, "metadata": new_meta}
 
 
 # QNT-159: optional event emitter for streaming intermediate state out of the
