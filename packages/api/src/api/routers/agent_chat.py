@@ -600,6 +600,9 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
                     resolved = model_info.get("resolved_model")
                     if resolved and resolved != "unknown":
                         tags.append(f"model:{resolved}")
+                    classifier_source = state_obj.get("classifier_source")
+                    if isinstance(classifier_source, str) and classifier_source:
+                        tags.append(f"classifier_source:{classifier_source}")
                     langfuse._create_trace_tags_via_ingestion(  # noqa: SLF001 — no public v4 equivalent
                         trace_id=trace_id,
                         tags=tags,

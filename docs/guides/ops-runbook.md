@@ -783,6 +783,19 @@ CX41 totals: 16 GiB RAM. Pre-QNT-103 mem_limit allocation was 13.06 GiB (clickho
 
 **Response**: check Langfuse for the offending trace, read the full `verdict_action` and `reports["technical"]` in the trace payload, and compare the cited levels against the close. If the model is systematically wrong (multiple tickers, not just one), roll back the most recent system-prompt change. If the report shape changed, fix `_CLOSE_RE` in `post_checks.py` and redeploy.
 
+### `classifier_source=fallback` rate climbing (QNT-189)
+
+**What it means**: the `classifier_source:fallback` tag appears in Langfuse when the keyword heuristic abstains AND the LLM classifier call fails or times out, forcing a bias to `"thesis"`. A rising fallback share means the agent is silently routing more traffic through the safe-default thesis path when it should be using a narrower shape (quick_fact, focused, etc.).
+
+**Most likely root causes**:
+1. **LiteLLM / Groq outage** — the classifier LLM call (Groq `llama-3.3-70b` via LiteLLM) is returning 5xx or timing out. Check `docker compose logs litellm --tail 100` for upstream errors and the Groq status page.
+2. **LiteLLM rate-limit exhaustion** — classifier calls are counted against the Groq free-tier RPM/TPD quota. Check LiteLLM logs for `429` responses; if the bucket is full, the fallback will persist until the window resets.
+3. **LLM returning unexpected structured-output shape** — a model swap or provider quirk causing `with_structured_output(IntentDecision)` to return an unparseable response. Check recent LiteLLM model routing changes and verify with a manual `POST /api/v1/agent/chat` call while watching `docker compose logs api --tail 50` for the "classify llm returned unexpected shape" warning.
+
+**Verification**: in Langfuse, filter traces by tag `classifier_source:fallback` over the last 24 h. A healthy baseline is near-zero; sustained > 5% warrants investigation.
+
+**Response**: fix the upstream LiteLLM / provider issue and watch the fallback share drop in Langfuse within the next few requests. No data loss occurs — the agent answers every query, just with the heavier thesis shape. Safe to run in degraded mode until the provider recovers.
+
 ---
 
 ## Security notes

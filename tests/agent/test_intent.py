@@ -400,3 +400,56 @@ def test_heuristic_walk_through_without_technical_stays_thesis() -> None:
     from agent.intent import _heuristic_intent
 
     assert _heuristic_intent("Walk me through NVDA's setup") == "thesis"
+
+
+# ─── QNT-189: classify_intent_with_source ───────────────────────────────────
+
+
+def test_with_source_heuristic_path() -> None:
+    """A heuristic-matched question returns source='heuristic'."""
+    from agent.intent import classify_intent_with_source
+
+    intent, source = classify_intent_with_source("What's the RSI?")
+    assert intent == "quick_fact"
+    assert source == "heuristic"
+
+
+def test_with_source_llm_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Heuristic abstains, LLM succeeds — source='llm'."""
+    _patch_llm_pipeline(monkeypatch, IntentDecision(intent="thesis"))
+    from agent.intent import classify_intent_with_source
+
+    intent, source = classify_intent_with_source("Tell me about UNH")
+    assert intent == "thesis"
+    assert source == "llm"
+
+
+def test_with_source_fallback_path_on_llm_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LLM raises — source='fallback', intent defaults to 'thesis'."""
+    _patch_llm_pipeline(monkeypatch, None, invoke_raises=RuntimeError("timeout"))
+    from agent.intent import classify_intent_with_source
+
+    intent, source = classify_intent_with_source("Tell me about UNH")
+    assert intent == "thesis"
+    assert source == "fallback"
+
+
+def test_with_source_fallback_path_on_unexpected_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LLM returns unparseable shape — source='fallback', intent defaults to 'thesis'."""
+    _patch_llm_pipeline(monkeypatch, {"parsed": None, "parsing_error": "x"})
+    from agent.intent import classify_intent_with_source
+
+    intent, source = classify_intent_with_source("Tell me about UNH")
+    assert intent == "thesis"
+    assert source == "fallback"
+
+
+def test_with_source_llm_include_raw_dict(monkeypatch: pytest.MonkeyPatch) -> None:
+    """include_raw=True dict with a parsed IntentDecision → source='llm'."""
+    decision = IntentDecision(intent="quick_fact")
+    _patch_llm_pipeline(monkeypatch, {"parsed": decision, "raw": "..."})
+    from agent.intent import classify_intent_with_source
+
+    intent, source = classify_intent_with_source("Tell me about UNH")
+    assert intent == "quick_fact"
+    assert source == "llm"

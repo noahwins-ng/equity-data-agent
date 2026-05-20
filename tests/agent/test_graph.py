@@ -661,7 +661,9 @@ def test_classify_default_to_thesis_when_classify_intent_fails(
     node must default to ``thesis`` so the safe path runs. Defends the
     QNT-67 / QNT-128 contracts against a misbehaving classifier."""
     stub_llm.invoke.return_value = AIMessage(content="technical")
-    monkeypatch.setattr(graph_module, "classify_intent", lambda _q, **_: "thesis")
+    monkeypatch.setattr(
+        graph_module, "classify_intent_with_source", lambda _q, **_: ("thesis", "fallback")
+    )
     graph = build_graph({"technical": _mock_tool("tech")})
 
     result = graph.invoke({"ticker": "NVDA", "question": "ambiguous mid-length question"})
@@ -676,7 +678,9 @@ def test_quick_fact_intent_narrows_plan_prompt(
     """Plan prompt for quick_fact bias should tell the LLM to fetch only
     the needed report. Direct check on the planner-prompt builder rather
     than asserting the LLM's choice (which is up to the model)."""
-    monkeypatch.setattr(graph_module, "classify_intent", lambda _q, **_: "quick_fact")
+    monkeypatch.setattr(
+        graph_module, "classify_intent_with_source", lambda _q, **_: ("quick_fact", "heuristic")
+    )
     stub_llm.invoke.return_value = AIMessage(content="technical")
     graph = build_graph({"technical": _mock_tool("tech")})
 
@@ -742,7 +746,9 @@ def test_comparison_with_only_one_resolved_ticker_falls_back_to_redirect(
     deterministic conversational redirect with hint=comparison."""
     from agent.conversational import ConversationalAnswer
 
-    monkeypatch.setattr(graph_module, "classify_intent", lambda _q, **_: "comparison")
+    monkeypatch.setattr(
+        graph_module, "classify_intent_with_source", lambda _q, **_: ("comparison", "heuristic")
+    )
     stub_llm.invoke.return_value = AIMessage(content="fundamental")
     graph = build_graph({"fundamental": _mock_tool("fund")})
 
@@ -841,7 +847,9 @@ def test_comparison_skips_when_one_ticker_has_no_reports(
     NOT produce a half-comparison — it falls back to a redirect."""
     from agent.conversational import ConversationalAnswer
 
-    monkeypatch.setattr(graph_module, "classify_intent", lambda _q, **_: "comparison")
+    monkeypatch.setattr(
+        graph_module, "classify_intent_with_source", lambda _q, **_: ("comparison", "heuristic")
+    )
     stub_llm.invoke.return_value = AIMessage(content="fundamental")
 
     def aapl_only(ticker: str) -> str:

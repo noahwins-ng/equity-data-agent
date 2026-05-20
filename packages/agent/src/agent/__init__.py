@@ -1,7 +1,13 @@
 from agent.comparison import ComparisonAnswer, ComparisonSection, ComparisonValue
 from agent.conversational import ConversationalAnswer, domain_redirect
 from agent.graph import AgentState, ToolFn, build_graph
-from agent.intent import Intent, classify_intent, extract_tickers
+from agent.intent import (
+    ClassifierSource,
+    Intent,
+    classify_intent,
+    classify_intent_with_source,
+    extract_tickers,
+)
 from agent.llm import get_llm
 from agent.prompts import (
     COMPARISON_SYSTEM_PROMPT,
@@ -45,7 +51,9 @@ __all__ = [
     "build_graph",
     "build_quick_fact_prompt",
     "build_synthesis_prompt",
+    "ClassifierSource",
     "classify_intent",
+    "classify_intent_with_source",
     "default_report_tools",
     "domain_redirect",
     "extract_tickers",
