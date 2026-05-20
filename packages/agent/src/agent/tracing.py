@@ -22,6 +22,7 @@ import logging
 
 from langfuse import Langfuse, observe, propagate_attributes
 from langfuse.langchain import CallbackHandler
+from langfuse.model import TextPromptClient
 from shared.config import settings
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,7 @@ def make_callback_handler() -> CallbackHandler | None:
     return CallbackHandler() if langfuse is not None else None
 
 
-def get_langfuse_prompt(name: str) -> object | None:
+def get_langfuse_prompt(name: str) -> TextPromptClient | None:
     """Return a Langfuse prompt object for native trace linking, or None.
 
     Uses the Langfuse SDK's built-in in-process cache (1-hour TTL) so
@@ -71,6 +72,7 @@ def flush() -> None:
 
 __all__ = [
     "CallbackHandler",
+    "TextPromptClient",
     "flush",
     "get_langfuse_prompt",
     "langfuse",
