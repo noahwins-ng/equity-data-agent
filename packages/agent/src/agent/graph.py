@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import TYPE_CHECKING, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
@@ -107,23 +107,41 @@ def _prompt_version() -> str:
 _PROMPT_VERSION: str = _prompt_version()
 
 
-def _prompt_cfg(config: RunnableConfig, prompt_name: str) -> RunnableConfig:
-    """Inject prompt version metadata and native Langfuse prompt link (QNT-199).
+def _linked_invoke(
+    runnable: Any,
+    prompt: list[Any],
+    config: RunnableConfig,
+    prompt_name: str,
+) -> Any:
+    """Invoke ``runnable`` with prompt version metadata + native Langfuse prompt link.
 
-    Always sets ``prompt_version`` (content hash) so it's visible in Langfuse
-    metadata regardless of whether Prompt Management is configured. Also attaches
-    ``langfuse_prompt`` when the named prompt has been pushed to Langfuse Prompt
-    Management (prod post-deploy), enabling the native trace → prompt panel link.
+    When Langfuse Prompt Management is available, wraps the pre-built message list
+    in a ChatPromptTemplate (via MessagesPlaceholder — no template expansion, safe
+    for report content with curly braces) with ``langfuse_prompt`` metadata, then
+    chains to ``runnable``. The CallbackHandler reads ``langfuse_prompt`` from the
+    PromptTemplate step and creates a native trace → Prompt panel link in Langfuse.
+
+    Falls back to direct invoke when Langfuse keys are unset (CI, local dev).
+    Always sets ``prompt_version`` so the version is visible in trace metadata
+    regardless of whether native linking is active.
     """
+    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+
     from agent.tracing import get_langfuse_prompt
 
-    existing: dict[str, object] = config.get("metadata") or {}
     prompt_obj = get_langfuse_prompt(prompt_name)
     version = str(prompt_obj.version) if prompt_obj is not None else _PROMPT_VERSION
-    new_meta: dict[str, object] = {**existing, "prompt_version": version}
+    existing: dict[str, object] = config.get("metadata") or {}
+    cfg: RunnableConfig = {**config, "metadata": {**existing, "prompt_version": version}}
+
     if prompt_obj is not None:
-        new_meta["langfuse_prompt"] = prompt_obj
-    return {**config, "metadata": new_meta}
+        template = ChatPromptTemplate.from_messages(
+            [MessagesPlaceholder(variable_name="messages")]
+        ).with_config(metadata={"langfuse_prompt": prompt_obj})
+        chain = template | runnable
+        return chain.invoke({"messages": prompt}, config=cfg)
+
+    return runnable.invoke(prompt, config=cfg)
 
 
 # QNT-159: optional event emitter for streaming intermediate state out of the
@@ -672,9 +690,7 @@ def build_graph(
             prompt = build_conversational_prompt(question)
             structured_llm = get_llm().with_structured_output(ConversationalAnswer)
             try:
-                response = structured_llm.invoke(
-                    prompt, config=_prompt_cfg(config, "conversational-prompt")
-                )
+                response = _linked_invoke(structured_llm, prompt, config, "conversational-prompt")
             except Exception as exc:  # noqa: BLE001 — fall back to deterministic redirect
                 logger.warning(
                     "synthesize %s: conversational structured output failed: %s",
@@ -707,9 +723,7 @@ def build_graph(
             prompt = build_comparison_prompt(comparison_tickers, question, reports_by_ticker)
             structured_llm = get_llm().with_structured_output(ComparisonAnswer)
             try:
-                response = structured_llm.invoke(
-                    prompt, config=_prompt_cfg(config, "comparison-prompt")
-                )
+                response = _linked_invoke(structured_llm, prompt, config, "comparison-prompt")
             except Exception as exc:  # noqa: BLE001 — fall back to redirect
                 logger.warning(
                     "synthesize %s: comparison structured output failed: %s",
@@ -738,9 +752,7 @@ def build_graph(
             prompt = build_focused_prompt(intent, ticker, question, reports)
             structured_llm = get_llm().with_structured_output(FocusedAnalysis)
             try:
-                response = structured_llm.invoke(
-                    prompt, config=_prompt_cfg(config, "focused-prompt")
-                )
+                response = _linked_invoke(structured_llm, prompt, config, "focused-prompt")
             except Exception as exc:  # noqa: BLE001 — surface as fallback redirect
                 logger.warning(
                     "synthesize %s: focused (%s) structured output failed: %s",
@@ -772,9 +784,7 @@ def build_graph(
             prompt = build_quick_fact_prompt(ticker, question, reports)
             structured_llm = get_llm().with_structured_output(QuickFactAnswer)
             try:
-                response = structured_llm.invoke(
-                    prompt, config=_prompt_cfg(config, "quick-fact-prompt")
-                )
+                response = _linked_invoke(structured_llm, prompt, config, "quick-fact-prompt")
             except Exception as exc:  # noqa: BLE001 — surface as fallback redirect
                 logger.warning(
                     "synthesize %s: quick-fact structured output failed: %s", ticker, exc
@@ -802,7 +812,7 @@ def build_graph(
         # rather than crashing the whole run.
         structured_llm = get_llm().with_structured_output(Thesis)
         try:
-            response = structured_llm.invoke(prompt, config=_prompt_cfg(config, "system-prompt"))
+            response = _linked_invoke(structured_llm, prompt, config, "system-prompt")
         except Exception as exc:  # noqa: BLE001 — surface as fallback redirect
             logger.warning("synthesize %s: structured output failed: %s", ticker, exc)
             response = None
