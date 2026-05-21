@@ -453,7 +453,7 @@ function ThesisCard({
               </div>
               <div className="h-1 w-full overflow-hidden rounded bg-zinc-800">
                 <div
-                  className="h-full bg-emerald-500"
+                  className="h-full bg-sky-500"
                   style={{ width: `${confidencePct}%` }}
                 />
               </div>
