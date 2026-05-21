@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { Analytics } from "@vercel/analytics/next";
 import { ChatPanel } from "@/components/chat-panel";
 import { MobileNav } from "@/components/mobile-chat-toggle";
+import { WatchlistDrawer } from "@/components/watchlist-drawer";
 import { Watchlist } from "@/components/watchlist";
 import "./globals.css";
 
@@ -45,12 +46,13 @@ export default function RootLayout({
     >
       <body className="relative flex h-full flex-col overflow-hidden bg-zinc-950 text-zinc-100">
         <MobileNav watchlist={<Watchlist />} />
-        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden sm:grid-cols-[minmax(0,1fr)_28rem] lg:grid-cols-[17rem_minmax(0,1fr)_28rem]">
-          <div className="hidden lg:block">
+        <WatchlistDrawer watchlist={<Watchlist />} />
+        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden md:grid-cols-[minmax(0,1fr)_clamp(18rem,30%,22rem)] lg:grid-cols-[minmax(0,1fr)_clamp(22rem,28%,26rem)] xl:grid-cols-[17rem_minmax(0,1fr)_clamp(22rem,26%,28rem)]">
+          <div className="hidden xl:block">
             <Watchlist />
           </div>
           <main className="min-h-0 overflow-y-auto">{children}</main>
-          <div className="hidden sm:block">
+          <div className="hidden md:block">
             <ChatPanel />
           </div>
         </div>

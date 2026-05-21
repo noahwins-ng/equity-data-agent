@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ChatPanel } from "@/components/chat-panel";
+import { ChartDataIcon } from "@/components/icons/chart-data";
 
 type Panel = "chat" | "watchlist" | null;
 
@@ -10,8 +11,8 @@ type Props = {
 };
 
 /**
- * Mobile-only nav header with hamburger menu.
- * Renders a header bar (sm:hidden) + panel overlays for Watchlist and Chat.
+ * Mobile/tablet nav header with hamburger menu.
+ * Renders a header bar (lg:hidden) + panel overlays for Watchlist and Chat.
  * Placed above the main grid in the root layout; panel overlays sit below the bar.
  */
 export function MobileNav({ watchlist }: Props) {
@@ -30,8 +31,8 @@ export function MobileNav({ watchlist }: Props) {
 
   return (
     <>
-      {/* Header bar — only visible on mobile */}
-      <header className="flex h-10 shrink-0 items-center gap-3 border-b border-zinc-800 bg-zinc-950 px-3 sm:hidden">
+      {/* Header bar — only visible on mobile (<768px) */}
+      <header className="flex h-10 shrink-0 items-center gap-3 border-b border-zinc-800 bg-zinc-950 px-3 md:hidden">
         <button
           onClick={() => (panel !== null ? closeAll() : setMenuOpen((v) => !v))}
           className="flex h-7 w-7 items-center justify-center rounded text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-100"
@@ -47,6 +48,7 @@ export function MobileNav({ watchlist }: Props) {
             </svg>
           )}
         </button>
+        <ChartDataIcon className="h-5 w-5 flex-shrink-0 text-emerald-400" />
         <span className="font-mono text-xs font-semibold uppercase tracking-widest text-zinc-400">
           Equity Data Agent
         </span>
@@ -54,7 +56,7 @@ export function MobileNav({ watchlist }: Props) {
 
       {/* Dropdown menu — appears below header bar */}
       {menuOpen && (
-        <div className="absolute left-0 right-0 top-10 z-50 border-b border-zinc-800 bg-zinc-900 sm:hidden">
+        <div className="absolute left-0 right-0 top-10 z-50 border-b border-zinc-800 bg-zinc-900 md:hidden">
           <button
             onClick={() => openPanel("watchlist")}
             className="flex w-full items-center gap-2 px-4 py-3 font-mono text-xs uppercase tracking-wider text-zinc-300 transition hover:bg-zinc-800 hover:text-zinc-100"
@@ -64,10 +66,10 @@ export function MobileNav({ watchlist }: Props) {
             </svg>
             Watchlist
           </button>
-          <div className="mx-4 border-t border-zinc-800" />
+          <div className="mx-4 border-t border-zinc-800 md:hidden" />
           <button
             onClick={() => openPanel("chat")}
-            className="flex w-full items-center gap-2 px-4 py-3 font-mono text-xs uppercase tracking-wider text-zinc-300 transition hover:bg-zinc-800 hover:text-zinc-100"
+            className="flex w-full items-center gap-2 px-4 py-3 font-mono text-xs uppercase tracking-wider text-zinc-300 transition hover:bg-zinc-800 hover:text-zinc-100 md:hidden"
           >
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="h-3.5 w-3.5" aria-hidden="true">
               <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z" />
@@ -79,12 +81,17 @@ export function MobileNav({ watchlist }: Props) {
 
       {/* Panel overlays — fill remaining height below header */}
       {panel === "watchlist" && (
-        <div className="absolute inset-x-0 bottom-0 top-10 z-40 overflow-y-auto sm:hidden">
+        <div
+          className="absolute inset-x-0 bottom-0 top-10 z-40 overflow-y-auto md:hidden [&_aside>div:first-child]:hidden"
+          onClick={(e) => {
+            if ((e.target as Element).closest("a")) closeAll();
+          }}
+        >
           {watchlist}
         </div>
       )}
       {panel === "chat" && (
-        <div className="absolute inset-x-0 bottom-0 top-10 z-40 sm:hidden">
+        <div className="absolute inset-x-0 bottom-0 top-10 z-40 md:hidden">
           <ChatPanel />
         </div>
       )}
