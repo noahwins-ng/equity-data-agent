@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Analytics } from "@vercel/analytics/next";
 import { ChatPanel } from "@/components/chat-panel";
+import { MobileNav } from "@/components/mobile-chat-toggle";
 import { Watchlist } from "@/components/watchlist";
 import "./globals.css";
 
@@ -42,11 +43,16 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="h-full overflow-hidden bg-zinc-950 text-zinc-100">
-        <div className="grid h-screen grid-cols-[17rem_minmax(0,1fr)_28rem] grid-rows-1 overflow-hidden">
-          <Watchlist />
+      <body className="relative flex h-full flex-col overflow-hidden bg-zinc-950 text-zinc-100">
+        <MobileNav watchlist={<Watchlist />} />
+        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden sm:grid-cols-[minmax(0,1fr)_28rem] lg:grid-cols-[17rem_minmax(0,1fr)_28rem]">
+          <div className="hidden lg:block">
+            <Watchlist />
+          </div>
           <main className="min-h-0 overflow-y-auto">{children}</main>
-          <ChatPanel />
+          <div className="hidden sm:block">
+            <ChatPanel />
+          </div>
         </div>
         <Analytics />
       </body>
