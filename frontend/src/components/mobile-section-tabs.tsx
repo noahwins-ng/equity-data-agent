@@ -51,10 +51,8 @@ export function MobileSectionTabs({ technicals, fundamentals, news }: Props) {
         {content[active]}
       </div>
 
-      {/* ≥1280px: shown. 1280–1439px: flex column, cards at natural height,
-          outer container scrolls. ≥1440px: 3-column grid, cards fill row
-          height, inner scroll. */}
-      <div className="hidden min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-6 py-2 xl:flex [&>*]:shrink-0 [&>*]:min-h-[16rem] min-[1440px]:grid min-[1440px]:grid-cols-3 min-[1440px]:overflow-hidden min-[1440px]:[&>*]:min-h-0">
+      {/* ≥1280px: 3-column grid, cards fill container height with inner scroll. */}
+      <div className="hidden min-h-0 flex-1 gap-3 overflow-hidden px-6 py-2 xl:grid xl:grid-cols-3">
         {technicals}
         {fundamentals}
         {news}
