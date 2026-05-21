@@ -56,15 +56,19 @@ export function QuoteHeader({
   return (
     <header
       aria-label={`Quote header for ${quote.ticker}`}
-      className="border-b border-zinc-800 bg-zinc-950 px-6 py-1.5"
+      className="shrink-0 border-b border-zinc-800 bg-zinc-950 px-4 py-2"
     >
-      <div className="flex items-center justify-between gap-4">
+      {/* Mobile: stack identity above price row.
+          md+: single row with identity left, price right. */}
+      <div className="flex flex-col gap-1 md:flex-row md:items-center md:justify-between md:gap-4">
+
+        {/* Identity — logo + ticker + name + chips, wraps freely */}
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-          <TickerLogo ticker={quote.ticker} logoUrl={logoUrl} size={28} />
-          <h1 className="font-mono text-xl font-semibold tracking-tight text-zinc-50">
+          <TickerLogo ticker={quote.ticker} logoUrl={logoUrl} size={26} />
+          <h1 className="font-mono text-lg font-semibold tracking-tight text-zinc-50">
             {quote.ticker}
           </h1>
-          <span className="truncate text-xs text-zinc-300">{quote.name}</span>
+          <span className="truncate text-xs text-zinc-400">{quote.name}</span>
           {quote.sector && (
             <span className="rounded border border-zinc-700 px-1 py-px text-[9px] uppercase tracking-wider text-zinc-300">
               {quote.sector}
@@ -72,9 +76,6 @@ export function QuoteHeader({
           )}
           {capTier && (
             <span className="rounded border border-zinc-700 px-1 py-px text-[9px] uppercase tracking-wider text-zinc-300">
-              {/* Cap-tier chip carries both the categorical label and the
-                  precise value. "Mega-cap · $5.06T" reads as one atom and
-                  saves the row a dedicated Stat for Mkt cap. */}
               {capTier}
               {capValue !== "—" ? (
                 <span className="ml-1 normal-case text-zinc-400">· {capValue}</span>
@@ -82,7 +83,9 @@ export function QuoteHeader({
             </span>
           )}
         </div>
-        <div className="flex shrink-0 items-baseline gap-2 whitespace-nowrap">
+
+        {/* Price row — inline on all sizes, right-aligned on md+ */}
+        <div className="flex shrink-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 md:justify-end">
           <span className="font-mono text-xl font-semibold tabular-nums leading-none text-zinc-50">
             {formatPrice(quote.price)}
           </span>
@@ -94,6 +97,7 @@ export function QuoteHeader({
             close {formatAsOfDate(quote.as_of)}
           </span>
         </div>
+
       </div>
     </header>
   );

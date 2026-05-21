@@ -23,6 +23,7 @@ import { PriceChart } from "@/components/ticker/price-chart";
 import { ProvenanceStrip } from "@/components/ticker/provenance-strip";
 import { QuoteHeader } from "@/components/ticker/quote-header";
 import { TechnicalsCard } from "@/components/ticker/technicals-card";
+import { MobileSectionTabs } from "@/components/mobile-section-tabs";
 import {
   API_BASE_URL,
   IS_PRERENDER,
@@ -108,19 +109,11 @@ export default async function TickerDetailPage({ params }: { params: Params }) {
     <div className="flex h-full flex-col">
       <QuoteHeader quote={quote} logoUrl={logoUrl} />
       <PriceChart ticker={ticker} />
-      {/*
-        The 3-card row fills whatever vertical space is left below the chart
-        and lets each card scroll independently. `min-h-0` on the grid track
-        is the magic incantation: without it the implicit `min-height: auto`
-        on flex items lets the news card's tall content push the page taller
-        than the viewport, which is exactly the awkward scrolling we want to
-        avoid.
-      */}
-      <div className="grid min-h-0 flex-1 grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-3 overflow-hidden px-6 py-2">
-        <TechnicalsCard ticker={ticker} />
-        <FundamentalsCard ticker={ticker} currentPrice={quote.price} />
-        <NewsCard items={news} />
-      </div>
+      <MobileSectionTabs
+        technicals={<TechnicalsCard ticker={ticker} />}
+        fundamentals={<FundamentalsCard ticker={ticker} currentPrice={quote.price} />}
+        news={<NewsCard items={news} />}
+      />
       <ProvenanceStrip />
     </div>
   );

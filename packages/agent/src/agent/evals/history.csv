@@ -581,3 +581,12 @@ run_id,git_sha,prompt_version,ticker,question_id,question,faithfulness,structure
 20260520T161350Z-436354,6de96e4,085eb3b1cb,GOOGL,googl-technical-deepdive,"Give me a detailed technical analysis on GOOGL — trend, momentum, and chart setup.",,,,,8,0.5289,1,1,7485
 20260520T161350Z-436354,6de96e4,085eb3b1cb,TSLA,tsla-news-sentiment,What's the current news sentiment on TSLA — any notable headlines?,,,,,7,0.4485,1,1,7180
 20260520T161350Z-436354,6de96e4,085eb3b1cb,META,meta-news-sentiment,What's the news sentiment around META right now — anything worth flagging?,,,,,6,0.4582,1,1,6010
+20260520T173847Z-63ca05,ae80e70,085eb3b1cb,NVDA,nvda-technical,Is NVDA overbought right now? Walk me through the technical setup.,10,0,10,10,8,0.442,1,1,2927
+20260520T173847Z-63ca05,ae80e70,085eb3b1cb,NVDA,nvda-fundamental,What does NVDA's most recent fundamental picture look like?,10,0,8,10,7,0.3913,1,1,7343
+20260520T173847Z-63ca05,ae80e70,085eb3b1cb,NVDA,nvda-quickfact-rsi,What's NVDA's RSI right now?,10,0,10,10,8,0.407,1,1,7551
+20260520T173847Z-63ca05,ae80e70,085eb3b1cb,NVDA,nvda-vs-aapl-fundamental,Compare NVDA vs AAPL on valuation and fundamentals.,10,8,8,8,8,0.3001,1,1,9383
+20260520T173847Z-63ca05,ae80e70,085eb3b1cb,NVDA,conversational-off-domain-weather,What's the weather like today?,10,0,10,10,8,0.2857,1,1,6111
+20260520T173847Z-63ca05,ae80e70,085eb3b1cb,NVDA,nvda-msft-rsi-regime-contrast,Compare NVDA vs MSFT on technical momentum.,10,0,2,4,4,0.3644,1,1,8901
+20260520T173847Z-63ca05,ae80e70,085eb3b1cb,NVDA,nvda-rsi-momentum-delta,Give me a balanced thesis on NVDA — is the technical momentum supporting further upside?,10,10,6,7,8,0.363,1,1,8824
+20260520T173847Z-63ca05,ae80e70,085eb3b1cb,NVDA,nvda-rsi-neutral-trending-down,Give me a thesis on NVDA — what does the RSI trend say about near-term momentum?,10,10,8,8,9,0.4769,1,1,8403
+20260520T173847Z-63ca05,ae80e70,085eb3b1cb,NVDA,conversational-off-domain-coding,Can you help me debug a Python function that's throwing a KeyError?,10,0,0,10,5,0.099,1,1,6987
