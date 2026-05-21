@@ -52,7 +52,7 @@ export default function RootLayout({
             <Watchlist />
           </div>
           <main className="min-h-0 overflow-y-auto">{children}</main>
-          <div className="hidden md:block">
+          <div className="hidden md:flex md:min-h-0 md:flex-col">
             <ChatPanel />
           </div>
         </div>
