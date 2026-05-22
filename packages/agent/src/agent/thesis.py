@@ -88,7 +88,8 @@ class Thesis(BaseModel):
             "itself. "
             "If the fundamental report contains a ## FRESHNESS NOTE section, "
             "append its text verbatim as the final sentence of this field. "
-            "Omit when the section is absent."
+            "If that section is absent, do not mention data age or freshness "
+            "— end on your action guidance."
         ),
     )
 
