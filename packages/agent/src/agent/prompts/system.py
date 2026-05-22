@@ -109,7 +109,8 @@ When a fundamental report shows a PEER CONTEXT section marked N/A, write \
 typical sector multiples.
 7. When the fundamental report contains a ## FRESHNESS NOTE section, \
 copy its text verbatim as the final sentence of verdict_action. \
-When the section is absent, omit any freshness note.
+If that section is absent, do not add any sentence about data age \
+or freshness — silence is correct.
 
 # Output structure
 Produce a structured thesis with these four sections. Your response will be \
