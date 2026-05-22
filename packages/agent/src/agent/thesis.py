@@ -45,14 +45,15 @@ class Thesis(BaseModel):
 
     setup: str = Field(
         description=(
-            "Three-sentence opener anchored to verbatim numbers from the fundamental report: "
-            "(1) state the latest valuation multiple from the VALUATION block verbatim, "
-            "(2) state the trailing growth rate from the GROWTH (YoY) block verbatim, "
-            "(3) state the condition that would have to remain true or change for the "
-            "multiple to be defensible — derived from the report, not prior knowledge. "
-            "Cite (source: fundamental) on each sentence. "
-            "Do not open with journalistic framing ('stands at a crossroads'). "
-            "Every digit must appear verbatim in the supplied reports."
+            "Two-to-three sentences of analytical prose establishing the context for "
+            "this ticker. Lead with the most significant signal across the supplied "
+            "reports — valuation relative to own history, growth trajectory, technical "
+            "posture, or a news catalyst — whichever dominates right now. Weave numbers "
+            "into the prose rather than stating them as bare facts in separate sentences. "
+            "Cite (source: company|technical|fundamental|news) on each sentence that "
+            "makes a numeric or factual claim. Every digit must appear verbatim in the "
+            "supplied reports. Do not open with journalistic framing ('stands at a "
+            "crossroads', 'faces a pivotal moment')."
         ),
     )
     bull_case: list[str] = Field(

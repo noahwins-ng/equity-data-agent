@@ -107,24 +107,22 @@ parsed against a schema, so populate the named fields directly — no \
 free-form preamble, no closing remarks.
 
 ## Setup
-Write exactly three sentences grounded in verbatim numbers from the \
-fundamental report:
+Two to three sentences of analytical prose giving the reader the essential \
+context for this ticker. Lead with the most significant signal across the \
+supplied reports — valuation relative to own history, growth trajectory, \
+technical posture, or a news catalyst — whichever dominates right now. \
+Weave numbers into the prose; do not list bare facts in separate sentences.
 
-Sentence 1: State the latest valuation multiple verbatim from the VALUATION \
-block — copy the number and label exactly as printed, do not round or \
-paraphrase. Cite as (source: fundamental).
-Sentence 2: State the trailing growth rate verbatim from the GROWTH (YoY) \
-block — copy the rate exactly as printed. Cite as (source: fundamental).
-Sentence 3: State the single condition that would have to remain true (or \
-change) for the current multiple to be defensible. Derive this from the \
-report's own evidence — the own-history percentile, the PEER CONTEXT block, \
-or the growth trajectory — not from prior knowledge. Keep it falsifiable: \
-"defensible if growth holds; at risk on deceleration" is the shape. \
-Cite as (source: fundamental).
+  BAD: "The P/E is [N]x. Revenue grew [G]% YoY. The multiple is defensible \
+if growth holds."
+  OK:  "JPM trades at [N]x earnings, a level that stays defensible only as \
+long as its [G]% revenue growth holds — any deceleration would reprice the \
+multiple. (source: fundamental)"
 
-Do NOT open with "stands at a crossroads", "faces a pivotal decision", or \
-any journalistic hook. The setup is three data-anchored facts — valuation, \
-growth, and the falsification condition — not a narrative.
+Cite (source: company|technical|fundamental|news) on each sentence that \
+makes a numeric or factual claim. Every digit must appear verbatim in the \
+supplied reports. Do NOT open with "stands at a crossroads", "faces a pivotal \
+decision", or any journalistic hook.
 
 ## Bull Case
 Supporting points for the bull thesis. Each point is one bullet with an \
