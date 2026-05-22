@@ -342,14 +342,7 @@ def build_fundamental_report(ticker: str) -> str:
         "",
         "## SIGNAL",
         _signal_verdict(latest),
+        "",
+        f"Data: latest available quarterly fundamentals as of {period_end.isoformat()}.",
     ]
-    if days_old > 90:
-        lines.extend(
-            [
-                "",
-                "## FRESHNESS NOTE",
-                f"Note: latest fundamentals are from {period_end.isoformat()} "
-                f"({days_old} days old — treat forward-looking estimates with extra caution).",
-            ]
-        )
     return "\n".join(lines)

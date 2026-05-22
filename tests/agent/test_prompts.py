@@ -201,15 +201,6 @@ def test_system_prompt_forbids_inventing_peer_comparisons() -> None:
     assert "sector" in text
 
 
-def test_system_prompt_requires_freshness_note_for_old_data() -> None:
-    """AC6 regression guard: prompt must instruct the model to copy the
-    ## FRESHNESS NOTE section verbatim into verdict_action when present.
-    """
-    text = SYSTEM_PROMPT.lower()
-    assert "freshness note" in text
-    assert "verbatim" in text
-
-
 def test_build_synthesis_prompt_returns_system_then_user_message() -> None:
     """Review fix: SYSTEM_PROMPT must land in the system turn so providers
     weight it correctly, not flattened into a single HumanMessage. Returning

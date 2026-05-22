@@ -499,27 +499,14 @@ def test_technical_header_freshness(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "days old" in report
 
 
-def test_fundamental_freshness_note_emitted_when_stale(
+def test_fundamental_static_data_disclaimer_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC6: report with period_end > 90 days ago includes ## FRESHNESS NOTE section."""
-    # default _fund_row() has period_end=2025-12-31 which is >90 days old
+    """AC6 (revised): report always carries a static disclaimer citing the period date."""
     _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, [_fund_row()])})
     report = build_fundamental_report("NVDA")
-    assert "## FRESHNESS NOTE" in report
-    assert "days old" in report
-
-
-def test_fundamental_no_freshness_note_when_current(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """AC6: report with recent period_end omits ## FRESHNESS NOTE section."""
-    from datetime import timedelta
-
-    recent = _fund_row(period_end=date.today() - timedelta(days=30))
-    _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, [recent])})
-    report = build_fundamental_report("NVDA")
-    assert "## FRESHNESS NOTE" not in report
+    assert "Data: latest available quarterly fundamentals as of" in report
+    assert "2025-12-31" in report
 
 
 # ---------- news ----------
