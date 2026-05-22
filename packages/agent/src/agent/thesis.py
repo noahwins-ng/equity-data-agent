@@ -45,10 +45,14 @@ class Thesis(BaseModel):
 
     setup: str = Field(
         description=(
-            "One-paragraph framing of the central question for this ticker. "
-            "Name what is at stake — the tension that makes this a decision, "
-            "not just 'here is NVDA'. Cite the supplied reports for any "
-            "numeric or factual claim using (source: company|technical|fundamental|news)."
+            "Three-sentence opener anchored to verbatim numbers from the fundamental report: "
+            "(1) state the latest valuation multiple from the VALUATION block verbatim, "
+            "(2) state the trailing growth rate from the GROWTH (YoY) block verbatim, "
+            "(3) state the condition that would have to remain true or change for the "
+            "multiple to be defensible — derived from the report, not prior knowledge. "
+            "Cite (source: fundamental) on each sentence. "
+            "Do not open with journalistic framing ('stands at a crossroads'). "
+            "Every digit must appear verbatim in the supplied reports."
         ),
     )
     bull_case: list[str] = Field(

@@ -613,3 +613,88 @@ def test_system_prompt_no_cross_case_duplication_rule_present() -> None:
     # "bull→not-in-bear" must both be stated so the LLM can't read it as one-way.
     assert "no-cross-case-duplication rule" in text
     assert "an indicator placed in the bull case must not appear here" in text
+
+
+def test_system_prompt_setup_template_anchors_to_verbatim_blocks() -> None:
+    """QNT-205: setup template. The setup section must instruct the model
+    to produce exactly three sentences anchored to verbatim block values,
+    replacing the journalism-style 'name the tension' framing.
+
+    Pins four invariants:
+    * The template names all three sentences so the structure is unambiguous.
+    * The block anchors match the actual fundamental report section headers.
+    * The falsification-condition shape is named.
+    * The journalism-hook prohibition is explicit.
+    """
+    text = SYSTEM_PROMPT
+    # All three sentence labels must be present.
+    assert "Sentence 1" in text
+    assert "Sentence 2" in text
+    assert "Sentence 3" in text
+    # Block anchors must match the fundamental report's exact section names.
+    assert "VALUATION" in text
+    assert "GROWTH (YoY)" in text
+    # The falsification shape must be named so the model knows what S3 looks like.
+    assert "falsifiable" in text
+    # The journalism-hook prohibition must call out the exact bad opening.
+    assert "stands at a crossroads" in text
+
+
+def test_system_prompt_force_stance_rule_requires_side_on_extreme_labels() -> None:
+    """QNT-205: force-stance rule. When extreme regime labels are present,
+    the model must pick a side rather than defaulting to 'mixed'/'cautious'.
+
+    Pins four invariants:
+    * The rule explicitly states mixed/cautious are not defaults.
+    * The override condition references extreme regime labels.
+    * The prescribed side choice uses the schema vocabulary.
+    * The interquartile-range condition names the VALUATION block.
+    """
+    text = SYSTEM_PROMPT
+    assert "'Mixed' and 'cautious' require justification" in text
+    assert "extreme regime label" in text
+    assert "use 'constructive' or 'negative'" in text
+    assert "own-history" in text
+    assert "interquartile range" in text
+
+
+def test_focused_prompt_positive_spec_names_three_variants() -> None:
+    """QNT-205: positive artifact spec. FOCUSED_SYSTEM_PROMPT must name all
+    three focus variants with concrete bullet specs rather than back-to-back
+    prohibitions.
+
+    Pins four invariants:
+    * All three focus types are named.
+    * The technical spec references the correct domain metrics.
+    * The fundamental spec references the GROWTH (YoY) block.
+    * A three-bullet requirement is stated.
+    """
+    from agent.prompts.system import FOCUSED_SYSTEM_PROMPT
+
+    text = FOCUSED_SYSTEM_PROMPT
+    assert "technical focus" in text
+    assert "fundamental focus" in text
+    assert "news_sentiment focus" in text
+    assert "MA crossovers" in text
+    assert "RSI and MACD" in text
+    assert "GROWTH (YoY)" in text
+    assert "three" in text  # "Produce exactly three bullets"
+
+
+def test_comparison_prompt_allows_ranking_without_arithmetic_threshold() -> None:
+    """QNT-205: comparison ranking exception. The COMPARISON_SYSTEM_PROMPT must
+    allow naming the more expensive ticker on material multi-metric gaps, but
+    must NOT require the LLM to compute a percentage (which would violate
+    ADR-003 Rule 1).
+
+    Pins three invariants:
+    * The ranking exception is present.
+    * The no-recommendation boundary is preserved.
+    * No numeric percentage threshold is present (arithmetic trap removed).
+    """
+    text = COMPARISON_SYSTEM_PROMPT
+    assert "more expensive" in text
+    # No-recommendation boundary must survive the ranking exception.
+    assert "recommendation" in text
+    # Percentage threshold would require LLM arithmetic — must not be present.
+    assert "15%" not in text
