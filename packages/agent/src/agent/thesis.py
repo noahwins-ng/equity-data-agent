@@ -85,7 +85,10 @@ class Thesis(BaseModel):
             "in this field must be a re-quote from the report bodies. Do "
             "not write any literal number that is not already in the "
             "reports, and do not echo numbers from the schema description "
-            "itself."
+            "itself. "
+            "If the fundamental report contains a ## FRESHNESS NOTE section, "
+            "append its text verbatim as the final sentence of this field. "
+            "Omit when the section is absent."
         ),
     )
 

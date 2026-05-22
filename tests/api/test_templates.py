@@ -50,13 +50,24 @@ def _reset_client_cache() -> Iterable[None]:
     clickhouse_module.get_client.cache_clear()
 
 
+_EMPTY_PEER_RESULT = _FakeResult(("pe_ratio", "ev_ebitda", "price_to_sales"), [])
+
+
 def _install_fake(monkeypatch: pytest.MonkeyPatch, canned: dict[str, _FakeResult]) -> None:
     """Swap get_client() for a fake in every place the templates imported it.
 
     Each template does ``from api.clickhouse import get_client`` so the name is
     bound at module load — patching ``api.clickhouse.get_client`` alone isn't
     enough; the templates' already-resolved reference must also be replaced.
+
+    The peer-median query for fundamental reports uses ``argMax`` — a substring
+    that does NOT appear in the history query. We inject an empty default so
+    tests that don't care about peer context don't have to provide peer rows,
+    while tests that need real peer data can pass ``"argMax": <result>`` first
+    in their canned dict (it takes precedence via insertion order).
     """
+    if "argMax" not in canned:
+        canned = {"argMax": _EMPTY_PEER_RESULT, **canned}
     fake = lambda: _FakeClient(canned)  # noqa: E731
     monkeypatch.setattr(clickhouse_module, "get_client", fake)
     monkeypatch.setattr(technical_module, "get_client", fake)
@@ -341,6 +352,174 @@ def test_fundamental_sections_cite_canonical_reference_rates(
     assert section_header in report
     for needle in must_contain:
         assert needle in report, f"{section_header} missing {needle!r}"
+
+
+# ---------- fundamental AC1–AC4 ----------
+
+
+def test_fundamental_own_history_percentile_renders_with_sufficient_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC1: with 5+ quarterly rows, each valuation multiple shows range + pct rank."""
+    rows = [
+        _fund_row(
+            period_end=date(2026, 3, 31),
+            pe_ratio=32.0,
+            ev_ebitda=25.0,
+            price_to_book=8.0,
+            price_to_sales=10.0,
+        ),
+        _fund_row(
+            period_end=date(2025, 12, 31),
+            pe_ratio=28.0,
+            ev_ebitda=22.0,
+            price_to_book=7.0,
+            price_to_sales=9.0,
+        ),
+        _fund_row(
+            period_end=date(2025, 9, 30),
+            pe_ratio=30.0,
+            ev_ebitda=24.0,
+            price_to_book=7.5,
+            price_to_sales=9.5,
+        ),
+        _fund_row(
+            period_end=date(2025, 6, 30),
+            pe_ratio=25.0,
+            ev_ebitda=20.0,
+            price_to_book=6.5,
+            price_to_sales=8.5,
+        ),
+        _fund_row(
+            period_end=date(2025, 3, 31),
+            pe_ratio=24.0,
+            ev_ebitda=19.0,
+            price_to_book=6.0,
+            price_to_sales=8.0,
+        ),
+    ]
+    _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, rows)})
+    report = build_fundamental_report("NVDA")
+    assert "range" in report
+    assert "pct" in report
+    # current P/E=32.0 is highest in history → pct rank should be 100
+    assert "over last 5y" in report
+
+
+def test_fundamental_peer_context_rendered_for_nvda(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC2: NVDA (Technology, 4 peers) renders a sector median in PEER CONTEXT."""
+    peer_rows = [
+        (28.0, 20.0, 8.0),
+        (30.0, 22.0, 9.0),
+        (25.0, 18.0, 7.0),
+        (27.0, 21.0, 8.5),
+    ]
+    _install_fake(
+        monkeypatch,
+        {
+            "argMax": _FakeResult(("pe_ratio", "ev_ebitda", "price_to_sales"), peer_rows),
+            "fundamental_summary": _FakeResult(_FUND_COLS, [_fund_row()]),
+        },
+    )
+    report = build_fundamental_report("NVDA")
+    assert "## PEER CONTEXT" in report
+    assert "Technology" in report
+    assert "Sector median P/E" in report
+    # median of [28, 30, 25, 27] = (27+28)/2 = 27.50
+    assert "27.50" in report
+
+
+def test_fundamental_peer_context_na_for_unh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC2: UNH (Healthcare, 0 peers) renders N/A in PEER CONTEXT, no query fired."""
+    _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, [_fund_row()])})
+    report = build_fundamental_report("UNH")
+    assert "## PEER CONTEXT" in report
+    assert "N/A (insufficient peers in coverage" in report
+    assert "Healthcare" in report
+
+
+def test_fundamental_valuation_prior_quarter_delta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC3: each valuation multiple shows prior-quarter value and direction."""
+    latest = _fund_row(pe_ratio=32.0, ev_ebitda=25.0, price_to_book=8.0, price_to_sales=10.0)
+    prior = _fund_row(
+        period_end=date(2025, 9, 30),
+        pe_ratio=28.0,
+        ev_ebitda=22.0,
+        price_to_book=7.0,
+        price_to_sales=9.0,
+    )
+    _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, [latest, prior])})
+    report = build_fundamental_report("NVDA")
+    # P/E expanded 28→32
+    assert "prior quarter 28.00, expanding" in report
+    # EV/EBITDA expanded 22→25
+    assert "prior quarter 22.00, expanding" in report
+
+
+def test_fundamental_margin_prior_quarter_delta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC3: profitability margins show prior-quarter value and direction."""
+    latest = _fund_row(gross_margin_pct=62.0, net_margin_pct=27.0, roe=24.0, roa=13.0)
+    prior = _fund_row(
+        period_end=date(2025, 9, 30),
+        gross_margin_pct=60.0,
+        net_margin_pct=25.0,
+        roe=22.0,
+        roa=12.0,
+    )
+    _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, [latest, prior])})
+    report = build_fundamental_report("NVDA")
+    assert "prior quarter 60.0%, expanding" in report  # gross margin
+    assert "prior quarter 25.0%, expanding" in report  # net margin
+
+
+def test_fundamental_header_freshness(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC4: fundamental report header carries period type and days-old count."""
+    _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, [_fund_row()])})
+    report = build_fundamental_report("NVDA")
+    assert "quarterly" in report
+    assert "days old" in report
+
+
+def test_technical_header_freshness(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC4: technical report header carries period type and days-old count."""
+    rows = [
+        (date(2026, 4, 16), 72.5, 3.9, 0.9, 3.0, 180.0, 175.0, 200.0, 180.0, 160.0, 198.0, 1000),
+    ]
+    _install_fake(monkeypatch, {"technical_indicators_daily": _tech_result(rows)})
+    report = build_technical_report("NVDA")
+    assert "daily" in report
+    assert "days old" in report
+
+
+def test_fundamental_freshness_note_emitted_when_stale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC6: report with period_end > 90 days ago includes ## FRESHNESS NOTE section."""
+    # default _fund_row() has period_end=2025-12-31 which is >90 days old
+    _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, [_fund_row()])})
+    report = build_fundamental_report("NVDA")
+    assert "## FRESHNESS NOTE" in report
+    assert "days old" in report
+
+
+def test_fundamental_no_freshness_note_when_current(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC6: report with recent period_end omits ## FRESHNESS NOTE section."""
+    from datetime import timedelta
+
+    recent = _fund_row(period_end=date.today() - timedelta(days=30))
+    _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, [recent])})
+    report = build_fundamental_report("NVDA")
+    assert "## FRESHNESS NOTE" not in report
 
 
 # ---------- news ----------
