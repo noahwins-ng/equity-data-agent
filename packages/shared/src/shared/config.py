@@ -106,6 +106,20 @@ class Settings(BaseSettings):
     #   Vercel project → Settings → Git → Deploy Hooks → Create Hook.
     VERCEL_DEPLOY_HOOK_URL: str = ""
 
+    # ─── QNT-192: Weekly online eval ─────────────────────────────────────────
+    #
+    # Sample rate for the weekly online eval Dagster schedule. Default 5% —
+    # bump to 1.0 if the first month produces < 20 sampled traces / week.
+    # Configurable without a deploy: update .env and restart dagster-daemon.
+    ONLINE_EVAL_SAMPLE_RATE: float = 0.05
+    # Separate Langfuse keys for the online eval schedule. In practice these
+    # point at the same Langfuse project as LANGFUSE_PUBLIC_KEY / SECRET_KEY
+    # (to read prod traces and push scores back), but isolating them as
+    # distinct env vars ensures evals/__main__.py's key-stripping pattern
+    # never silently kills the schedule.
+    ONLINE_EVAL_LANGFUSE_PUBLIC_KEY: str = ""
+    ONLINE_EVAL_LANGFUSE_SECRET_KEY: str = ""
+
     # ─── QNT-161: public-chat abuse controls ──────────────────────────────
     #
     # CORS allowlist for the public chat panel. Default is dev-only — prod

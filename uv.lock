@@ -534,12 +534,14 @@ name = "dagster-pipelines"
 version = "0.1.0"
 source = { editable = "packages/dagster-pipelines" }
 dependencies = [
+    { name = "agent" },
     { name = "clickhouse-connect" },
     { name = "dagster" },
     { name = "dagster-docker" },
     { name = "dagster-webserver" },
     { name = "feedparser" },
     { name = "httpx" },
+    { name = "langfuse" },
     { name = "pandas" },
     { name = "qdrant-client" },
     { name = "shared" },
@@ -548,12 +550,14 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "agent", editable = "packages/agent" },
     { name = "clickhouse-connect", specifier = ">=0.8.0" },
     { name = "dagster", specifier = ">=1.9.0" },
     { name = "dagster-docker", specifier = ">=0.25.0" },
     { name = "dagster-webserver", specifier = ">=1.9.0" },
     { name = "feedparser", specifier = ">=6.0.10" },
     { name = "httpx", specifier = ">=0.27.0" },
+    { name = "langfuse", specifier = ">=4.0.0" },
     { name = "pandas", specifier = ">=2.0.0" },
     { name = "qdrant-client", specifier = ">=1.15.0" },
     { name = "shared", editable = "packages/shared" },

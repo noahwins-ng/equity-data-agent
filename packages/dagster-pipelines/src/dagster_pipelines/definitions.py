@@ -12,6 +12,7 @@ from dagster_pipelines.assets.indicators import (
 from dagster_pipelines.assets.news_embeddings import news_embeddings
 from dagster_pipelines.assets.news_raw import news_raw
 from dagster_pipelines.assets.ohlcv_raw import ohlcv_raw
+from dagster_pipelines.online_eval import online_eval_job, online_eval_weekly_schedule
 from dagster_pipelines.resources.clickhouse import ClickHouseResource
 from dagster_pipelines.resources.qdrant import QdrantResource
 from dagster_pipelines.run_failure_alert import dagster_run_failure_alert_sensor
@@ -60,6 +61,7 @@ defs = Definitions(
         fundamentals_downstream_job,
         news_downstream_job,
         vercel_deploy_job,
+        online_eval_job,
     ],
     schedules=[
         ohlcv_daily_schedule,
@@ -68,6 +70,7 @@ defs = Definitions(
         vercel_deploy_after_ohlcv,
         vercel_deploy_after_news,
         vercel_deploy_after_fundamentals,
+        online_eval_weekly_schedule,
     ],
     sensors=[
         ohlcv_raw_sensor,
