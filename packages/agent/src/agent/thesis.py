@@ -45,11 +45,13 @@ class Thesis(BaseModel):
 
     setup: str = Field(
         description=(
-            "Two-to-three sentences of analytical prose establishing the context for "
-            "this ticker. Lead with the most significant signal across the supplied "
-            "reports — valuation relative to own history, growth trajectory, technical "
-            "posture, or a news catalyst — whichever dominates right now. Weave numbers "
-            "into the prose rather than stating them as bare facts in separate sentences. "
+            "Two-to-three sentences of analytical prose that synthesise the full picture. "
+            "A good setup does three things woven together: (1) anchors the reader in "
+            "the company's business context — what it sells and what drives it "
+            "(cite source: company), (2) surfaces the dominant analytical signal from "
+            "the reports with a verbatim number, and (3) names the tension — the specific "
+            "condition that would have to hold or change for the thesis to resolve one way. "
+            "Do not write three separate fact statements; weave them into continuous prose. "
             "Cite (source: company|technical|fundamental|news) on each sentence that "
             "makes a numeric or factual claim. Every digit must appear verbatim in the "
             "supplied reports. Do not open with journalistic framing ('stands at a "

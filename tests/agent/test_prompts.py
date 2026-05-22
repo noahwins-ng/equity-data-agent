@@ -615,13 +615,15 @@ def test_system_prompt_no_cross_case_duplication_rule_present() -> None:
     assert "an indicator placed in the bull case must not appear here" in text
 
 
-def test_system_prompt_setup_is_prose_first_not_slot_filling() -> None:
-    """Setup section must instruct prose-first analytical writing, not a
-    rigid three-sentence slot-filling template.
+def test_system_prompt_setup_is_holistic_prose_not_slot_filling() -> None:
+    """Setup section must instruct holistic prose that synthesises company
+    context, dominant signal, and the tension — not a rigid slot-filling template.
 
-    Pins four invariants:
+    Pins six invariants:
     * No Sentence-1/2/3 labels (template eliminated).
-    * BAD/OK example present so the model knows what prose-first looks like.
+    * BAD/OK example present so the model knows what holistic prose looks like.
+    * Company business context explicitly required.
+    * Tension / falsification condition explicitly required.
     * Verbatim-numbers grounding constraint retained.
     * Journalism-hook prohibition retained.
     """
@@ -630,9 +632,13 @@ def test_system_prompt_setup_is_prose_first_not_slot_filling() -> None:
     assert "Sentence 1" not in text
     assert "Sentence 2" not in text
     assert "Sentence 3" not in text
-    # BAD/OK example must be present to show the prose-first intent.
+    # BAD/OK example must be present to show the holistic prose intent.
     assert "BAD" in text
     assert "OK" in text
+    # Company context anchor must be explicitly required.
+    assert "business context" in text
+    # The tension / falsification condition must be named.
+    assert "tension" in text
     # Grounding constraint must be retained.
     assert "verbatim" in text
     # The journalism-hook prohibition must call out the exact bad opening.
