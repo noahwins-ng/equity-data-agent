@@ -71,6 +71,10 @@ class _StructuredLLM:
         self.invoke.return_value = AIMessage(content="technical, fundamental, news")
         self._structured_runnable = MagicMock()
         self._structured_runnable.invoke = MagicMock(return_value=_stub_thesis())
+        # with_retry() must return the same mock so .invoke stays configured.
+        # The synthesize node calls .with_retry() on the structured runnable;
+        # a fresh auto-generated MagicMock would lose the return_value.
+        self._structured_runnable.with_retry.return_value = self._structured_runnable
 
     def with_structured_output(self, schema: object) -> MagicMock:  # noqa: ARG002
         return self._structured_runnable
@@ -204,6 +208,57 @@ def test_synthesize_returns_none_when_structured_output_fails(
 
     assert result["thesis"] is None
     assert result["confidence"] == 1.0
+
+
+def test_thesis_retries_on_validation_error_and_returns_valid_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-196 Phase 2: a ValidationError on the first synthesize attempt must
+    trigger a retry via with_retry(); the second attempt's valid Thesis must
+    reach the user rather than the domain_redirect fallback."""
+    from agent import intent as intent_module
+    from langchain_core.runnables import RunnableLambda
+    from pydantic import BaseModel, ValidationError
+
+    def _make_validation_error() -> ValidationError:
+        class _M(BaseModel):
+            x: int
+
+        try:
+            _M(x="not-an-int")  # type: ignore[arg-type]
+        except ValidationError as exc:
+            return exc
+        raise AssertionError("unreachable")
+
+    valid_thesis = _stub_thesis("Retry recovery thesis.")
+    call_count = [0]
+
+    def _invoke(_input: object) -> object:
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise _make_validation_error()
+        return valid_thesis
+
+    class _RetryCapableLLM:
+        """Minimal stub whose with_structured_output returns a real RunnableLambda
+        so with_retry() produces an actual RunnableRetry (not another MagicMock)."""
+
+        def __init__(self) -> None:
+            self.invoke = MagicMock(return_value=AIMessage(content="technical"))
+
+        def with_structured_output(self, schema: object) -> RunnableLambda:  # noqa: ARG002
+            return RunnableLambda(_invoke)
+
+    llm = _RetryCapableLLM()
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+    monkeypatch.setattr(intent_module, "get_llm", lambda *_a, **_kw: llm)
+
+    graph = build_graph({name: _mock_tool(name) for name in REPORT_TOOLS})
+    result = _run(graph)
+
+    assert result["thesis"] is valid_thesis, "retry recovery must produce the valid thesis"
+    assert result["conversational"] is None, "no fallback redirect when retry succeeds"
+    assert call_count[0] == 2, "structured output must be called twice (first fail, second ok)"
 
 
 def test_synthesize_returns_none_when_response_is_not_a_thesis(

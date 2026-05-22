@@ -322,6 +322,9 @@ def test_synthesize_node_invokes_llm_with_system_message(
     )
     structured_runnable = MagicMock()
     structured_runnable.invoke = MagicMock(return_value=structured_response)
+    # with_retry() must return the same mock so .invoke stays configured
+    # (synthesize node now chains .with_retry() onto the structured runnable).
+    structured_runnable.with_retry.return_value = structured_runnable
 
     llm = MagicMock()
     llm.invoke = MagicMock(return_value=plan_response)

@@ -39,8 +39,10 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
+from langchain_core.exceptions import OutputParserException
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
+from pydantic import ValidationError
 from shared.tickers import TICKERS
 
 from agent.comparison import ComparisonAnswer
@@ -690,13 +692,21 @@ def build_graph(
 
         if intent == "conversational":
             prompt = build_conversational_prompt(question)
-            structured_llm = get_llm().with_structured_output(ConversationalAnswer)
+            structured_llm = (
+                get_llm()
+                .with_structured_output(ConversationalAnswer)
+                .with_retry(
+                    stop_after_attempt=2,
+                    retry_if_exception_type=(ValidationError, OutputParserException),
+                )
+            )
             try:
                 response = _linked_invoke(structured_llm, prompt, config, "conversational-prompt")
             except Exception as exc:  # noqa: BLE001 — fall back to deterministic redirect
                 logger.warning(
-                    "synthesize %s: conversational structured output failed: %s",
+                    "synthesize %s: conversational structured output failed: %s: %s",
                     ticker,
+                    type(exc).__name__,
                     exc,
                 )
                 response = None
@@ -723,13 +733,21 @@ def build_graph(
                 return _fallback("I couldn't pull reports for both of those tickers right now.")
 
             prompt = build_comparison_prompt(comparison_tickers, question, reports_by_ticker)
-            structured_llm = get_llm().with_structured_output(ComparisonAnswer)
+            structured_llm = (
+                get_llm()
+                .with_structured_output(ComparisonAnswer)
+                .with_retry(
+                    stop_after_attempt=2,
+                    retry_if_exception_type=(ValidationError, OutputParserException),
+                )
+            )
             try:
                 response = _linked_invoke(structured_llm, prompt, config, "comparison-prompt")
             except Exception as exc:  # noqa: BLE001 — fall back to redirect
                 logger.warning(
-                    "synthesize %s: comparison structured output failed: %s",
+                    "synthesize %s: comparison structured output failed: %s: %s",
                     ticker,
+                    type(exc).__name__,
                     exc,
                 )
                 response = None
@@ -752,14 +770,22 @@ def build_graph(
                     "I couldn't pull a report to answer that focused analysis right now."
                 )
             prompt = build_focused_prompt(intent, ticker, question, reports)
-            structured_llm = get_llm().with_structured_output(FocusedAnalysis)
+            structured_llm = (
+                get_llm()
+                .with_structured_output(FocusedAnalysis)
+                .with_retry(
+                    stop_after_attempt=2,
+                    retry_if_exception_type=(ValidationError, OutputParserException),
+                )
+            )
             try:
                 response = _linked_invoke(structured_llm, prompt, config, "focused-prompt")
             except Exception as exc:  # noqa: BLE001 — surface as fallback redirect
                 logger.warning(
-                    "synthesize %s: focused (%s) structured output failed: %s",
+                    "synthesize %s: focused (%s) structured output failed: %s: %s",
                     ticker,
                     intent,
+                    type(exc).__name__,
                     exc,
                 )
                 response = None
@@ -784,12 +810,22 @@ def build_graph(
             if not reports:
                 return _fallback("I couldn't pull a report to answer that quick fact right now.")
             prompt = build_quick_fact_prompt(ticker, question, reports)
-            structured_llm = get_llm().with_structured_output(QuickFactAnswer)
+            structured_llm = (
+                get_llm()
+                .with_structured_output(QuickFactAnswer)
+                .with_retry(
+                    stop_after_attempt=2,
+                    retry_if_exception_type=(ValidationError, OutputParserException),
+                )
+            )
             try:
                 response = _linked_invoke(structured_llm, prompt, config, "quick-fact-prompt")
             except Exception as exc:  # noqa: BLE001 — surface as fallback redirect
                 logger.warning(
-                    "synthesize %s: quick-fact structured output failed: %s", ticker, exc
+                    "synthesize %s: quick-fact structured output failed: %s: %s",
+                    ticker,
+                    type(exc).__name__,
+                    exc,
                 )
                 response = None
             quick_fact = _coerce_quick_fact(response)
@@ -811,12 +847,25 @@ def build_graph(
         # ``with_structured_output(Thesis)`` forces the LLM into the four-section
         # schema. Errors from a misbehaving provider (Gemini occasionally
         # returns malformed tool-call JSON) surface as a fallback redirect
-        # rather than crashing the whole run.
-        structured_llm = get_llm().with_structured_output(Thesis)
+        # rather than crashing the whole run. with_retry recovers transient
+        # parse failures (measured at 5.5% on this branch — QNT-196).
+        structured_llm = (
+            get_llm()
+            .with_structured_output(Thesis)
+            .with_retry(
+                stop_after_attempt=2,
+                retry_if_exception_type=(ValidationError, OutputParserException),
+            )
+        )
         try:
             response = _linked_invoke(structured_llm, prompt, config, "system-prompt")
         except Exception as exc:  # noqa: BLE001 — surface as fallback redirect
-            logger.warning("synthesize %s: structured output failed: %s", ticker, exc)
+            logger.warning(
+                "synthesize %s: thesis structured output failed: %s: %s",
+                ticker,
+                type(exc).__name__,
+                exc,
+            )
             response = None
         thesis = _coerce_thesis(response)
         if thesis is None:
