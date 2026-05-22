@@ -370,7 +370,7 @@ def test_default_report_tools_compose_with_build_graph(
                 def invoke(self, _prompt: object, **_kwargs: Any) -> Any:
                     return outer._thesis
 
-                def with_retry(self, **_kw: Any) -> "_StructuredRunnable":
+                def with_retry(self, **_kw: Any) -> _StructuredRunnable:
                     return self
 
             return _StructuredRunnable()
