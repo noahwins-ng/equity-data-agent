@@ -251,6 +251,9 @@ def test_groq_quota_error_falls_back_to_conversational_redirect(
                     raise _GroqQuotaError("groq quota exceeded for the day")
                     _ = outer  # keep closure ref for clarity
 
+                def with_retry(self, **_kw: Any) -> "_StructuredRunnable":
+                    return self
+
             return _StructuredRunnable()
 
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: _QuotaLLM())
