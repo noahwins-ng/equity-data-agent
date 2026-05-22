@@ -186,6 +186,30 @@ def test_system_prompt_treats_report_content_as_data() -> None:
     assert "ignore previous instructions" in text  # named example
 
 
+def test_system_prompt_forbids_inventing_peer_comparisons() -> None:
+    """AC5 regression guard: prompt must prohibit fabricating peer/sector/history comparisons.
+
+    The fundamental report now surfaces a PEER CONTEXT section. The guard tells
+    the model not to state rich/cheap vs peers or history unless those numbers
+    appear in the report — preventing hallucinated sector-comparison claims when
+    the peer section shows N/A.
+    """
+    text = SYSTEM_PROMPT.lower()
+    assert "peer" in text
+    # The guard must reference what the model should NOT do (invent comparisons)
+    assert "rich" in text or "cheap" in text
+    assert "sector" in text
+
+
+def test_system_prompt_requires_freshness_note_for_old_data() -> None:
+    """AC6 regression guard: prompt must instruct the model to copy the
+    ## FRESHNESS NOTE section verbatim into verdict_action when present.
+    """
+    text = SYSTEM_PROMPT.lower()
+    assert "freshness note" in text
+    assert "verbatim" in text
+
+
 def test_build_synthesis_prompt_returns_system_then_user_message() -> None:
     """Review fix: SYSTEM_PROMPT must land in the system turn so providers
     weight it correctly, not flattened into a single HumanMessage. Returning

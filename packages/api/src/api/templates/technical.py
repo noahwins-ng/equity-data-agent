@@ -227,10 +227,11 @@ def build_technical_report(ticker: str) -> str:
     bb_lower = latest["bb_lower"]
     rsi_trend = _rsi_trajectory(rsi, prior["rsi_14"] if prior else None)
 
+    days_old = (date.today() - as_of).days
     lines = [
         f"# TECHNICAL REPORT — {ticker}",
-        f"As of {as_of.isoformat()} ({meta.get('sector', 'Unknown sector')}, "
-        f"{meta.get('industry', 'Unknown industry')})",
+        f"As of {as_of.isoformat()} (daily, {days_old} days old) — "
+        f"{meta.get('sector', 'Unknown sector')}, {meta.get('industry', 'Unknown industry')}",
         "",
         "## PRICE ACTION",
         f"Close: {format_ratio(close, precision=2)} "
