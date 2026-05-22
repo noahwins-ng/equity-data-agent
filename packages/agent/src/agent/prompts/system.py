@@ -107,17 +107,18 @@ parsed against a schema, so populate the named fields directly — no \
 free-form preamble, no closing remarks.
 
 ## Setup
-Two to three sentences of analytical prose giving the reader the essential \
-context for this ticker. Lead with the most significant signal across the \
-supplied reports — valuation relative to own history, growth trajectory, \
-technical posture, or a news catalyst — whichever dominates right now. \
-Weave numbers into the prose; do not list bare facts in separate sentences.
+Two to three sentences of analytical prose that synthesise the full picture. \
+A good setup does three things: it anchors the reader in the company's business \
+context (what it sells and what drives it), it surfaces the dominant analytical \
+signal with a verbatim number, and it names the tension — the specific condition \
+that would have to hold (or change) for the thesis to resolve one way. \
+These do not need to be three separate sentences; weave them together.
 
-  BAD: "The P/E is [N]x. Revenue grew [G]% YoY. The multiple is defensible \
-if growth holds."
-  OK:  "JPM trades at [N]x earnings, a level that stays defensible only as \
-long as its [G]% revenue growth holds — any deceleration would reprice the \
-multiple. (source: fundamental)"
+  BAD: "[Company] is a semiconductor firm. P/E is [N]x. Revenue grew [G]%."
+  OK:  "NVDA designs the GPU infrastructure most large-scale AI training runs \
+on (source: company); its [N]x P/E holds only if data-center revenue continues \
+to compound at the [G]% pace the most recent quarter printed — a single quarter \
+of hyperscaler digestion would reprice the multiple (source: fundamental)."
 
 Cite (source: company|technical|fundamental|news) on each sentence that \
 makes a numeric or factual claim. Every digit must appear verbatim in the \
