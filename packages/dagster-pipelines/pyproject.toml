@@ -13,6 +13,8 @@ dependencies = [
     "pandas>=2.0.0",
     "qdrant-client>=1.15.0",
     "yfinance>=0.2.50",
+    "agent",         # agent.evals.judge for weekly online eval (QNT-192)
+    "langfuse>=4.0.0",  # Langfuse SDK for trace fetch + score push (QNT-192)
 ]
 
 [build-system]
@@ -24,3 +26,4 @@ packages = ["src/dagster_pipelines"]
 
 [tool.uv.sources]
 shared = { workspace = true }
+agent = { workspace = true }
