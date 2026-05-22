@@ -615,27 +615,26 @@ def test_system_prompt_no_cross_case_duplication_rule_present() -> None:
     assert "an indicator placed in the bull case must not appear here" in text
 
 
-def test_system_prompt_setup_template_anchors_to_verbatim_blocks() -> None:
-    """QNT-205: setup template. The setup section must instruct the model
-    to produce exactly three sentences anchored to verbatim block values,
-    replacing the journalism-style 'name the tension' framing.
+def test_system_prompt_setup_is_prose_first_not_slot_filling() -> None:
+    """Setup section must instruct prose-first analytical writing, not a
+    rigid three-sentence slot-filling template.
 
     Pins four invariants:
-    * The template names all three sentences so the structure is unambiguous.
-    * The block anchors match the actual fundamental report section headers.
-    * The falsification-condition shape is named.
-    * The journalism-hook prohibition is explicit.
+    * No Sentence-1/2/3 labels (template eliminated).
+    * BAD/OK example present so the model knows what prose-first looks like.
+    * Verbatim-numbers grounding constraint retained.
+    * Journalism-hook prohibition retained.
     """
     text = SYSTEM_PROMPT
-    # All three sentence labels must be present.
-    assert "Sentence 1" in text
-    assert "Sentence 2" in text
-    assert "Sentence 3" in text
-    # Block anchors must match the fundamental report's exact section names.
-    assert "VALUATION" in text
-    assert "GROWTH (YoY)" in text
-    # The falsification shape must be named so the model knows what S3 looks like.
-    assert "falsifiable" in text
+    # Template labels must be gone — the model writes prose, not slots.
+    assert "Sentence 1" not in text
+    assert "Sentence 2" not in text
+    assert "Sentence 3" not in text
+    # BAD/OK example must be present to show the prose-first intent.
+    assert "BAD" in text
+    assert "OK" in text
+    # Grounding constraint must be retained.
+    assert "verbatim" in text
     # The journalism-hook prohibition must call out the exact bad opening.
     assert "stands at a crossroads" in text
 
