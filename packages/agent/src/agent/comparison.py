@@ -117,7 +117,12 @@ class ComparisonAnswer(BaseModel):
             "NOT compute new ratios, deltas, or synthetic comparisons "
             "(e.g. 'NVDA's P/E is 2x AAPL's'). Phrase contrasts in "
             "qualitative terms ('NVDA trades at a richer multiple', "
-            "'AAPL shows weaker momentum')."
+            "'AAPL shows weaker momentum'). Exception: when one ticker's "
+            "valuation multiple is materially richer on at least two of "
+            "P/E, EV/EBITDA, P/S (visible in the key_values above), "
+            "state explicitly which ticker is more expensive and on which "
+            "metrics (e.g. 'NVDA is more expensive than AAPL on both P/E "
+            "and EV/EBITDA'). Do not extend to a recommendation."
         ),
     )
 
