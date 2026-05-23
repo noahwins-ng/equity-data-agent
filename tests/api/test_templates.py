@@ -509,6 +509,62 @@ def test_fundamental_static_data_disclaimer_present(
     assert "2025-12-31" in report
 
 
+# ---------- signal verdict v2 (QNT-206) ----------
+
+
+from api.templates.fundamental import _signal_verdict  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    ("pe", "rev_yoy", "margin", "roe", "expected_prefix"),
+    [
+        # Clearly bullish: cheap PE (2) + strong growth (2) + strong margin (1) + strong ROE (1)
+        (15.0, 15.0, 20.0, 18.0, "BULLISH (6/6 weighted indicators agree)"),
+        # Clearly bearish: rich PE (2) + contracting growth (2) + loss margin (1) + negative ROE (1)
+        (45.0, -5.0, -5.0, -3.0, "BEARISH (6/6 weighted indicators agree)"),
+        # Partial bullish: cheap PE (2) + strong growth (2); profitability neutral → 4/6
+        (15.0, 15.0, 10.0, 10.0, "BULLISH (4/6 weighted indicators agree)"),
+    ],
+)
+def test_signal_verdict_v2_weighted_verdict_text(
+    pe: float,
+    rev_yoy: float,
+    margin: float,
+    roe: float,
+    expected_prefix: str,
+) -> None:
+    """AC1: verdict text carries 'weighted indicators agree' with correct tally."""
+    row = {"pe_ratio": pe, "revenue_yoy_pct": rev_yoy, "net_margin_pct": margin, "roe": roe}
+    assert _signal_verdict(row) == expected_prefix
+
+
+def test_signal_verdict_v2_value_trap_label() -> None:
+    """AC2: cheap multiple + contracting revenue emits MIXED (value-trap risk)."""
+    row = {"pe_ratio": 15.0, "revenue_yoy_pct": -5.0, "net_margin_pct": None, "roe": None}
+    assert _signal_verdict(row) == "MIXED (value-trap risk)"
+
+
+def test_signal_verdict_v2_growth_at_a_price_label() -> None:
+    """AC3: rich multiple + strong revenue emits MIXED (growth-at-a-price)."""
+    latest = {"pe_ratio": 45.0, "revenue_yoy_pct": 25.0, "net_margin_pct": None, "roe": None}
+    assert _signal_verdict(latest) == "MIXED (growth-at-a-price)"
+
+
+def test_signal_verdict_v2_growth_at_a_price_tsla_pattern() -> None:
+    """AC3 live: TSLA-like row (PE>>40, rev>10, profitability neutral) fires growth-at-a-price."""
+    tsla_like = {"pe_ratio": 406.0, "revenue_yoy_pct": 15.8, "net_margin_pct": 2.1, "roe": 0.6}
+    assert _signal_verdict(tsla_like) == "MIXED (growth-at-a-price)"
+
+
+def test_signal_verdict_v2_profitability_breaks_tie_to_bullish() -> None:
+    """Named MIXED fires only when vote is tied; strong profitability breaks tie to BULLISH."""
+    # PE rich (bear 2) + rev > 10 (bull 2) + strong margin/ROE (bull 2) = 4 bull, 2 bear
+    row = {"pe_ratio": 45.0, "revenue_yoy_pct": 15.0, "net_margin_pct": 20.0, "roe": 18.0}
+    result = _signal_verdict(row)
+    assert result.startswith("BULLISH")
+    assert "weighted" in result
+
+
 # ---------- news ----------
 
 
