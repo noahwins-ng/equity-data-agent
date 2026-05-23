@@ -452,12 +452,13 @@ def _render_period_section(
     pb_hist = _hist("price_to_book")
     ps_hist = _hist("price_to_sales")
 
+    scope = label.lower()
     return [
         f"## {label}",
-        f"As of {period_end.isoformat()} ({days_old} days old)",
+        f"As of {period_end.isoformat()} ({scope}, {days_old} days old)",
         "",
-        "### VALUATION",
-        "P/E: "
+        f"### {label} VALUATION",
+        f"P/E ({scope}): "
         + _pe_label(
             latest["pe_ratio"],
             latest["eps"],
@@ -465,41 +466,43 @@ def _render_period_section(
             _p("pe_ratio"),
             peer_medians.get("pe_ratio"),
         ),
-        "EV/EBITDA: "
+        f"EV/EBITDA ({scope}): "
         + _valuation_label(
             latest["ev_ebitda"],
             ev_hist,
             prior_value=_p("ev_ebitda"),
             peer_median=peer_medians.get("ev_ebitda"),
         ),
-        "Price/Book: "
+        f"Price/Book ({scope}): "
         + _valuation_label(latest["price_to_book"], pb_hist, prior_value=_p("price_to_book")),
-        "Price/Sales: "
+        f"Price/Sales ({scope}): "
         + _valuation_label(
             latest["price_to_sales"],
             ps_hist,
             prior_value=_p("price_to_sales"),
             peer_median=peer_medians.get("price_to_sales"),
         ),
-        f"EPS: {format_ratio(latest['eps'], na_reason='earnings unavailable')}",
+        f"EPS ({scope}): {format_ratio(latest['eps'], na_reason='earnings unavailable')}",
         "",
-        "### GROWTH (YoY)",
-        _growth_label(latest["revenue_yoy_pct"], _p("revenue_yoy_pct"), "Revenue"),
-        _growth_label(latest["net_income_yoy_pct"], _p("net_income_yoy_pct"), "Net income"),
-        _growth_label(latest["fcf_yoy_pct"], _p("fcf_yoy_pct"), "Free cash flow"),
+        f"### {label} GROWTH (YoY)",
+        _growth_label(latest["revenue_yoy_pct"], _p("revenue_yoy_pct"), f"Revenue ({scope})"),
+        _growth_label(
+            latest["net_income_yoy_pct"], _p("net_income_yoy_pct"), f"Net income ({scope})"
+        ),
+        _growth_label(latest["fcf_yoy_pct"], _p("fcf_yoy_pct"), f"Free cash flow ({scope})"),
         _GROWTH_REFERENCE,
         "",
-        "### PROFITABILITY",
-        _margin_line(latest["gross_margin_pct"], _p("gross_margin_pct"), "Gross margin"),
-        _margin_line(latest["net_margin_pct"], _p("net_margin_pct"), "Net margin"),
-        _margin_line(latest["roe"], _p("roe"), "ROE"),
-        _margin_line(latest["roa"], _p("roa"), "ROA"),
+        f"### {label} PROFITABILITY",
+        _margin_line(latest["gross_margin_pct"], _p("gross_margin_pct"), f"Gross margin ({scope})"),
+        _margin_line(latest["net_margin_pct"], _p("net_margin_pct"), f"Net margin ({scope})"),
+        _margin_line(latest["roe"], _p("roe"), f"ROE ({scope})"),
+        _margin_line(latest["roa"], _p("roa"), f"ROA ({scope})"),
         _PROFITABILITY_REFERENCE,
         "",
-        "### CASH & LEVERAGE",
-        f"FCF yield: {format_pct(latest['fcf_yield'])}",
-        f"Debt/Equity: {format_ratio(latest['debt_to_equity'])}",
-        f"Current ratio: {format_ratio(latest['current_ratio'])}",
+        f"### {label} CASH & LEVERAGE",
+        f"FCF yield ({scope}): {format_pct(latest['fcf_yield'])}",
+        f"Debt/Equity ({scope}): {format_ratio(latest['debt_to_equity'])}",
+        f"Current ratio ({scope}): {format_ratio(latest['current_ratio'])}",
     ]
 
 
