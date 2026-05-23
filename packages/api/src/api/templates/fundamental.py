@@ -252,29 +252,75 @@ def _peer_context_lines(
 
 
 def _signal_verdict(latest: dict[str, Any]) -> str:
-    """Coarse bullish/bearish/neutral vote across valuation, growth, quality."""
-    votes: list[str] = []
-    pe = latest["pe_ratio"]
+    """Weighted-vote signal: valuation 2x, growth 2x, profitability 1x each indicator.
+
+    Two profitability indicators (margin + ROE) means effective category weights are
+    valuation:growth:profitability = 2:2:2 when all four metrics are present.
+
+    When valuation and growth disagree and neither side wins the weighted vote,
+    emits a named asymmetry label instead of plain NEUTRAL:
+      - P/E < 20 + contracting revenue   -> MIXED (value-trap risk)
+      - P/E > 40 + strong revenue (>10%) -> MIXED (growth-at-a-price)
+    Named labels require both pe and rev_yoy to be non-None; without both axes
+    the asymmetry cannot be classified and we fall back to generic NEUTRAL.
+    """
+    pe = latest.get("pe_ratio")
+    rev_yoy = latest.get("revenue_yoy_pct")
+    margin = latest.get("net_margin_pct")
+    roe = latest.get("roe")
+
+    bull = 0
+    bear = 0
+    total = 0
+
+    # Valuation — 2x weight
     if pe is not None:
-        votes.append("bullish" if pe < 20 else "bearish" if pe > 40 else "neutral")
-    rev_yoy = latest["revenue_yoy_pct"]
+        total += 2
+        if pe < 20:
+            bull += 2
+        elif pe > 40:
+            bear += 2
+
+    # Growth — 2x weight
     if rev_yoy is not None:
-        votes.append("bullish" if rev_yoy > 10 else "bearish" if rev_yoy < 0 else "neutral")
-    margin = latest["net_margin_pct"]
+        total += 2
+        if rev_yoy > 10:
+            bull += 2
+        elif rev_yoy < 0:
+            bear += 2
+
+    # Profitability: net margin — 1x weight
     if margin is not None:
-        votes.append("bullish" if margin > 15 else "bearish" if margin < 0 else "neutral")
-    roe = latest["roe"]
+        total += 1
+        if margin > 15:
+            bull += 1
+        elif margin < 0:
+            bear += 1
+
+    # Profitability: ROE — 1x weight
     if roe is not None:
-        votes.append("bullish" if roe > 15 else "bearish" if roe < 0 else "neutral")
-    if not votes:
+        total += 1
+        if roe > 15:
+            bull += 1
+        elif roe < 0:
+            bear += 1
+
+    if total == 0:
         return "N/M (insufficient ratios)"
-    bull = votes.count("bullish")
-    bear = votes.count("bearish")
+
     if bull > bear and bull >= 2:
-        return f"BULLISH ({bull}/{len(votes)} indicators agree)"
+        return f"BULLISH ({bull}/{total} weighted indicators agree)"
     if bear > bull and bear >= 2:
-        return f"BEARISH ({bear}/{len(votes)} indicators agree)"
-    return f"NEUTRAL (mixed: {bull} bullish, {bear} bearish, {len(votes) - bull - bear} neutral)"
+        return f"BEARISH ({bear}/{total} weighted indicators agree)"
+
+    # Named asymmetry labels when vote is tied/mixed
+    if pe is not None and rev_yoy is not None:
+        if pe < 20 and rev_yoy < 0:
+            return "MIXED (value-trap risk)"
+        if pe > 40 and rev_yoy > 10:
+            return "MIXED (growth-at-a-price)"
+
+    return f"NEUTRAL (mixed: {bull} bullish, {bear} bearish, {total - bull - bear} neutral weight)"
 
 
 def build_fundamental_report(ticker: str) -> str:
