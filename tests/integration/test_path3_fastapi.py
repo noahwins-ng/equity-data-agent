@@ -116,11 +116,13 @@ def test_reports_technical_renders_against_real_sql(ch_client: Client, client: T
     body = r.text
     assert "TECHNICAL REPORT" in body and "AAPL" in body
     # QNT-207: report restructured into ## DAILY / ## WEEKLY / ## MONTHLY with
-    # per-timeframe PRICE ACTION / MOMENTUM / VOLATILITY / TREND sub-blocks.
+    # per-timeframe PRICE ACTION / MOMENTUM / VOLATILITY / TREND sub-blocks
+    # (QNT-207 follow-up prefixes each h3 with the timeframe label so the LLM
+    # cannot drop scope when quoting a sub-section).
     # ## SIGNAL was removed in favour of the TREND label.
     assert "## DAILY" in body
-    assert "### PRICE ACTION" in body
-    assert "### TREND" in body
+    assert "### DAILY PRICE ACTION" in body
+    assert "### DAILY TREND" in body
     assert "## SIGNAL" not in body
 
 

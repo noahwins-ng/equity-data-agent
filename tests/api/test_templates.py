@@ -140,7 +140,7 @@ def test_technical_bullish_overbought_rendering(monkeypatch: pytest.MonkeyPatch)
     # Period change (was "+1.54% daily" in v1; now "+1.54% vs prior period")
     assert "+1.54% vs prior period" in report
     # TREND replaces SIGNAL footer
-    assert "### TREND" in report
+    assert "### DAILY TREND" in report
     assert "Uptrend" in report
     assert "## SIGNAL" not in report
 
@@ -154,9 +154,9 @@ def test_technical_null_indicators_render_as_nm(monkeypatch: pytest.MonkeyPatch)
     report = build_technical_report("NVDA")
     # RSI N/M still flags insufficient history; thresholds are tacked on so the
     # agent has them in-corpus even on the empty-history branch (QNT-136).
-    assert "RSI-14: N/M (insufficient history" in report
-    assert "MACD(12/26/9): N/M" in report
-    assert "Bollinger(20,2): N/M" in report
+    assert "RSI-14 (daily): N/M (insufficient history" in report
+    assert "MACD(12/26/9) (daily): N/M" in report
+    assert "Bollinger(20,2) (daily): N/M" in report
     # TREND must not fabricate a verdict with no data
     assert "N/M (insufficient history; need SMA-20, SMA-50" in report
 
@@ -251,11 +251,19 @@ def test_technical_renders_all_three_timeframes(monkeypatch: pytest.MonkeyPatch)
     assert "## DAILY" in report
     assert "## WEEKLY" in report
     assert "## MONTHLY" in report
-    # Each has the PRICE ACTION / MOMENTUM / VOLATILITY / TREND sub-structure
-    assert report.count("### PRICE ACTION") == 3
-    assert report.count("### MOMENTUM") == 3
-    assert report.count("### VOLATILITY") == 3
-    assert report.count("### TREND") == 3
+    # Each has the PRICE ACTION / MOMENTUM / VOLATILITY / TREND sub-structure,
+    # prefixed with the timeframe label so the LLM can't drop scope when
+    # quoting a sub-section (QNT-207 follow-up).
+    for tf in ("DAILY", "WEEKLY", "MONTHLY"):
+        assert f"### {tf} PRICE ACTION" in report
+        assert f"### {tf} MOMENTUM" in report
+        assert f"### {tf} VOLATILITY" in report
+        assert f"### {tf} TREND" in report
+    # Per-line scope tags travel with each metric so a thesis can't strip
+    # the timeframe when quoting a single value.
+    assert "Close (daily):" in report
+    assert "RSI-14 (weekly):" in report
+    assert "Bollinger(20,2) (monthly):" in report
     # ## SIGNAL is gone
     assert "## SIGNAL" not in report
     # Disclaimer line surfaced once at the top
@@ -386,7 +394,7 @@ def test_fundamental_pe_nulled_with_low_eps_renders_near_zero_earnings(
     rows = [_fund_row(pe_ratio=None, eps=0.01)]
     _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, rows)})
     report = build_fundamental_report("UNH")
-    assert "P/E: N/M (near-zero earnings" in report
+    assert "P/E (quarterly): N/M (near-zero earnings" in report
 
 
 def test_fundamental_prior_period_trend_label(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -401,7 +409,7 @@ def test_fundamental_prior_period_trend_label(monkeypatch: pytest.MonkeyPatch) -
     )
     report = build_fundamental_report("NVDA")
     # +25% vs +18% prior → accelerating
-    assert "Revenue: +25.00% YoY" in report
+    assert "Revenue (quarterly): +25.00% YoY" in report
     assert "prior period +18.00%, accelerating" in report
 
 
@@ -416,10 +424,18 @@ def test_fundamental_unknown_ticker_404() -> None:
     [
         # Every P/E line — including the N/M branches — must carry the
         # canonical rich/cheap thresholds (QNT-137 / ADR-012).
-        (15.0, 2.5, ["P/E: 15.00", "rich ≥ 40", "cheap ≤ 20"]),
-        (45.0, 2.5, ["P/E: 45.00", "rich ≥ 40", "cheap ≤ 20"]),
-        (None, 0.01, ["P/E: N/M", "near-zero earnings", "rich ≥ 40", "cheap ≤ 20"]),
-        (None, None, ["P/E: N/M", "EPS unavailable", "rich ≥ 40", "cheap ≤ 20"]),
+        (15.0, 2.5, ["P/E (quarterly): 15.00", "rich ≥ 40", "cheap ≤ 20"]),
+        (45.0, 2.5, ["P/E (quarterly): 45.00", "rich ≥ 40", "cheap ≤ 20"]),
+        (
+            None,
+            0.01,
+            ["P/E (quarterly): N/M", "near-zero earnings", "rich ≥ 40", "cheap ≤ 20"],
+        ),
+        (
+            None,
+            None,
+            ["P/E (quarterly): N/M", "EPS unavailable", "rich ≥ 40", "cheap ≤ 20"],
+        ),
     ],
 )
 def test_fundamental_pe_label_always_cites_canonical_thresholds(
@@ -439,11 +455,11 @@ def test_fundamental_pe_label_always_cites_canonical_thresholds(
     ("section_header", "must_contain"),
     [
         (
-            "### GROWTH (YoY)",
+            "### QUARTERLY GROWTH (YoY)",
             ["Reference rates: ≥ 10% strong, ≤ 0% contraction"],
         ),
         (
-            "### PROFITABILITY",
+            "### QUARTERLY PROFITABILITY",
             [
                 "Reference rates",
                 "net margin ≥ 15% strong",
@@ -591,8 +607,18 @@ def test_fundamental_renders_quarterly_annual_ttm_sections(
     # Period disclaimer + per-multiple label rule disclaimer
     assert "Quarterly captures execution trajectory" in report
     assert "Per-multiple label" in report
-    # Sub-section repeats per period
-    assert report.count("### VALUATION") == 3
+    # Sub-sections carry their period prefix so the LLM can't drop the scope
+    # when quoting a sub-section name (QNT-207 follow-up).
+    for period in ("QUARTERLY", "ANNUAL", "TTM"):
+        assert f"### {period} VALUATION" in report
+        assert f"### {period} GROWTH (YoY)" in report
+        assert f"### {period} PROFITABILITY" in report
+        assert f"### {period} CASH & LEVERAGE" in report
+    # Per-line scope tags travel with each multiple so a thesis can't strip
+    # the period when quoting a single number.
+    assert "P/E (quarterly):" in report
+    assert "P/E (annual):" in report
+    assert "P/E (ttm):" in report
 
 
 def test_fundamental_renders_premium_inline_discounted_label(

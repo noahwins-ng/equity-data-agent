@@ -254,23 +254,24 @@ def _render_section(label: str, rows: list[dict[str, Any]]) -> list[str]:
     rsi_trend = _rsi_trajectory(rsi, prior["rsi_14"] if prior else None)
     prior_close_val = float(prior["close"]) if prior else None
 
+    scope = label.lower()
     return [
         f"## {label}",
-        f"As of {as_of.isoformat()}",
+        f"As of {as_of.isoformat()} ({scope})",
         "",
-        "### PRICE ACTION",
-        f"Close: {format_ratio(close, precision=2)} "
+        f"### {label} PRICE ACTION",
+        f"Close ({scope}): {format_ratio(close, precision=2)} "
         f"({format_signed_pct(period_change_pct, na_reason='no prior period')} vs prior period)",
-        f"Trend: {_price_action_label(close, sma_20, sma_50)}",
+        f"Trend ({scope}): {_price_action_label(close, sma_20, sma_50)}",
         "",
-        "### MOMENTUM",
-        f"RSI-14: {_rsi_label(rsi)}{rsi_trend}",
-        f"MACD(12/26/9): {_macd_label(macd, macd_signal, macd_hist)}",
+        f"### {label} MOMENTUM",
+        f"RSI-14 ({scope}): {_rsi_label(rsi)}{rsi_trend}",
+        f"MACD(12/26/9) ({scope}): {_macd_label(macd, macd_signal, macd_hist)}",
         "",
-        "### VOLATILITY",
-        f"Bollinger(20,2): {_bb_label(close, bb_upper, bb_middle, bb_lower)}",
+        f"### {label} VOLATILITY",
+        f"Bollinger(20,2) ({scope}): {_bb_label(close, bb_upper, bb_middle, bb_lower)}",
         "",
-        "### TREND",
+        f"### {label} TREND",
         _trend_label(close, prior_close_val, sma_20, sma_50),
     ]
 
