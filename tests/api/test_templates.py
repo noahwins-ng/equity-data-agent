@@ -357,10 +357,10 @@ def test_fundamental_sections_cite_canonical_reference_rates(
 # ---------- fundamental AC1–AC4 ----------
 
 
-def test_fundamental_own_history_percentile_renders_with_sufficient_history(
+def test_fundamental_own_history_range_position_renders_with_sufficient_history(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC1: with 5+ quarterly rows, each valuation multiple shows range + pct rank."""
+    """AC1: with 5+ quarterly rows, each valuation multiple shows range + position label."""
     rows = [
         _fund_row(
             period_end=date(2026, 3, 31),
@@ -401,9 +401,45 @@ def test_fundamental_own_history_percentile_renders_with_sufficient_history(
     _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, rows)})
     report = build_fundamental_report("NVDA")
     assert "range" in report
-    assert "pct" in report
-    # current P/E=32.0 is highest in history → pct rank should be 100
     assert "over last 5y" in report
+    # current P/E=32.0 is highest in history → near 5y high
+    assert "near 5y high" in report
+    # no numeric pct leaked
+    assert "pct" not in report
+
+
+def test_fundamental_range_position_label_thin_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With only 2 rows, range is shown but no position label (too thin to be meaningful)."""
+    rows = [
+        _fund_row(period_end=date(2026, 3, 31), pe_ratio=406.0),
+        _fund_row(period_end=date(2025, 12, 31), pe_ratio=413.0),
+    ]
+    _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, rows)})
+    report = build_fundamental_report("TSLA")
+    assert "range" in report
+    assert "over last 5y" in report
+    # with 2 rows, hi != lo → ratio=0 → label fires as "near 5y low"
+    # but critically: no numeric "pct" in the output
+    assert "pct" not in report
+
+
+def test_fundamental_range_position_label_degenerate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When all rows have the same value (hi == lo), range shown but no position label."""
+    rows = [
+        _fund_row(period_end=date(2026, 3, 31), pe_ratio=30.0),
+        _fund_row(period_end=date(2025, 12, 31), pe_ratio=30.0),
+        _fund_row(period_end=date(2025, 9, 30), pe_ratio=30.0),
+    ]
+    _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, rows)})
+    report = build_fundamental_report("NVDA")
+    assert "range" in report
+    assert "near 5y" not in report
+    assert "mid 5y" not in report
+    assert "pct" not in report
 
 
 def test_fundamental_peer_context_rendered_for_nvda(
