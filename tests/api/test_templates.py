@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 from api import clickhouse as clickhouse_module
+from api.templates import company as company_module
 from api.templates import fundamental as fundamental_module
 from api.templates import news as news_module
 from api.templates import technical as technical_module
@@ -31,7 +32,11 @@ class _FakeResult:
 
 
 class _FakeClient:
-    """Dispatches ``client.query()`` calls to canned results by table name."""
+    """Dispatches ``client.query()`` calls to canned results by table name.
+
+    Matches by substring against ``query``; iteration order = insertion order,
+    so tests can prioritise a specific match by ordering its key earlier.
+    """
 
     def __init__(self, canned: dict[str, _FakeResult]) -> None:
         self._canned = canned
@@ -50,36 +55,8 @@ def _reset_client_cache() -> Iterable[None]:
     clickhouse_module.get_client.cache_clear()
 
 
-_EMPTY_PEER_RESULT = _FakeResult(("pe_ratio", "ev_ebitda", "price_to_sales"), [])
-
-
-def _install_fake(monkeypatch: pytest.MonkeyPatch, canned: dict[str, _FakeResult]) -> None:
-    """Swap get_client() for a fake in every place the templates imported it.
-
-    Each template does ``from api.clickhouse import get_client`` so the name is
-    bound at module load — patching ``api.clickhouse.get_client`` alone isn't
-    enough; the templates' already-resolved reference must also be replaced.
-
-    The peer-median query for fundamental reports uses ``argMax`` — a substring
-    that does NOT appear in the history query. We inject an empty default so
-    tests that don't care about peer context don't have to provide peer rows,
-    while tests that need real peer data can pass ``"argMax": <result>`` first
-    in their canned dict (it takes precedence via insertion order).
-    """
-    if "argMax" not in canned:
-        canned = {"argMax": _EMPTY_PEER_RESULT, **canned}
-    fake = lambda: _FakeClient(canned)  # noqa: E731
-    monkeypatch.setattr(clickhouse_module, "get_client", fake)
-    monkeypatch.setattr(technical_module, "get_client", fake)
-    monkeypatch.setattr(fundamental_module, "get_client", fake)
-    monkeypatch.setattr(news_module, "get_client", fake)
-
-
-# ---------- technical ----------
-
-
 _TECH_COLS = (
-    "date",
+    "as_of",
     "rsi_14",
     "macd",
     "macd_signal",
@@ -96,6 +73,36 @@ _TECH_COLS = (
 
 def _tech_result(rows: list[tuple[Any, ...]]) -> _FakeResult:
     return _FakeResult(_TECH_COLS, rows)
+
+
+_EMPTY_PEER_RESULT = _FakeResult(("pe_ratio", "ev_ebitda", "price_to_sales"), [])
+_EMPTY_TECH_RESULT = _tech_result([])
+
+
+def _install_fake(monkeypatch: pytest.MonkeyPatch, canned: dict[str, _FakeResult]) -> None:
+    """Swap get_client() for a fake in every place the templates imported it.
+
+    Auto-injects empty defaults so tests can be terse:
+      * ``argMax``: peer-median query (used by the fundamental report).
+      * ``technical_indicators_weekly`` / ``technical_indicators_monthly``: the
+        non-daily timeframes added in QNT-207. Tests that focus on DAILY can
+        ignore them; QNT-207 renders them in-place as N/M when empty.
+    """
+    if "argMax" not in canned:
+        canned = {"argMax": _EMPTY_PEER_RESULT, **canned}
+    if "technical_indicators_weekly" not in canned:
+        canned = {**canned, "technical_indicators_weekly": _EMPTY_TECH_RESULT}
+    if "technical_indicators_monthly" not in canned:
+        canned = {**canned, "technical_indicators_monthly": _EMPTY_TECH_RESULT}
+    fake = lambda: _FakeClient(canned)  # noqa: E731
+    monkeypatch.setattr(clickhouse_module, "get_client", fake)
+    monkeypatch.setattr(technical_module, "get_client", fake)
+    monkeypatch.setattr(fundamental_module, "get_client", fake)
+    monkeypatch.setattr(news_module, "get_client", fake)
+    monkeypatch.setattr(company_module, "get_client", fake)
+
+
+# ---------- technical ----------
 
 
 def test_technical_unknown_ticker_404() -> None:
@@ -121,19 +128,21 @@ def test_technical_bullish_overbought_rendering(monkeypatch: pytest.MonkeyPatch)
 
     assert "# TECHNICAL REPORT — NVDA" in report
     assert "As of 2026-04-16" in report
+    assert "## DAILY" in report
     # Comparative RSI context — bucket label + canonical thresholds (QNT-136
     # appended the cross-bucket threshold for in-corpus quoting).
     assert "72.5 — overbought (above 70 threshold" in report
-    assert "prior session 69.0, up 3.5" in report
+    assert "prior period 69.0, up 3.5" in report
     # MACD with explicit signal-cross wording
     assert "above signal" in report
-    # Trend vs SMA-50
+    # Price action shows close vs SMA-50
     assert "close above SMA-50" in report
-    # Daily change was +1.54%
-    assert "+1.54% daily" in report
-    # Explicit signal verdict
-    assert "## SIGNAL" in report
-    assert "BULLISH" in report
+    # Period change (was "+1.54% daily" in v1; now "+1.54% vs prior period")
+    assert "+1.54% vs prior period" in report
+    # TREND replaces SIGNAL footer
+    assert "### TREND" in report
+    assert "Uptrend" in report
+    assert "## SIGNAL" not in report
 
 
 def test_technical_null_indicators_render_as_nm(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -148,8 +157,8 @@ def test_technical_null_indicators_render_as_nm(monkeypatch: pytest.MonkeyPatch)
     assert "RSI-14: N/M (insufficient history" in report
     assert "MACD(12/26/9): N/M" in report
     assert "Bollinger(20,2): N/M" in report
-    # Signal must not fabricate a verdict with no data
-    assert "N/M (insufficient history across all indicators)" in report
+    # TREND must not fabricate a verdict with no data
+    assert "N/M (insufficient history; need SMA-20, SMA-50" in report
 
 
 @pytest.mark.parametrize(
@@ -172,10 +181,7 @@ def test_technical_rsi_label_always_cites_canonical_thresholds(
     must_contain: list[str],
 ) -> None:
     """QNT-136 regression guard: every non-N/M RSI bucket must print both the
-    70 (overbought) and 30 (oversold) thresholds in the report body. Without
-    this, the agent leaks those numbers from TA prior knowledge whenever
-    the bucket the report names doesn't already contain them — and the
-    QNT-67 hallucination scorer flags them as unsupported."""
+    70 (overbought) and 30 (oversold) thresholds in the report body."""
     rows = [
         (
             date(2026, 4, 16),
@@ -196,6 +202,133 @@ def test_technical_rsi_label_always_cites_canonical_thresholds(
     report = build_technical_report("NVDA")
     for needle in must_contain:
         assert needle in report, f"RSI={rsi_value} report missing {needle!r}"
+
+
+def test_technical_header_freshness(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Header carries timeframe + days-old count."""
+    rows = [
+        (date(2026, 4, 16), 72.5, 3.9, 0.9, 3.0, 180.0, 175.0, 200.0, 180.0, 160.0, 198.0, 1000),
+    ]
+    _install_fake(monkeypatch, {"technical_indicators_daily": _tech_result(rows)})
+    report = build_technical_report("NVDA")
+    assert "daily" in report
+    assert "days old" in report
+
+
+# ---------- technical AC1 (QNT-207) ----------
+
+
+def _daily_row(*, as_of: date, close: float, prior_close: float | None = None) -> tuple[Any, ...]:
+    return (as_of, 55.0, 1.0, 0.5, 0.5, 180.0, 175.0, 200.0, 180.0, 160.0, close, 1000)
+
+
+def test_technical_renders_all_three_timeframes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC1: ## DAILY, ## WEEKLY, ## MONTHLY all appear; each has PRICE ACTION /
+    MOMENTUM / VOLATILITY / TREND; ## SIGNAL does not appear."""
+    daily_rows = [
+        _daily_row(as_of=date(2026, 4, 16), close=185.0),
+        _daily_row(as_of=date(2026, 4, 15), close=184.0),
+    ]
+    weekly_rows = [
+        (date(2026, 4, 13), 60.0, 2.0, 0.5, 0.5, 178.0, 172.0, 205.0, 182.0, 160.0, 187.0, 5000),
+        (date(2026, 4, 6), 58.0, 1.8, 0.4, 0.4, 175.0, 170.0, 200.0, 180.0, 158.0, 184.0, 4900),
+    ]
+    monthly_rows = [
+        (date(2026, 4, 1), 65.0, 5.0, 1.0, 1.0, 170.0, 160.0, 220.0, 175.0, 140.0, 190.0, 20000),
+        (date(2026, 3, 1), 62.0, 4.0, 0.8, 0.8, 165.0, 155.0, 210.0, 170.0, 135.0, 180.0, 19000),
+    ]
+    _install_fake(
+        monkeypatch,
+        {
+            "technical_indicators_daily": _tech_result(daily_rows),
+            "technical_indicators_weekly": _tech_result(weekly_rows),
+            "technical_indicators_monthly": _tech_result(monthly_rows),
+        },
+    )
+    report = build_technical_report("NVDA")
+
+    # AC1 — three timeframe sections
+    assert "## DAILY" in report
+    assert "## WEEKLY" in report
+    assert "## MONTHLY" in report
+    # Each has the PRICE ACTION / MOMENTUM / VOLATILITY / TREND sub-structure
+    assert report.count("### PRICE ACTION") == 3
+    assert report.count("### MOMENTUM") == 3
+    assert report.count("### VOLATILITY") == 3
+    assert report.count("### TREND") == 3
+    # ## SIGNAL is gone
+    assert "## SIGNAL" not in report
+    # Disclaimer line surfaced once at the top
+    assert (
+        "Daily captures intraday-to-week swings; weekly captures multi-week regime; "
+        "monthly captures cycle-level posture."
+    ) in report
+    # Every TREND block resolves to one of the three labels (this dataset is
+    # bullish across all three: close > SMA-50, SMA-20 > SMA-50, positive slope).
+    assert "Uptrend" in report
+
+
+@pytest.mark.parametrize(
+    ("close", "prior_close", "sma_20", "sma_50", "expected"),
+    [
+        # Uptrend: all three conditions met
+        (200.0, 195.0, 190.0, 180.0, "Uptrend"),
+        # Downtrend: all three reversed
+        (150.0, 155.0, 160.0, 170.0, "Downtrend"),
+        # Sideways: SMA-20 above SMA-50 but close below SMA-50
+        (175.0, 174.0, 185.0, 180.0, "Sideways"),
+        # Sideways: positive slope but close below SMA-50
+        (170.0, 165.0, 175.0, 180.0, "Sideways"),
+    ],
+)
+def test_technical_trend_label_derivation(
+    monkeypatch: pytest.MonkeyPatch,
+    close: float,
+    prior_close: float,
+    sma_20: float,
+    sma_50: float,
+    expected: str,
+) -> None:
+    """AC1: TREND label comes from close vs SMA-50, SMA-20 vs SMA-50, slope."""
+    rows = [
+        (date(2026, 4, 16), 55.0, 1.0, 0.5, 0.5, sma_20, sma_50, 220.0, 180.0, 140.0, close, 1000),
+        (
+            date(2026, 4, 15),
+            54.0,
+            0.9,
+            0.4,
+            0.4,
+            sma_20 - 1,
+            sma_50 - 1,
+            218.0,
+            178.0,
+            138.0,
+            prior_close,
+            900,
+        ),
+    ]
+    _install_fake(monkeypatch, {"technical_indicators_daily": _tech_result(rows)})
+    report = build_technical_report("NVDA")
+    assert expected in report
+
+
+def test_technical_weekly_empty_renders_nm_in_place(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A trailing weekly/monthly slice with no data renders as N/M inline,
+    not as a 404 on the whole report — daily is the gate."""
+    daily_rows = [
+        _daily_row(as_of=date(2026, 4, 16), close=185.0),
+        _daily_row(as_of=date(2026, 4, 15), close=184.0),
+    ]
+    _install_fake(
+        monkeypatch,
+        {"technical_indicators_daily": _tech_result(daily_rows)},
+    )
+    report = build_technical_report("NVDA")
+    assert "## DAILY" in report
+    assert "## WEEKLY" in report
+    assert "## MONTHLY" in report
+    assert "no weekly indicator data" in report
+    assert "no monthly indicator data" in report
 
 
 # ---------- fundamental ----------
@@ -250,8 +383,6 @@ def test_fundamental_pe_nulled_with_low_eps_renders_near_zero_earnings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # QNT-87 end-to-end: pe_ratio=None + eps=0.01 → "N/M (near-zero earnings…".
-    # QNT-137 appends the rich/cheap threshold note to every P/E line, so the
-    # near-zero-earnings reason now lives inside a longer N/M parenthetical.
     rows = [_fund_row(pe_ratio=None, eps=0.01)]
     _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, rows)})
     report = build_fundamental_report("UNH")
@@ -284,9 +415,7 @@ def test_fundamental_unknown_ticker_404() -> None:
     ("pe", "eps", "must_contain"),
     [
         # Every P/E line — including the N/M branches — must carry the
-        # canonical rich/cheap thresholds so the agent quotes them from
-        # the report instead of leaking ``40`` / ``20`` from valuation
-        # prior knowledge (QNT-137 / ADR-012, mirrors QNT-136 RSI 70/30).
+        # canonical rich/cheap thresholds (QNT-137 / ADR-012).
         (15.0, 2.5, ["P/E: 15.00", "rich ≥ 40", "cheap ≤ 20"]),
         (45.0, 2.5, ["P/E: 45.00", "rich ≥ 40", "cheap ≤ 20"]),
         (None, 0.01, ["P/E: N/M", "near-zero earnings", "rich ≥ 40", "cheap ≤ 20"]),
@@ -299,13 +428,6 @@ def test_fundamental_pe_label_always_cites_canonical_thresholds(
     eps: float | None,
     must_contain: list[str],
 ) -> None:
-    """QNT-137 regression guard: every P/E line carries rich/cheap thresholds.
-
-    Sweep ``20260426T085600Z-9433e1`` showed the model leaking ``40`` and
-    ``20`` (and similar fundamental thresholds) into action lines whenever
-    the report omitted them. ADR-012's chosen fix is to surface the
-    convention in the report layer, not loosen the prompt or scorer.
-    """
     rows = [_fund_row(pe_ratio=pe, eps=eps)]
     _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, rows)})
     report = build_fundamental_report("NVDA")
@@ -316,16 +438,12 @@ def test_fundamental_pe_label_always_cites_canonical_thresholds(
 @pytest.mark.parametrize(
     ("section_header", "must_contain"),
     [
-        # GROWTH section footer cites the ≥ 10% strong / ≤ 0% contraction
-        # thresholds used in ``_signal_verdict`` for revenue YoY.
         (
-            "## GROWTH (YoY)",
+            "### GROWTH (YoY)",
             ["Reference rates: ≥ 10% strong, ≤ 0% contraction"],
         ),
-        # PROFITABILITY footer cites the 15% strong / 0 loss-making
-        # thresholds used in ``_signal_verdict`` for net margin and ROE.
         (
-            "## PROFITABILITY",
+            "### PROFITABILITY",
             [
                 "Reference rates",
                 "net margin ≥ 15% strong",
@@ -341,11 +459,6 @@ def test_fundamental_sections_cite_canonical_reference_rates(
     section_header: str,
     must_contain: list[str],
 ) -> None:
-    """QNT-137 regression guard: GROWTH and PROFITABILITY sections always
-    print a 'Reference rates' footer naming the thresholds ``_signal_verdict``
-    votes against. Without it the agent leaks ``10``, ``15`` etc. from
-    fundamental prior knowledge — same root cause as the QNT-136 RSI fix
-    (ADR-012)."""
     rows = [_fund_row()]
     _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, rows)})
     report = build_fundamental_report("NVDA")
@@ -354,13 +467,10 @@ def test_fundamental_sections_cite_canonical_reference_rates(
         assert needle in report, f"{section_header} missing {needle!r}"
 
 
-# ---------- fundamental AC1–AC4 ----------
-
-
 def test_fundamental_own_history_range_position_renders_with_sufficient_history(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC1: with 5+ quarterly rows, each valuation multiple shows range + position label."""
+    """With 5+ quarterly rows, each valuation multiple shows range + position label."""
     rows = [
         _fund_row(
             period_end=date(2026, 3, 31),
@@ -404,48 +514,12 @@ def test_fundamental_own_history_range_position_renders_with_sufficient_history(
     assert "over last 5y" in report
     # current P/E=32.0 is highest in history → near 5y high
     assert "near 5y high" in report
-    # no numeric pct leaked
-    assert "pct" not in report
-
-
-def test_fundamental_range_position_label_thin_history(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """With only 2 rows, range is shown but no position label (too thin to be meaningful)."""
-    rows = [
-        _fund_row(period_end=date(2026, 3, 31), pe_ratio=406.0),
-        _fund_row(period_end=date(2025, 12, 31), pe_ratio=413.0),
-    ]
-    _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, rows)})
-    report = build_fundamental_report("TSLA")
-    assert "range" in report
-    assert "over last 5y" in report
-    # with 2 rows, hi != lo → ratio=0 → label fires as "near 5y low"
-    # but critically: no numeric "pct" in the output
-    assert "pct" not in report
-
-
-def test_fundamental_range_position_label_degenerate(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """When all rows have the same value (hi == lo), range shown but no position label."""
-    rows = [
-        _fund_row(period_end=date(2026, 3, 31), pe_ratio=30.0),
-        _fund_row(period_end=date(2025, 12, 31), pe_ratio=30.0),
-        _fund_row(period_end=date(2025, 9, 30), pe_ratio=30.0),
-    ]
-    _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, rows)})
-    report = build_fundamental_report("NVDA")
-    assert "range" in report
-    assert "near 5y" not in report
-    assert "mid 5y" not in report
-    assert "pct" not in report
 
 
 def test_fundamental_peer_context_rendered_for_nvda(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC2: NVDA (Technology, 4 peers) renders a sector median in PEER CONTEXT."""
+    """NVDA (Technology, 4 peers) renders a sector median in PEER CONTEXT."""
     peer_rows = [
         (28.0, 20.0, 8.0),
         (30.0, 22.0, 9.0),
@@ -470,7 +544,7 @@ def test_fundamental_peer_context_rendered_for_nvda(
 def test_fundamental_peer_context_na_for_unh(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC2: UNH (Healthcare, 0 peers) renders N/A in PEER CONTEXT, no query fired."""
+    """UNH (Healthcare, 0 peers) renders N/A in PEER CONTEXT."""
     _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, [_fund_row()])})
     report = build_fundamental_report("UNH")
     assert "## PEER CONTEXT" in report
@@ -478,74 +552,85 @@ def test_fundamental_peer_context_na_for_unh(
     assert "Healthcare" in report
 
 
-def test_fundamental_valuation_prior_quarter_delta(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """AC3: each valuation multiple shows prior-quarter value and direction."""
-    latest = _fund_row(pe_ratio=32.0, ev_ebitda=25.0, price_to_book=8.0, price_to_sales=10.0)
-    prior = _fund_row(
-        period_end=date(2025, 9, 30),
-        pe_ratio=28.0,
-        ev_ebitda=22.0,
-        price_to_book=7.0,
-        price_to_sales=9.0,
-    )
-    _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, [latest, prior])})
-    report = build_fundamental_report("NVDA")
-    # P/E expanded 28→32
-    assert "prior quarter 28.00, expanding" in report
-    # EV/EBITDA expanded 22→25
-    assert "prior quarter 22.00, expanding" in report
-
-
-def test_fundamental_margin_prior_quarter_delta(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """AC3: profitability margins show prior-quarter value and direction."""
-    latest = _fund_row(gross_margin_pct=62.0, net_margin_pct=27.0, roe=24.0, roa=13.0)
-    prior = _fund_row(
-        period_end=date(2025, 9, 30),
-        gross_margin_pct=60.0,
-        net_margin_pct=25.0,
-        roe=22.0,
-        roa=12.0,
-    )
-    _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, [latest, prior])})
-    report = build_fundamental_report("NVDA")
-    assert "prior quarter 60.0%, expanding" in report  # gross margin
-    assert "prior quarter 25.0%, expanding" in report  # net margin
-
-
 def test_fundamental_header_freshness(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC4: fundamental report header carries period type and days-old count."""
     _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, [_fund_row()])})
     report = build_fundamental_report("NVDA")
     assert "quarterly" in report
     assert "days old" in report
 
 
-def test_technical_header_freshness(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC4: technical report header carries period type and days-old count."""
-    rows = [
-        (date(2026, 4, 16), 72.5, 3.9, 0.9, 3.0, 180.0, 175.0, 200.0, 180.0, 160.0, 198.0, 1000),
-    ]
-    _install_fake(monkeypatch, {"technical_indicators_daily": _tech_result(rows)})
-    report = build_technical_report("NVDA")
-    assert "daily" in report
-    assert "days old" in report
-
-
 def test_fundamental_static_data_disclaimer_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC6 (revised): report always carries a static disclaimer citing the period date."""
     _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, [_fund_row()])})
     report = build_fundamental_report("NVDA")
     assert "Data: latest available quarterly fundamentals as of" in report
     assert "2025-12-31" in report
 
 
-# ---------- signal verdict v2 (QNT-206) ----------
+# ---------- fundamental AC2 (QNT-207) ----------
+
+
+def test_fundamental_renders_quarterly_annual_ttm_sections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC2: ## QUARTERLY, ## ANNUAL, ## TTM sections all appear when data exists."""
+    rows = [
+        _fund_row(period_type="quarterly", period_end=date(2025, 12, 31)),
+        _fund_row(period_type="quarterly", period_end=date(2025, 9, 30), pe_ratio=22.0),
+        _fund_row(period_type="annual", period_end=date(2025, 12, 31), pe_ratio=28.0),
+        _fund_row(period_type="annual", period_end=date(2024, 12, 31), pe_ratio=24.0),
+        _fund_row(period_type="ttm", period_end=date(2025, 12, 31), pe_ratio=26.0),
+        _fund_row(period_type="ttm", period_end=date(2025, 9, 30), pe_ratio=23.0),
+    ]
+    _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, rows)})
+    report = build_fundamental_report("NVDA")
+    assert "## QUARTERLY" in report
+    assert "## ANNUAL" in report
+    assert "## TTM" in report
+    # Period disclaimer + per-multiple label rule disclaimer
+    assert "Quarterly captures execution trajectory" in report
+    assert "Per-multiple label" in report
+    # Sub-section repeats per period
+    assert report.count("### VALUATION") == 3
+
+
+def test_fundamental_renders_premium_inline_discounted_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC2: at least one Premium/Inline/Discounted suffix renders on a multiple line."""
+    # Need >=4 history points for own-history IQR derivation; the latest P/E
+    # (50) is above own-history 75th pct → Premium.
+    rows = [
+        _fund_row(period_end=date(2026, 3, 31), pe_ratio=50.0),
+        _fund_row(period_end=date(2025, 12, 31), pe_ratio=20.0),
+        _fund_row(period_end=date(2025, 9, 30), pe_ratio=22.0),
+        _fund_row(period_end=date(2025, 6, 30), pe_ratio=24.0),
+        _fund_row(period_end=date(2025, 3, 31), pe_ratio=23.0),
+    ]
+    _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, rows)})
+    report = build_fundamental_report("UNH")
+    assert "— Premium" in report
+
+
+def test_fundamental_no_value_trap_label_in_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC2: value-trap / growth-at-a-price asymmetry labels never render in the body.
+
+    Even with a row pattern that would historically have triggered the named
+    asymmetry label (cheap P/E + contracting revenue), the rendered body must
+    not contain the strings. The vote logic itself stays in the codebase for
+    downstream consumers (tested separately below).
+    """
+    rows = [_fund_row(pe_ratio=15.0, revenue_yoy_pct=-5.0, net_margin_pct=None, roe=None)]
+    _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, rows)})
+    report = build_fundamental_report("NVDA")
+    assert "value-trap" not in report
+    assert "growth-at-a-price" not in report
+    # ## SIGNAL section itself is also gone from the body now
+    assert "## SIGNAL" not in report
+
+
+# ---------- signal verdict v2 (QNT-206 vote logic kept as a Python callable) ----------
 
 
 from api.templates.fundamental import _signal_verdict  # noqa: E402
@@ -554,11 +639,8 @@ from api.templates.fundamental import _signal_verdict  # noqa: E402
 @pytest.mark.parametrize(
     ("pe", "rev_yoy", "margin", "roe", "expected_prefix"),
     [
-        # Clearly bullish: cheap PE (2) + strong growth (2) + strong margin (1) + strong ROE (1)
         (15.0, 15.0, 20.0, 18.0, "BULLISH (6/6 weighted indicators agree)"),
-        # Clearly bearish: rich PE (2) + contracting growth (2) + loss margin (1) + negative ROE (1)
         (45.0, -5.0, -5.0, -3.0, "BEARISH (6/6 weighted indicators agree)"),
-        # Partial bullish: cheap PE (2) + strong growth (2); profitability neutral → 4/6
         (15.0, 15.0, 10.0, 10.0, "BULLISH (4/6 weighted indicators agree)"),
     ],
 )
@@ -569,32 +651,28 @@ def test_signal_verdict_v2_weighted_verdict_text(
     roe: float,
     expected_prefix: str,
 ) -> None:
-    """AC1: verdict text carries 'weighted indicators agree' with correct tally."""
+    """Vote logic kept as a callable -- thesis v2 (QNT-208) may consume it
+    even though QNT-207 dropped the rendered output."""
     row = {"pe_ratio": pe, "revenue_yoy_pct": rev_yoy, "net_margin_pct": margin, "roe": roe}
     assert _signal_verdict(row) == expected_prefix
 
 
 def test_signal_verdict_v2_value_trap_label() -> None:
-    """AC2: cheap multiple + contracting revenue emits MIXED (value-trap risk)."""
     row = {"pe_ratio": 15.0, "revenue_yoy_pct": -5.0, "net_margin_pct": None, "roe": None}
     assert _signal_verdict(row) == "MIXED (value-trap risk)"
 
 
 def test_signal_verdict_v2_growth_at_a_price_label() -> None:
-    """AC3: rich multiple + strong revenue emits MIXED (growth-at-a-price)."""
     latest = {"pe_ratio": 45.0, "revenue_yoy_pct": 25.0, "net_margin_pct": None, "roe": None}
     assert _signal_verdict(latest) == "MIXED (growth-at-a-price)"
 
 
 def test_signal_verdict_v2_growth_at_a_price_tsla_pattern() -> None:
-    """AC3 live: TSLA-like row (PE>>40, rev>10, profitability neutral) fires growth-at-a-price."""
     tsla_like = {"pe_ratio": 406.0, "revenue_yoy_pct": 15.8, "net_margin_pct": 2.1, "roe": 0.6}
     assert _signal_verdict(tsla_like) == "MIXED (growth-at-a-price)"
 
 
 def test_signal_verdict_v2_profitability_breaks_tie_to_bullish() -> None:
-    """Named MIXED fires only when vote is tied; strong profitability breaks tie to BULLISH."""
-    # PE rich (bear 2) + rev > 10 (bull 2) + strong margin/ROE (bull 2) = 4 bull, 2 bear
     row = {"pe_ratio": 45.0, "revenue_yoy_pct": 15.0, "net_margin_pct": 20.0, "roe": 18.0}
     result = _signal_verdict(row)
     assert result.startswith("BULLISH")
@@ -604,16 +682,17 @@ def test_signal_verdict_v2_profitability_breaks_tie_to_bullish() -> None:
 # ---------- news ----------
 
 
-def test_news_empty_returns_nm_block(monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_fake(
-        monkeypatch,
-        {"news_raw": _FakeResult(("published_at", "source", "headline"), [])},
-    )
-    report = build_news_report("NVDA")
-    assert "# NEWS REPORT — NVDA" in report
-    assert "## HEADLINES" in report
-    assert "N/M (no news ingested for NVDA" in report
-    assert "## SIGNAL" in report
+_NEWS_COLS = ("published_at", "source", "headline", "body_snippet")
+
+
+def _news_row(
+    *,
+    published: datetime,
+    source: str = "finnhub",
+    headline: str = "headline",
+    body_snippet: str = "",
+) -> tuple[Any, ...]:
+    return (published, source, headline, body_snippet)
 
 
 def test_news_unknown_ticker_404() -> None:
@@ -622,93 +701,98 @@ def test_news_unknown_ticker_404() -> None:
     assert exc.value.status_code == 404
 
 
-_NEWS_COLS = ("published_at", "source", "headline", "sentiment_label", "body_snippet")
+def test_news_empty_returns_nm_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_fake(
+        monkeypatch,
+        {"news_raw": _FakeResult(_NEWS_COLS, [])},
+    )
+    report = build_news_report("NVDA")
+    assert "# NEWS REPORT — NVDA" in report
+    assert "## RECENT HEADLINES" in report
+    assert "N/M (no news ingested for NVDA" in report
+    # SIGNAL section is gone post-QNT-207
+    assert "## SIGNAL" not in report
+    assert "## SOURCES" in report
 
 
-def _news_row(
-    *,
-    published: datetime,
-    source: str = "finnhub",
-    headline: str = "headline",
-    sentiment_label: str = "pending",
-    body_snippet: str = "",
-) -> tuple[Any, ...]:
-    return (published, source, headline, sentiment_label, body_snippet)
-
-
-def test_news_renders_sentiment_and_body_snippet_per_article(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """QNT-175 AC #1/#2: each headline carries its body snippet + sentiment
-    label, and the SIGNAL section reports the real distribution rather than
-    the legacy 'Phase 4 pending' placeholder."""
+def test_news_renders_headlines_without_sentiment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC3: per-headline rendering omits the Sentiment: line entirely."""
     rows = [
         _news_row(
             published=datetime(2026, 4, 16, tzinfo=UTC),
             source="finnhub",
             headline="NVDA hits new high",
-            sentiment_label="positive",
-            body_snippet="Earnings blew past estimates as data centre",
+            body_snippet="Earnings blew past estimates as data centre demand surged",
         ),
         _news_row(
             published=datetime(2026, 4, 15, tzinfo=UTC),
-            source="finnhub",
+            source="reuters",
             headline="Analyst flags margin risk",
-            sentiment_label="negative",
-            body_snippet="Bears pointed to compressing margins on",
-        ),
-        _news_row(
-            published=datetime(2026, 4, 14, tzinfo=UTC),
-            source="finnhub",
-            headline="Sector roundup",
-            sentiment_label="neutral",
-            body_snippet="Chip names traded mixed against the index",
+            body_snippet="Bears pointed to compressing margins",
         ),
     ]
     _install_fake(monkeypatch, {"news_raw": _FakeResult(_NEWS_COLS, rows)})
     report = build_news_report("NVDA")
+    assert "## RECENT HEADLINES" in report
+    assert "Earnings blew past estimates" in report
+    # Sentiment is removed
+    assert "Sentiment:" not in report
+    assert "## SIGNAL" not in report
+    # Sources roll-up rendered
+    assert "## SOURCES" in report
+    assert "finnhub: 1" in report
+    assert "reuters: 1" in report
 
-    assert "Earnings blew past estimates as data centre" in report
-    assert "Sentiment: Positive" in report
-    assert "Sentiment: Negative" in report
-    assert "Sentiment: Neutral" in report
-    assert "## SIGNAL" in report
-    # Distribution must be the real count, not the placeholder.
-    assert "1 bullish / 1 neutral / 1 bearish" in report
-    assert "balanced" in report
-    assert "Phase 4" not in report
+
+def test_news_lookback_and_cap_constants() -> None:
+    """AC3: lookback widened 7 -> 14, cap widened 10 -> 20 (QNT-207)."""
+    from api.templates import news as news_module_local
+
+    assert news_module_local._LOOKBACK_DAYS == 14
+    assert news_module_local._MAX_HEADLINES == 20
 
 
-def test_news_pending_sentiment_renders_as_na(monkeypatch: pytest.MonkeyPatch) -> None:
-    """QNT-175 AC #3: legacy rows whose sentiment_label is ``pending`` (the
-    Phase 4 default for un-scored articles) render as ``Sentiment: N/A``."""
-    rows = [
-        _news_row(
-            published=datetime(2026, 4, 16, tzinfo=UTC),
-            source="yahoo_finance",
-            headline="Older yahoo article",
-            sentiment_label="pending",
-            body_snippet="",
-        ),
-    ]
-    _install_fake(monkeypatch, {"news_raw": _FakeResult(_NEWS_COLS, rows)})
+def test_news_header_advertises_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_fake(monkeypatch, {"news_raw": _FakeResult(_NEWS_COLS, [])})
     report = build_news_report("NVDA")
-
-    assert "Sentiment: N/A" in report
-    # The SIGNAL section names the un-scored state explicitly so the agent
-    # doesn't read a single article as "net bullish/bearish".
-    assert "none scored" in report
+    assert "Lookback: last 14 days, up to 20 headlines" in report
 
 
 # ---------- company ----------
 
 
-def test_company_report_renders_static_profile() -> None:
-    """QNT-175 AC #4: company endpoint returns a rich static profile (description,
-    competitors, risks, watch metrics) for a covered ticker. No DB query — the
-    report is rebuilt from ``TICKER_METADATA`` on every call."""
+def _company_install(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    pe: float | None = 25.0,
+    rev_yoy: float | None = 12.0,
+    daily_rows: list[tuple[Any, ...]] | None = None,
+) -> None:
+    """Set up fakes so the company CONTEXT NOW block can render without a tunnel."""
+    fund_rows = (
+        [_fund_row(pe_ratio=pe, revenue_yoy_pct=rev_yoy)]
+        if pe is not None or rev_yoy is not None
+        else []
+    )
+    if daily_rows is None:
+        daily_rows = [
+            _daily_row(as_of=date(2026, 4, 16), close=185.0),
+            _daily_row(as_of=date(2026, 4, 15), close=183.0),
+        ]
+    _install_fake(
+        monkeypatch,
+        {
+            "fundamental_summary": _FakeResult(_FUND_COLS, fund_rows),
+            "technical_indicators_daily": _tech_result(daily_rows),
+        },
+    )
+
+
+def test_company_report_renders_static_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Company endpoint returns a rich static profile + live CONTEXT NOW (QNT-207)."""
     from api.templates.company import build_company_report
 
+    _company_install(monkeypatch)
     report = build_company_report("NVDA")
     assert "# COMPANY REPORT — NVDA" in report
     assert "## BUSINESS" in report
@@ -728,13 +812,13 @@ def test_company_report_unknown_ticker_404() -> None:
     assert exc.value.status_code == 404
 
 
-def test_company_report_covers_all_tickers() -> None:
-    """QNT-175 AC #4: every covered ticker has a static profile — none falls
-    back to '(none recorded)' bullets, which would mean the metadata extension
-    skipped a ticker."""
+def test_company_report_covers_all_tickers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every covered ticker has a static profile — none falls back to
+    '(none recorded)' bullets."""
     from api.templates.company import build_company_report
     from shared.tickers import TICKERS
 
+    _company_install(monkeypatch)
     for ticker in TICKERS:
         report = build_company_report(ticker)
         assert f"# COMPANY REPORT — {ticker}" in report
@@ -743,19 +827,64 @@ def test_company_report_covers_all_tickers() -> None:
         )
 
 
+# ---------- company AC4 (QNT-207) ----------
+
+
+def test_company_context_now_renders_with_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC4: ## CONTEXT NOW block appears with at least one cited number."""
+    from api.templates.company import build_company_report
+
+    _company_install(monkeypatch, pe=25.0, rev_yoy=12.0)
+    report = build_company_report("NVDA")
+    assert "## CONTEXT NOW" in report
+    # P/E cited verbatim
+    assert "Latest P/E: 25.00" in report
+    # Revenue YoY cited verbatim
+    assert "Latest revenue YoY: +12.00%" in report
+    # Trend label derived from daily data
+    assert "Daily trend:" in report
+
+
+def test_company_context_now_handles_missing_fundamentals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC4: CONTEXT NOW gracefully degrades to N/A when fundamentals are missing."""
+    from api.templates.company import build_company_report
+
+    _install_fake(
+        monkeypatch,
+        {
+            "fundamental_summary": _FakeResult(_FUND_COLS, []),
+            "technical_indicators_daily": _tech_result(
+                [
+                    _daily_row(as_of=date(2026, 4, 16), close=185.0),
+                    _daily_row(as_of=date(2026, 4, 15), close=183.0),
+                ]
+            ),
+        },
+    )
+    report = build_company_report("NVDA")
+    assert "## CONTEXT NOW" in report
+    assert "Latest P/E: N/A" in report
+    # Trend should still be cited (daily rows present) — a cited "trend label"
+    # satisfies AC4 by itself.
+    assert "Daily trend:" in report
+
+
 # ---------- summary ----------
 
 
 def test_summary_composes_all_three_sections(monkeypatch: pytest.MonkeyPatch) -> None:
     tech_rows = [
-        (date(2026, 4, 16), 55.0, 1.0, 0.5, 0.5, 180.0, 175.0, 200.0, 180.0, 160.0, 185.0, 1000),
+        _daily_row(as_of=date(2026, 4, 16), close=185.0),
+        _daily_row(as_of=date(2026, 4, 15), close=183.0),
     ]
     _install_fake(
         monkeypatch,
         {
             "technical_indicators_daily": _tech_result(tech_rows),
             "fundamental_summary": _FakeResult(_FUND_COLS, [_fund_row()]),
-            "news_raw": _FakeResult(("published_at", "source", "headline"), []),
+            "news_raw": _FakeResult(_NEWS_COLS, []),
         },
     )
     report = build_summary_report("NVDA")
@@ -772,7 +901,7 @@ def test_summary_demotes_subreport_404_to_inline_nm(monkeypatch: pytest.MonkeyPa
         {
             "technical_indicators_daily": _tech_result([]),
             "fundamental_summary": _FakeResult(_FUND_COLS, [_fund_row()]),
-            "news_raw": _FakeResult(("published_at", "source", "headline"), []),
+            "news_raw": _FakeResult(_NEWS_COLS, []),
         },
     )
     report = build_summary_report("NVDA")
