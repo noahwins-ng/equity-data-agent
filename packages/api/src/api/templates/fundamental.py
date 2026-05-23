@@ -55,22 +55,27 @@ _RATIO_COLUMNS = (
 _MIN_PEERS_FOR_MEDIAN = 3
 
 
-def _history_stats(values: list[float]) -> tuple[float, float, float, int] | None:
-    """Return (min, max, median, pct_rank) or None if fewer than 2 values.
+def _history_stats(values: list[float]) -> tuple[float, float, str | None] | None:
+    """Return (min, max, position_label) or None if fewer than 2 values.
 
-    Percentile rank = (count strictly below values[0]) / (n-1) * 100, rounded.
-    values[0] is the current (newest) observation.
+    position_label is one of 'near 5y low' / 'mid 5y range' / 'near 5y high',
+    based on where values[0] (the current observation) sits in the (lo, hi) range.
+    Returns None label when hi == lo (degenerate single-value range).
     """
     if len(values) < 2:
         return None
     lo = min(values)
     hi = max(values)
-    med = statistics.median(values)
-    current = values[0]
-    n = len(values)
-    rank = sum(1 for v in values if v < current)
-    pct = round(rank / (n - 1) * 100)
-    return lo, hi, med, pct
+    if hi == lo:
+        return lo, hi, None
+    ratio = (values[0] - lo) / (hi - lo)
+    if ratio <= 0.25:
+        label = "near 5y low"
+    elif ratio >= 0.75:
+        label = "near 5y high"
+    else:
+        label = "mid 5y range"
+    return lo, hi, label
 
 
 def _valuation_label(
@@ -91,8 +96,11 @@ def _valuation_label(
     parts: list[str] = []
     stats = _history_stats(history_values)
     if stats:
-        lo, hi, _med, pct = stats
-        parts.append(f"range {format_ratio(lo)}–{format_ratio(hi)} over last 5y, {pct}th pct")
+        lo, hi, pos = stats
+        range_str = f"range {format_ratio(lo)}–{format_ratio(hi)} over last 5y"
+        if pos is not None:
+            range_str += f", {pos}"
+        parts.append(range_str)
     if prior_value is not None and math.isfinite(prior_value):
         direction = (
             "expanding"
