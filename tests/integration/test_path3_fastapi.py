@@ -115,8 +115,13 @@ def test_reports_technical_renders_against_real_sql(ch_client: Client, client: T
     assert r.status_code == 200
     body = r.text
     assert "TECHNICAL REPORT" in body and "AAPL" in body
-    assert "## PRICE ACTION" in body
-    assert "## SIGNAL" in body
+    # QNT-207: report restructured into ## DAILY / ## WEEKLY / ## MONTHLY with
+    # per-timeframe PRICE ACTION / MOMENTUM / VOLATILITY / TREND sub-blocks.
+    # ## SIGNAL was removed in favour of the TREND label.
+    assert "## DAILY" in body
+    assert "### PRICE ACTION" in body
+    assert "### TREND" in body
+    assert "## SIGNAL" not in body
 
 
 @pytest.mark.integration
