@@ -11,6 +11,7 @@ from agent.prompts.system import (
     COMPARISON_SYSTEM_PROMPT,
     CONVERSATIONAL_SYSTEM_PROMPT,
     FOCUSED_SYSTEM_PROMPT,
+    FOLLOWUP_SYSTEM_PROMPT,
     QUICK_FACT_SYSTEM_PROMPT,
     REPORT_TOOLS,
     SYSTEM_PROMPT,
@@ -18,6 +19,7 @@ from agent.prompts.system import (
     build_comparison_prompt,
     build_conversational_prompt,
     build_focused_prompt,
+    build_followup_prompt,
     build_quick_fact_prompt,
     build_synthesis_prompt,
 )
@@ -26,6 +28,7 @@ __all__ = [
     "COMPARISON_SYSTEM_PROMPT",
     "CONVERSATIONAL_SYSTEM_PROMPT",
     "FOCUSED_SYSTEM_PROMPT",
+    "FOLLOWUP_SYSTEM_PROMPT",
     "QUICK_FACT_SYSTEM_PROMPT",
     "REPORT_TOOLS",
     "SYSTEM_PROMPT",
@@ -33,6 +36,7 @@ __all__ = [
     "build_comparison_prompt",
     "build_conversational_prompt",
     "build_focused_prompt",
+    "build_followup_prompt",
     "build_quick_fact_prompt",
     "build_synthesis_prompt",
 ]

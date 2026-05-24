@@ -15,6 +15,7 @@ into the runtime surface.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 import time
@@ -207,6 +208,35 @@ def _health_payload(response: Response) -> dict[str, Any]:
     }
 
 
+async def _agent_thread_prune_loop() -> None:
+    """QNT-209: periodic prune of stale agent threads from the SqliteSaver.
+
+    Sleeps ``AGENT_THREAD_PRUNE_INTERVAL_SECONDS`` between runs, calls
+    :func:`agent.memory.prune_stale_threads` against the api-process
+    SqliteSaver connection, and logs the count pruned. Runs forever until
+    cancelled by the lifespan teardown. A prune failure logs and continues
+    so a transient SQLite lock can't kill the loop.
+    """
+    from agent.memory import prune_stale_threads
+
+    from api.routers.agent_chat import get_checkpointer_conn
+
+    while True:
+        try:
+            await asyncio.sleep(settings.AGENT_THREAD_PRUNE_INTERVAL_SECONDS)
+        except asyncio.CancelledError:
+            return
+        conn = get_checkpointer_conn()
+        if conn is None:
+            continue
+        try:
+            pruned = prune_stale_threads(conn, settings.AGENT_THREAD_TTL_DAYS)  # type: ignore[arg-type]
+            if pruned:
+                logger.info("agent prune: pruned %d threads", pruned)
+        except Exception as exc:  # noqa: BLE001 — keep the loop alive across SQLite hiccups
+            logger.warning("agent prune failed: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: ARG001 — signature required by FastAPI
     """Warm the ClickHouse client + Dagster count cache + logo cache on startup."""
@@ -221,8 +251,22 @@ async def lifespan(app: FastAPI):  # noqa: ARG001 — signature required by Fast
     # call can't block process shutdown — the request path falls back to
     # an inline fetch if the thread hasn't finished by then.
     threading.Thread(target=prewarm_logo_cache, daemon=True).start()
-    yield
-    get_client.cache_clear()
+    # QNT-209: eagerly init the SqliteSaver + sidecar table so the first
+    # chat request that arrives with a thread_id doesn't pay the bootstrap
+    # cost inline, and so the prune loop has something to scan.
+    from api.routers.agent_chat import get_checkpointer
+
+    get_checkpointer()
+    prune_task = asyncio.create_task(_agent_thread_prune_loop())
+    try:
+        yield
+    finally:
+        prune_task.cancel()
+        try:
+            await prune_task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001 — shutdown swallow
+            pass
+        get_client.cache_clear()
 
 
 app = FastAPI(

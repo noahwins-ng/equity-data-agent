@@ -705,7 +705,12 @@ def test_intent_event_arrives_before_first_tool_call(
     event is less than the first ``tool_call`` index.
     """
 
-    def _fake_build(tools: dict[str, Any], *, event_emitter: Any = None) -> Any:
+    def _fake_build(
+        tools: dict[str, Any],
+        *,
+        event_emitter: Any = None,
+        **_kwargs: Any,
+    ) -> Any:
         graph = MagicMock()
 
         def invoke(state: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
@@ -1268,7 +1273,8 @@ def test_chat_request_rejects_legacy_toggle_fields() -> None:
     schema_fields = set(chat_module.ChatRequest.model_fields)
     assert "tools_enabled" not in schema_fields
     assert "cite_sources" not in schema_fields
-    assert schema_fields == {"ticker", "message"}
+    # QNT-209 adds ``thread_id`` (opaque per-session memory key).
+    assert schema_fields == {"ticker", "message", "thread_id"}
 
 
 # ─── QNT-182: deterministic eval scores pushed onto prod traces ─────────────
@@ -1642,3 +1648,83 @@ def test_current_model_info_returns_unknown_for_unmapped_alias(
         assert info["resolved_model"] == "unknown"
     finally:
         set_model_override(None)
+
+
+# ─── QNT-209: thread_id boundary tests ──────────────────────────────────────
+
+
+def test_thread_id_echoed_on_done_event(
+    client: TestClient,
+    stub_graph: MagicMock,  # noqa: ARG001 — fixture installs build_graph stub
+) -> None:
+    """AC6: when the request supplies a thread_id, the streaming ``done``
+    event carries it back so the frontend can confirm what the backend used."""
+    r = client.post(
+        "/api/v1/agent/chat",
+        json={"ticker": "NVDA", "message": "thesis?", "thread_id": "session:NVDA"},
+    )
+    frames = _parse_sse(r.text)
+    done = frames[-1][1]
+    assert done["thread_id"] == "session:NVDA"
+
+
+def test_ephemeral_path_when_thread_id_absent(
+    client: TestClient,
+    stub_graph: MagicMock,  # noqa: ARG001 — fixture installs build_graph stub
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC5: when thread_id is absent, the request must not touch the
+    checkpointer (no get_checkpointer call) and the done event echoes
+    thread_id=None."""
+    spy = MagicMock(return_value=None)
+    monkeypatch.setattr(chat_module, "get_checkpointer", spy)
+
+    r = client.post(
+        "/api/v1/agent/chat",
+        json={"ticker": "NVDA", "message": "thesis?"},
+    )
+    frames = _parse_sse(r.text)
+    done = frames[-1][1]
+    assert done["thread_id"] is None
+    # The checkpointer accessor is the gatekeeper for persistence; the
+    # ephemeral path must not call it.
+    spy.assert_not_called()
+
+
+def test_thread_id_drives_checkpointer_compile(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC5 mirror: when thread_id IS present, build_graph must be called
+    with the SqliteSaver returned from get_checkpointer."""
+    captured: dict[str, Any] = {}
+    sentinel_saver = MagicMock(name="sentinel-saver")
+
+    def _fake_get() -> Any:
+        return sentinel_saver
+
+    def _fake_build(tools: dict[str, Any], **kwargs: Any) -> Any:
+        captured["checkpointer"] = kwargs.get("checkpointer")
+        graph = MagicMock()
+        graph.invoke.return_value = {
+            "ticker": "NVDA",
+            "intent": "thesis",
+            "plan": [],
+            "reports": {},
+            "errors": {},
+            "thesis": None,
+            "quick_fact": None,
+            "confidence": 0.0,
+        }
+        return graph
+
+    monkeypatch.setattr(chat_module, "get_checkpointer", _fake_get)
+    monkeypatch.setattr(chat_module, "get_checkpointer_conn", lambda: None)
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    client.post(
+        "/api/v1/agent/chat",
+        json={"ticker": "NVDA", "message": "thesis?", "thread_id": "session:NVDA"},
+    )
+    assert captured["checkpointer"] is sentinel_saver

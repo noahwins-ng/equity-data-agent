@@ -166,6 +166,22 @@ class Settings(BaseSettings):
     CHAT_BURST_THRESHOLD: int = 20
     CHAT_BURST_WINDOW_SECONDS: int = 300
 
+    # ─── QNT-209: Agent session memory (SqliteSaver) ─────────────────────────
+    #
+    # Path on the api container to the SQLite database holding LangGraph
+    # checkpoints + the QNT-209 thread_last_seen sidecar table. The /var/lib/
+    # agent prefix matches the named volume mount in docker-compose.yml so the
+    # database persists across container restarts (AC2/AC11). Override to a
+    # tmp path in tests.
+    AGENT_DB_PATH: str = "/var/lib/agent/agent.db"
+    # Days to retain a thread's checkpoint history. Refresh creates a new
+    # thread per browser session; abandoned sessions get pruned after this
+    # window. Tests override to 0 for immediate pruning.
+    AGENT_THREAD_TTL_DAYS: int = 7
+    # How often the prune loop fires inside the api lifespan task.
+    # 86_400 = once per day. Tests override to a few seconds.
+    AGENT_THREAD_PRUNE_INTERVAL_SECONDS: int = 86_400
+
     @property
     def is_prod(self) -> bool:
         return self.ENV == "prod"
