@@ -94,9 +94,9 @@ class AspectView(BaseModel):
         description=(
             "Neutral observations or mixed signals that neither clearly "
             "support nor undermine the aspect's label — context a reader "
-            "should know, but not a threat. Example: 'RSI-14 is neutral at "
-            "53.7 (source: technical).' Leave EMPTY when there are no "
-            "relevant neutral signals."
+            "should know, but not a threat. Example: 'RSI is neutral with "
+            "no directional signal (source: technical).' Leave EMPTY when "
+            "there are no relevant neutral signals."
         ),
     )
     risks: list[str] = Field(
