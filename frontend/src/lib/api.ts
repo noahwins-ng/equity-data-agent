@@ -259,7 +259,6 @@ export type AspectView = {
   summary: string;
   supports: string[];
   challenges: string[];
-  risks: string[] | null;
 };
 
 // QNT-208 v2: thesis is four aspect blocks + verdict + rationale.
