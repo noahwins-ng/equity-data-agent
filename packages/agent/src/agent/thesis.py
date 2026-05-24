@@ -99,15 +99,15 @@ class AspectView(BaseModel):
             "there are no relevant neutral signals."
         ),
     )
-    risks: list[str] = Field(
-        default_factory=list,
+    risks: list[str] | None = Field(
+        default=None,
         description=(
             "Active headwinds or downside factors that argue AGAINST the "
             "aspect's label or could invalidate it if they worsen. Each "
             "bullet is one sentence with an inline citation. Example: "
             "'China export controls on advanced GPUs remain an overhang "
-            "(source: news).' Leave EMPTY when the supplied report contains "
-            "no real counter-evidence."
+            "(source: news).' Omit or pass null when there are no active "
+            "headwinds."
         ),
     )
 
