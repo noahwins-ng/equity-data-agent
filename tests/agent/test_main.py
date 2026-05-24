@@ -22,17 +22,30 @@ from unittest.mock import MagicMock
 import pytest
 from agent import __main__ as cli
 from agent.quick_fact import QuickFactAnswer
-from agent.thesis import Thesis
+from agent.thesis import AspectView, Thesis
 
 
-def _stub_thesis(setup: str = "NVDA looks attractive on momentum.") -> Thesis:
-    """Minimal Thesis for CLI tests — only ``setup`` text is asserted on."""
+def _stub_thesis(summary: str = "NVDA looks attractive on momentum.") -> Thesis:
+    """Minimal Thesis for CLI tests — company.summary carries the seed text."""
     return Thesis(
-        setup=setup,
-        bull_case=["RSI 62 (source: technical)"],
-        bear_case=[],
-        verdict_stance="constructive",
-        verdict_action="Trim above SMA50 (source: technical).",
+        company=AspectView(label=None, summary=summary, supports=[], challenges=[]),
+        fundamental=AspectView(
+            label="Inline",
+            summary="P/E sits in the report's Inline bucket (source: fundamental).",
+            supports=[],
+            challenges=[],
+        ),
+        technical=AspectView(
+            label="Uptrend",
+            summary="Trend label Uptrend (source: technical).",
+            supports=["RSI 62 (source: technical)"],
+            challenges=[],
+        ),
+        news=AspectView(
+            label=None, summary="No material headlines (source: news).", supports=[], challenges=[]
+        ),
+        verdict="Overweight",
+        verdict_rationale="Inline multiple paired with Uptrend trend label.",
     )
 
 
@@ -61,12 +74,14 @@ def test_analyze_success_prints_thesis_and_exits_0(
     assert cli.main(["analyze", "NVDA"]) == 0
     out = capsys.readouterr()
     # CLI re-renders the structured Thesis to markdown — assert all four
-    # section headings + the seed text from the stub appear on stdout.
-    assert "## Setup" in out.out
+    # aspect headings + verdict + the seed text from the stub appear on stdout.
+    assert "## Company" in out.out
     assert "NVDA looks attractive on momentum." in out.out
-    assert "## Bull Case" in out.out
-    assert "## Bear Case" in out.out
+    assert "## Fundamental" in out.out
+    assert "## Technical" in out.out
+    assert "## News" in out.out
     assert "## Verdict" in out.out
+    assert "**Overweight**" in out.out
     assert "confidence=0.67" in out.err
     # QNT-181: CLI now passes config={"callbacks": [handler]} when Langfuse
     # is enabled, or config={} when disabled. Tests run with keys stripped
@@ -100,8 +115,8 @@ def test_analyze_quick_fact_intent_prints_short_answer(
     assert "RSI sits at 62" in out.out
     assert "**Value:** 62 (source: technical)" in out.out
     # No thesis sections rendered.
-    assert "## Setup" not in out.out
-    assert "## Bull Case" not in out.out
+    assert "## Company" not in out.out
+    assert "## Fundamental" not in out.out
     assert "intent=quick_fact" in out.err
 
 
@@ -130,7 +145,7 @@ def test_analyze_writes_output_file(tmp_path: Path) -> None:
     assert cli.main(["analyze", "NVDA", "--output", str(out_file)]) == 0
     written = out_file.read_text()
     # The file holds the same markdown the CLI prints — section headings + body.
-    assert "## Setup" in written
+    assert "## Company" in written
     assert "NVDA looks attractive on momentum." in written
     assert "## Verdict" in written
 

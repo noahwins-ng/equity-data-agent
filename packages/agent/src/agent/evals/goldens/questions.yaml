@@ -1,27 +1,30 @@
 # Golden-set questions for agent evaluation (QNT-67, eval type (b)).
 #
+# QNT-208 rewrote every reference_thesis for the new v2 four-aspect shape:
+# Company / Fundamental / Technical / News blocks (each with summary +
+# supports + challenges + optional aspect label) plus an Overweight /
+# Neutral / Underweight verdict whose rationale names at least one aspect
+# label verbatim. Forbidden-substring gates are scoped per-aspect under
+# ``forbidden_aspect_support_substrings`` (was ``forbidden_bull_substrings``).
+# The ``news_sentiment`` intent was renamed to ``news`` per the v2
+# vocabulary cleanup.
+#
 # Records span every ticker in shared.tickers.TICKERS (coverage enforced by
 # tests/agent/evals/test_questions_yaml.py) and exercise every supported
 # intent shape: thesis, quick_fact, comparison, conversational, plus the
-# QNT-176 focused-analysis trio (fundamental, technical, news_sentiment).
-# The mix favours thin/quiet tickers (UNH, V, JPM) over the obvious
-# heavyweights (NVDA, AAPL) so prompt regressions on the long tail don't
-# hide behind tech-mega-cap successes (Phase 2 retro lesson —
-# feedback_sample_ac_broadly.md). The record-count band lives in
-# test_record_count_within_target_band; bump it together when adding
-# records here.
+# QNT-176 focused-analysis trio (fundamental, technical, news).
 #
 # Record shape:
-#   - id: short-slug                     # stable identifier; appears in history.csv
-#     ticker: NVDA                        # must be in shared.tickers.TICKERS
-#     question: "…"                       # what the user would ask the agent
-#     expected_tools:                     # subset of REPORT_TOOLS the question
-#       - technical                       # MUST trigger; over-fetching is OK by design
-#     reference_thesis: |                 # what a "good" thesis looks like — used
-#       …                                 # by LLM-as-judge for rubric comparison
-#                                         # and by the cosine signal as the target
-#                                         # text. Don't pin specific numbers — the
-#                                         # judge compares structure and coverage.
+#   - id: short-slug                                  # stable identifier; appears in history.csv
+#     ticker: NVDA                                     # must be in shared.tickers.TICKERS
+#     question: "..."                                  # what the user would ask the agent
+#     expected_tools:                                  # subset of REPORT_TOOLS the question
+#       - technical                                    # MUST trigger; over-fetching is OK by design
+#     expected_intent: thesis                          # optional intent pin
+#     forbidden_substrings: []                         # optional global anti-patterns
+#     forbidden_aspect_support_substrings:             # optional per-aspect anti-patterns
+#       technical: ["overbought"]                      # checked against technical.supports list
+#     reference_thesis: |                              # what a "good" thesis looks like
 
 questions:
   - id: nvda-technical
@@ -30,12 +33,14 @@ questions:
     expected_tools:
       - technical
     reference_thesis: |
-      A useful answer leads with the trend direction (uptrend, downtrend,
-      consolidating) drawn from moving-average alignment, names the current
-      RSI bucket (overbought / neutral / oversold) and the MACD posture, and
-      explicitly cites the technical report. It avoids manufacturing target
-      prices the report does not provide and ends with a confidence line tied
-      to whether the technical signals agreed or diverged.
+      A useful answer is a four-aspect thesis. The Technical aspect carries
+      the daily TREND label verbatim (Uptrend / Sideways / Downtrend) and
+      its supports / challenges cite the underlying RSI bucket, MACD posture,
+      and SMA alignment that produced the label (source: technical). The
+      Fundamental aspect carries a Premium / Inline / Discounted label drawn
+      from the report's valuation multiples. Company and News aspects are
+      narrative-only. Verdict is Overweight / Neutral / Underweight with a
+      rationale that mentions at least one of the aspect labels verbatim.
 
   - id: nvda-fundamental
     ticker: NVDA
@@ -43,11 +48,13 @@ questions:
     expected_tools:
       - fundamental
     reference_thesis: |
-      A useful answer summarises the latest reported earnings, revenue, and
-      P/E from the fundamental report, calls out any earnings surprise and
-      its direction, and abstains from forward-looking projections that the
-      report does not contain. Cites (source: fundamental) on every numeric
-      claim and ends with a confidence line that depends on report coverage.
+      A useful answer is a four-aspect thesis. The Fundamental aspect carries
+      a Premium / Inline / Discounted label quoted verbatim from the
+      fundamental report and its supports / challenges cite the underlying
+      P/E, EPS, revenue, and earnings-surprise direction (source: fundamental).
+      The Technical aspect carries a TREND label. Company and News aspects
+      are narrative-only. Verdict is Overweight / Neutral / Underweight with
+      a rationale that names the Fundamental label verbatim.
 
   - id: aapl-fundamental
     ticker: AAPL
@@ -55,36 +62,38 @@ questions:
     expected_tools:
       - fundamental
     reference_thesis: |
-      A useful answer reports AAPL's latest P/E ratio and EPS verbatim from
-      the fundamental report, places the multiple in context using only
-      qualitative language (rich, in-line, compressed) since the report does
-      not supply peer comparables, and refuses to compute YoY growth that
-      isn't already stated. Cites the fundamental report and ends with a
-      data-completeness-anchored confidence line.
+      A useful four-aspect thesis. The Fundamental aspect carries one of
+      Premium / Inline / Discounted (quoted verbatim from the report) with
+      supports / challenges that cite AAPL's latest P/E and EPS plus the
+      report's own-history bucket (source: fundamental). No peer comparables
+      are invented when the report shows N/A. Company / Technical / News
+      aspects are populated to the extent their reports support them.
+      Verdict mentions the Fundamental label verbatim.
 
   - id: aapl-technical
     ticker: AAPL
-    question: "Where is AAPL on the price chart — is the trend intact?"
+    question: "Where is AAPL on the price chart -- is the trend intact?"
     expected_tools:
       - technical
     reference_thesis: |
-      A useful answer reads the trend label and SMA stack from the technical
-      report, names the RSI bucket and MACD posture, and avoids reading
-      support / resistance levels that aren't explicitly tabulated. Cites
-      (source: technical) and ends with a confidence line keyed to whether
-      the technical indicators were internally consistent.
+      A useful four-aspect thesis. The Technical aspect carries the daily
+      TREND label verbatim (Uptrend / Sideways / Downtrend) and its
+      supports / challenges cite SMA stack alignment, RSI bucket, MACD
+      posture from the technical report (source: technical). No invented
+      support / resistance levels. Verdict references the Technical label
+      verbatim.
 
   - id: msft-news
     ticker: MSFT
-    question: "What's the recent news sentiment around MSFT?"
+    question: "What's the recent news flow around MSFT?"
     expected_tools:
       - news
     reference_thesis: |
-      A useful answer summarises tone (constructive, mixed, cautious) drawn
-      strictly from the news report, paraphrases at most two notable
-      headlines without inventing details, and tags the news report as the
-      sole source. If the news report is unavailable it states so plainly
-      and lowers the confidence line accordingly.
+      A useful four-aspect thesis. The News aspect summarises the running
+      story drawn strictly from the news report and surfaces at most two
+      notable headlines without inventing details, citing (source: news).
+      Other aspects are populated to the extent their reports allow.
+      Verdict cites at least one aspect label verbatim.
 
   - id: googl-technical
     ticker: GOOGL
@@ -92,24 +101,25 @@ questions:
     expected_tools:
       - technical
     reference_thesis: |
-      A useful answer states the trend label, RSI bucket, and MACD posture
-      from the technical report, calls out moving-average alignment if the
-      report flags it, and avoids inventing target levels. Cites (source:
-      technical) per the system prompt and ends with a confidence line.
+      A useful four-aspect thesis. The Technical aspect carries the daily
+      TREND label verbatim and its supports / challenges cite RSI, MACD,
+      and moving-average alignment from the technical report (source:
+      technical). No invented target levels. Verdict mentions the Technical
+      label verbatim.
 
   - id: googl-combined
     ticker: GOOGL
-    question: "Give me a balanced thesis on GOOGL — fundamentals plus technicals."
+    question: "Give me a balanced thesis on GOOGL -- fundamentals plus technicals."
     expected_tools:
       - technical
       - fundamental
     reference_thesis: |
-      A useful answer integrates the technical posture (trend, RSI, MACD)
-      and the fundamental snapshot (latest EPS, P/E, earnings surprise)
-      without doing arithmetic across them. Cites both source reports
-      explicitly on the numeric claims and resolves a final disposition
-      (constructive / neutral / cautious). The confidence line is graded
-      down if either report was missing.
+      A useful four-aspect thesis. The Fundamental aspect carries a
+      Premium / Inline / Discounted label; the Technical aspect carries an
+      Uptrend / Sideways / Downtrend label. Both label sources are quoted
+      verbatim from their reports. Aspect supports / challenges cite the
+      underlying metrics (P/E, EPS, RSI, MACD) without doing arithmetic
+      across reports. Verdict mentions at least one aspect label verbatim.
 
   - id: amzn-fundamental
     ticker: AMZN
@@ -117,10 +127,11 @@ questions:
     expected_tools:
       - fundamental
     reference_thesis: |
-      A useful answer reports AMZN's latest revenue, EPS, and P/E verbatim
-      from the fundamental report, notes the direction of the most recent
-      earnings surprise without inventing magnitudes, and refuses to project
-      growth rates the report does not state. Cites (source: fundamental).
+      A useful four-aspect thesis. The Fundamental aspect carries a
+      Premium / Inline / Discounted label quoted verbatim from the report
+      and its supports / challenges cite AMZN's latest revenue, EPS, P/E,
+      and earnings-surprise direction (source: fundamental). No invented
+      projections. Verdict references the Fundamental label verbatim.
 
   - id: meta-combined
     ticker: META
@@ -130,12 +141,14 @@ questions:
       - fundamental
       - news
     reference_thesis: |
-      A useful answer triangulates technical posture, fundamental health,
-      and news sentiment from the three reports, names disagreements between
-      them rather than averaging away, and reaches a clear cautious /
-      neutral / constructive disposition. Cites every numeric claim against
-      its source report; the confidence line tracks how many of the three
-      reports were actually supplied.
+      A useful four-aspect thesis. The Fundamental aspect carries a
+      Premium / Inline / Discounted label; the Technical aspect carries
+      an Uptrend / Sideways / Downtrend label. News aspect surfaces material
+      headlines. The thesis triangulates the three aspects without averaging
+      them away and names disagreements explicitly. Verdict is Overweight /
+      Neutral / Underweight and its rationale mentions at least one aspect
+      label verbatim. Confidence reflects how many of the three data-driven
+      reports were supplied.
 
   - id: meta-news
     ticker: META
@@ -143,11 +156,11 @@ questions:
     expected_tools:
       - news
     reference_thesis: |
-      A useful answer summarises the tone of META coverage (constructive,
-      mixed, cautious) and surfaces at most two concrete headlines from the
-      news report without paraphrasing them into facts the report does not
-      state. Cites (source: news) and ends with a confidence line that
-      reflects whether the news report was supplied.
+      A useful four-aspect thesis with the News aspect carrying the bulk
+      of the analysis. News supports / challenges quote at most two
+      headlines verbatim or near-verbatim from the report, citing (source:
+      news). Other aspects are populated to the extent their reports
+      support. Verdict mentions an aspect label verbatim.
 
   - id: tsla-technical
     ticker: TSLA
@@ -155,10 +168,11 @@ questions:
     expected_tools:
       - technical
     reference_thesis: |
-      A useful answer leads with the trend label and momentum readings from
-      the technical report (RSI bucket, MACD posture, SMA alignment) and
-      avoids inventing breakout / breakdown levels that the report does not
-      supply. Cites (source: technical) and ends with a confidence line.
+      A useful four-aspect thesis. The Technical aspect carries the daily
+      TREND label verbatim (Uptrend / Sideways / Downtrend) and its
+      supports / challenges cite RSI bucket, MACD posture, and SMA alignment
+      from the report (source: technical). No invented breakout / breakdown
+      levels. Verdict references the Technical label verbatim.
 
   - id: tsla-news
     ticker: TSLA
@@ -166,10 +180,10 @@ questions:
     expected_tools:
       - news
     reference_thesis: |
-      A useful answer summarises news tone, surfaces at most two headlines
-      verbatim or near-verbatim from the news report, and cites (source:
-      news). It does not invent quotes or attribute events the news report
-      did not include.
+      A useful four-aspect thesis. The News aspect surfaces at most two
+      headlines verbatim or near-verbatim with (source: news). Other
+      aspects are populated to the extent their reports allow. Verdict
+      mentions an aspect label verbatim.
 
   - id: jpm-fundamental
     ticker: JPM
@@ -177,11 +191,12 @@ questions:
     expected_tools:
       - fundamental
     reference_thesis: |
-      A useful answer states JPM's latest EPS and P/E ratio verbatim from
-      the fundamental report, comments qualitatively on the multiple
-      (premium / in-line / discounted) without inventing peer comparables,
-      and notes the direction of the most recent earnings surprise. Cites
-      (source: fundamental).
+      A useful four-aspect thesis. The Fundamental aspect carries a
+      Premium / Inline / Discounted label quoted verbatim from the report
+      and its supports / challenges cite JPM's latest EPS, P/E, and
+      earnings-surprise direction (source: fundamental). Multiple framing
+      uses the report's own bucket, not invented peer comparables. Verdict
+      mentions the Fundamental label verbatim.
 
   - id: v-combined
     ticker: V
@@ -190,12 +205,12 @@ questions:
       - technical
       - fundamental
     reference_thesis: |
-      A useful answer combines the technical posture (trend, momentum) and
-      the fundamental snapshot (latest EPS, P/E, earnings surprise) into a
-      single disposition. Numeric claims are cited against their source
-      report; the answer refuses to compute composite scores the reports
-      don't provide. Confidence is anchored to how complete the supplied
-      reports were.
+      A useful four-aspect thesis. The Fundamental aspect carries a
+      Premium / Inline / Discounted label; the Technical aspect carries an
+      Uptrend / Sideways / Downtrend label. Aspect supports / challenges
+      cite the underlying metrics from each report without doing arithmetic
+      across them. Verdict mentions at least one aspect label verbatim.
+      Confidence reflects how complete the supplied reports were.
 
   - id: unh-fundamental
     ticker: UNH
@@ -203,11 +218,11 @@ questions:
     expected_tools:
       - fundamental
     reference_thesis: |
-      A useful answer reports UNH's latest revenue, EPS, and P/E verbatim
-      from the fundamental report, names the direction of the latest
-      earnings surprise, and abstains from projecting forward earnings the
-      report does not contain. Cites (source: fundamental) and ends with a
-      data-completeness-keyed confidence line.
+      A useful four-aspect thesis. The Fundamental aspect carries a
+      Premium / Inline / Discounted label and its supports / challenges
+      cite UNH's latest revenue, EPS, P/E, and earnings-surprise direction
+      (source: fundamental). No invented forward earnings. Verdict
+      mentions the Fundamental label verbatim.
 
   - id: unh-news
     ticker: UNH
@@ -215,17 +230,14 @@ questions:
     expected_tools:
       - news
     reference_thesis: |
-      A useful answer reads tone and notable headlines straight from the
-      news report, escalates only what the report itself flags as material
-      (regulatory, litigation, M&A) without manufacturing a narrative, and
-      tags (source: news). If no news report is available it says so and
-      lowers the confidence line accordingly.
+      A useful four-aspect thesis with the News aspect carrying the bulk
+      of analysis. News supports / challenges read headlines and material
+      items straight from the report (regulatory, litigation, M&A) without
+      manufacturing a narrative, citing (source: news). Verdict mentions an
+      aspect label verbatim.
 
   # QNT-149: quick-fact golden. Single-metric question that the classifier
-  # heuristic routes to the quick_fact response shape (no thesis card, just
-  # a short answer + cited value). The reference text mirrors the shape
-  # ``QuickFactAnswer.to_markdown()`` produces so the cosine + judge
-  # scorers compare like-against-like.
+  # heuristic routes to the quick_fact response shape.
   - id: nvda-quickfact-rsi
     ticker: NVDA
     question: "What's NVDA's RSI right now?"
@@ -237,19 +249,11 @@ questions:
       technical report and labels the bucket (overbought, neutral,
       oversold) with the canonical thresholds the report cites. Cites
       (source: technical) inline. No thesis sections, no padding with
-      fundamental or news context — the question is a single-metric
-      lookup.
+      fundamental or news context.
 
       **Value:** <RSI value> (source: technical)
 
-  # QNT-156: comparison golden. Two-ticker question that the classifier
-  # heuristic routes to the comparison response shape. The graph fetches
-  # reports for each ticker independently; the synthesize step renders a
-  # ComparisonAnswer with per-ticker sections + a qualitative differences
-  # paragraph. ADR-003 still applies: no cross-ticker arithmetic — the LLM
-  # does not compute a synthetic delta the reports do not state. The record
-  # ticker is one of the two named tickers (the loader gates on
-  # shared.tickers.TICKERS); the second ticker is parsed from the question.
+  # QNT-156: comparison golden — now four-aspect per ticker (QNT-208).
   - id: nvda-vs-aapl-fundamental
     ticker: NVDA
     question: "Compare NVDA vs AAPL on valuation and fundamentals."
@@ -257,24 +261,16 @@ questions:
       - fundamental
     expected_intent: comparison
     reference_thesis: |
-      A useful answer renders one section per ticker with verbatim cited
-      values from each ticker's fundamental report (latest P/E, EPS,
-      revenue trend) and a SHORT qualitative differences paragraph that
-      contrasts the two ("trades at a richer multiple", "shows stronger
-      margin trend") WITHOUT computing a synthetic ratio or delta the
-      reports do not state. Each per-ticker section cites only that
-      ticker's reports. No "NVDA's P/E is 2x AAPL's" — that is
-      arithmetic and violates ADR-003.
+      A useful comparison renders one section per ticker, each with the
+      four QNT-208 aspect blocks (company / fundamental / technical / news).
+      The Fundamental aspect for each ticker carries a Premium / Inline /
+      Discounted label quoted verbatim and supports / challenges that cite
+      that ticker's P/E, EPS, and revenue (source: fundamental). The
+      differences paragraph contrasts the two in qualitative language only,
+      with no cross-ticker arithmetic ("trades at a richer multiple", not
+      "P/E is 2x"). Each per-ticker section cites only that ticker's reports.
 
-  # QNT-156: conversational golden. Off-domain question that the
-  # classifier heuristic routes to the conversational shape. The graph
-  # skips the gather node entirely (no reports needed) and the synthesize
-  # node returns a ConversationalAnswer that names what the agent CAN do
-  # plus three suggested questions. The hallucination scorer treats ANY
-  # digit in the conversational answer as a regression — there are no
-  # reports to cite, so any number IS hallucinated. ``ticker`` is set to
-  # an arbitrary symbol just so the loader's ticker-membership check
-  # passes; the agent never gathers a report for it.
+  # QNT-156: conversational golden.
   - id: conversational-off-domain-weather
     ticker: NVDA
     question: "What's the weather like today?"
@@ -283,109 +279,91 @@ questions:
     reference_thesis: |
       A useful answer is a polite "I don't know that" + a one-line
       redirect to what the agent CAN do (cover ten US public equities
-      across technical, fundamental, and news reports; produce a
-      thesis, a quick fact, or a side-by-side comparison). It includes
-      three suggested questions drawn from the agent's actual
-      capabilities. CONTAINS NO DIGITS — no years, no counts, no
-      percentages.
+      across technical, fundamental, news, and company reports; produce a
+      thesis, a quick fact, a side-by-side comparison, or a focused
+      analysis). It includes three suggested questions drawn from the
+      agent's actual capabilities. CONTAINS NO DIGITS.
 
-  # QNT-176: focused-analysis goldens. Three records — one per focused
-  # intent (fundamental / technical / news_sentiment). The plan node
-  # narrows DETERMINISTICALLY to ``[company, <focus_report>]``, so
-  # ``expected_tools`` is exactly that pair (no over-fetch tolerance
-  # required, but the tool-call check would accept it either way).
-  # Tickers are picked from the long-tail (UNH, V) plus one heavyweight
-  # so a prompt regression on the niche names is visible.
+  # QNT-176: focused-analysis goldens, reshaped for the QNT-208 per-focus
+  # verdict + news catalyst fields.
   - id: jpm-fundamental-deepdive
     ticker: JPM
-    question: "Walk me through JPM's fundamentals — valuation deep dive."
+    question: "Walk me through JPM's fundamentals -- valuation deep dive."
     expected_tools:
       - company
       - fundamental
     expected_intent: fundamental
     reference_thesis: |
       A useful answer is a focused fundamental read: 2-4 sentences of
-      summary leaning on JPM's valuation (P/E vs. its threshold), latest
-      EPS, revenue, and net-margin posture pulled VERBATIM from the
-      fundamental report and grounded in JPM's actual business segments
-      from the company report. 2-5 key-point bullets cite underlying
-      metrics with (source: fundamental) or (source: company). Cited
-      values list contains 1-4 entries (P/E, EPS, revenue, margin) each
-      copied byte-for-byte from the report. NO technical / chart talk
-      (RSI, MACD, SMA-50) — the focus is fundamentals only. NO four-
-      section thesis, NO buy/sell verdict.
+      summary leaning on JPM's valuation, latest EPS, revenue, and
+      net-margin posture pulled VERBATIM from the fundamental report and
+      grounded in JPM's actual business segments from the company report.
+      Verdict is one of Premium / Inline / Discounted quoted from the
+      report. 2-5 key-point bullets cite underlying metrics with (source:
+      fundamental) or (source: company). Cited values list contains 1-4
+      entries copied byte-for-byte. NO technical chart talk (RSI, MACD,
+      SMA-50). NO four-section thesis.
 
   - id: v-technical-analysis
     ticker: V
-    question: "Give me a technical analysis of V — chart setup and indicators."
+    question: "Give me a technical analysis of V -- chart setup and indicators."
     expected_tools:
       - company
       - technical
     expected_intent: technical
     reference_thesis: |
       A useful answer is a focused technical read: 2-4 sentences naming
-      the trend direction (uptrend / downtrend / consolidation) drawn
-      from moving-average alignment, the current RSI bucket (overbought
-      / neutral / oversold) with the canonical thresholds, and the MACD
-      posture relative to its signal line — all VERBATIM from the
-      technical report. 2-5 key-point bullets cite underlying values
-      with (source: technical) or (source: company). Cited values list
-      surfaces RSI, MACD, SMA-50 or current price (1-4 entries) copied
-      byte-for-byte. NO P/E / earnings talk — focus is technicals
-      only. NO four-section thesis, NO buy/sell verdict.
+      the trend direction drawn from moving-average alignment, the current
+      RSI bucket, and the MACD posture relative to its signal line -- all
+      VERBATIM from the technical report. Verdict is one of Uptrend /
+      Sideways / Downtrend quoted from the report's per-timeframe TREND
+      labels (majority rule across daily / weekly / monthly). 2-5 key-point
+      bullets cite underlying values with (source: technical) or (source:
+      company). Cited values list surfaces RSI, MACD, SMA-50, or close
+      price (1-4 entries). NO P/E / earnings talk.
 
   - id: unh-news-sentiment
     ticker: UNH
-    question: "What's the news sentiment on UNH — any concerning headlines?"
+    question: "What's the news on UNH -- any concerning headlines?"
     expected_tools:
       - company
       - news
-    expected_intent: news_sentiment
+    expected_intent: news
     reference_thesis: |
-      A useful answer is a focused news-sentiment read: 2-4 sentences
-      capturing the OVERALL TILT of recent UNH headlines in qualitative
-      language ("constructive", "mixed", "cautious") with (source: news)
-      cites and (source: company) for any qualitative business context.
-      2-5 key-point bullets each quote or summarise one headline with
-      (source: news). Cited values list MAY be empty (news sentiment
-      often has no quantitative anchor) or hold one qualitative label
-      like "constructive" with source=news. NO P/E, RSI, or other
-      numeric metrics from technical / fundamental — those reports were
-      not gathered for this focus. NO four-section thesis, NO buy/sell
-      verdict.
+      A useful answer is a focused news read: 2-4 sentences summarising
+      the running story for UNH (source: news) with (source: company) for
+      any qualitative business context. ``existing_development`` carries the
+      running story narrative. ``positive_catalysts`` and ``negative_catalysts``
+      list cited headlines (each "(source: news)"). 2-5 key-point bullets
+      expand the development. NO P/E, RSI, or other numeric metrics from
+      technical / fundamental.
 
-  # QNT-183: regime-polarity golden. Single-ticker thesis question where the
-  # technical report prints an overbought RSI. A correct answer places the
-  # overbought reading in the BEAR case (or omits the technical section
-  # from bull entirely) — it must NOT cite the overbought RSI as a bull
-  # bullet even if the SIGNAL aggregate prints BULLISH. This record pins
-  # the regime-polarity rule added in QNT-183.
+  # QNT-208: regime-polarity golden (was QNT-183). Single-ticker thesis
+  # where the technical report prints an overbought RSI. A correct answer
+  # places the overbought reading in technical.challenges -- it must NOT
+  # appear in technical.supports.
   - id: tsla-overbought-rsi-regime
     ticker: TSLA
-    question: "Give me a thesis on TSLA — is the technical setup bullish?"
+    question: "Give me a thesis on TSLA -- is the technical setup bullish?"
     expected_tools:
       - technical
-    forbidden_bull_substrings:
-      - "overbought"
+    forbidden_aspect_support_substrings:
+      technical:
+        - "overbought"
     reference_thesis: |
-      A correct thesis for a ticker whose RSI sits in the overbought
-      bucket does NOT list the overbought RSI reading as a bull-case
-      bullet. Overbought RSI is regime-labeled bear evidence (mean-
-      reversion risk) — it belongs in the bear case or is noted as a
-      caution in the verdict, never padded into the bull section. The
-      bull case draws only on metrics that genuinely support upside:
-      trend direction, SMA alignment, MACD posture relative to signal.
-      Each bullet cites (source: technical) and avoids re-quoting the
-      SIGNAL aggregate line. Bear case explicitly names the overbought
-      condition as a risk factor with its label cited verbatim from the
-      report.
+      A correct four-aspect thesis for a ticker whose RSI sits in the
+      overbought bucket does NOT list the overbought RSI in
+      technical.supports. Overbought RSI is regime-labeled challenge
+      evidence and belongs in technical.challenges or is noted as caution
+      in the verdict. technical.supports draws only on metrics that
+      genuinely support the Technical aspect's label (Uptrend / Sideways /
+      Downtrend) -- trend direction, SMA alignment, MACD posture. Each
+      bullet cites (source: technical). technical.challenges names the
+      overbought condition as a risk factor with its label cited verbatim.
 
-  # QNT-184: anti-SIGNAL-footer regression. Focused-technical question
-  # supplied a technical report that ends with "## SIGNAL\nBULLISH (X/Y
-  # indicators agree)". The FOCUSED_SYSTEM_PROMPT anti-SIGNAL rule forbids
-  # quoting that footer; forbidden_substrings pins it as a hard gate.
-  # "indicators agree" is used rather than bare "signal" to avoid false
-  # positives from legitimate MACD phrases like "MACD above signal line".
+  # QNT-184: anti-SIGNAL-footer regression. Focused-technical question --
+  # the focused prompt forbids quoting the SIGNAL footer. "indicators
+  # agree" pins the exact anti-pattern.
   - id: tsla-focused-technical-no-signal-quote
     ticker: TSLA
     question: "Give me a technical analysis on TSLA."
@@ -398,18 +376,13 @@ questions:
     reference_thesis: |
       A useful answer is a focused technical read with 2-4 sentences naming
       the trend direction, RSI bucket, and MACD posture pulled VERBATIM from
-      the technical report. Key-point bullets cite specific metric values
-      (e.g. "RSI 58.0 neutral", "close above SMA-50 by +9.17%", "MACD
-      +15.32 above signal line") — NOT the SIGNAL aggregate footer
-      ("3/3 indicators agree" or "the overall signal is bullish"). The
-      output must not contain the phrase "indicators agree" or paraphrase
-      the SIGNAL footer as a bullet or summary sentence.
+      the technical report. Verdict is one of Uptrend / Sideways / Downtrend.
+      Key-point bullets cite specific metric values (e.g. "RSI 58.0 neutral",
+      "close above SMA-50 by +9.17%", "MACD +15.32 above signal line") --
+      NOT the report's TREND label or any SIGNAL aggregate line.
 
-  # QNT-183: regime-contrast comparison golden. Two-ticker comparison where
-  # one ticker has an overbought RSI and the other is neutral/oversold.
-  # A correct differences paragraph does NOT pair "stronger momentum" with
-  # the higher-but-overbought RSI — it phrases the contrast as "more
-  # stretched" or "approaching overbought" per the regime-mirror rule.
+  # QNT-183: regime-contrast comparison golden. Two-ticker comparison
+  # where one ticker has an overbought RSI.
   - id: nvda-msft-rsi-regime-contrast
     ticker: NVDA
     question: "Compare NVDA vs MSFT on technical momentum."
@@ -424,92 +397,78 @@ questions:
       RSI as "stronger momentum" when that RSI sits in the overbought
       zone. Correct phrasing: "more stretched technically", "approaching
       overbought", "NVDA's RSI is in overbought territory while MSFT's
-      sits in neutral" — NOT "NVDA shows stronger momentum because its
-      RSI is higher". Each per-ticker section cites its own technical
-      report verbatim. The differences paragraph introduces no new
-      numbers and uses regime language to characterise the contrast.
+      sits in neutral". Each per-ticker section carries four aspect blocks
+      with verbatim citations from that ticker's reports. The differences
+      paragraph introduces no new numbers and uses regime language to
+      characterise the contrast.
 
-  # QNT-185: prior-session momentum-delta golden. Thesis question where the
-  # technical report prints a current RSI with a prior-session delta showing
-  # a drop from overbought into the neutral band. A correct bull bullet (if
-  # any) characterises the directional move ("cooling from overbought",
-  # "rolling over") rather than reading only the current bucket label.
-  # forbidden_substrings pins the exact anti-pattern observed in the
-  # 2026-05-18 analyst-quality assessment sample 1 (NVDA thesis).
+  # QNT-185: prior-session momentum-delta golden.
   - id: nvda-rsi-momentum-delta
     ticker: NVDA
-    question: "Give me a balanced thesis on NVDA — is the technical momentum supporting further upside?"
+    question: "Give me a balanced thesis on NVDA -- is the technical momentum supporting further upside?"
     expected_tools:
       - technical
     forbidden_substrings:
       - "potential for further growth"
     reference_thesis: |
-      A correct thesis for a ticker where RSI has dropped from the
-      overbought zone into the neutral band names the directional move,
-      not just the current bucket. Bull bullets do NOT say "RSI is
-      neutral, indicating potential for further growth" — they say
-      "RSI cooling from overbought" or "RSI rolling over from the 70+
-      zone", citing both the current and prior-session values verbatim
-      from the technical report. The prior-session delta is data, not
-      flavour: a large downward move signals mean-reversion risk and
-      belongs in context (bear case or verdict), not as upside evidence.
-      Each bullet cites (source: technical) and avoids re-quoting the
-      SIGNAL aggregate footer.
+      A correct four-aspect thesis for a ticker where RSI has dropped from
+      the overbought zone into the neutral band names the directional move,
+      not just the current bucket. technical.supports does NOT say "RSI is
+      neutral, indicating potential for further growth" -- it says "RSI
+      cooling from overbought" or "RSI rolling over from the 70+ zone",
+      citing both the current and prior-session values verbatim from the
+      technical report. The prior-session delta is data, not flavour: a
+      large downward move signals mean-reversion risk and belongs in
+      technical.challenges (or the verdict), not supports. Each bullet
+      cites (source: technical). Verdict mentions an aspect label verbatim.
 
-  # QNT-194: verdict-shape golden. Thesis question where the technical report
-  # supplies concrete SMA and RSI levels. A correct action is trigger-shaped:
-  # it names a condition (price level or indicator threshold) AND a position
-  # action verb (trim, hold, reduce, defend, etc.). State-shaped actions
-  # ("Close above SMA-50") fail the verdict_shape_ok deterministic check.
+  # QNT-194 lineage (verdict-shape): the v2 verdict is closed-set
+  # (Overweight / Neutral / Underweight) so the old trigger-shape rule
+  # is replaced by a verdict_rationale label-mention check enforced by
+  # the verdict_consistency gate in golden_set.py.
   - id: amzn-verdict-shape
     ticker: AMZN
-    question: "Give me a thesis on AMZN — what's the right trade action here?"
+    question: "Give me a thesis on AMZN -- what's the right trade action here?"
     expected_tools:
       - technical
       - fundamental
     reference_thesis: |
-      A correct thesis for AMZN ends with a trigger-shaped verdict action.
-      The action names a specific condition drawn from the reports (a price
-      level relative to an SMA, an RSI threshold, a support/resistance zone)
-      AND a position verb: trim, hold, reduce, defend, accumulate, or exit.
-      "Close above SMA-50 at X.XX" is NOT an action — it is a description
-      of the present state. A correct action looks like: "Hold; reduce on
-      close below SMA-50 at X.XX as trend invalidation." or "Trim above
-      Y; defend SMA-50 at X as the bear-case trigger." The Bull and Bear
-      cases cite verbatim values from the technical and fundamental reports
-      with inline (source: technical) and (source: fundamental) tags.
+      A correct four-aspect thesis for AMZN. The Fundamental aspect carries
+      a Premium / Inline / Discounted label; the Technical aspect carries
+      an Uptrend / Sideways / Downtrend label. Supports / challenges in
+      each aspect cite verbatim values from the technical and fundamental
+      reports with inline (source: technical) and (source: fundamental)
+      tags. Verdict is one of Overweight / Neutral / Underweight and the
+      verdict_rationale mentions at least one aspect label verbatim
+      (Premium / Inline / Discounted / Uptrend / Sideways / Downtrend).
 
-  # QNT-198: neutral-RSI-trending-down polarity regression. The technical
-  # report prints RSI at a neutral level but declining from a higher prior-
-  # session value. A correct thesis places the declining RSI in the BEAR
-  # case only — not as a bull bullet, and not in both cases.
+  # QNT-198: neutral-RSI-trending-down polarity regression. A correct
+  # thesis places the declining RSI in technical.challenges only.
   - id: nvda-rsi-neutral-trending-down
     ticker: NVDA
-    question: "Give me a thesis on NVDA — what does the RSI trend say about near-term momentum?"
+    question: "Give me a thesis on NVDA -- what does the RSI trend say about near-term momentum?"
     expected_tools:
       - technical
-    forbidden_bull_substrings:
-      - "trending down"
+    forbidden_aspect_support_substrings:
+      technical:
+        - "trending down"
     reference_thesis: |
-      A correct thesis where RSI is in the neutral zone but declining
-      places that directional signal in the BEAR case only. "RSI neutral
-      but trending down" is a bearish momentum signal — it appears
-      exclusively as a bear bullet (e.g., "RSI rolling over from the
-      neutral zone, momentum fading (source: technical)"). The bull case
-      draws on other supporting metrics (SMA alignment, MACD posture)
-      if available, or stays empty if no genuine bull evidence exists.
-      The RSI indicator does not appear in both bull and bear bullets.
+      A correct four-aspect thesis where RSI is in the neutral zone but
+      declining places that directional signal in technical.challenges only.
+      "RSI neutral but trending down" is a bearish momentum signal -- it
+      appears exclusively as a technical.challenges bullet (e.g., "RSI
+      rolling over from the neutral zone, momentum fading (source:
+      technical)"). technical.supports draws on other supporting metrics
+      (SMA alignment, MACD posture) if available, or stays empty if no
+      genuine supports exist. The RSI indicator does not appear in both
+      supports and challenges within the Technical aspect.
 
-  # ── Wave-2 breadth fixtures (QNT-190) ──────────────────────────────────
-  # Intent coverage: 3 × quick_fact, 2 × comparison, 2 × conversational,
-  # 2 × fundamental, 2 × technical (focused), 2 × news_sentiment.
-  # Every record pins expected_intent explicitly so classifier accuracy and
-  # synthesiser quality are decoupled in the score.
+  # ----- Wave-2 breadth fixtures (QNT-190) -------------------------------
+  # Intent coverage: 3 x quick_fact, 2 x comparison, 2 x conversational,
+  # 2 x fundamental, 2 x technical (focused), 2 x news (focused).
 
-  # ── quick_fact ──────────────────────────────────────────────────────────
+  # ----- quick_fact ------------------------------------------------------
 
-  # P/E lookup — fundamental report, different metric from the existing RSI
-  # quick-fact. Reference mirrors QuickFactAnswer.to_markdown() shape.
   - id: aapl-quickfact-pe
     ticker: AAPL
     question: "What's AAPL's P/E ratio?"
@@ -517,17 +476,13 @@ questions:
       - fundamental
     expected_intent: quick_fact
     reference_thesis: |
-      A useful answer states AAPL's trailing P/E ratio verbatim from
-      the fundamental report, labels it qualitatively (rich, in-line,
+      A useful answer states AAPL's trailing P/E ratio verbatim from the
+      fundamental report, labels it qualitatively (rich, in-line,
       compressed) without computing a peer ratio the report does not
-      supply, and cites (source: fundamental) inline. No thesis
-      sections and no padding with technical or news context — the
-      question is a single-metric lookup.
+      supply, and cites (source: fundamental) inline. No thesis sections.
 
       **Value:** <P/E value> (source: fundamental)
 
-  # Recent-close lookup — technical report. Tests the quick-fact shape on
-  # a price metric rather than an indicator metric.
   - id: msft-quickfact-close
     ticker: MSFT
     question: "What is MSFT's most recent closing price?"
@@ -538,12 +493,9 @@ questions:
       A useful answer states MSFT's most recent closing price verbatim
       from the technical report and notes the daily change or trend
       label if the report supplies it. Cites (source: technical) inline.
-      No thesis sections, no indicator tour — the question is a price
-      lookup, not a technical analysis.
 
       **Value:** <close price> (source: technical)
 
-  # EPS lookup — fundamental report. Tests quick-fact on an earnings metric.
   - id: jpm-quickfact-eps
     ticker: JPM
     question: "What's JPM's latest EPS?"
@@ -553,55 +505,46 @@ questions:
     reference_thesis: |
       A useful answer states JPM's most recently reported EPS verbatim
       from the fundamental report, names the earnings-surprise direction
-      (beat/miss) if the report states it, and cites (source:
-      fundamental) inline. No P/E commentary, no sector comparison,
-      no thesis structure — the question is a single-metric lookup.
+      (beat/miss) if the report states it, and cites (source: fundamental)
+      inline.
 
       **Value:** <EPS value> (source: fundamental)
 
-  # ── comparison ──────────────────────────────────────────────────────────
+  # ----- comparison ------------------------------------------------------
 
-  # Fundamental comparison — different ticker pair (AMZN vs META) and
-  # different primary dimension (fundamental) from the existing NVDA/MSFT
-  # technical contrast record.
   - id: amzn-meta-fundamental
     ticker: AMZN
-    question: "Compare AMZN vs META — which has the stronger fundamental case?"
+    question: "Compare AMZN vs META -- which has the stronger fundamental case?"
     expected_tools:
       - fundamental
     expected_intent: comparison
     reference_thesis: |
-      A useful answer renders one section per ticker citing verbatim
-      values from each company's fundamental report (latest EPS,
-      revenue, P/E) and a SHORT qualitative differences paragraph that
-      contrasts the two on valuation and earnings trajectory without
-      computing a cross-ticker ratio or delta the reports do not state.
-      Cites only that ticker's report in each section. No technical
-      or news content — the focus is fundamentals only.
+      A useful comparison renders one section per ticker, each with the
+      four QNT-208 aspect blocks. The Fundamental aspect for each ticker
+      carries a Premium / Inline / Discounted label quoted from that
+      ticker's report. Supports / challenges cite each ticker's latest
+      EPS, revenue, and P/E (source: fundamental). The differences
+      paragraph contrasts the two qualitatively without computing a
+      cross-ticker ratio or delta.
 
-  # Technical comparison — different pair (TSLA vs V) and technical
-  # dimension, covering the payments-sector / EV contrast in momentum.
   - id: tsla-v-technical
     ticker: TSLA
-    question: "Compare TSLA vs V on technical momentum — who has the stronger chart setup?"
+    question: "Compare TSLA vs V on technical momentum -- who has the stronger chart setup?"
     expected_tools:
       - technical
     expected_intent: comparison
     reference_thesis: |
-      A useful answer renders one section per ticker citing each
-      ticker's technical report (trend label, RSI bucket, MACD posture,
-      SMA alignment) and a SHORT qualitative differences paragraph that
-      contrasts their momentum postures using regime language (overbought,
-      neutral, oversold) rather than raw ordering. The differences
-      paragraph does NOT call the higher RSI "stronger momentum" when
-      that reading is overbought — it phrases the contrast as "more
-      stretched" or names the bucket difference. Each section cites only
-      its own technical report. No fundamental or news content.
+      A useful comparison renders one section per ticker, each with the
+      four QNT-208 aspect blocks. The Technical aspect for each ticker
+      carries an Uptrend / Sideways / Downtrend label from its technical
+      report. Supports / challenges cite RSI bucket, MACD posture, and
+      SMA alignment for that ticker. The differences paragraph contrasts
+      momentum postures using regime language (overbought, neutral,
+      oversold) rather than raw ordering -- a higher RSI is not "stronger
+      momentum" when that reading is overbought.
 
-  # ── conversational ──────────────────────────────────────────────────────
+  # ----- conversational --------------------------------------------------
 
-  # Clearly off-domain: a coding question. Tests that the agent refuses to
-  # answer and redirects cleanly to its actual capabilities.
   - id: conversational-off-domain-coding
     ticker: NVDA
     question: "Can you help me debug a Python function that's throwing a KeyError?"
@@ -610,13 +553,10 @@ questions:
     reference_thesis: |
       A useful answer is a polite "that's outside my scope" redirect.
       It names what the agent CAN do (equity analysis across ten US
-      public companies — technical, fundamental, news; thesis, quick
-      fact, comparison) and offers three suggested equity questions.
-      CONTAINS NO DIGITS — no years, no counts, no percentages. No
-      Python advice, no debugging guidance.
+      public companies -- technical, fundamental, news; thesis, quick
+      fact, comparison, focused analysis) and offers three suggested
+      equity questions. CONTAINS NO DIGITS.
 
-  # Capability ask: user wants to understand what the agent does. Tests that
-  # the agent describes its own capabilities accurately without hallucinating.
   - id: conversational-capability-ask
     ticker: AAPL
     question: "What can you actually help me with?"
@@ -625,38 +565,32 @@ questions:
     reference_thesis: |
       A useful answer describes the agent's scope concisely: equity
       analysis for a fixed set of US public companies, covering
-      technical indicators, fundamental metrics, and news sentiment.
-      It names the response shapes available (thesis, quick fact,
-      comparison, focused analysis) and offers three example questions
-      the user could ask. CONTAINS NO DIGITS — no counts of tickers,
-      no years, no percentages.
+      technical indicators, fundamental metrics, and news. It names the
+      response shapes available (thesis, quick fact, comparison, focused
+      analysis) and offers three example questions. CONTAINS NO DIGITS.
 
-  # ── fundamental (focused) ───────────────────────────────────────────────
+  # ----- fundamental (focused) -------------------------------------------
 
-  # AAPL fundamental deep dive — different ticker from the existing JPM
-  # record; exercises the Services/iPhone margin story.
   - id: aapl-fundamental-analysis
     ticker: AAPL
-    question: "Walk me through AAPL's fundamentals — how is the business valued?"
+    question: "Walk me through AAPL's fundamentals -- how is the business valued?"
     expected_tools:
       - company
       - fundamental
     expected_intent: fundamental
     reference_thesis: |
       A useful answer is a focused fundamental read: 2-4 sentences of
-      summary grounded in AAPL's valuation (P/E vs. qualitative context),
+      summary grounded in AAPL's valuation (P/E vs. own-history bucket),
       latest EPS, revenue, and margin posture pulled VERBATIM from the
       fundamental report and anchored in AAPL's business segments from
-      the company report. 2-5 key-point bullets cite underlying metrics
-      with (source: fundamental) or (source: company). Cited values list
-      holds 1-4 entries (P/E, EPS, revenue, margin) copied byte-for-byte
-      from the report. NO technical chart talk (RSI, MACD, SMA-50) —
-      focus is fundamentals only. NO four-section thesis, NO verdict.
+      the company report. Verdict is one of Premium / Inline / Discounted
+      quoted from the report. 2-5 key-point bullets cite underlying
+      metrics with (source: fundamental) or (source: company). Cited
+      values list holds 1-4 entries. NO technical chart talk.
 
-  # AMZN fundamental — exercises the AWS-as-profit-centre story.
   - id: amzn-fundamental-analysis
     ticker: AMZN
-    question: "Break down AMZN's fundamentals — what does the earnings picture look like?"
+    question: "Break down AMZN's fundamentals -- what does the earnings picture look like?"
     expected_tools:
       - company
       - fundamental
@@ -664,92 +598,72 @@ questions:
     reference_thesis: |
       A useful answer is a focused fundamental read: 2-4 sentences of
       summary covering AMZN's latest revenue, EPS, and P/E from the
-      fundamental report and AWS/retail segment context from the company
-      report. 2-5 key-point bullets cite underlying values with (source:
+      fundamental report and AWS / retail segment context from the
+      company report. Verdict is one of Premium / Inline / Discounted.
+      2-5 key-point bullets cite underlying values with (source:
       fundamental) or (source: company). Cited values list holds 1-4
-      entries copied verbatim. Abstains from forward-earnings projections
-      the report does not state. NO technical indicators. NO four-section
-      thesis, NO verdict.
+      entries. NO forward-earnings projections.
 
-  # ── technical (focused) ─────────────────────────────────────────────────
+  # ----- technical (focused) ---------------------------------------------
 
-  # MSFT technical analysis — different ticker from the existing V/TSLA
-  # records; exercises the Azure-growth-narrative company context.
   - id: msft-technical-analysis
     ticker: MSFT
-    question: "Give me a technical read on MSFT — what do the indicators say?"
+    question: "Give me a technical read on MSFT -- what do the indicators say?"
     expected_tools:
       - company
       - technical
     expected_intent: technical
     reference_thesis: |
       A useful answer is a focused technical read: 2-4 sentences naming
-      the trend direction, RSI bucket (with canonical thresholds), and
-      MACD posture relative to its signal line — all VERBATIM from the
-      technical report — grounded in MSFT's business context from the
-      company report. 2-5 key-point bullets cite specific metric values
-      with (source: technical) or (source: company). Cited values list
-      surfaces RSI, MACD, SMA-50, or close price (1-4 entries). NO P/E
-      or earnings talk — focus is technicals only. NO four-section
-      thesis, NO verdict.
+      the trend direction, RSI bucket, and MACD posture relative to its
+      signal line -- all VERBATIM from the technical report. Verdict is
+      one of Uptrend / Sideways / Downtrend quoted from the report's
+      per-timeframe TREND labels. 2-5 key-point bullets cite specific
+      metric values. Cited values list surfaces RSI, MACD, SMA-50, or
+      close price (1-4 entries). NO P/E talk.
 
-  # GOOGL technical deep dive — different ticker from MSFT above; adds
-  # coverage of the search/cloud narrative in the company report context.
   - id: googl-technical-deepdive
     ticker: GOOGL
-    question: "Give me a detailed technical analysis on GOOGL — trend, momentum, and chart setup."
+    question: "Give me a detailed technical analysis on GOOGL -- trend, momentum, and chart setup."
     expected_tools:
       - company
       - technical
     expected_intent: technical
     reference_thesis: |
       A useful answer is a focused technical read: 2-4 sentences stating
-      the trend label, RSI bucket, MACD posture, and SMA alignment
-      drawn VERBATIM from the technical report and placed in GOOGL's
-      business context from the company report. 2-5 key-point bullets
-      cite specific values with (source: technical) or (source: company).
-      Cited values list holds 1-4 entries copied byte-for-byte from the
-      technical report. NO P/E, revenue, or earnings talk. NO four-
-      section thesis, NO verdict.
+      the trend label, RSI bucket, MACD posture, and SMA alignment drawn
+      VERBATIM from the technical report. Verdict is one of Uptrend /
+      Sideways / Downtrend. 2-5 key-point bullets cite specific values.
+      Cited values list holds 1-4 entries. NO P/E, revenue, or earnings talk.
 
-  # ── news_sentiment (focused) ─────────────────────────────────────────────
+  # ----- news (focused) --------------------------------------------------
 
-  # TSLA news sentiment — different ticker from the existing UNH record;
-  # exercises the Musk-narrative and EV-sector headline pattern.
   - id: tsla-news-sentiment
     ticker: TSLA
-    question: "What's the current news sentiment on TSLA — any notable headlines?"
+    question: "What's the news on TSLA -- any notable headlines?"
     expected_tools:
       - company
       - news
-    expected_intent: news_sentiment
+    expected_intent: news
     reference_thesis: |
-      A useful answer is a focused news-sentiment read: 2-4 sentences
-      capturing the OVERALL TILT of recent TSLA headlines in qualitative
-      language ("constructive", "mixed", "cautious") with (source: news)
-      cites and (source: company) for any business-context grounding.
-      2-5 key-point bullets each quote or summarise one headline with
-      (source: news). Cited values list MAY be empty or hold one
-      qualitative label (e.g. "cautious" with source=news). NO P/E,
-      RSI, or other numeric indicators. NO four-section thesis, NO
-      verdict.
+      A useful answer is a focused news read: 2-4 sentences summarising
+      the running TSLA story with (source: news) cites and (source:
+      company) for any business-context grounding. ``existing_development``
+      narrates the running story. ``positive_catalysts`` and
+      ``negative_catalysts`` list cited headlines. 2-5 key-point bullets
+      expand the development. NO P/E, RSI, or other numeric indicators
+      from technical / fundamental.
 
-  # META news sentiment — exercises the advertising / Reality Labs
-  # headline pattern and the brand-name relevance filter (META is
-  # headline-scoped in NEWS_RELEVANCE).
   - id: meta-news-sentiment
     ticker: META
-    question: "What's the news sentiment around META right now — anything worth flagging?"
+    question: "What's the news on META right now -- anything worth flagging?"
     expected_tools:
       - company
       - news
-    expected_intent: news_sentiment
+    expected_intent: news
     reference_thesis: |
-      A useful answer is a focused news-sentiment read: 2-4 sentences
-      capturing the overall tone of recent META coverage in qualitative
-      language with (source: news) cites and (source: company) for any
-      segment-level grounding. 2-5 key-point bullets each surface one
-      headline or theme from the news report with (source: news). Cited
-      values list MAY be empty or hold one qualitative label. NO RSI,
-      MACD, P/E, or other numeric indicators. NO four-section thesis,
-      NO verdict.
+      A useful answer is a focused news read: 2-4 sentences capturing
+      the running META story with (source: news) cites and (source:
+      company) for any segment-level grounding. ``existing_development``
+      narrates the story. ``positive_catalysts`` and ``negative_catalysts``
+      list cited headlines. NO RSI, MACD, P/E, or other numeric indicators.

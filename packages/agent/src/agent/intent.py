@@ -61,7 +61,7 @@ Intent = Literal[
     "conversational",
     "fundamental",
     "technical",
-    "news_sentiment",
+    "news",
 ]
 
 # Which code path resolved the intent — written into AgentState by classify_node
@@ -85,8 +85,8 @@ class IntentDecision(BaseModel):
             "deep dive (valuation, earnings, margins) on one ticker. "
             "'technical' when the user explicitly asks for a technical "
             "analysis (price action, indicators, trend) on one ticker. "
-            "'news_sentiment' when the user asks for a news / headline / "
-            "sentiment read on one ticker."
+            "'news' when the user asks for a news / headline read on one "
+            "ticker."
         ),
     )
 
@@ -242,7 +242,11 @@ _TECHNICAL_ANALYSIS_TOKENS: tuple[str, ...] = (
 # "sentiment" with enough surrounding context to be unambiguous focused asks
 # — anything broader defers to the LLM classifier, which is the safer arm
 # given the safe-default-to-thesis bias.
-_NEWS_SENTIMENT_TOKENS: tuple[str, ...] = (
+#
+# QNT-208 dropped the ``news_sentiment`` intent in favour of plain ``news``;
+# the tokens stay (users still ask about "sentiment") but the variable name
+# tracks the new vocabulary.
+_NEWS_TOKENS: tuple[str, ...] = (
     "news sentiment",
     "what is the sentiment",
     "what's the sentiment",
@@ -344,8 +348,8 @@ def _heuristic_intent(question: str) -> Intent | None:
     focused_hits: list[Intent] = []
     if _matches_any(text, _FUNDAMENTAL_TOKENS) is not None:
         focused_hits.append("fundamental")
-    if _matches_any(text, _NEWS_SENTIMENT_TOKENS) is not None:
-        focused_hits.append("news_sentiment")
+    if _matches_any(text, _NEWS_TOKENS) is not None:
+        focused_hits.append("news")
     if _matches_any(text, _TECHNICAL_ANALYSIS_TOKENS) is not None:
         focused_hits.append("technical")
     if len(focused_hits) == 1:
@@ -394,18 +398,19 @@ look on AAPL?", "chart setup for TSLA", "Walk me through TSLA technical \
 setup", "what do the charts say for META?", "is AAPL overbought?", \
 "is TSLA oversold?"). The answer is a focused read on price action, \
 indicators, and trend.
-* "news_sentiment" — the user asked for a news / headline / sentiment \
-read on one ticker (e.g. "what's the news sentiment on AAPL?", "headlines \
-on META", "any concerning news for UNH?", "what's the news say on NVDA?", \
-"how is sentiment on META?", "any catalysts for TSLA?"). The answer is a \
-focused read on recent headlines and their sentiment.
+* "news" — the user asked for a news / headline read on one ticker \
+(e.g. "what's the news on AAPL?", "headlines on META", "any concerning \
+news for UNH?", "what's the news say on NVDA?", "how is sentiment on \
+META?", "any catalysts for TSLA?"). The answer is a focused read on \
+recent headlines (positive and negative catalysts) tied to the running \
+story.
 
 If you are uncertain between "thesis" and "quick_fact", default to "thesis" \
 — that path is the existing safe shape. Pick "comparison" only when there \
 is an explicit multi-ticker contrast in the question. Pick "conversational" \
 only for greetings, capability asks, or clearly off-domain inputs — \
 ambiguous equity questions should NOT route here. Pick "fundamental", \
-"technical", or "news_sentiment" ONLY when the user explicitly named that \
+"technical", or "news" ONLY when the user explicitly named that \
 domain; an open-ended "should I buy NVDA?" still routes to "thesis" even \
 though the answer happens to lean on fundamentals.
 

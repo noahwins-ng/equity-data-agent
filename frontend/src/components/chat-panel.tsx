@@ -28,6 +28,8 @@ import {
 
 import {
   API_BASE_URL,
+  type AspectLabel,
+  type AspectView,
   type ChatErrorEvent,
   type ComparisonPayload,
   type ConversationalPayload,
@@ -42,6 +44,7 @@ import {
   type ThesisPayload,
   type ToolCallEvent,
   type ToolResultEvent,
+  type Verdict,
 } from "@/lib/api";
 import { parseSseStream } from "@/lib/sse";
 
@@ -258,7 +261,7 @@ function emptyStateSuggestions(ticker: string): string[] {
     `Give me a balanced thesis on ${ticker}`,
     `Technical analysis of ${ticker}`,
     `Walk me through ${ticker}'s fundamentals`,
-    `What's the news sentiment on ${ticker}?`,
+    `What's the news on ${ticker}?`,
   ];
 }
 
@@ -351,22 +354,71 @@ function ProseBlock({ text }: { text: string }) {
   );
 }
 
-// ─── Structured thesis card ───────────────────────────────────────────────
+// ─── QNT-208: four-aspect thesis card ─────────────────────────────────────
 
-const STANCE_PILL: Record<ThesisPayload["verdict_stance"], string> = {
-  constructive: "border-emerald-700/40 bg-emerald-900/20 text-emerald-300",
-  cautious: "border-amber-700/40 bg-amber-900/20 text-amber-300",
-  negative: "border-red-700/40 bg-red-900/20 text-red-300",
-  mixed: "border-zinc-700 bg-zinc-900/40 text-zinc-300",
+// Verdict pill palette. Overweight = emerald (constructive), Neutral = zinc
+// (balanced), Underweight = red (negative). Pydantic bounds the verdict on
+// the server side; an exhaustive map means a future verdict value lights up
+// a type error rather than a missing className at runtime.
+const VERDICT_PILL: Record<Verdict, string> = {
+  Overweight: "border-emerald-700/40 bg-emerald-900/20 text-emerald-300",
+  Neutral: "border-zinc-700 bg-zinc-900/40 text-zinc-300",
+  Underweight: "border-red-700/40 bg-red-900/20 text-red-300",
 };
 
-// QNT-150: defensive lookup for the verdict-stance pill className. The
-// ``verdict_stance`` field is bounded by Pydantic on the server, but a
-// hallucinated/unknown stance from a misbehaving provider would otherwise
-// resolve to ``undefined`` and render a pill with no className. Fall back to
-// the neutral ``mixed`` palette so the card still renders cleanly.
-function stancePillClass(stance: ThesisPayload["verdict_stance"]): string {
-  return STANCE_PILL[stance] ?? STANCE_PILL.mixed;
+// Per-aspect label chip palette. Premium / Uptrend = green; Discounted /
+// Downtrend = red; Inline / Sideways = zinc; null label = no chip rendered.
+const ASPECT_LABEL_PILL: Record<AspectLabel, string> = {
+  Premium: "border-amber-700/40 bg-amber-900/20 text-amber-300",
+  Inline: "border-zinc-700 bg-zinc-900/40 text-zinc-300",
+  Discounted: "border-emerald-700/40 bg-emerald-900/20 text-emerald-300",
+  Uptrend: "border-emerald-700/40 bg-emerald-900/20 text-emerald-300",
+  Sideways: "border-zinc-700 bg-zinc-900/40 text-zinc-300",
+  Downtrend: "border-red-700/40 bg-red-900/20 text-red-300",
+};
+
+function AspectBlock({ title, aspect }: { title: string; aspect: AspectView }) {
+  return (
+    <div>
+      <div className="mb-1 flex items-baseline gap-2">
+        <h4 className="font-mono text-[10px] uppercase tracking-wider text-zinc-400">
+          {title}
+        </h4>
+        {aspect.label && (
+          <span
+            className={`rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider ${ASPECT_LABEL_PILL[aspect.label]}`}
+          >
+            {aspect.label}
+          </span>
+        )}
+      </div>
+      <ProseBlock text={aspect.summary} />
+      {aspect.supports.length > 0 && (
+        <ul className="mt-1 space-y-0.5 text-xs text-zinc-200">
+          {aspect.supports.map((point, i) => (
+            <li key={`s-${i}`} className="flex gap-1">
+              <span className="text-emerald-500">+</span>
+              <span className="min-w-0 flex-1">
+                <ProseBlock text={point} />
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {aspect.challenges.length > 0 && (
+        <ul className="mt-1 space-y-0.5 text-xs text-zinc-200">
+          {aspect.challenges.map((point, i) => (
+            <li key={`c-${i}`} className="flex gap-1">
+              <span className="text-red-500">-</span>
+              <span className="min-w-0 flex-1">
+                <ProseBlock text={point} />
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 function ThesisCard({
@@ -378,13 +430,13 @@ function ThesisCard({
   thesis: ThesisPayload;
   stats: DoneEvent | null;
 }) {
-  const confidencePct = stats ? Math.max(0, Math.min(100, Math.round(stats.confidence * 100))) : null;
+  const confidencePct = stats
+    ? Math.max(0, Math.min(100, Math.round(stats.confidence * 100)))
+    : null;
   return (
     <section className="rounded border border-zinc-800 bg-zinc-900/40">
       <header className="flex items-baseline justify-between gap-2 border-b border-zinc-800 px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider text-zinc-400">
-        <span>
-          Thesis · {ticker ?? "session"} · this session
-        </span>
+        <span>Thesis · {ticker ?? "session"} · this session</span>
         {stats && (
           <span className="text-zinc-500">
             {stats.tools_count} sources · {stats.citations_count} cited
@@ -393,45 +445,10 @@ function ThesisCard({
       </header>
 
       <div className="space-y-3 p-3">
-        <ProseBlock text={thesis.setup} />
-
-        <div>
-          <h4 className="mb-1 font-mono text-[10px] uppercase tracking-wider text-emerald-400">
-            ▲ Bull Case
-          </h4>
-          {thesis.bull_case.length === 0 ? (
-            <p className="text-xs italic text-zinc-500">
-              No bull case supported by the reports.
-            </p>
-          ) : (
-            <ol className="space-y-1 pl-4 text-xs text-zinc-200">
-              {thesis.bull_case.map((point, i) => (
-                <li key={i} className="list-decimal">
-                  <ProseBlock text={point} />
-                </li>
-              ))}
-            </ol>
-          )}
-        </div>
-
-        <div>
-          <h4 className="mb-1 font-mono text-[10px] uppercase tracking-wider text-red-400">
-            ▼ Bear Case
-          </h4>
-          {thesis.bear_case.length === 0 ? (
-            <p className="text-xs italic text-zinc-500">
-              No bear case supported by the reports.
-            </p>
-          ) : (
-            <ol className="space-y-1 pl-4 text-xs text-zinc-200">
-              {thesis.bear_case.map((point, i) => (
-                <li key={i} className="list-decimal">
-                  <ProseBlock text={point} />
-                </li>
-              ))}
-            </ol>
-          )}
-        </div>
+        <AspectBlock title="Company" aspect={thesis.company} />
+        <AspectBlock title="Fundamental" aspect={thesis.fundamental} />
+        <AspectBlock title="Technical" aspect={thesis.technical} />
+        <AspectBlock title="News" aspect={thesis.news} />
 
         <div className="rounded border border-zinc-800 bg-zinc-950/60 p-2">
           <div className="mb-1 flex items-center gap-2">
@@ -439,12 +456,12 @@ function ThesisCard({
               Verdict
             </span>
             <span
-              className={`rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider ${stancePillClass(thesis.verdict_stance)}`}
+              className={`rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider ${VERDICT_PILL[thesis.verdict]}`}
             >
-              {thesis.verdict_stance}
+              {thesis.verdict}
             </span>
           </div>
-          <ProseBlock text={thesis.verdict_action} />
+          <ProseBlock text={thesis.verdict_rationale} />
           {confidencePct !== null && (
             <div className="mt-2">
               <div className="mb-0.5 flex justify-between font-mono text-[10px] uppercase tracking-wider text-zinc-500">
@@ -544,34 +561,15 @@ function ComparisonCard({
           {comparison.sections.map((section) => (
             <div
               key={section.ticker}
-              className="rounded border border-zinc-800 bg-zinc-950/60 p-2"
+              className="space-y-3 rounded border border-zinc-800 bg-zinc-950/60 p-2"
             >
-              <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+              <div className="font-mono text-[11px] uppercase tracking-wider text-zinc-300">
                 {section.ticker}
               </div>
-              <ProseBlock text={section.summary} />
-              {section.key_values.length > 0 && (
-                <ul className="mt-2 space-y-1">
-                  {section.key_values.map((kv, i) => (
-                    <li
-                      key={`${section.ticker}-${i}`}
-                      className="flex items-baseline justify-between gap-2 font-mono text-[10px]"
-                    >
-                      <span className="uppercase tracking-wider text-zinc-500">
-                        {kv.label}
-                      </span>
-                      <span className="flex items-baseline gap-1">
-                        <span className="rounded border border-zinc-700 bg-zinc-950 px-1 py-px font-mono text-[10px] tabular-nums text-zinc-100">
-                          {kv.value}
-                        </span>
-                        <span className="rounded border border-zinc-700 bg-zinc-900 px-1 py-px text-[9px] uppercase tracking-wide text-zinc-400">
-                          {kv.source}
-                        </span>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <AspectBlock title="Company" aspect={section.company} />
+              <AspectBlock title="Fundamental" aspect={section.fundamental} />
+              <AspectBlock title="Technical" aspect={section.technical} />
+              <AspectBlock title="News" aspect={section.news} />
             </div>
           ))}
         </div>
@@ -636,7 +634,7 @@ function ConversationalCard({
 // ─── Focused-analysis card (QNT-176) ──────────────────────────────────────
 //
 // One card shape covers all three focused intents (fundamental / technical /
-// news_sentiment). The ``focus`` discriminator drives the header label and
+// news). The ``focus`` discriminator drives the header label and
 // the accent palette so a glance tells the user which read they got. The
 // body fields are rendered the same way the comparison card renders its
 // per-ticker section: prose summary with chips, a bullet list of key
@@ -651,8 +649,8 @@ const FOCUS_PILL: Record<FocusKind, { label: string; className: string }> = {
     label: "Technicals",
     className: "border-emerald-700/40 bg-emerald-900/20 text-emerald-300",
   },
-  news_sentiment: {
-    label: "News sentiment",
+  news: {
+    label: "News",
     className: "border-amber-700/40 bg-amber-900/20 text-amber-300",
   },
 };
@@ -695,7 +693,64 @@ function FocusedAnalysisCard({
       </header>
 
       <div className="space-y-3 p-3">
+        {focused.verdict && (
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+              Verdict
+            </span>
+            <span
+              className={`rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider ${ASPECT_LABEL_PILL[focused.verdict]}`}
+            >
+              {focused.verdict}
+            </span>
+          </div>
+        )}
         <ProseBlock text={focused.summary} />
+
+        {focused.focus === "news" && focused.existing_development && (
+          <div>
+            <h4 className="mb-1 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+              Running story
+            </h4>
+            <ProseBlock text={focused.existing_development} />
+          </div>
+        )}
+
+        {focused.focus === "news" && focused.positive_catalysts.length > 0 && (
+          <div>
+            <h4 className="mb-1 font-mono text-[10px] uppercase tracking-wider text-emerald-400">
+              Positive catalysts
+            </h4>
+            <ul className="space-y-0.5 text-xs text-zinc-200">
+              {focused.positive_catalysts.map((c, i) => (
+                <li key={`pc-${i}`} className="flex gap-1">
+                  <span className="text-emerald-500">+</span>
+                  <span className="min-w-0 flex-1">
+                    <ProseBlock text={c} />
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {focused.focus === "news" && focused.negative_catalysts.length > 0 && (
+          <div>
+            <h4 className="mb-1 font-mono text-[10px] uppercase tracking-wider text-red-400">
+              Negative catalysts
+            </h4>
+            <ul className="space-y-0.5 text-xs text-zinc-200">
+              {focused.negative_catalysts.map((c, i) => (
+                <li key={`nc-${i}`} className="flex gap-1">
+                  <span className="text-red-500">-</span>
+                  <span className="min-w-0 flex-1">
+                    <ProseBlock text={c} />
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {focused.key_points.length > 0 && (
           <div>
@@ -774,7 +829,7 @@ function RunBlock({
     conversational: "reply…",
     fundamental: "fundamental analysis…",
     technical: "technical analysis…",
-    news_sentiment: "news sentiment…",
+    news: "news read…",
   };
 
   return (
@@ -822,7 +877,7 @@ function RunBlock({
       )}
 
       {/* QNT-176: focused-analysis card — renders when intent ∈
-        {fundamental, technical, news_sentiment} */}
+        {fundamental, technical, news} */}
       {run.focused && (
         <FocusedAnalysisCard
           ticker={run.ticker}

@@ -45,15 +45,17 @@ def _mock_tool(text: str) -> ToolFn:
     return tool
 
 
-def _stub_thesis(setup: str = "NVDA thesis body.") -> Thesis:
-    """Minimal Thesis for graph tests — fields chosen so the markdown render
+def _stub_thesis(company_summary: str = "NVDA thesis body.") -> Thesis:
+    """Minimal Thesis for graph tests -- fields chosen so the markdown render
     contains the seed text (so tests can grep for it)."""
-    return Thesis(
-        setup=setup,
-        bull_case=["bull (source: technical)"],
-        bear_case=["bear (source: fundamental)"],
-        verdict_stance="mixed",
-        verdict_action="Hold pending QNT-67 eval.",
+    from ._thesis_factory import make_thesis
+
+    return make_thesis(
+        company_summary=company_summary,
+        supports=["bull (source: technical)"],
+        challenges=["bear (source: fundamental)"],
+        verdict="Neutral",
+        verdict_rationale="Premium and Uptrend tension (source: technical).",
     )
 
 
@@ -761,21 +763,15 @@ def test_classify_node_routes_to_comparison_for_two_ticker_question(
     The graph fetches reports for each named ticker and synthesize returns
     a ComparisonAnswer. AC: comparison response shape returns per-ticker
     sections + a differences paragraph."""
-    from agent.comparison import ComparisonAnswer, ComparisonSection, ComparisonValue
+    from agent.comparison import ComparisonAnswer
+
+    from ._thesis_factory import make_comparison_section
 
     stub_llm.invoke.return_value = AIMessage(content="fundamental")
     expected = ComparisonAnswer(
         sections=[
-            ComparisonSection(
-                ticker="NVDA",
-                summary="NVDA trades at a premium (source: fundamental).",
-                key_values=[ComparisonValue(label="P/E", value="50.0", source="fundamental")],
-            ),
-            ComparisonSection(
-                ticker="AAPL",
-                summary="AAPL trades closer to the market (source: fundamental).",
-                key_values=[ComparisonValue(label="P/E", value="32.0", source="fundamental")],
-            ),
+            make_comparison_section("NVDA", "Premium", "Uptrend"),
+            make_comparison_section("AAPL", "Inline", "Sideways"),
         ],
         differences="NVDA carries a richer multiple than AAPL (source: fundamental).",
     )
@@ -1089,7 +1085,7 @@ def test_focused_intent_narrows_plan_to_company_and_matching_report(
     cases: list[tuple[Intent, str, str]] = [
         ("fundamental", "give me a fundamental analysis of NVDA", "fundamental"),
         ("technical", "technical analysis of NVDA", "technical"),
-        ("news_sentiment", "what is the sentiment on NVDA?", "news"),
+        ("news", "what is the sentiment on NVDA?", "news"),
     ]
 
     for intent, question, expected_report in cases:
@@ -1188,7 +1184,7 @@ def test_hint_from_intent_focused_resolves_to_real_bank_label() -> None:
     from agent.graph import _hint_from_intent
 
     bank_labels = {label for label, _ in _SUGGESTION_BANK}
-    for intent in ("fundamental", "technical", "news_sentiment"):
+    for intent in ("fundamental", "technical", "news"):
         hint = _hint_from_intent(intent)  # type: ignore[arg-type]
         assert hint is not None, f"intent {intent!r} produced None hint"
         assert hint in bank_labels, f"intent {intent!r} hint {hint!r} not in {bank_labels}"

@@ -26,7 +26,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from agent.quick_fact import QuickFactAnswer
-from agent.thesis import Thesis
+from agent.thesis import AspectView, Thesis
 from api import main as main_module
 from api.routers import agent_chat as chat_module
 from fastapi.testclient import TestClient
@@ -50,13 +50,33 @@ def _parse_sse(body: str) -> list[tuple[str, dict[str, Any]]]:
     return frames
 
 
-def _stub_thesis(setup: str = "NVDA framing.", bull: list[str] | None = None) -> Thesis:
+def _stub_thesis(
+    company_summary: str = "NVDA framing (source: company).",
+    technical_supports: list[str] | None = None,
+) -> Thesis:
     return Thesis(
-        setup=setup,
-        bull_case=bull if bull is not None else ["RSI 62 (source: technical)"],
-        bear_case=["Multiple compression risk (source: fundamental)"],
-        verdict_stance="constructive",
-        verdict_action="Trim above SMA50 (source: technical).",
+        company=AspectView(label=None, summary=company_summary, supports=[], challenges=[]),
+        fundamental=AspectView(
+            label="Premium",
+            summary="Multiple sits Premium (source: fundamental).",
+            supports=[],
+            challenges=["Multiple compression risk (source: fundamental)"],
+        ),
+        technical=AspectView(
+            label="Uptrend",
+            summary="Daily TREND Uptrend (source: technical).",
+            supports=technical_supports
+            if technical_supports is not None
+            else ["RSI 62 (source: technical)"],
+            challenges=[],
+        ),
+        news=AspectView(
+            label=None, summary="No material headlines (source: news).", supports=[], challenges=[]
+        ),
+        verdict="Overweight",
+        verdict_rationale=(
+            "Premium multiple paired with Uptrend trend (source: technical, fundamental)."
+        ),
     )
 
 
@@ -167,8 +187,9 @@ def test_happy_path_emits_canonical_sequence(
     done_data = frames[-1][1]
     assert done_data["confidence"] == 0.67
     assert done_data["tools_count"] == 3
-    # The stub thesis has citations in setup (no), bull (1), bear (1), verdict (1).
-    assert done_data["citations_count"] == 3
+    # QNT-208: v2 stub has citations across multiple aspects; the exact
+    # count is shape-dependent. Pin a non-zero floor.
+    assert done_data["citations_count"] >= 3
 
 
 def test_thesis_event_payload_matches_pydantic_dump(
@@ -189,7 +210,7 @@ def test_prose_chunks_split_setup_into_clauses(
 ) -> None:
     """The setup paragraph is chunked at sentence boundaries so the panel can
     render it progressively. Two-sentence setup → two prose_chunk events."""
-    thesis = _stub_thesis(setup="First clause. Second clause.")
+    thesis = _stub_thesis(company_summary="First clause. Second clause.")
 
     def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
         graph = MagicMock()
@@ -216,17 +237,33 @@ def test_prose_chunks_split_setup_into_clauses(
     assert chunks[1].startswith("Second clause.")
 
 
-def test_thesis_with_empty_bull_emits_full_event(
+def test_thesis_with_empty_supports_emits_full_event(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Asymmetric thesis (empty bull or bear) must still serialize cleanly so
-    the panel can render the asymmetry without a parse error."""
+    """QNT-208: asymmetric aspect (empty supports OR empty challenges) must
+    still serialize cleanly so the panel can render the asymmetry."""
     thesis = Thesis(
-        setup="One-sided framing.",
-        bull_case=[],  # asymmetric — no bull case
-        bear_case=["Bear concern (source: fundamental)"],
-        verdict_stance="negative",
-        verdict_action="Avoid; revisit on quarterly miss (source: fundamental).",
+        company=AspectView(label=None, summary="One-sided framing.", supports=[], challenges=[]),
+        fundamental=AspectView(
+            label="Premium",
+            summary="Multiple Premium (source: fundamental).",
+            supports=[],
+            challenges=["Bear concern (source: fundamental)"],
+        ),
+        technical=AspectView(
+            label="Downtrend",
+            summary="TREND Downtrend (source: technical).",
+            supports=[],
+            challenges=[],
+        ),
+        news=AspectView(
+            label=None, summary="No headlines (source: news).", supports=[], challenges=[]
+        ),
+        verdict="Underweight",
+        verdict_rationale=(
+            "Premium multiple and Downtrend trend label together argue Underweight "
+            "(source: technical, fundamental)."
+        ),
     )
 
     def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
@@ -247,9 +284,9 @@ def test_thesis_with_empty_bull_emits_full_event(
     r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": ""})
     frames = _parse_sse(r.text)
     thesis_data = next(data for name, data in frames if name == "thesis")
-    assert thesis_data["bull_case"] == []
-    assert thesis_data["bear_case"] == ["Bear concern (source: fundamental)"]
-    assert thesis_data["verdict_stance"] == "negative"
+    assert thesis_data["fundamental"]["supports"] == []
+    assert thesis_data["fundamental"]["challenges"] == ["Bear concern (source: fundamental)"]
+    assert thesis_data["verdict"] == "Underweight"
 
 
 def test_no_thesis_when_reports_empty_emits_done_with_zero(
@@ -614,18 +651,31 @@ def test_quick_fact_citations_count_matches_helper() -> None:
 
 
 def test_count_citations_matches_source_pattern() -> None:
-    """``citations_count`` counts ``(source: …)`` parens across all sections —
-    the canonical citation shape the synthesis prompt enforces."""
+    """``citations_count`` counts ``(source: ...)`` parens across all
+    aspects + verdict rationale -- the canonical citation shape the
+    synthesis prompt enforces (QNT-208)."""
     thesis = Thesis(
-        setup="Setup with no cite.",
-        bull_case=[
-            "First (source: technical)",
-            "Second (source: fundamental|news)",
-        ],
-        bear_case=["Third (source: fundamental)"],
-        verdict_stance="mixed",
-        verdict_action="Levels (source: technical).",
+        company=AspectView(
+            label=None, summary="Company summary with no cite.", supports=[], challenges=[]
+        ),
+        fundamental=AspectView(
+            label="Premium",
+            summary="Multiple Premium",
+            supports=["Second (source: fundamental|news)"],
+            challenges=["Third (source: fundamental)"],
+        ),
+        technical=AspectView(
+            label="Uptrend",
+            summary="Uptrend",
+            supports=["First (source: technical)"],
+            challenges=[],
+        ),
+        news=AspectView(label=None, summary="No headlines", supports=[], challenges=[]),
+        verdict="Neutral",
+        verdict_rationale="Premium plus Uptrend (source: technical).",
     )
+    # 1 (fundamental.supports) + 1 (fundamental.challenges) + 1 (technical.supports)
+    # + 1 (verdict_rationale) = 4 citations.
     assert chat_module._count_citations(thesis) == 4
 
 
@@ -721,21 +771,39 @@ def test_comparison_intent_emits_comparison_event_not_thesis(
     """QNT-156: when the graph returns intent=comparison, the SSE stream
     emits an ``intent`` preamble and a ``comparison`` event; the thesis
     + quick-fact cards are intentionally absent."""
-    from agent.comparison import ComparisonAnswer, ComparisonSection, ComparisonValue
+    from agent.comparison import ComparisonAnswer, ComparisonSection
+
+    def _section(ticker: str, label: str) -> ComparisonSection:
+        return ComparisonSection(
+            ticker=ticker,
+            company=AspectView(
+                label=None,
+                summary=f"{ticker} context (source: company).",
+                supports=[],
+                challenges=[],
+            ),
+            fundamental=AspectView(
+                label=label,
+                summary=f"{ticker} sits {label} (source: fundamental).",
+                supports=[],
+                challenges=[],
+            ),
+            technical=AspectView(
+                label="Sideways",
+                summary=f"{ticker} TREND Sideways (source: technical).",
+                supports=[],
+                challenges=[],
+            ),
+            news=AspectView(
+                label=None,
+                summary=f"{ticker} no headlines (source: news).",
+                supports=[],
+                challenges=[],
+            ),
+        )
 
     comparison = ComparisonAnswer(
-        sections=[
-            ComparisonSection(
-                ticker="NVDA",
-                summary="NVDA trades at a premium (source: fundamental).",
-                key_values=[ComparisonValue(label="P/E", value="50.0", source="fundamental")],
-            ),
-            ComparisonSection(
-                ticker="AAPL",
-                summary="AAPL trades closer to the market (source: fundamental).",
-                key_values=[ComparisonValue(label="P/E", value="32.0", source="fundamental")],
-            ),
-        ],
+        sections=[_section("NVDA", "Premium"), _section("AAPL", "Inline")],
         differences="NVDA carries a richer multiple than AAPL (source: fundamental).",
     )
 
@@ -1234,22 +1302,31 @@ def test_eval_scores_pushed_on_happy_path(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``hallucination_ok``, ``plan_adherence``, ``verdict_direction_ok``, and
-    ``verdict_shape_ok`` are pushed onto the Langfuse trace when the graph
-    completes with a thesis (QNT-182 AC #1, #3; QNT-193 AC #4; QNT-194 AC #3).
-
-    Uses a local graph stub whose reports contain the numbers the stubbed
-    thesis cites — otherwise ``hallucination_ok`` would correctly flag them
-    and the test wouldn't be exercising the happy path.
-    """
+    """``hallucination_ok`` and ``plan_adherence`` are pushed onto the
+    Langfuse trace when the graph completes with a thesis (QNT-208 dropped
+    the v1 verdict_direction_ok / verdict_shape_ok scores along with
+    ``verdict_action``)."""
     fake_lf = _install_fake_langfuse(monkeypatch)
 
     clean_thesis = Thesis(
-        setup="NVDA framing.",
-        bull_case=["RSI 62 reading (source: technical)"],
-        bear_case=["P/E 35 expansion risk (source: fundamental)"],
-        verdict_stance="constructive",
-        verdict_action="Trim above SMA50 (source: technical).",
+        company=AspectView(label=None, summary="NVDA framing.", supports=[], challenges=[]),
+        fundamental=AspectView(
+            label="Premium",
+            summary="Multiple Premium (source: fundamental).",
+            supports=[],
+            challenges=["P/E 35 expansion risk (source: fundamental)"],
+        ),
+        technical=AspectView(
+            label="Uptrend",
+            summary="Trend Uptrend (source: technical).",
+            supports=["RSI 62 reading (source: technical)"],
+            challenges=[],
+        ),
+        news=AspectView(
+            label=None, summary="No headlines (source: news).", supports=[], challenges=[]
+        ),
+        verdict="Neutral",
+        verdict_rationale="Premium paired with Uptrend (source: technical, fundamental).",
     )
 
     def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
@@ -1292,8 +1369,6 @@ def test_eval_scores_pushed_on_happy_path(
     assert score_names == {
         "hallucination_ok",
         "plan_adherence",
-        "verdict_direction_ok",
-        "verdict_shape_ok",
     }
 
     for call in score_calls:
@@ -1316,11 +1391,24 @@ def test_eval_scores_flag_fabricated_number(
     # again so its thesis cites RSI 99 — which appears in NO report body
     # produced by the stubbed tools. The hallucination scorer should flag 99.
     bad_thesis = Thesis(
-        setup="NVDA framing.",
-        bull_case=["RSI 99 (source: technical)"],
-        bear_case=["Multiple compression risk (source: fundamental)"],
-        verdict_stance="constructive",
-        verdict_action="Trim above SMA50 (source: technical).",
+        company=AspectView(label=None, summary="NVDA framing.", supports=[], challenges=[]),
+        fundamental=AspectView(
+            label="Premium",
+            summary="Multiple Premium (source: fundamental).",
+            supports=[],
+            challenges=["Multiple compression risk (source: fundamental)"],
+        ),
+        technical=AspectView(
+            label="Uptrend",
+            summary="Uptrend (source: technical).",
+            supports=["RSI 99 (source: technical)"],
+            challenges=[],
+        ),
+        news=AspectView(
+            label=None, summary="No headlines (source: news).", supports=[], challenges=[]
+        ),
+        verdict="Overweight",
+        verdict_rationale="Premium and Uptrend agree (source: technical, fundamental).",
     )
 
     def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:

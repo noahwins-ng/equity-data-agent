@@ -296,9 +296,9 @@ def test_heuristic_help_phrase_with_ticker_does_not_misclassify_as_conversationa
         ("how do the technicals look on AAPL?", "technical"),
         ("TA on TSLA please", "technical"),
         ("chart setup for MSFT", "technical"),
-        ("What's the news sentiment on AAPL?", "news_sentiment"),
-        ("what is the sentiment for UNH?", "news_sentiment"),
-        ("give me a news read on META", "news_sentiment"),
+        ("What's the news sentiment on AAPL?", "news"),
+        ("what is the sentiment for UNH?", "news"),
+        ("give me a news read on META", "news"),
     ],
 )
 def test_heuristic_classifies_focused_intents(question: str, expected: str) -> None:
@@ -314,7 +314,7 @@ def test_heuristic_classifies_focused_intents(question: str, expected: str) -> N
     [
         # Review finding: bare 'sentiment on' / 'headlines on' tripped the
         # heuristic on phrases that name no ticker and target no domain.
-        # These must NOT route to news_sentiment.
+        # These must NOT route to news.
         "What's the market sentiment on the sector right now?",
         "Based on recent sentiment on Wall Street, what's next?",
         "Headlines on the bond market today",
@@ -325,7 +325,7 @@ def test_heuristic_does_not_misfire_on_overbroad_sentiment_phrases(question: str
     heuristic must not capture non-domain-specific sentiment talk."""
     from agent.intent import _heuristic_intent
 
-    assert _heuristic_intent(question) != "news_sentiment"
+    assert _heuristic_intent(question) != "news"
 
 
 def test_heuristic_focused_loses_to_thesis_when_multiple_focuses_named() -> None:
@@ -338,7 +338,7 @@ def test_heuristic_focused_loses_to_thesis_when_multiple_focuses_named() -> None
     # thesis depending on later checks. The forbidden outcome is any single
     # focused intent.
     result = _heuristic_intent("Triangulate technicals fundamentals and news for META")
-    assert result not in {"fundamental", "technical", "news_sentiment"}
+    assert result not in {"fundamental", "technical", "news"}
 
 
 def test_heuristic_focused_loses_to_explicit_thesis_token() -> None:
@@ -380,9 +380,9 @@ def test_llm_fallback_returns_focused(monkeypatch: pytest.MonkeyPatch) -> None:
         ("what does the balance sheet say about AAPL?", "fundamental"),
         ("is NVDA expensive?", "fundamental"),
         # News sentiment: new phrasings from QNT-186 scope
-        ("what's the news say on META?", "news_sentiment"),
-        ("how is sentiment on AAPL?", "news_sentiment"),
-        ("any catalysts for TSLA?", "news_sentiment"),
+        ("what's the news say on META?", "news"),
+        ("how is sentiment on AAPL?", "news"),
+        ("any catalysts for TSLA?", "news"),
     ],
 )
 def test_heuristic_classifies_qnt186_expanded_phrasings(question: str, expected: str) -> None:

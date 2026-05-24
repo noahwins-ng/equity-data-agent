@@ -62,9 +62,15 @@ class JudgeScore(BaseModel):
         ge=0,
         le=10,
         description=(
-            "Whether the thesis covers the required sections (Setup, Bull case, "
-            "Bear case, Verdict). 10 = all sections present and substantive; "
-            "0 = missing major sections."
+            "Whether the thesis carries the four QNT-208 aspect blocks "
+            "(Company, Fundamental, Technical, News) each with summary + "
+            "supports + challenges, the Fundamental and Technical aspects "
+            "carry a label (Premium/Inline/Discounted or Uptrend/Sideways/"
+            "Downtrend), and the final verdict is one of Overweight / "
+            "Neutral / Underweight with a rationale citing aspect labels. "
+            "10 = all blocks present, labels present, verdict in the closed "
+            "set with a rationale that names an aspect label verbatim; "
+            "0 = missing aspect blocks or verdict outside the closed set."
         ),
     )
     correctness: int = Field(
@@ -80,15 +86,21 @@ class JudgeScore(BaseModel):
         le=10,
         description=(
             "Whether the thesis follows analyst-logic rules: "
-            "(B-1) overbought metrics (RSI >= 70) must NOT appear as bull-case "
-            "bullets — they belong in the bear case or are omitted; "
-            "(B-2) SIGNAL-aggregate lines ('indicators agree', 'all signals') must "
-            "NOT be quoted in a FOCUSED summary or key_points section; "
-            "(B-3) prior-session deltas (yesterday's move, day-over-day change) must "
-            "be characterised when present in the report, not silently dropped; "
-            "(B-8) verdict-action must carry a conditional verb ('if', 'should', "
-            "'consider') when a specific action level is stated. "
-            "10 = all four rules respected; score down 2-3 points per rule violated."
+            "(A-1) overbought metrics (RSI >= 70) must NOT appear in the "
+            "Technical aspect's ``supports`` list -- they belong in "
+            "``challenges`` or are omitted; "
+            "(A-2) report TREND / LABEL aggregate lines (e.g. 'TREND "
+            "Uptrend', 'indicators agree') must NOT be quoted as bullets -- "
+            "those belong in the aspect's ``label`` field, not in supports "
+            "or challenges; "
+            "(A-3) prior-session deltas (yesterday's move, day-over-day "
+            "change) must be characterised when present in the report, not "
+            "silently dropped; "
+            "(A-4) verdict_rationale must mention at least one aspect "
+            "label verbatim (Premium, Inline, Discounted, Uptrend, "
+            "Sideways, or Downtrend). "
+            "10 = all four rules respected; score down 2-3 points per "
+            "rule violated."
         ),
     )
 
@@ -118,23 +130,28 @@ faithfulness — Does every number in the GENERATED thesis appear verbatim in \
 the reports the agent received? (10 = zero fabricated figures; 0 = many \
 fabricated figures)
 
-structure — Does the GENERATED thesis include all required sections \
-(Setup, Bull case, Bear case, Verdict)? (10 = fully covered; 0 = missing \
-major sections)
+structure — Does the GENERATED thesis carry the four QNT-208 aspect blocks \
+(Company, Fundamental, Technical, News) each with summary + supports + \
+challenges, with the Fundamental aspect carrying a Premium/Inline/Discounted \
+label and the Technical aspect carrying an Uptrend/Sideways/Downtrend label, \
+and a final verdict in {{Overweight, Neutral, Underweight}} with a rationale \
+naming an aspect label verbatim? (10 = all blocks + labels + verdict present; \
+0 = missing blocks or verdict outside the closed set)
 
 correctness — Do the conclusions, citations, and directional claims in the \
 GENERATED thesis match the REFERENCE? (10 = fully aligned; 0 = contradicts \
 the reference)
 
 analyst_logic — Does the GENERATED thesis follow these four analyst-logic rules?
-  B-1: Overbought indicators (e.g. RSI >= 70) must NOT appear as bull-case \
-bullets. They belong in the bear case or are omitted from the bull bullets.
-  B-2: SIGNAL-aggregate phrases ("all indicators agree", "indicators confirm", \
-"signals align") must NOT appear in a FOCUSED summary or key_points block.
-  B-3: Prior-session delta information (yesterday's move, day-over-day change) \
+  A-1: Overbought indicators (e.g. RSI >= 70) must NOT appear in the \
+Technical aspect's supports list. They belong in challenges or are omitted.
+  A-2: Report TREND or LABEL aggregate lines (e.g. "TREND Uptrend", "P/E \
+28.4 Premium", "indicators agree") must NOT be quoted as bullet text; those \
+labels belong in the aspect's ``label`` field, not in supports or challenges.
+  A-3: Prior-session delta information (yesterday's move, day-over-day change) \
 must be characterised when that data is present in the report — not silently dropped.
-  B-8: When the verdict-action names a specific action level (e.g. "buy above $X"), \
-the sentence must carry a conditional verb (e.g. "if", "should consider", "may").
+  A-4: ``verdict_rationale`` must mention at least one aspect label verbatim \
+(Premium, Inline, Discounted, Uptrend, Sideways, or Downtrend).
 Score 10 if all four rules are respected; deduct 2-3 points per rule violated."""
 
 

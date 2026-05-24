@@ -4,24 +4,28 @@ The local golden-set harness (`agent.evals`) computes four scorers per record
 and writes them to `history.csv`. Two of those are deterministic and cheap
 enough to run on every prod chat:
 
-* ``hallucination_ok`` — every numeric token in the rendered answer must
+* ``hallucination_ok`` -- every numeric token in the rendered answer must
   appear in some fetched report. Implemented in
   :mod:`agent.evals.hallucination`.
-* ``plan_adherence`` — the planner-requested tools must be a subset of the
+* ``plan_adherence`` -- the planner-requested tools must be a subset of the
   tools the gather node successfully fetched. Set comparison, no LLM cost.
 
 The other two scorers (``judge_score``, ``cosine``) need either an LLM call or
 a reference thesis, neither of which is free at prod-chat scale. We
-deliberately do NOT push those — see the QNT-182 ticket for the cost rationale.
+deliberately do NOT push those.
+
+QNT-208 dropped two deterministic verdict-shape scores that depended on
+fields the v2 schema no longer carries. The new ``verdict_rationale`` is
+narrative; if a post-deploy review surfaces analogous v2 checks (e.g.
+rationale must mention an aspect label verbatim) we can add them back as
+their own ticket.
 
 Wiring: :func:`push_to_trace_id` is called from ``api.routers.agent_chat``
 after ``graph.invoke()`` returns, with the ``trace_id`` resolved from the
-LangGraph ``CallbackHandler``'s ``last_trace_id`` attribute. It uses
-``langfuse.create_score(trace_id=..., ...)`` so the score lands on the
-trace the handler actually emitted (no implicit ambient-context dependency).
-When Langfuse keys are unset (eval bench runs strip them at import time, ADR-019)
-or the handler never produced a trace (no LLM call inside the graph) the call
-is a safe no-op.
+LangGraph ``CallbackHandler``'s ``last_trace_id`` attribute. When Langfuse
+keys are unset (eval bench runs strip them at import time, ADR-019) or
+the handler never produced a trace (no LLM call inside the graph) the
+call is a safe no-op.
 """
 
 from __future__ import annotations
@@ -34,7 +38,6 @@ from agent.conversational import ConversationalAnswer
 from agent.evals.hallucination import HallucinationResult
 from agent.evals.hallucination import check as check_hallucination
 from agent.focused import FocusedAnalysis
-from agent.post_checks import check_verdict_direction, check_verdict_shape, record_mismatch
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 from agent.tracing import langfuse
@@ -53,7 +56,7 @@ def _render_answer(state: dict[str, Any]) -> str:
     failed and a domain-redirect conversational was filled in), ``run_record``
     scores the thesis but the SSE handler streams the conversational redirect
     to the user. For prod scoring we want to score what the user actually
-    saw — so conversational wins over thesis when both are present.
+    saw -- so conversational wins over thesis when both are present.
 
     Order: comparison > conversational > quick_fact > focused > thesis.
     """
@@ -104,9 +107,7 @@ def _missing_planned_tools(state: dict[str, Any], planned: set[str]) -> set[str]
     (``{ticker: {tool: body}}``). Per-ticker (intersection) is the strict
     model: a planned tool is considered fulfilled only if EVERY ticker
     fetched it. If NVDA gets ``fundamental`` but AAPL doesn't, the
-    comparison answer is degraded — flag it. The looser union model
-    (``any ticker has it``) would silently pass on partial gather
-    failures, defeating the purpose of the score.
+    comparison answer is degraded -- flag it.
     """
     reports_by_ticker = state.get("reports_by_ticker") or {}
     if reports_by_ticker:
@@ -125,11 +126,6 @@ def _missing_planned_tools(state: dict[str, Any], planned: set[str]) -> set[str]
 def compute_scores(state: dict[str, Any]) -> tuple[HallucinationResult, set[str]]:
     """Compute ``(hallucination_result, missing_planned_tools)`` for one run.
 
-    ``missing_planned_tools`` is empty iff plan-adherence passes. Returning the
-    set (not just a bool) lets the caller surface the failing tool names in
-    the Langfuse score ``comment`` so prod debugging doesn't require
-    cross-referencing logs.
-
     Pure: no I/O, no Langfuse client. Exposed so tests can assert on the raw
     scorer output without monkeypatching the Langfuse SDK.
     """
@@ -138,8 +134,6 @@ def compute_scores(state: dict[str, Any]) -> tuple[HallucinationResult, set[str]
     hallucination = check_hallucination(answer_md, reports)
 
     planned = set(state.get("plan") or [])
-    # An empty plan (e.g. conversational redirect) trivially satisfies
-    # adherence — no tool was requested, no tool can be missing.
     missing = _missing_planned_tools(state, planned) if planned else set()
 
     return hallucination, missing
@@ -149,17 +143,8 @@ def push_to_trace_id(state: dict[str, Any], trace_id: str | None) -> None:
     """Compute and attach ``hallucination_ok`` + ``plan_adherence`` scores to
     the Langfuse trace identified by ``trace_id``.
 
-    ``trace_id`` is the LangGraph ``CallbackHandler.last_trace_id`` captured
-    after ``graph.invoke()`` returns; ``None`` when the handler never created
-    a trace (no LLM call fired inside the graph). Safe no-op when:
-
-    * Langfuse keys are unset (``langfuse is None``) — eval bench runs strip
-      keys at import time so callbacks have no client to flow to.
-    * ``trace_id`` is ``None`` or empty — nothing to score.
-
     Failures are logged at WARNING and swallowed: observability must never
-    break the SSE response, same pattern as ``_UsageCallback`` in
-    ``agent.llm``.
+    break the SSE response.
     """
     if langfuse is None or not trace_id:
         return
@@ -179,33 +164,6 @@ def push_to_trace_id(state: dict[str, Any], trace_id: str | None) -> None:
             data_type="NUMERIC",
             comment=(f"missing: {', '.join(sorted(missing_tools))}" if missing_tools else "clean"),
         )
-        # QNT-193: verdict-direction check — only for thesis responses that
-        # include a technical report (the only shape with verdict_action today).
-        thesis = state.get("thesis")
-        if isinstance(thesis, Thesis):
-            technical_report = (state.get("reports") or {}).get("technical", "")
-            direction_ok, direction_comment = check_verdict_direction(thesis, technical_report)
-            langfuse.create_score(
-                trace_id=trace_id,
-                name="verdict_direction_ok",
-                value=1.0 if direction_ok else 0.0,
-                data_type="NUMERIC",
-                comment=direction_comment,
-            )
-            if not direction_ok:
-                logger.warning("verdict_direction_ok=0 trace=%s: %s", trace_id, direction_comment)
-                record_mismatch()
-            # QNT-194: verdict-shape check — action must be trigger-shaped, not state-shaped.
-            shape_ok, shape_comment = check_verdict_shape(thesis)
-            langfuse.create_score(
-                trace_id=trace_id,
-                name="verdict_shape_ok",
-                value=1.0 if shape_ok else 0.0,
-                data_type="NUMERIC",
-                comment=shape_comment,
-            )
-            if not shape_ok:
-                logger.warning("verdict_shape_ok=0 trace=%s: %s", trace_id, shape_comment)
     except Exception as exc:  # noqa: BLE001 — telemetry must not crash the request
         logger.warning("eval-score push failed: %s", exc)
 

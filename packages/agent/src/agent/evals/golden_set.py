@@ -30,7 +30,7 @@ import os
 import subprocess
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -91,11 +91,14 @@ class GoldenRecord:
     anti-pattern regression tests (e.g. "indicators agree" guards the
     anti-SIGNAL-footer rule).
 
-    ``forbidden_bull_substrings`` (QNT-183): same contract but checked only
-    against the ``bull_case`` bullets of a Thesis response. Use when a term
-    is correct in the bear section but forbidden in the bull section (e.g.
-    "overbought" must not appear as a bull bullet even though it belongs in
-    the bear case). No-op for non-Thesis response shapes.
+    ``forbidden_aspect_support_substrings`` (QNT-208, renamed from
+    ``forbidden_bull_substrings``): mapping ``{aspect_name: (substring,
+    ...)}`` checked against the ``supports`` list of the named aspect on a
+    Thesis response. Aspect names are ``company`` / ``fundamental`` /
+    ``technical`` / ``news``. Use when a term is correct in challenges but
+    forbidden in supports (e.g. "overbought" must not appear in
+    ``technical.supports`` even though it belongs in ``technical.challenges``).
+    No-op for non-Thesis response shapes.
     """
 
     id: str
@@ -105,7 +108,7 @@ class GoldenRecord:
     reference_thesis: str
     expected_intent: str = "auto"
     forbidden_substrings: tuple[str, ...] = ()
-    forbidden_bull_substrings: tuple[str, ...] = ()
+    forbidden_aspect_support_substrings: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -151,7 +154,20 @@ def load_goldens(path: Path = GOLDENS_PATH) -> list[GoldenRecord]:
             raise ValueError(f"{path}: question missing field {exc}") from exc
         expected_intent = str(entry.get("expected_intent", "auto"))
         forbidden = tuple(str(s) for s in entry.get("forbidden_substrings", []))
-        forbidden_bull = tuple(str(s) for s in entry.get("forbidden_bull_substrings", []))
+        raw_aspect_forbidden = entry.get("forbidden_aspect_support_substrings", {})
+        if not isinstance(raw_aspect_forbidden, dict):
+            raise ValueError(
+                f"{path}: question {rec_id!r} forbidden_aspect_support_substrings "
+                "must be a mapping of aspect_name -> list[str]"
+            )
+        forbidden_aspect: dict[str, tuple[str, ...]] = {}
+        for aspect_name, subs in raw_aspect_forbidden.items():
+            if aspect_name not in {"company", "fundamental", "technical", "news"}:
+                raise ValueError(
+                    f"{path}: question {rec_id!r} forbidden_aspect_support_substrings "
+                    f"aspect {aspect_name!r} must be one of company/fundamental/technical/news"
+                )
+            forbidden_aspect[str(aspect_name)] = tuple(str(s) for s in subs)
         if rec_id in seen_ids:
             raise ValueError(f"{path}: duplicate question id {rec_id!r}")
         if ticker not in TICKERS:
@@ -166,7 +182,7 @@ def load_goldens(path: Path = GOLDENS_PATH) -> list[GoldenRecord]:
                 reference_thesis=reference,
                 expected_intent=expected_intent,
                 forbidden_substrings=forbidden,
-                forbidden_bull_substrings=forbidden_bull,
+                forbidden_aspect_support_substrings=forbidden_aspect,
             )
         )
     return records
@@ -303,24 +319,49 @@ def run_record(record: GoldenRecord, *, llm_for_judge: Any | None = None) -> Eva
     # adding a new CSV column or EvalOutcome field.
     thesis_lower = thesis.lower()
     violated = [s for s in record.forbidden_substrings if s.lower() in thesis_lower]
+    hallucination_ok = hresult.ok
+    hallucination_reason = hresult.reason()
     if violated:
         hallucination_ok = False
         hallucination_reason = f"forbidden: {', '.join(repr(s) for s in violated)}"
-    elif record.forbidden_bull_substrings and isinstance(thesis_obj, Thesis):
-        # QNT-183: forbidden_bull_substrings — same contract but scoped to the
-        # bull_case list so bear-section occurrences of the same term don't
-        # trigger a false positive (e.g. "overbought" is correct in bear case).
-        bull_text = " ".join(thesis_obj.bull_case).lower()
-        bull_violated = [s for s in record.forbidden_bull_substrings if s.lower() in bull_text]
-        if bull_violated:
+    elif record.forbidden_aspect_support_substrings and isinstance(thesis_obj, Thesis):
+        # QNT-208: forbidden_aspect_support_substrings — per-aspect contract.
+        # Scoped to each aspect's ``supports`` list so challenges occurrences
+        # of the same term don't trigger a false positive (e.g. "overbought"
+        # is correct in technical.challenges).
+        aspect_map = {
+            "company": thesis_obj.company,
+            "fundamental": thesis_obj.fundamental,
+            "technical": thesis_obj.technical,
+            "news": thesis_obj.news,
+        }
+        aspect_violations: list[str] = []
+        for aspect_name, subs in record.forbidden_aspect_support_substrings.items():
+            aspect = aspect_map.get(aspect_name)
+            if aspect is None:
+                continue
+            supports_text = " ".join(aspect.supports).lower()
+            for sub in subs:
+                if sub.lower() in supports_text:
+                    aspect_violations.append(f"{aspect_name}.supports: {sub!r}")
+        if aspect_violations:
             hallucination_ok = False
-            hallucination_reason = f"forbidden in bull: {', '.join(repr(s) for s in bull_violated)}"
-        else:
-            hallucination_ok = hresult.ok
-            hallucination_reason = hresult.reason()
-    else:
-        hallucination_ok = hresult.ok
-        hallucination_reason = hresult.reason()
+            hallucination_reason = f"forbidden in supports: {', '.join(aspect_violations)}"
+
+    # QNT-208: verdict_consistency — the v2 verdict_rationale must mention
+    # at least one aspect label verbatim (Premium, Inline, Discounted,
+    # Uptrend, Sideways, Downtrend). Folded into hallucination_ok so any
+    # rationale that drifts off-vocabulary gates the same exit code.
+    if hallucination_ok and isinstance(thesis_obj, Thesis):
+        rationale_lower = thesis_obj.verdict_rationale.lower()
+        aspect_labels = ("premium", "inline", "discounted", "uptrend", "sideways", "downtrend")
+        if not any(label in rationale_lower for label in aspect_labels):
+            hallucination_ok = False
+            hallucination_reason = (
+                "verdict_consistency: verdict_rationale must mention at least "
+                "one aspect label verbatim (Premium/Inline/Discounted/"
+                "Uptrend/Sideways/Downtrend)"
+            )
 
     return EvalOutcome(
         record=record,

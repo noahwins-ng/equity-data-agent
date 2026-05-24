@@ -24,7 +24,7 @@ from agent.graph import REPORT_TOOLS, build_graph
 from agent.prompts import (
     COMPARISON_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
-    THESIS_SECTIONS,
+    THESIS_ASPECTS,
     build_synthesis_prompt,
 )
 from agent.prompts.system import _sanitize_report_body
@@ -52,54 +52,49 @@ def test_system_prompt_requires_citations() -> None:
 
 
 def test_system_prompt_specifies_thesis_structure() -> None:
-    """Rule 3 (QNT-133): four-section structure. All sections must appear
-    as literal headings, in order."""
-    for section in THESIS_SECTIONS:
-        assert f"## {section}" in SYSTEM_PROMPT, f"missing section heading: {section}"
-    indices = [SYSTEM_PROMPT.index(f"## {s}") for s in THESIS_SECTIONS]
-    assert indices == sorted(indices), f"section order drifted: {indices}"
+    """QNT-208: four-aspect structure. All aspect names must appear in the
+    prompt body so the LLM populates the matching schema fields.
+    Order is enforced by the schema, not by where each name first appears
+    in the prose, so this test only pins presence (case-insensitive)."""
+    text_lower = SYSTEM_PROMPT.lower()
+    for s in THESIS_ASPECTS:
+        assert s.lower() in text_lower, f"missing aspect: {s}"
 
 
 def test_system_prompt_allows_asymmetry() -> None:
-    """QNT-133 guardrail: the model must not invent a bull or bear case to
-    match a template. The prompt must explicitly permit empty sections."""
+    """QNT-208 guardrail: the model must not invent supports or challenges
+    to fill an aspect. The prompt must explicitly permit empty lists."""
     text = SYSTEM_PROMPT.lower()
     assert "asymmetry" in text
     assert "empty" in text
-    # Must call out both sides — a one-sided asymmetry rule would still let
-    # the model invent the missing side.
-    assert "bull case" in text and "bear case" in text
+    # Both sides must be named so a one-sided asymmetry rule cannot let the
+    # model invent the missing side.
+    assert "supports" in text and "challenges" in text
 
 
-def test_system_prompt_grounds_action_levels_in_real_data() -> None:
-    """QNT-133 guardrail: verdict action levels must reference numbers that
-    appear in the supplied reports — no hallucinated price targets."""
-    text = SYSTEM_PROMPT.lower()
-    assert "action level" in text
-    # Cite the canonical example so a future "tone down the example" edit
-    # has to actively remove the recipe rather than just paraphrase it away.
-    assert "verbatim" in text
-    # The prompt's regression-fix language: action levels must echo only
-    # report numbers, never numbers from the prompt itself.
-    assert "every digit in your action line" in text
-
-
-def test_system_prompt_forbids_signal_line_in_bullets() -> None:
-    """Bull/bear bullets must cite underlying metrics, not the report's own
-    `## SIGNAL` aggregate verdict line. Without this rule the LLM takes the
-    lazy path and writes bullets like "the technical report indicates a
-    bullish signal with 2/3 indicators agreeing" — meta-summary instead of
-    real evidence. The fix surfaces the explicit anti-SIGNAL rule plus a
-    counter-example so a future prompt edit can't quietly drop it."""
+def test_system_prompt_verdict_rule_names_closed_set() -> None:
+    """QNT-208: the verdict is a closed Overweight / Neutral / Underweight
+    set and the rationale must name an aspect label verbatim. Pin both so a
+    prompt edit cannot quietly drop either invariant."""
     text = SYSTEM_PROMPT
-    # The literal anti-SIGNAL rule must be on the wire.
-    assert "Cite underlying metrics, not the report's own SIGNAL line" in text
+    assert "Overweight" in text
+    assert "Neutral" in text
+    assert "Underweight" in text
+    assert "verdict_rationale" in text
+    # Per-aspect labels the rationale must mention verbatim.
+    for label in ("Premium", "Inline", "Discounted", "Uptrend", "Sideways", "Downtrend"):
+        assert label in text, f"missing verdict-label vocabulary: {label}"
+
+
+def test_system_prompt_forbids_label_line_in_bullets() -> None:
+    """QNT-208: supports / challenges bullets must cite underlying metrics,
+    not the report's own TREND / LABEL aggregate line. Bullets cite RSI,
+    MACD, P/E, etc.; the label goes in the aspect's ``label`` field."""
+    text = SYSTEM_PROMPT
+    assert "Cite underlying metrics, not the report's TREND or label line" in text
     # Counter-example must mention what NOT to bullet so the LLM has
     # something to pattern-match against.
     assert "non-bullet" in text
-    # Both bull and bear must invoke the rule (bear references it via "same
-    # anti-SIGNAL rule applies").
-    assert "anti-SIGNAL rule" in text
 
 
 def test_system_prompt_encourages_news_citation_when_relevant() -> None:
@@ -114,21 +109,22 @@ def test_system_prompt_encourages_news_citation_when_relevant() -> None:
     """
     text = SYSTEM_PROMPT
     assert "Use news headlines as catalyst evidence" in text
-    # Both directions allowed (bull or bear) so the LLM doesn't force a
-    # bullish-news bullet onto a bearish headline.
-    assert "either bull or bear" in text
+    # Both directions allowed (supports or challenges) so the LLM doesn't
+    # force a positive bullet onto a negative headline.
+    assert "supports or challenges" in text
     # The opt-out is named explicitly so a thesis on a ticker with off-topic
     # headlines can still skip news without the LLM padding to comply.
-    assert "no news headline materially bears on the question" in text
+    assert "headlines are off-topic" in text
 
 
-def test_system_prompt_requires_decimal_preservation_in_action() -> None:
-    """The verdict_action format-preservation rule. Without it the LLM
-    drops decimals and renders `187.72` as `18772` — a real prod
-    regression seen on the first NVDA thesis after QNT-175 shipped."""
-    text = SYSTEM_PROMPT
-    assert "Preserve the value's exact format" in text
-    assert "do not strip the dot" in text
+def test_system_prompt_requires_verbatim_numbers() -> None:
+    """QNT-208 (carry-over from QNT-175): the prompt must require every digit
+    to appear verbatim in the supplied reports. The v1 ``verdict_action``
+    decimal-preservation guidance was dropped along with the field, but the
+    underlying invariant lives on at the global "no arithmetic" level."""
+    text = SYSTEM_PROMPT.lower()
+    assert "verbatim" in text
+    assert "do not invent numbers" in text
 
 
 def test_system_prompt_contains_no_multi_digit_literals() -> None:
@@ -159,13 +155,11 @@ def test_system_prompt_contains_no_multi_digit_literals() -> None:
     )
 
 
-def test_system_prompt_anchors_confidence_to_data_completeness() -> None:
-    """Confidence reflects data completeness, not narrative strength. The
-    graph computes the numeric value via ``_confidence_from_reports``; the
-    prompt only needs to carry the framing if it mentions confidence at all."""
+def test_system_prompt_delegates_confidence_to_graph() -> None:
+    """QNT-208: confidence is computed by the graph and attached separately.
+    The prompt explicitly tells the model NOT to invent a confidence line."""
     text = SYSTEM_PROMPT.lower()
-    assert "data completeness" in text
-    assert "low" in text and "medium" in text and "high" in text
+    assert "confidence is computed separately" in text
 
 
 def test_system_prompt_pins_to_supplied_reports() -> None:
@@ -327,14 +321,10 @@ def test_synthesize_node_invokes_llm_with_system_message(
     SystemMessage whose content is SYSTEM_PROMPT. Catches both the rule-
     on-the-wire regression AND a regression where someone re-flattens the
     prompt back into a string."""
+    from ._thesis_factory import make_thesis
+
     plan_response = AIMessage(content="technical, fundamental, news")
-    structured_response = Thesis(
-        setup="Setup paragraph (source: technical).",
-        bull_case=["bull (source: technical)"],
-        bear_case=[],
-        verdict_stance="constructive",
-        verdict_action="Trim above SMA50 (source: technical).",
-    )
+    structured_response = make_thesis()
     structured_runnable = MagicMock()
     structured_runnable.invoke = MagicMock(return_value=structured_response)
     # with_retry() must return the same mock so .invoke stays configured
@@ -375,14 +365,14 @@ def test_synthesize_node_invokes_llm_with_system_message(
     assert schema_arg is Thesis
 
 
-def test_thesis_sections_match_issue_body() -> None:
-    """Freeze the QNT-133 section list so a future prompt edit can't quietly
-    drop or rename one of the four sections."""
-    assert THESIS_SECTIONS == (
-        "Setup",
-        "Bull Case",
-        "Bear Case",
-        "Verdict",
+def test_thesis_aspects_match_issue_body() -> None:
+    """Freeze the QNT-208 aspect list so a future prompt edit can't quietly
+    drop or rename one of the four aspects."""
+    assert THESIS_ASPECTS == (
+        "Company",
+        "Fundamental",
+        "Technical",
+        "News",
     )
 
 
@@ -443,10 +433,10 @@ def test_system_prompt_regime_polarity_rule_present() -> None:
     # Canonical extreme-regime labels the rule covers.
     assert "overbought" in text
     assert "oversold" in text
-    # Correct case assignment must be stated so the LLM knows which bucket.
-    assert "overbought RSI and a rich P/E are bear evidence" in text
-    # The hard exclusion — not even if SIGNAL says BULLISH.
-    assert "overbought RSI reading is never a bull bullet" in text
+    # QNT-208: case assignment now framed in terms of supports / challenges.
+    assert "Overbought RSI and a Premium P/E are CHALLENGES" in text
+    # The hard exclusion — not even if TREND label is Uptrend.
+    assert "An overbought RSI reading is never a Technical ``supports`` bullet" in text
 
 
 def test_comparison_prompt_regime_mirror_present() -> None:
@@ -462,10 +452,7 @@ def test_comparison_prompt_regime_mirror_present() -> None:
     text = COMPARISON_SYSTEM_PROMPT
     assert "Regime labels in either section trump raw ordering" in text
     # Forbidden phrasing the rule explicitly bans.
-    assert '"stronger momentum"' in text
-    # Correct alternatives the rule provides.
-    assert '"more stretched"' in text
-    assert '"approaching overbought"' in text
+    assert "stronger momentum" in text
 
 
 def test_system_prompt_prior_session_delta_rule_present() -> None:
@@ -502,31 +489,19 @@ def test_system_prompt_prior_session_delta_rule_present() -> None:
         )
 
 
-def test_focused_prompt_anti_signal_rule_present() -> None:
-    """QNT-184: FOCUSED_SYSTEM_PROMPT must contain the explicit anti-SIGNAL
-    rule with a BAD/OK counter-example pair so the LLM cannot paraphrase the
-    SIGNAL aggregate footer as a bullet or summary sentence.
-
-    Pins three invariants:
-    * The rule names the forbidden pattern ("Never quote the SIGNAL aggregate").
-    * A concrete BAD example is present showing the forbidden form.
-    * A concrete OK example is present showing the correct metric-citation form.
-    """
+def test_focused_prompt_anti_label_rule_present() -> None:
+    """QNT-208: FOCUSED_SYSTEM_PROMPT must contain the anti-aggregate-label
+    rule so the LLM cannot paraphrase a TREND / LABEL line as a bullet."""
     from agent.prompts.system import FOCUSED_SYSTEM_PROMPT
 
     text = FOCUSED_SYSTEM_PROMPT
-    assert "Never quote the SIGNAL aggregate line" in text
-    # BAD/OK labels must be present so the LLM has paired examples.
-    assert "BAD:" in text
-    assert "OK:" in text
-    # The forbidden form the BAD example illustrates.
-    assert "indicators agree" in text.lower()
+    assert "Never quote a report's TREND or LABEL aggregate line as a bullet" in text
 
 
-def test_strip_signal_section_removes_signal_footer() -> None:
-    """QNT-184: _strip_signal_section must excise the ## SIGNAL block so the
+def test_strip_label_section_removes_signal_footer() -> None:
+    """QNT-184: _strip_label_section must excise the ## SIGNAL block so the
     focused synthesizer never sees the aggregate verdict string."""
-    from agent.prompts.system import _strip_signal_section
+    from agent.prompts.system import _strip_label_section
 
     report = (
         "# TECHNICAL REPORT — TSLA\n"
@@ -535,19 +510,19 @@ def test_strip_signal_section_removes_signal_footer() -> None:
         "## SIGNAL\n"
         "BULLISH (3/3 indicators agree)"
     )
-    stripped = _strip_signal_section(report)
+    stripped = _strip_label_section(report)
     assert "## SIGNAL" not in stripped
     assert "indicators agree" not in stripped
     # Content before the section is preserved.
     assert "RSI-14: 58.0 neutral" in stripped
 
 
-def test_strip_signal_section_noop_on_no_signal() -> None:
+def test_strip_label_section_noop_on_no_signal() -> None:
     """A report without a ## SIGNAL section is returned unchanged."""
-    from agent.prompts.system import _strip_signal_section
+    from agent.prompts.system import _strip_label_section
 
     report = "# FUNDAMENTAL REPORT — AAPL\n## EARNINGS\nEPS 1.40\n"
-    assert _strip_signal_section(report) == report
+    assert _strip_label_section(report) == report
 
 
 def test_build_focused_prompt_strips_signal_from_report() -> None:
@@ -577,129 +552,43 @@ def test_build_focused_prompt_strips_signal_from_report() -> None:
     assert "RSI-14" in user_text
 
 
-def test_system_prompt_declining_rsi_delta_is_bear_only() -> None:
-    """QNT-198: declining-momentum-delta polarity rule. A downward RSI delta
-    — even from a neutral level — is a bearish signal and must be placed
-    in the bear case only, never as a bull bullet.
-
-    Pins three invariants:
-    * The rule explicitly names the declining-delta → bear-only contract.
-    * The polarity-inversion framing is present so the LLM recognises
-      "neutral but trending down" as the forbidden bull pattern.
-    * The rule covers any absolute level (not just overbought), preventing
-      the QNT-198 regression where RSI 61.7 trending down appeared in bull.
-    """
+def test_system_prompt_declining_rsi_delta_is_challenges_only() -> None:
+    """QNT-208 (was QNT-198): a downward RSI delta -- even from a neutral
+    level -- is bearish and must appear in technical.challenges only, never
+    in technical.supports."""
     text = SYSTEM_PROMPT
-    assert "A declining momentum delta belongs in the bear case" in text
-    # The rule must name the specific forbidden pattern (neutral but trending down
-    # as a bull bullet) — this phrase is unique to the new rule and won't pass
-    # trivially from FOCUSED_SYSTEM_PROMPT which already contained "trending down".
-    assert '"RSI neutral but trending down" as a bull bullet is a polarity inversion' in text
-    assert "polarity inversion" in text
+    assert "A declining momentum delta belongs in challenges, not supports" in text
 
 
-def test_system_prompt_no_cross_case_duplication_rule_present() -> None:
-    """QNT-198: no-cross-case-duplication rule. An indicator placed in the
-    bear case must not also appear in the bull case, and vice versa.
-
-    Pins two invariants:
-    * The rule is stated in the Bull Case section.
-    * The mirror is stated in the Bear Case section.
-    """
+def test_system_prompt_no_cross_list_duplication_rule_present() -> None:
+    """QNT-208 (was QNT-198): a metric placed in supports for one aspect
+    must not also appear in challenges for the same aspect."""
     text = SYSTEM_PROMPT
-    # Bull Case section carries the full bidirectional rule.
-    assert "No indicator may appear in both the bull case and the bear case" in text
-    # Bear Case section mirrors it in both directions — "bear→not-in-bull" AND
-    # "bull→not-in-bear" must both be stated so the LLM can't read it as one-way.
-    assert "no-cross-case-duplication rule" in text
-    assert "an indicator placed in the bull case must not appear here" in text
+    assert "No indicator may appear in both supports and challenges within the same" in text
 
 
-def test_system_prompt_setup_is_holistic_prose_not_slot_filling() -> None:
-    """Setup section must instruct holistic prose that synthesises company
-    context, dominant signal, and the tension — not a rigid slot-filling template.
-
-    Pins six invariants:
-    * No Sentence-1/2/3 labels (template eliminated).
-    * BAD/OK example present so the model knows what holistic prose looks like.
-    * Company business context explicitly required.
-    * Tension / falsification condition explicitly required.
-    * Verbatim-numbers grounding constraint retained.
-    * Journalism-hook prohibition retained.
-    """
-    text = SYSTEM_PROMPT
-    # Template labels must be gone — the model writes prose, not slots.
-    assert "Sentence 1" not in text
-    assert "Sentence 2" not in text
-    assert "Sentence 3" not in text
-    # BAD/OK example must be present to show the holistic prose intent.
-    assert "BAD" in text
-    assert "OK" in text
-    # Company context anchor must be explicitly required.
-    assert "business context" in text
-    # The tension / falsification condition must be named.
-    assert "tension" in text
-    # Grounding constraint must be retained.
-    assert "verbatim" in text
-    # The journalism-hook prohibition must call out the exact bad opening.
-    assert "stands at a crossroads" in text
-
-
-def test_system_prompt_force_stance_rule_requires_side_on_extreme_labels() -> None:
-    """QNT-205: force-stance rule. When extreme regime labels are present,
-    the model must pick a side rather than defaulting to 'mixed'/'cautious'.
-
-    Pins four invariants:
-    * The rule explicitly states mixed/cautious are not defaults.
-    * The override condition references extreme regime labels.
-    * The prescribed side choice uses the schema vocabulary.
-    * The interquartile-range condition names the VALUATION block.
-    """
-    text = SYSTEM_PROMPT
-    assert "'Mixed' and 'cautious' require justification" in text
-    assert "extreme regime label" in text
-    assert "use 'constructive' or 'negative'" in text
-    assert "own-history" in text
-    assert "interquartile range" in text
-
-
-def test_focused_prompt_positive_spec_names_three_variants() -> None:
-    """QNT-205: positive artifact spec. FOCUSED_SYSTEM_PROMPT must name all
-    three focus variants with concrete bullet specs rather than back-to-back
-    prohibitions.
-
-    Pins four invariants:
-    * All three focus types are named.
-    * The technical spec references the correct domain metrics.
-    * The fundamental spec references the GROWTH (YoY) block.
-    * A three-bullet requirement is stated.
-    """
+def test_focused_prompt_per_focus_verdict_branches_present() -> None:
+    """QNT-208: FOCUSED_SYSTEM_PROMPT must name the per-focus verdict
+    vocabulary for each branch. fundamental -> Premium/Inline/Discounted;
+    technical -> Uptrend/Sideways/Downtrend; news -> verdict is null."""
     from agent.prompts.system import FOCUSED_SYSTEM_PROMPT
 
     text = FOCUSED_SYSTEM_PROMPT
-    assert "technical focus" in text
-    assert "fundamental focus" in text
-    assert "news_sentiment focus" in text
-    assert "MA crossovers" in text
-    assert "RSI and MACD" in text
-    assert "GROWTH (YoY)" in text
-    assert "three" in text  # "Produce exactly three bullets"
+    assert 'focus="fundamental"' in text
+    assert 'focus="technical"' in text
+    assert 'focus="news"' in text
+    assert "Premium / Inline / Discounted" in text
+    assert "Uptrend / Sideways / Downtrend" in text
+    assert "existing_development" in text
+    assert "positive_catalysts" in text
+    assert "negative_catalysts" in text
 
 
 def test_comparison_prompt_allows_ranking_without_arithmetic_threshold() -> None:
-    """QNT-205: comparison ranking exception. The COMPARISON_SYSTEM_PROMPT must
-    allow naming the more expensive ticker on material multi-metric gaps, but
-    must NOT require the LLM to compute a percentage (which would violate
-    ADR-003 Rule 1).
-
-    Pins three invariants:
-    * The ranking exception is present.
-    * The no-recommendation boundary is preserved.
-    * No numeric percentage threshold is present (arithmetic trap removed).
-    """
+    """QNT-208: comparison ranking exception. The COMPARISON_SYSTEM_PROMPT
+    must allow naming the more expensive ticker on material multi-metric
+    gaps, but must NOT require the LLM to compute a percentage."""
     text = COMPARISON_SYSTEM_PROMPT
     assert "more expensive" in text
-    # No-recommendation boundary must survive the ranking exception.
     assert "recommendation" in text
-    # Percentage threshold would require LLM arithmetic — must not be present.
     assert "15%" not in text
