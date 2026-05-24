@@ -2,7 +2,7 @@
 
 Reshapes the thesis output to analyst-standard framing: per-aspect blocks
 (Company / Fundamental / Technical / News) each with summary + supports +
-challenges + an aspect-level label, plus a final Overweight / Neutral /
+challenges + risks + an aspect-level label, plus a final Overweight / Neutral /
 Underweight verdict with a 2-3 sentence rationale.
 
 The synthesize node forces the LLM through this schema with
@@ -13,9 +13,10 @@ QNT-67 hallucination check already understands.
 
 Field shapes are deliberately permissive:
 
-* Per aspect, ``supports`` / ``challenges`` are ``list[str]`` of bullets.
-  Empty lists are valid — asymmetric aspects (all-supports or
-  all-challenges) are real analyst reads, not a schema violation.
+* Per aspect, ``supports`` / ``challenges`` / ``risks`` are ``list[str]``
+  of bullets. Empty lists are valid — asymmetric aspects are real analyst
+  reads, not a schema violation. ``challenges`` = neutral/mixed signals;
+  ``risks`` = active headwinds that could invalidate the label.
 * ``label`` is ``str | None`` per aspect — Company and News are
   narrative-only and pass ``None``; Fundamental carries one of
   ``Premium`` / ``Inline`` / ``Discounted`` and Technical carries one of
@@ -91,10 +92,22 @@ class AspectView(BaseModel):
     challenges: list[str] = Field(
         default_factory=list,
         description=(
-            "Bullets that argue AGAINST the aspect's label, or that "
-            "complicate it. Each bullet is one sentence with an inline "
-            "citation. Leave EMPTY when the supplied report contains no "
-            "real counter-evidence."
+            "Neutral observations or mixed signals that neither clearly "
+            "support nor undermine the aspect's label — context a reader "
+            "should know, but not a threat. Example: 'RSI is neutral with "
+            "no directional signal (source: technical).' Leave EMPTY when "
+            "there are no relevant neutral signals."
+        ),
+    )
+    risks: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Active headwinds or downside factors that argue AGAINST the "
+            "aspect's label or could invalidate it if they worsen. Each "
+            "bullet is one sentence with an inline citation. Example: "
+            "'China export controls on advanced GPUs remain an overhang "
+            "(source: news).' Leave EMPTY when the supplied report contains "
+            "no real counter-evidence."
         ),
     )
 
@@ -175,6 +188,9 @@ class Thesis(BaseModel):
                     parts.append(f"+ {point.strip()}")
             if aspect.challenges:
                 for point in aspect.challenges:
+                    parts.append(f"· {point.strip()}")
+            if aspect.risks:
+                for point in aspect.risks:
                     parts.append(f"- {point.strip()}")
             parts.append("")
 

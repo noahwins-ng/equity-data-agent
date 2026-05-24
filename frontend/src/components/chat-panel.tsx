@@ -409,6 +409,18 @@ function AspectBlock({ title, aspect }: { title: string; aspect: AspectView }) {
         <ul className="mt-1 space-y-0.5 text-xs text-zinc-200">
           {aspect.challenges.map((point, i) => (
             <li key={`c-${i}`} className="flex gap-1">
+              <span className="text-amber-500">·</span>
+              <span className="min-w-0 flex-1">
+                <ProseBlock text={point} />
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {aspect.risks?.length > 0 && (
+        <ul className="mt-1 space-y-0.5 text-xs text-zinc-200">
+          {aspect.risks.map((point, i) => (
+            <li key={`r-${i}`} className="flex gap-1">
               <span className="text-red-500">-</span>
               <span className="min-w-0 flex-1">
                 <ProseBlock text={point} />

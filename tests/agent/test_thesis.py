@@ -163,7 +163,7 @@ def test_to_markdown_contains_all_four_aspect_headings_and_verdict() -> None:
 def test_to_markdown_renders_supports_and_challenges_bullets() -> None:
     rendered = _full_thesis().to_markdown()
     assert "+ RSI 62 with SMA50 sloping up (source: technical)." in rendered
-    assert "- Customer concentration in top three hyperscalers (source: company)." in rendered
+    assert "· Customer concentration in top three hyperscalers (source: company)." in rendered
 
 
 def test_to_markdown_renders_aspect_label_when_present() -> None:
