@@ -213,6 +213,15 @@ services:
       # (see .github/workflows/deploy.yml). Defaults to "unknown" for local dev
       # where compose isn't the entry point.
       - GIT_SHA=${GIT_SHA:-unknown}
+      # QNT-209: SqliteSaver + sidecar table for cross-request session memory.
+      # Path lives inside the agent_memory named volume so compose
+      # down/up preserves chat threads (AC11).
+      - AGENT_DB_PATH=/var/lib/agent/agent.db
+    volumes:
+      # QNT-209: persists the agent session-memory SQLite DB across api
+      # container restarts. SqliteSaver writes here on every chat request
+      # that carries a thread_id; the prune loop drops stale rows.
+      - agent_memory:/var/lib/agent
     depends_on: [clickhouse]
     ports:
       # QNT-75: bound to loopback only — public ingress is via cloudflared (see
@@ -523,3 +532,4 @@ volumes:
   grafana_data:     # Grafana state (changed admin password, modified dashboards)
   dagster_home:     # persists Dagster run history + schedule/sensor cursors across rebuilds;
                     # shared between dagster and dagster-daemon so they see the same state
+  agent_memory:     # QNT-209: SqliteSaver DB for chat session memory (followup intent)

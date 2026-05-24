@@ -830,6 +830,7 @@ function RunBlock({
     fundamental: "fundamental analysis…",
     technical: "technical analysis…",
     news: "news read…",
+    followup: "follow-up…",
   };
 
   return (
@@ -971,7 +972,7 @@ const RATE_LIMIT_REDIRECT =
   "a moment, or fork the repo to run the agent against your own keys.";
 
 async function consumeChatStream(
-  body: { ticker: string; message: string },
+  body: { ticker: string; message: string; thread_id?: string },
   onEvent: (event: string, data: unknown) => void,
   signal: AbortSignal,
 ): Promise<void> {
@@ -1034,6 +1035,14 @@ export function ChatPanel() {
   // first render — prefillComposer increments the counter, never resets it.
   const [composerInput, setComposerInput] = useState("");
   const [composerFocusKey, setComposerFocusKey] = useState(0);
+  // QNT-209: per-ticker thread map. One thread_id per ticker per ChatPanel
+  // mount; lifetime = this React component state (NOT localStorage, NOT
+  // sessionStorage — both survive refresh and would break the desired
+  // "refresh = restart" UX). Switching tickers within the same session
+  // gives each ticker its own continuity; switching back to a prior ticker
+  // reuses its original thread_id so a followup question still has the
+  // earlier turn to reason over.
+  const [threadIds, setThreadIds] = useState<Record<string, string>>({});
 
   // Clear the composer when the active ticker changes. Prefilled suggestions
   // ("Technical analysis of TSLA") embed the ticker by name, so leaving the
@@ -1126,10 +1135,21 @@ export function ChatPanel() {
       const controller = new AbortController();
       abortRef.current = controller;
 
+      // QNT-209: lazily mint a thread_id for this ticker if we haven't yet,
+      // otherwise reuse the existing one. Stored via setThreadIds so a
+      // navigation away and back lands on the same id (intentional: the
+      // user expects continuity within one session).
+      const existingThreadId = threadIds[ticker];
+      const threadId = existingThreadId ?? crypto.randomUUID();
+      if (!existingThreadId) {
+        setThreadIds((prev) => ({ ...prev, [ticker]: threadId }));
+      }
+
       consumeChatStream(
         {
           ticker,
           message: prompt,
+          thread_id: threadId,
         },
         (event, data) => {
           if (event === "tool_call") {
@@ -1201,7 +1221,7 @@ export function ChatPanel() {
         }));
       });
     },
-    [ticker, updateRun],
+    [ticker, updateRun, threadIds],
   );
 
   // Cancel any in-flight stream when the panel unmounts.

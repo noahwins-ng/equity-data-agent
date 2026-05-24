@@ -140,6 +140,13 @@ class ChatRequest(BaseModel):
 
     ticker: str = Field(min_length=1, max_length=8)
     message: str = Field(default="", max_length=_MESSAGE_MAX_LEN)
+    # QNT-209: opaque session identifier supplied by the frontend (one per
+    # ticker per ChatPanel mount; lifetime = component state, lost on
+    # refresh). When present the backend persists the run via SqliteSaver
+    # so a follow-up question on the same thread_id can reuse the prior
+    # turn's reports. When absent (curl, tests, non-frontend callers) the
+    # request runs against an ephemeral compile with no checkpointer.
+    thread_id: str | None = Field(default=None, max_length=128)
 
     @field_validator("message")
     @classmethod
@@ -375,11 +382,76 @@ def _instrument_tools(
 # ─── Streaming generator ────────────────────────────────────────────────────
 
 
-_DONE_FAILURE_PAYLOAD = {
+_DONE_FAILURE_PAYLOAD: dict[str, Any] = {
     "tools_count": 0,
     "citations_count": 0,
     "confidence": 0.0,
 }
+
+
+def _done_failure_payload(thread_id: str | None) -> dict[str, Any]:
+    """QNT-209: failure-path done payload carries ``thread_id`` so the
+    frontend can confirm what the backend used even when the run errored
+    or timed out before any payload was produced."""
+    return {**_DONE_FAILURE_PAYLOAD, "thread_id": thread_id}
+
+
+# QNT-209: process-wide SqliteSaver singleton. Built lazily on the first chat
+# request that supplies a ``thread_id`` (the FastAPI lifespan in main.py also
+# eagerly initialises it on startup so the prune loop has something to scan).
+# A single connection with check_same_thread=False is the documented usage:
+# SqliteSaver guards its OWN cursor with an internal lock, and the underlying
+# sqlite3 module compiles with threadsafety=3 (serialized) so direct
+# ``conn.execute(...)`` calls from ``touch_thread`` (event loop) interleaved
+# with saver writes (asyncio.to_thread worker) are safe at the sqlite layer.
+# The saver lock guarantees nothing about access bypassing it -- the
+# serialized-mode guarantee from the sqlite module is what makes this safe.
+_CHECKPOINTER_SINGLETON: object | None = None
+_CHECKPOINTER_CONN: object | None = None
+
+
+def get_checkpointer() -> object | None:
+    """Return the lazily-built ``SqliteSaver`` instance, or None on failure.
+
+    Failure modes: SQLite file unwriteable, sqlite3 module unavailable,
+    langgraph_checkpoint_sqlite import error. On any of these we log and
+    return None so the chat endpoint degrades to the ephemeral path rather
+    than 500'ing.
+    """
+    global _CHECKPOINTER_SINGLETON, _CHECKPOINTER_CONN
+    if _CHECKPOINTER_SINGLETON is not None:
+        return _CHECKPOINTER_SINGLETON
+    try:
+        import os
+        import sqlite3
+
+        from agent.memory import init_thread_metadata
+        from langgraph.checkpoint.sqlite import SqliteSaver
+
+        os.makedirs(os.path.dirname(settings.AGENT_DB_PATH) or ".", exist_ok=True)
+        conn = sqlite3.connect(settings.AGENT_DB_PATH, check_same_thread=False)
+        saver = SqliteSaver(conn)
+        # Force the LangGraph tables into existence before the sidecar so the
+        # prune deletes have something to reference when the loop fires.
+        saver.setup()
+        init_thread_metadata(conn)
+        _CHECKPOINTER_CONN = conn
+        _CHECKPOINTER_SINGLETON = saver
+        return saver
+    except Exception as exc:  # noqa: BLE001 — checkpointer must not block the API
+        logger.warning("agent SqliteSaver unavailable, falling back to ephemeral: %s", exc)
+        return None
+
+
+def get_checkpointer_conn() -> object | None:
+    """Return the raw sqlite3.Connection backing the checkpointer (or None).
+
+    The prune loop in ``api.main`` uses this to call ``prune_stale_threads``
+    against the same database file the saver is writing to.
+    """
+    if _CHECKPOINTER_SINGLETON is None:
+        get_checkpointer()
+    return _CHECKPOINTER_CONN
 
 
 # QNT-150: stable user-facing strings for SSE error events. Raw exception
@@ -431,7 +503,7 @@ async def _maybe_alert_breaker_once() -> None:
     record_breaker_trip("global TPD ceiling reached")
 
 
-async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
+async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  # noqa: C901, PLR0915 — orchestration coroutine, refactor candidate for QNT-209 follow-up
     """Yield SSE frames for one chat request.
 
     Validation failures yield a single ``error`` event followed by ``done``;
@@ -444,14 +516,20 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
     invocation, no LLM cost) and the panel renders the same redirect card it
     uses for off-domain questions. The agent never reaches a paid provider
     in either branch — see ADR-017.
+
+    QNT-209: ``request.thread_id`` is the per-(session, ticker) memory key
+    the frontend supplies. None = ephemeral (curl, tests, no-frontend) → no
+    checkpointer at compile, no sidecar touch, nothing persists.
     """
+    thread_id = request.thread_id
+    use_memory = thread_id is not None
     ticker = request.ticker.upper()
     if ticker not in TICKERS:
         yield _sse(
             "error",
             {"detail": f"Unknown ticker: {ticker}", "code": "unknown-ticker"},
         )
-        yield _sse("done", _DONE_FAILURE_PAYLOAD)
+        yield _sse("done", _done_failure_payload(thread_id))
         return
 
     # QNT-161: budget gate. Cheap O(1) check before we instantiate any
@@ -481,6 +559,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
                 "citations_count": 0,
                 "confidence": 0.0,
                 "intent": "conversational",
+                "thread_id": thread_id,
             },
         )
         return
@@ -518,7 +597,22 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
 
         base_tools = default_report_tools()
         instrumented = _instrument_tools(base_tools, queue, loop, ticker)
-        graph = build_graph(instrumented, event_emitter=_emit)
+        # QNT-209: attach the SqliteSaver only when the request named a
+        # thread_id. The ephemeral compile path keeps the existing behavior
+        # for curl / tests / non-frontend callers — no checkpoint rows, no
+        # sidecar touch.
+        checkpointer = get_checkpointer() if use_memory else None
+        if use_memory and checkpointer is not None and thread_id is not None:
+            try:
+                from agent.memory import touch_thread
+
+                conn = get_checkpointer_conn()
+                if conn is not None:
+                    # type: ignore[arg-type] — runtime sqlite3.Connection
+                    touch_thread(conn, thread_id)  # type: ignore[arg-type]
+            except Exception as exc:  # noqa: BLE001 — sidecar touch must not block the run
+                logger.warning("touch_thread failed for %s: %s", thread_id, exc)
+        graph = build_graph(instrumented, event_emitter=_emit, checkpointer=checkpointer)  # type: ignore[arg-type]
 
         # QNT-181: tag every Langfuse trace with a per-request session_id
         # (uuid4) and a per-IP user_id (truncated sha256 of client_ip). The
@@ -572,6 +666,17 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
                         "langfuse_user_id": user_id,
                         **model_info,
                     },
+                }
+            # QNT-209: a compiled-with-checkpointer graph REQUIRES
+            # configurable.thread_id on every invoke. Setting it for the
+            # ephemeral compile too is harmless (no checkpointer reads it).
+            if thread_id is not None:
+                existing_configurable = graph_config.get("configurable") or {}
+                if not isinstance(existing_configurable, dict):
+                    existing_configurable = {}
+                graph_config["configurable"] = {
+                    **existing_configurable,
+                    "thread_id": thread_id,
                 }
             try:
                 with propagate_attributes(trace_name="agent-chat"):
@@ -678,7 +783,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
                 "error",
                 {"detail": _ERROR_DETAIL_AGENT_TIMEOUT, "code": "agent-timeout"},
             )
-            yield _sse("done", _DONE_FAILURE_PAYLOAD)
+            yield _sse("done", _done_failure_payload(thread_id))
             return
 
         if "error" in final_state_holder:
@@ -697,7 +802,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
                 "error",
                 {"detail": _ERROR_DETAIL_AGENT_FAILED, "code": "agent-failed"},
             )
-            yield _sse("done", _DONE_FAILURE_PAYLOAD)
+            yield _sse("done", _done_failure_payload(thread_id))
             return
 
         state = final_state_holder.get("state") or {}
@@ -767,7 +872,11 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
                 yield _sse("prose_chunk", {"delta": chunk + " "})
                 await asyncio.sleep(0)
             yield _sse("comparison", comparison.model_dump())
-        elif intent == "quick_fact" and isinstance(quick_fact, QuickFactAnswer):
+        elif intent in {"quick_fact", "followup"} and isinstance(quick_fact, QuickFactAnswer):
+            # QNT-209: followup reuses the QuickFactAnswer schema (the panel
+            # already renders it). The intent event still carries "followup"
+            # so Langfuse/UI can tell the two apart; the rendered card is
+            # the same compact answer + cited value chip.
             for chunk in _split_prose(quick_fact.answer):
                 yield _sse("prose_chunk", {"delta": chunk + " "})
                 await asyncio.sleep(0)
@@ -807,7 +916,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
             citations_count = _count_comparison_citations(
                 comparison if isinstance(comparison, ComparisonAnswer) else None
             )
-        elif intent == "quick_fact":
+        elif intent in {"quick_fact", "followup"}:
             citations_count = _count_quick_fact_citations(
                 quick_fact if isinstance(quick_fact, QuickFactAnswer) else None
             )
@@ -823,13 +932,20 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
         else:
             citations_count = _count_citations(thesis if isinstance(thesis, Thesis) else None)
 
+        # QNT-209: tools_count reflects tools INVOKED this turn, not the
+        # size of the hydrated report bundle. On followup turns we reused
+        # the prior turn's reports verbatim and fired zero tools, so the
+        # frontend chip should read "0 sources" rather than the misleading
+        # 3-4 hydrated entries.
+        tools_count = 0 if intent == "followup" else len(reports)
         yield _sse(
             "done",
             {
-                "tools_count": len(reports),
+                "tools_count": tools_count,
                 "citations_count": citations_count,
                 "confidence": confidence,
                 "intent": intent,
+                "thread_id": thread_id,
             },
         )
     finally:

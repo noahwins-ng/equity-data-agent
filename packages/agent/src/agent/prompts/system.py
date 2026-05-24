@@ -39,6 +39,8 @@ the eval is the empirical check.
 
 from __future__ import annotations
 
+from typing import Any
+
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 # Canonical tool registry. The graph (`agent.graph`) imports this rather than
@@ -638,10 +640,96 @@ def build_focused_prompt(
     ]
 
 
+# QNT-209: Followup prompt. Triggered when the classifier picks ``followup``
+# (short pronoun-style question on a thread with a prior turn). Reuses the
+# QUICK_FACT schema (QuickFactAnswer) so the frontend renders it through the
+# existing quick-fact card -- no new schema to plumb through.
+#
+# Same anti-arithmetic / cite-the-source rules as the rest. The user's
+# question is a continuation of the prior answer, so we feed the LLM both
+# the original reports AND a flattened markdown of the prior thesis (when
+# we have one) so it can elaborate without re-fetching tools.
+FOLLOWUP_SYSTEM_PROMPT = """You are an investment research analyst answering a \
+follow-up question. The user just received your prior answer about a US public \
+equity and is asking you to elaborate, justify, or dig deeper (e.g. "why?", \
+"tell me more", "elaborate on the bear case").
+
+# Hard rules
+1. Reuse the supplied reports and the prior thesis. Do NOT request new \
+information; everything you need is in the context below. If the user is asking \
+about something the reports don't cover, say so plainly.
+2. Never perform arithmetic. Every number must appear verbatim in either the \
+reports or the prior thesis. Do not compute new ratios, deltas, or growth rates.
+3. Cite the source for any value. ``source`` is one of: technical, fundamental, \
+news. Inline cite the same way in the prose: ``(source: <name>)``.
+4. Keep the answer short. One paragraph (2-4 sentences) of plain prose. Do NOT \
+produce bullets or a thesis card. This is a conversational follow-up, not a \
+re-do of the prior answer.
+5. Stay within the supplied context. No prior knowledge of the company beyond \
+what the reports and prior thesis already state.
+
+# Output shape
+Populate the QuickFactAnswer fields directly:
+* answer: One short paragraph elaborating on what the user asked about. Cite \
+sources inline.
+* cited_value: A single representative value from the answer if one anchors \
+the elaboration; otherwise leave empty.
+* source: ``technical`` / ``fundamental`` / ``news`` matching cited_value, \
+or null if no single value anchors the answer.
+"""
+
+
+def build_followup_prompt(
+    ticker: str,
+    question: str,
+    reports: dict[str, str],
+    prior_thesis: object | None,
+) -> list[BaseMessage]:
+    """Compose the followup prompt as a system + user message pair.
+
+    ``prior_thesis`` is the hydrated ``Thesis`` from the earlier turn on this
+    thread (or None if the thread only has non-thesis prior turns). When
+    present we flatten it via ``to_markdown`` so the LLM has the full v2
+    four-aspect framing to reference.
+    """
+    if reports:
+        report_body = "\n\n".join(
+            f"=== {name} report ===\n{_sanitize_report_body(text)}\n=== end {name} report ==="
+            for name, text in reports.items()
+        )
+    else:
+        report_body = "(no reports available)"
+
+    prior_section = ""
+    to_md: Any = getattr(prior_thesis, "to_markdown", None)
+    if callable(to_md):
+        try:
+            prior_md = str(to_md())
+        except Exception:  # noqa: BLE001 — never let formatting kill the followup
+            prior_md = ""
+        if prior_md:
+            prior_section = (
+                "\n# Prior turn (your earlier thesis on this ticker)\n"
+                f"{_sanitize_report_body(prior_md)}\n"
+            )
+
+    user_msg = (
+        f"# Task\nElaborate on the prior answer for {ticker}.\n"
+        f"Question: {question or '(no follow-up text supplied)'}\n\n"
+        f"# Reports\n{report_body}\n"
+        f"{prior_section}"
+    )
+    return [
+        SystemMessage(content=FOLLOWUP_SYSTEM_PROMPT),
+        HumanMessage(content=user_msg),
+    ]
+
+
 __all__ = [
     "COMPARISON_SYSTEM_PROMPT",
     "CONVERSATIONAL_SYSTEM_PROMPT",
     "FOCUSED_SYSTEM_PROMPT",
+    "FOLLOWUP_SYSTEM_PROMPT",
     "QUICK_FACT_SYSTEM_PROMPT",
     "REPORT_TOOLS",
     "SYSTEM_PROMPT",
@@ -649,6 +737,7 @@ __all__ = [
     "build_comparison_prompt",
     "build_conversational_prompt",
     "build_focused_prompt",
+    "build_followup_prompt",
     "build_quick_fact_prompt",
     "build_synthesis_prompt",
 ]

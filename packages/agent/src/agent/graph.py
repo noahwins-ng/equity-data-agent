@@ -55,6 +55,7 @@ from agent.prompts import (
     build_comparison_prompt,
     build_conversational_prompt,
     build_focused_prompt,
+    build_followup_prompt,
     build_quick_fact_prompt,
     build_synthesis_prompt,
 )
@@ -62,6 +63,7 @@ from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 
 if TYPE_CHECKING:
+    from langgraph.checkpoint.base import BaseCheckpointSaver
     from langgraph.graph.state import CompiledStateGraph
 
 logger = logging.getLogger(__name__)
@@ -82,6 +84,7 @@ def _prompt_version() -> str:
         COMPARISON_SYSTEM_PROMPT,
         CONVERSATIONAL_SYSTEM_PROMPT,
         FOCUSED_SYSTEM_PROMPT,
+        FOLLOWUP_SYSTEM_PROMPT,
         QUICK_FACT_SYSTEM_PROMPT,
         SYSTEM_PROMPT,
     )
@@ -96,6 +99,8 @@ def _prompt_version() -> str:
         + CONVERSATIONAL_SYSTEM_PROMPT
         + "\n"
         + FOCUSED_SYSTEM_PROMPT
+        + "\n"
+        + FOLLOWUP_SYSTEM_PROMPT
         + "\n"
         + ",".join(sorted(REPORT_TOOLS))
     )
@@ -462,6 +467,7 @@ def build_graph(
     tools: dict[str, ToolFn],
     *,
     event_emitter: EventEmitter | None = None,
+    checkpointer: BaseCheckpointSaver | None = None,
 ) -> CompiledStateGraph:
     """Compile the classify -> plan -> gather -> synthesize graph (QNT-149, QNT-159).
 
@@ -493,8 +499,16 @@ def build_graph(
         # synthesize_node which wrap their LLM call in BLE001. Mirror that
         # contract here so the bias-to-thesis invariant the rest of the
         # graph relies on cannot be defeated by an unrelated dependency.
+        # QNT-209: ``has_prior_turn`` flips on once the checkpointer hydrated
+        # ``reports`` from an earlier run on this thread. Cheapest available
+        # signal — no schema change to AgentState. Lets the followup heuristic
+        # accept short pronoun questions ("why?", "elaborate") that would
+        # otherwise fall through to the thesis safe default.
+        has_prior_turn = bool(state.get("reports"))
         try:
-            intent, classifier_source = classify_intent_with_source(question, config=config)
+            intent, classifier_source = classify_intent_with_source(
+                question, config=config, has_prior_turn=has_prior_turn
+            )
         except Exception as exc:  # noqa: BLE001 — preserve the safe default
             logger.warning("classify %s: defaulting to thesis: %s", ticker, exc)
             intent = "thesis"
@@ -518,6 +532,15 @@ def build_graph(
         ticker = state["ticker"]
         question = state.get("question", "")
         intent = state.get("intent", "thesis")
+
+        # QNT-209: followup reuses the prior turn's hydrated reports — set
+        # plan empty so gather no-ops. Critically we return ONLY ``plan``
+        # here; including ``reports`` / ``reports_by_ticker`` in the return
+        # dict would clobber the checkpointer-hydrated state with empty
+        # values and defeat the whole point of the followup path.
+        if intent == "followup":
+            logger.info("plan %s: skipped (followup)", ticker)
+            return {"plan": []}
 
         # Conversational path skips tool gathering entirely — the answer
         # comes from the LLM with no report context. We still pass through
@@ -600,6 +623,13 @@ def build_graph(
         ticker = state["ticker"]
         intent = state.get("intent", "thesis")
         plan = state.get("plan", [])
+
+        # QNT-209: followup keeps the hydrated reports verbatim. Return an
+        # empty dict so TypedDict merge leaves ``reports`` and
+        # ``reports_by_ticker`` untouched (AC4: zero tool calls).
+        if intent == "followup":
+            logger.info("gather %s: skipped (followup)", ticker)
+            return {}
 
         # Conversational path: nothing to gather — keep state intact and
         # let synthesize emit the prose answer.
@@ -688,6 +718,53 @@ def build_graph(
                 reason,
             )
             return payload
+
+        # QNT-209: followup reasons over the prior turn's hydrated reports
+        # via a single LLM call into QuickFactAnswer. We deliberately reuse
+        # an existing structured shape rather than mint a new one — the
+        # frontend already renders QuickFactAnswer and the AC explicitly
+        # forbids introducing a new schema for followup.
+        if intent == "followup":
+            prior_thesis = state.get("thesis")
+            if not reports and not prior_thesis:
+                # No prior context to reason over — degrade to the redirect
+                # so the user sees an in-domain reply rather than blank.
+                return _fallback("I don't have a prior turn on this thread to follow up on.")
+            prompt = build_followup_prompt(ticker, question, reports, prior_thesis)
+            structured_llm = (
+                get_llm()
+                .with_structured_output(QuickFactAnswer)
+                .with_retry(
+                    stop_after_attempt=2,
+                    retry_if_exception_type=(ValidationError, OutputParserException),
+                )
+            )
+            try:
+                response = _linked_invoke(structured_llm, prompt, config, "followup-prompt")
+            except Exception as exc:  # noqa: BLE001 — fall back to redirect
+                logger.warning(
+                    "synthesize %s: followup structured output failed: %s: %s",
+                    ticker,
+                    type(exc).__name__,
+                    exc,
+                )
+                response = None
+            followup = _coerce_quick_fact(response)
+            if followup is None:
+                return _fallback("I had trouble building a follow-up answer for that.")
+            # QNT-209: return ONLY the keys this branch owns. Using
+            # ``_empty_payload()`` here would write ``thesis=None`` /
+            # ``focused=None`` / etc. back to the checkpoint, clobbering
+            # the prior turn's hydrated payload — turn 3 of a followup
+            # chain would then see ``state['thesis'] is None`` and lose
+            # the v2 framing the FOLLOWUP_SYSTEM_PROMPT wants to reference.
+            # plan is empty on followup runs, so the report-coverage
+            # heuristic would render 0% confidence -- a misleading chip
+            # given we reused EVERY hydrated report. Treat reuse as full
+            # coverage.
+            followup_confidence = 1.0 if reports else confidence
+            logger.info("synthesize %s: confidence=%s followup=ok", ticker, followup_confidence)
+            return {"quick_fact": followup, "confidence": followup_confidence}
 
         if intent == "conversational":
             prompt = build_conversational_prompt(question)
@@ -889,6 +966,12 @@ def build_graph(
     # a blank state again.
     builder.add_edge("gather", "synthesize")
     builder.add_edge("synthesize", END)
+    # QNT-209: passing a checkpointer enables the followup path — the next
+    # invocation against the same thread_id sees ``reports`` hydrated from
+    # the prior turn. None ⇒ ephemeral compile (curl, tests, non-frontend
+    # callers, the QNT-209 ephemeral fallback in the SSE endpoint).
+    if checkpointer is not None:
+        return builder.compile(checkpointer=checkpointer)
     return builder.compile()
 
 

@@ -84,8 +84,12 @@ def test_every_intent_has_at_least_one_golden() -> None:
     pinned = {r.expected_intent for r in load_goldens() if r.expected_intent != "auto"}
     named = set(get_args(Intent))
     # ``thesis`` is implied by every ``auto`` record (the heuristic default),
-    # so it doesn't need to be pinned. Every other intent does.
-    required = named - {"thesis"}
+    # so it doesn't need to be pinned. ``followup`` (QNT-209) is multi-turn
+    # by definition — the heuristic only fires when a prior turn is
+    # hydrated on the same thread — so a single-shot golden can't exercise
+    # it. Per AC9 the followup intent does not contaminate the 16-question
+    # contract; coverage lives in tests/agent/test_followup.py instead.
+    required = named - {"thesis", "followup"}
     missing = required - pinned
     assert not missing, (
         f"goldens missing pinned records for intents: {sorted(missing)} (found: {sorted(pinned)})"

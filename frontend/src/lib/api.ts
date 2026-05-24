@@ -218,6 +218,12 @@ export type HealthResponse = {
 export type ChatRequest = {
   ticker: string;
   message: string;
+  // QNT-209: opaque per-(session, ticker) memory key. Generated on the
+  // frontend via crypto.randomUUID() inside ChatPanel; lives in component
+  // state only — refresh discards it and the agent sees no prior turn.
+  // Omitted on tests / non-frontend callers; backend then runs ephemeral
+  // (no checkpointer, no sidecar touch).
+  thread_id?: string;
 };
 
 export type ToolCallEvent = {
@@ -280,6 +286,8 @@ export type ThesisPayload = {
 // always renders an in-domain reply, never a blank state or stack trace.
 // QNT-176: ``fundamental`` / ``technical`` / ``news`` are the
 // focused-analysis intents (QNT-208 renamed ``news_sentiment`` -> ``news``).
+// QNT-209: ``followup`` reuses the QuickFactAnswer schema so the panel
+// renders it through the existing quick-fact card.
 export type Intent =
   | "thesis"
   | "quick_fact"
@@ -287,7 +295,8 @@ export type Intent =
   | "conversational"
   | "fundamental"
   | "technical"
-  | "news";
+  | "news"
+  | "followup";
 
 export type FocusKind = "fundamental" | "technical" | "news";
 
@@ -374,6 +383,9 @@ export type DoneEvent = {
   citations_count: number;
   confidence: number;
   intent?: Intent;
+  // QNT-209: echoed by the backend for confirmation. Null when the request
+  // omitted thread_id (ephemeral path).
+  thread_id?: string | null;
 };
 
 export type ChatErrorEvent = {

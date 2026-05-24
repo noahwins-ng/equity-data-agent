@@ -62,6 +62,7 @@ Intent = Literal[
     "fundamental",
     "technical",
     "news",
+    "followup",
 ]
 
 # Which code path resolved the intent — written into AgentState by classify_node
@@ -256,6 +257,22 @@ _NEWS_TOKENS: tuple[str, ...] = (
     "any catalysts",
 )
 
+# QNT-209: pronoun-style follow-up triggers. The heuristic only fires when
+# the caller signals there IS a prior turn (``has_prior_turn=True``) and no
+# ticker is named — "why" / "elaborate" on their own carry no semantic
+# anchor, and we want them to route to the followup synthesizer that reuses
+# the prior turn's reports rather than re-fetching tools.
+_FOLLOWUP_TOKENS: tuple[str, ...] = (
+    "why",
+    "how come",
+    "tell me more",
+    "elaborate",
+    "expand on",
+    "dig in",
+    "what about that",
+    "go deeper",
+)
+
 # Short questions are more likely quick-fact. Tuned conservatively: a 12-word
 # question can still be open-ended, so this is one signal among several.
 _SHORT_QUESTION_WORD_LIMIT = 12
@@ -297,18 +314,38 @@ def extract_tickers(text: str) -> list[str]:
     return seen
 
 
-def _heuristic_intent(question: str) -> Intent | None:
+def _heuristic_intent(question: str, *, has_prior_turn: bool = False) -> Intent | None:
     """Cheap keyword classifier.
 
     Returns the intent when the heuristic is confident, or None to defer to
     the LLM. The LLM is the fallback, not the primary — most questions in
     the chat are short and word-spotty enough for this layer to handle.
+
+    QNT-209: ``has_prior_turn`` is True when the caller hydrated state from
+    the checkpointer and saw reports from an earlier turn on this thread.
+    It gates the followup detection — bare "why?" without a prior turn has
+    no anchor and falls through to the thesis safe default.
     """
     text = question.strip().lower()
     if not text:
         # No question = no override; the existing graph already defaults the
         # thesis path for empty messages, and the LLM call would be wasted.
         return "thesis"
+
+    # QNT-209: followup pronouns. Must run BEFORE the thesis bias so a short
+    # "why?" with a prior turn routes here instead of falling into the safe
+    # default. Requires: short question, no ticker named (the user is
+    # gesturing at the previous answer, not naming a new one), a followup
+    # token, AND a prior turn on this thread. Without all four signals we
+    # defer — bare "why?" with no context is ambiguous and the safe default
+    # still applies.
+    if (
+        has_prior_turn
+        and len(text.split()) <= _SHORT_QUESTION_WORD_LIMIT
+        and not extract_tickers(question)
+        and _matches_any(text, _FOLLOWUP_TOKENS) is not None
+    ):
+        return "followup"
 
     # Conversational greetings / capability asks are unambiguous — short
     # greetings ("hi", "hey") are usually the WHOLE message, so a strict
@@ -404,6 +441,12 @@ news for UNH?", "what's the news say on NVDA?", "how is sentiment on \
 META?", "any catalysts for TSLA?"). The answer is a focused read on \
 recent headlines (positive and negative catalysts) tied to the running \
 story.
+* "followup" — the user is referring back to your prior turn; the question \
+does not name a ticker or metric directly (e.g. "why?", "tell me more", \
+"elaborate on the bear case", "go deeper"). Only pick this when the \
+question reads like a continuation of the immediately preceding answer; \
+a question that names a new ticker, metric, or topic is NOT a followup \
+even if it's short.
 
 If you are uncertain between "thesis" and "quick_fact", default to "thesis" \
 — that path is the existing safe shape. Pick "comparison" only when there \
@@ -422,6 +465,7 @@ def classify_intent_with_source(
     question: str,
     *,
     config: RunnableConfig | None = None,
+    has_prior_turn: bool = False,
 ) -> tuple[Intent, ClassifierSource]:
     """Return ``(intent, source)`` for ``question``.
 
@@ -433,8 +477,12 @@ def classify_intent_with_source(
 
     QNT-181: ``config`` carries the LangGraph CallbackHandler so the
     LLM-fallback path's generation observation nests under the parent trace.
+
+    QNT-209: ``has_prior_turn`` is forwarded to the heuristic so a short
+    pronoun-style question on a hydrated thread can route to ``followup``
+    instead of falling through to the thesis safe default.
     """
-    heuristic = _heuristic_intent(question)
+    heuristic = _heuristic_intent(question, has_prior_turn=has_prior_turn)
     if heuristic is not None:
         logger.info("classify intent=%s via=heuristic question=%r", heuristic, question[:80])
         return heuristic, "heuristic"
@@ -464,6 +512,7 @@ def classify_intent(
     question: str,
     *,
     config: RunnableConfig | None = None,
+    has_prior_turn: bool = False,
 ) -> Intent:
     """Return the response shape to use for ``question``.
 
@@ -471,7 +520,11 @@ def classify_intent(
     only need the intent. Use ``classify_intent_with_source`` when the
     classifier path (heuristic / llm / fallback) also matters.
     """
-    intent, _ = classify_intent_with_source(question, config=config)
+    intent, _ = classify_intent_with_source(
+        question,
+        config=config,
+        has_prior_turn=has_prior_turn,
+    )
     return intent
 
 
