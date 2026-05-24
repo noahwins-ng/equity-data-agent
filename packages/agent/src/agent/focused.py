@@ -47,11 +47,12 @@ FocusedSource = Literal["company", "technical", "fundamental", "news"]
 # no "sentiment" language anywhere.
 FocusKind = Literal["fundamental", "technical", "news"]
 
-# Per-focus verdict literals — Pydantic accepts the union at parse time and
-# the synthesize-node prompt instructs the model which set to draw from.
-FundamentalVerdict = Literal["Premium", "Inline", "Discounted"]
-TechnicalVerdict = Literal["Uptrend", "Sideways", "Downtrend"]
-FocusedVerdict = FundamentalVerdict | TechnicalVerdict
+# Per-focus verdict literals. Merged into one Literal so the JSON Schema
+# emits a single {"type": "string", "enum": [...]} — Groq rejects anyOf
+# with two string branches as "duplicate primitive types".
+# Fundamental: Premium | Inline | Discounted
+# Technical:   Uptrend | Sideways | Downtrend
+FocusedVerdict = Literal["Premium", "Inline", "Discounted", "Uptrend", "Sideways", "Downtrend"]
 
 
 class FocusedValue(BaseModel):
@@ -195,6 +196,4 @@ __all__ = [
     "FocusedValue",
     "FocusedVerdict",
     "FocusKind",
-    "FundamentalVerdict",
-    "TechnicalVerdict",
 ]
