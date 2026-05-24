@@ -1,4 +1,4 @@
-"""Unit tests for ``agent.eval_scores`` (QNT-182).
+"""Unit tests for ``agent.eval_scores`` (QNT-182, reshaped in QNT-208).
 
 Pure tests against ``compute_scores`` — no Langfuse client, no SSE handler.
 Integration coverage of the trace push lives in ``tests/api/test_agent_chat.py``.
@@ -6,26 +6,20 @@ Integration coverage of the trace push lives in ``tests/api/test_agent_chat.py``
 
 from __future__ import annotations
 
-from agent.comparison import ComparisonAnswer, ComparisonSection, ComparisonValue
+from agent.comparison import ComparisonAnswer
 from agent.conversational import ConversationalAnswer
 from agent.eval_scores import compute_scores
 from agent.quick_fact import QuickFactAnswer
-from agent.thesis import Thesis
 
-
-def _thesis(setup: str = "Setup paragraph.", *, citations: list[str] | None = None) -> Thesis:
-    return Thesis(
-        setup=setup,
-        bull_case=citations or ["RSI 65 (source: technical)"],
-        bear_case=["Multiple compression (source: fundamental)"],
-        verdict_stance="constructive",
-        verdict_action="Trim above SMA50 (source: technical).",
-    )
+from ._thesis_factory import make_comparison_section, make_thesis
 
 
 def test_compute_scores_clean_thesis_passes_both() -> None:
     state = {
-        "thesis": _thesis(),
+        "thesis": make_thesis(
+            supports=["RSI 65 (source: technical)"],
+            challenges=["Multiple compression (source: fundamental)"],
+        ),
         "plan": ["technical", "fundamental"],
         "reports": {
             "technical": "RSI 65 reading. SMA50 cited.",
@@ -40,7 +34,7 @@ def test_compute_scores_clean_thesis_passes_both() -> None:
 def test_compute_scores_flags_fabricated_number() -> None:
     """A thesis number not in any report fails the hallucination check."""
     state = {
-        "thesis": _thesis(citations=["RSI 99 (source: technical)"]),
+        "thesis": make_thesis(supports=["RSI 99 (source: technical)"]),
         "plan": ["technical", "fundamental"],
         "reports": {
             "technical": "RSI 65 reading.",
@@ -56,7 +50,7 @@ def test_compute_scores_flags_fabricated_number() -> None:
 def test_compute_scores_flags_missing_planned_tool() -> None:
     """Plan adherence fails when gather skipped a planned tool."""
     state = {
-        "thesis": _thesis(),
+        "thesis": make_thesis(),
         "plan": ["technical", "fundamental", "news"],
         "reports": {
             "technical": "RSI 65 reading. SMA50 cited.",
@@ -102,20 +96,8 @@ def test_compute_scores_renders_comparison_shape() -> None:
     state = {
         "comparison": ComparisonAnswer(
             sections=[
-                ComparisonSection(
-                    ticker="NVDA",
-                    summary="P/E 50 currently (source: fundamental).",
-                    key_values=[
-                        ComparisonValue(label="P/E", value="50", source="fundamental"),
-                    ],
-                ),
-                ComparisonSection(
-                    ticker="AAPL",
-                    summary="P/E 30 currently (source: fundamental).",
-                    key_values=[
-                        ComparisonValue(label="P/E", value="30", source="fundamental"),
-                    ],
-                ),
+                make_comparison_section("NVDA", "Premium", "Uptrend"),
+                make_comparison_section("AAPL", "Inline", "Sideways"),
             ],
             differences="NVDA trades at a richer multiple.",
         ),
@@ -136,16 +118,8 @@ def test_compute_scores_comparison_partial_gather_flags_missing() -> None:
     state = {
         "comparison": ComparisonAnswer(
             sections=[
-                ComparisonSection(
-                    ticker="NVDA",
-                    summary="P/E 50 (source: fundamental).",
-                    key_values=[ComparisonValue(label="P/E", value="50", source="fundamental")],
-                ),
-                ComparisonSection(
-                    ticker="AAPL",
-                    summary="No fundamental data available.",
-                    key_values=[],
-                ),
+                make_comparison_section("NVDA", "Premium", "Uptrend"),
+                make_comparison_section("AAPL", "Inline", "Sideways"),
             ],
             differences="NVDA has more data.",
         ),

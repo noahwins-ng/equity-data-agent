@@ -1,23 +1,28 @@
-"""Structured thesis output: Setup / Bull Case / Bear Case / Verdict (QNT-133, QNT-195).
+"""Per-aspect thesis (QNT-208, supersedes QNT-133).
+
+Reshapes the thesis output to analyst-standard framing: per-aspect blocks
+(Company / Fundamental / Technical / News) each with summary + supports +
+challenges + an aspect-level label, plus a final Overweight / Neutral /
+Underweight verdict with a 2-3 sentence rationale.
 
 The synthesize node forces the LLM through this schema with
-``with_structured_output`` so the API can stream the four sections to the
-frontend as JSON without having to re-parse prose. The CLI and the eval
-harness still want a flat string, so :meth:`Thesis.to_markdown` re-renders
-the structured form into the markdown shape the QNT-67 hallucination check
-already understands.
+``with_structured_output`` so the API can stream the structured payload
+to the frontend as JSON without re-parsing prose. The CLI and the eval
+harness call :meth:`Thesis.to_markdown` for the flat-string form the
+QNT-67 hallucination check already understands.
 
 Field shapes are deliberately permissive:
 
-* ``bull_case`` / ``bear_case`` are ``list[str]`` of supporting points rather
-  than nested ``{title, body}`` records — the design v2 mock is the example,
-  not the contract, and a flatter shape lets the model produce 1-N points
-  without padding the structure.
-* Asymmetry is allowed: an empty ``bull_case`` or ``bear_case`` is a valid
-  output for a one-sided name. The system prompt explicitly tells the model
-  not to invent the missing side.
-* ``verdict_stance`` is a closed set so the frontend can colour-code it
-  without string-matching.
+* Per aspect, ``supports`` / ``challenges`` are ``list[str]`` of bullets.
+  Empty lists are valid — asymmetric aspects (all-supports or
+  all-challenges) are real analyst reads, not a schema violation.
+* ``label`` is ``str | None`` per aspect — Company and News are
+  narrative-only and pass ``None``; Fundamental carries one of
+  ``Premium`` / ``Inline`` / ``Discounted`` and Technical carries one of
+  ``Uptrend`` / ``Sideways`` / ``Downtrend`` (quoted verbatim from the
+  matching report's embedded labels per QNT-207).
+* ``verdict`` is a closed three-state set so the frontend pill can
+  colour-code without string-matching.
 
 Field descriptions are picked up by ``with_structured_output`` and become
 part of the JSON schema the LLM sees, so they double as inline prompting.
@@ -31,68 +36,118 @@ from pydantic import BaseModel, Field
 
 from agent.disclaimer import DISCLAIMER
 
-VerdictStance = Literal["constructive", "cautious", "negative", "mixed"]
+Verdict = Literal["Overweight", "Neutral", "Underweight"]
+
+# Aspect verdict labels — the values the FUNDAMENTAL and TECHNICAL aspects
+# may carry. Company and News stay narrative-only (``label=None``). These
+# strings match the labels QNT-207 embeds in the report templates so the
+# LLM can quote them verbatim.
+AspectLabel = Literal[
+    "Premium",
+    "Inline",
+    "Discounted",
+    "Uptrend",
+    "Sideways",
+    "Downtrend",
+]
+
+
+class AspectView(BaseModel):
+    """One source aspect inside a Thesis (company / fundamental / technical / news).
+
+    Each aspect is a self-contained analyst paragraph: a summary, two
+    bullet lists framing the read, and an optional label that names the
+    aspect's verdict in the matching report's own vocabulary.
+    """
+
+    label: str | None = Field(
+        default=None,
+        description=(
+            "Aspect verdict label. Fundamental carries one of "
+            "Premium / Inline / Discounted; Technical carries one of "
+            "Uptrend / Sideways / Downtrend. Quote the label verbatim from "
+            "the matching report (the report templates print these "
+            "explicitly). Company and News are narrative-only aspects -- "
+            "pass null."
+        ),
+    )
+    summary: str = Field(
+        description=(
+            "Two to three sentences of analytical prose for this aspect. "
+            "Cite (source: company|technical|fundamental|news) on each "
+            "sentence that makes a numeric or factual claim. Every digit "
+            "must appear verbatim in the supplied reports."
+        ),
+    )
+    supports: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Bullets that argue FOR the aspect's label. Each bullet is one "
+            "sentence with an inline citation. Leave EMPTY when the "
+            "supplied report does not support the label (asymmetry is "
+            "expected; do not pad)."
+        ),
+    )
+    challenges: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Bullets that argue AGAINST the aspect's label, or that "
+            "complicate it. Each bullet is one sentence with an inline "
+            "citation. Leave EMPTY when the supplied report contains no "
+            "real counter-evidence."
+        ),
+    )
 
 
 class Thesis(BaseModel):
-    """Structured investment thesis with four sections.
+    """Structured investment thesis with four aspect blocks + a verdict.
 
     Returned by the synthesize node when ``with_structured_output(Thesis)``
     succeeds. Consumers that want a flat string (CLI ``--output``, the
     QNT-67 evals) call :meth:`to_markdown`; consumers that want JSON (the
-    forthcoming SSE endpoint, frontend) call :meth:`model_dump`.
+    SSE endpoint, frontend) call :meth:`model_dump`.
     """
 
-    setup: str = Field(
+    company: AspectView = Field(
         description=(
-            "Two-to-three sentences of analytical prose that synthesise the full picture. "
-            "A good setup does three things woven together: (1) anchors the reader in "
-            "the company's business context — what it sells and what drives it "
-            "(cite source: company), (2) surfaces the dominant analytical signal from "
-            "the reports with a verbatim number, and (3) names the tension — the specific "
-            "condition that would have to hold or change for the thesis to resolve one way. "
-            "Do not write three separate fact statements; weave them into continuous prose. "
-            "Cite (source: company|technical|fundamental|news) on each sentence that "
-            "makes a numeric or factual claim. Every digit must appear verbatim in the "
-            "supplied reports. Do not open with journalistic framing ('stands at a "
-            "crossroads', 'faces a pivotal moment')."
+            "Business context aspect drawn from the company report. "
+            "Narrative only -- ``label`` is null."
         ),
     )
-    bull_case: list[str] = Field(
-        default_factory=list,
+    fundamental: AspectView = Field(
         description=(
-            "Supporting points for the bull thesis. Each entry is one bullet "
-            "with an inline citation (source: company|technical|fundamental|news). "
-            "Number of points must reflect the actual evidence in the supplied "
-            "reports — do not pad. Leave EMPTY if the reports contain no real "
-            "bull case rather than inventing one."
+            "Valuation / earnings / margin aspect drawn from the "
+            "fundamental report. ``label`` is one of Premium / Inline / "
+            "Discounted, quoted verbatim from the report."
         ),
     )
-    bear_case: list[str] = Field(
-        default_factory=list,
+    technical: AspectView = Field(
         description=(
-            "Supporting points for the bear thesis. Mirror of bull_case: one "
-            "bullet per real concern, inline citations, EMPTY when the reports "
-            "do not support a bear case."
+            "Price-action / indicator aspect drawn from the technical "
+            "report. ``label`` is one of Uptrend / Sideways / Downtrend, "
+            "quoted verbatim from the report."
         ),
     )
-    verdict_stance: VerdictStance = Field(
+    news: AspectView = Field(
         description=(
-            "Overall stance. Use 'constructive' when bull dominates, "
-            "'negative' when bear dominates, 'cautious' when bear edges bull, "
-            "'mixed' when both sides have weight."
+            "Headline-flow aspect drawn from the news report. Narrative only -- ``label`` is null."
         ),
     )
-    verdict_action: str = Field(
+    verdict: Verdict = Field(
         description=(
-            "Concrete actionable guidance for an investor. Action levels MUST "
-            "reference values that appear verbatim in the supplied reports — "
-            "for example, the moving-average level the technical report "
-            "prints, or the overbought RSI threshold it cites. Every digit "
-            "in this field must be a re-quote from the report bodies. Do "
-            "not write any literal number that is not already in the "
-            "reports, and do not echo numbers from the schema description "
-            "itself."
+            "Final verdict on the ticker. Use Overweight when at least two "
+            "aspects carry favourable labels and no aspect carries a "
+            "critically unfavourable label; Underweight when at least two "
+            "aspects carry unfavourable labels and news has at least one "
+            "negative catalyst; Neutral otherwise."
+        ),
+    )
+    verdict_rationale: str = Field(
+        description=(
+            "Two to three sentences naming which aspect labels shaped the "
+            "verdict. Must mention at least one aspect's label verbatim "
+            "(Premium, Inline, Discounted, Uptrend, Sideways, or "
+            "Downtrend). Cite (source: ...) for any numeric claim."
         ),
     )
 
@@ -105,27 +160,30 @@ class Thesis(BaseModel):
         names, so the eval text matches the prompt's contract one-to-one.
         """
         parts: list[str] = []
-        parts.append("## Setup")
-        parts.append(self.setup.strip() or "_(no framing supplied)_")
+        for heading, aspect in (
+            ("Company", self.company),
+            ("Fundamental", self.fundamental),
+            ("Technical", self.technical),
+            ("News", self.news),
+        ):
+            parts.append(f"## {heading}")
+            if aspect.label:
+                parts.append(f"**Label:** {aspect.label}")
+            parts.append(aspect.summary.strip() or "_(no summary supplied)_")
+            if aspect.supports:
+                for point in aspect.supports:
+                    parts.append(f"+ {point.strip()}")
+            if aspect.challenges:
+                for point in aspect.challenges:
+                    parts.append(f"- {point.strip()}")
+            parts.append("")
 
-        parts.append("\n## Bull Case")
-        if self.bull_case:
-            parts.extend(f"- {point.strip()}" for point in self.bull_case)
-        else:
-            parts.append("_(no bull case supported by the reports)_")
-
-        parts.append("\n## Bear Case")
-        if self.bear_case:
-            parts.extend(f"- {point.strip()}" for point in self.bear_case)
-        else:
-            parts.append("_(no bear case supported by the reports)_")
-
-        parts.append("\n## Verdict")
-        parts.append(f"**Stance:** {self.verdict_stance}")
-        parts.append(self.verdict_action.strip() or "_(no action guidance supplied)_")
+        parts.append("## Verdict")
+        parts.append(f"**{self.verdict}**")
+        parts.append(self.verdict_rationale.strip() or "_(no rationale supplied)_")
 
         parts.append(f"\n{DISCLAIMER}")
-        return "\n".join(parts)
+        return "\n".join(parts).strip()
 
 
-__all__ = ["Thesis", "VerdictStance"]
+__all__ = ["AspectLabel", "AspectView", "Thesis", "Verdict"]

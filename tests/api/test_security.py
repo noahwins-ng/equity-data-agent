@@ -48,12 +48,27 @@ def _parse_sse(body: str) -> list[tuple[str, dict[str, Any]]]:
 
 
 def _stub_thesis() -> Thesis:
+    from agent.thesis import AspectView
+
     return Thesis(
-        setup="Setup.",
-        bull_case=["Bull (source: technical)"],
-        bear_case=["Bear (source: fundamental)"],
-        verdict_stance="constructive",
-        verdict_action="Action (source: technical).",
+        company=AspectView(label=None, summary="Company.", supports=[], challenges=[]),
+        fundamental=AspectView(
+            label="Premium",
+            summary="Multiple Premium (source: fundamental).",
+            supports=[],
+            challenges=["Bear (source: fundamental)"],
+        ),
+        technical=AspectView(
+            label="Uptrend",
+            summary="Trend Uptrend (source: technical).",
+            supports=["Bull (source: technical)"],
+            challenges=[],
+        ),
+        news=AspectView(
+            label=None, summary="No headlines (source: news).", supports=[], challenges=[]
+        ),
+        verdict="Overweight",
+        verdict_rationale="Premium + Uptrend (source: technical, fundamental).",
     )
 
 

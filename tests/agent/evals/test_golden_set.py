@@ -30,6 +30,8 @@ from agent.evals.judge import JudgeScore
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 
+from .._thesis_factory import make_thesis
+
 
 def _judge(composite: int = 8) -> JudgeScore:
     """Build a JudgeScore where all axes equal the composite target."""
@@ -51,14 +53,18 @@ def _record(rid: str = "test-1", ticker: str = "NVDA") -> GoldenRecord:
     )
 
 
-def _thesis(setup: str, bull: list[str] | None = None) -> Thesis:
-    """Build a minimal Thesis whose markdown render contains the seed text."""
-    return Thesis(
-        setup=setup,
-        bull_case=bull or [],
-        bear_case=[],
-        verdict_stance="constructive",
-        verdict_action="Hold pending eval.",
+def _thesis(summary: str, supports: list[str] | None = None) -> Thesis:
+    """Build a minimal v2 Thesis whose markdown render contains the seed text.
+
+    ``summary`` lands in the technical aspect's summary so the markdown
+    grep target is easy to predict for hallucination tests.
+    """
+    return make_thesis(
+        company_summary=summary,
+        supports=supports if supports is not None else [],
+        challenges=[],
+        verdict="Neutral",
+        verdict_rationale="Premium paired with Uptrend (source: technical).",
     )
 
 
@@ -232,7 +238,7 @@ class TestRunRecord:
             {
                 "thesis": _thesis(
                     "RSI is 72.5, trend up (source: technical). MACD above signal line.",
-                    bull=["RSI 72.5 (source: technical)"],
+                    supports=["RSI 72.5 (source: technical)"],
                 ),
                 "reports": {"technical": "RSI is 72.5 today. MACD above signal line."},
                 "errors": {},
@@ -249,70 +255,66 @@ class TestRunRecord:
         outcome = run_record(record)
         assert outcome.hallucination_ok, outcome.hallucination_reason
 
-    def test_forbidden_bull_substring_in_bull_fails(
+    def test_forbidden_aspect_support_in_supports_fails(
         self,
         stub_graph: Callable[[dict[str, Any]], None],
         stub_judge: MagicMock,  # noqa: ARG002
     ) -> None:
-        """QNT-183: a thesis whose bull_case contains a forbidden_bull_substring
-        must fail hallucination_ok even if the bear case uses the same term
-        correctly."""
+        """QNT-208 (was QNT-183): a thesis whose technical.supports contains
+        a forbidden_aspect_support substring must fail hallucination_ok even
+        if challenges uses the same term correctly."""
         stub_graph(
             {
-                "thesis": Thesis(
-                    setup="RSI is 71.6 (source: technical).",
-                    bull_case=[
-                        "RSI 71.6 overbought but bullish continuation"
-                        " in uptrend (source: technical)"
+                "thesis": make_thesis(
+                    supports=[
+                        "RSI 71.6 overbought but bullish continuation in uptrend"
+                        " (source: technical)"
                     ],
-                    bear_case=["RSI pulling back from overbought territory (source: technical)"],
-                    verdict_stance="cautious",
-                    verdict_action="No action level supported by current data.",
+                    challenges=["RSI pulling back from overbought territory (source: technical)"],
+                    verdict_rationale="Premium plus Uptrend tension (source: technical).",
                 ),
                 "reports": {"technical": "RSI is 71.6 overbought territory today"},
                 "errors": {},
             }
         )
         record = GoldenRecord(
-            id="test-forbidden-bull",
+            id="test-forbidden-supports",
             ticker="NVDA",
             question="Is NVDA overbought?",
             expected_tools=("technical",),
-            reference_thesis="Bear case cites overbought RSI; bull case omits it.",
-            forbidden_bull_substrings=("overbought",),
+            reference_thesis="Challenges cite overbought RSI; supports omits it.",
+            forbidden_aspect_support_substrings={"technical": ("overbought",)},
         )
         outcome = run_record(record)
         assert not outcome.hallucination_ok
-        assert "forbidden in bull" in outcome.hallucination_reason
+        assert "forbidden in supports" in outcome.hallucination_reason
         assert "overbought" in outcome.hallucination_reason
 
-    def test_forbidden_bull_substring_in_bear_only_passes(
+    def test_forbidden_aspect_support_in_challenges_only_passes(
         self,
         stub_graph: Callable[[dict[str, Any]], None],
         stub_judge: MagicMock,  # noqa: ARG002
     ) -> None:
-        """QNT-183: the same term appearing only in the bear case must NOT
-        fail — the bear case is the correct home for overbought RSI."""
+        """QNT-208: the same term appearing only in technical.challenges must
+        NOT fail -- challenges is the correct home for overbought RSI."""
         stub_graph(
             {
-                "thesis": Thesis(
-                    setup="RSI is 71.6 (source: technical).",
-                    bull_case=["Uptrend intact (source: technical)"],
-                    bear_case=["RSI pulling back from overbought territory (source: technical)"],
-                    verdict_stance="cautious",
-                    verdict_action="No action level supported by current data.",
+                "thesis": make_thesis(
+                    supports=["Uptrend intact (source: technical)"],
+                    challenges=["RSI pulling back from overbought territory (source: technical)"],
+                    verdict_rationale="Uptrend label with overbought caution (source: technical).",
                 ),
                 "reports": {"technical": "RSI is 71.6 overbought territory today"},
                 "errors": {},
             }
         )
         record = GoldenRecord(
-            id="test-forbidden-bull-absent",
+            id="test-forbidden-supports-absent",
             ticker="NVDA",
             question="Is NVDA overbought?",
             expected_tools=("technical",),
-            reference_thesis="Bear case cites overbought RSI; bull case omits it.",
-            forbidden_bull_substrings=("overbought",),
+            reference_thesis="Challenges cite overbought RSI; supports omits it.",
+            forbidden_aspect_support_substrings={"technical": ("overbought",)},
         )
         outcome = run_record(record)
         assert outcome.hallucination_ok, outcome.hallucination_reason

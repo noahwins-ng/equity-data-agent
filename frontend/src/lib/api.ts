@@ -239,26 +239,47 @@ export type ProseChunkEvent = {
   delta: string;
 };
 
-export type VerdictStance = "constructive" | "cautious" | "negative" | "mixed";
+// QNT-208 v2: final verdict is a closed three-state set.
+export type Verdict = "Overweight" | "Neutral" | "Underweight";
 
+// QNT-208 v2: per-aspect label. Fundamental: Premium / Inline / Discounted.
+// Technical: Uptrend / Sideways / Downtrend. Company and News are
+// narrative-only (label === null).
+export type AspectLabel =
+  | "Premium"
+  | "Inline"
+  | "Discounted"
+  | "Uptrend"
+  | "Sideways"
+  | "Downtrend";
+
+// QNT-208 v2: one aspect inside a four-aspect Thesis or ComparisonSection.
+export type AspectView = {
+  label: AspectLabel | null;
+  summary: string;
+  supports: string[];
+  challenges: string[];
+};
+
+// QNT-208 v2: thesis is four aspect blocks + verdict + rationale.
+// v1 list/stance fields removed in this milestone.
 export type ThesisPayload = {
-  setup: string;
-  bull_case: string[];
-  bear_case: string[];
-  verdict_stance: VerdictStance;
-  verdict_action: string;
+  company: AspectView;
+  fundamental: AspectView;
+  technical: AspectView;
+  news: AspectView;
+  verdict: Verdict;
+  verdict_rationale: string;
 };
 
 // QNT-149 / QNT-156: classifier picks one of these shapes for each run.
 // The panel uses ``intent`` to swap layout (thesis card vs. compact
 // quick-fact / comparison / conversational) and the matching payload is
 // delivered on the corresponding event. ``conversational`` also serves as
-// the deterministic fallback when ANY synthesize path fails — the panel
+// the deterministic fallback when ANY synthesize path fails -- the panel
 // always renders an in-domain reply, never a blank state or stack trace.
-// QNT-176: ``fundamental`` / ``technical`` / ``news_sentiment`` are the
-// focused-analysis intents — the user explicitly named one report family
-// and gets a focused multi-sentence read narrowed to that domain (plus
-// ``company`` as qualitative grounding).
+// QNT-176: ``fundamental`` / ``technical`` / ``news`` are the
+// focused-analysis intents (QNT-208 renamed ``news_sentiment`` -> ``news``).
 export type Intent =
   | "thesis"
   | "quick_fact"
@@ -266,9 +287,9 @@ export type Intent =
   | "conversational"
   | "fundamental"
   | "technical"
-  | "news_sentiment";
+  | "news";
 
-export type FocusKind = "fundamental" | "technical" | "news_sentiment";
+export type FocusKind = "fundamental" | "technical" | "news";
 
 export type IntentEvent = {
   intent: Intent;
@@ -286,18 +307,17 @@ export type QuickFactPayload = {
 // order) plus a qualitative differences paragraph. No cross-ticker numeric
 // claims by contract — every cited value comes verbatim from one ticker's
 // reports.
-export type ComparisonSource = "technical" | "fundamental" | "news";
-
-export type ComparisonValue = {
-  label: string;
-  value: string;
-  source: ComparisonSource;
-};
+//
+// QNT-208 v2: each section carries four AspectView blocks mirroring the
+// thesis card (was: a single ``key_values`` list).
+export type ComparisonSource = "company" | "technical" | "fundamental" | "news";
 
 export type ComparisonSection = {
   ticker: string;
-  summary: string;
-  key_values: ComparisonValue[];
+  company: AspectView;
+  fundamental: AspectView;
+  technical: AspectView;
+  news: AspectView;
 };
 
 export type ComparisonPayload = {
@@ -326,11 +346,27 @@ export type FocusedValue = {
   source: FocusedSource;
 };
 
+// QNT-208 v2: per-focus verdict. For focus=fundamental: Premium / Inline /
+// Discounted. For focus=technical: Uptrend / Sideways / Downtrend. For
+// focus=news: null (the catalyst fields carry the payload instead).
+export type FocusedVerdict =
+  | "Premium"
+  | "Inline"
+  | "Discounted"
+  | "Uptrend"
+  | "Sideways"
+  | "Downtrend";
+
 export type FocusedAnalysisPayload = {
   focus: FocusKind;
   summary: string;
   key_points: string[];
   cited_values: FocusedValue[];
+  verdict: FocusedVerdict | null;
+  // News-focus fields (null/empty for other focuses).
+  existing_development: string | null;
+  positive_catalysts: string[];
+  negative_catalysts: string[];
 };
 
 export type DoneEvent = {

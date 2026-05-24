@@ -1,24 +1,29 @@
-"""Comparison response shape (QNT-156).
+"""Comparison response shape (QNT-156, reshaped in QNT-208).
 
 Triggered when the user asks a multi-ticker question ("Compare NVDA vs AAPL",
 "How does META stack up against GOOGL?"). The synthesis combines per-ticker
 sections drawn from each ticker's pre-computed reports plus a short
 differences paragraph that narrates the contrast in plain English.
 
+QNT-208 replaces the v1 ``key_values`` list with four ``AspectView`` blocks
+per section (company / fundamental / technical / news) mirroring the new
+Thesis shape. The differences paragraph stays qualitative (words, not
+numbers) and the no-cross-ticker-arithmetic rule from ADR-003 still holds.
+
 Constraints carried over from QNT-67 / ADR-003:
 
-* Every numeric value in a section is copied VERBATIM from the corresponding
-  ticker's reports — no cross-ticker arithmetic, no synthetic deltas, no
-  computed ratios. The hallucination scorer treats any number that does not
-  appear in any of the supplied reports as a regression.
-* The differences paragraph is qualitative ("higher P/E", "stronger margin
-  trend"). It must NOT introduce numbers that are not already present in
-  the per-ticker sections.
+* Every numeric value in an aspect block is copied VERBATIM from the
+  corresponding ticker's reports — no cross-ticker arithmetic, no
+  synthetic deltas, no computed ratios. The hallucination scorer treats
+  any number that does not appear in any of the supplied reports as a
+  regression.
+* The differences paragraph is qualitative ("higher P/E", "stronger
+  margin trend"). It must NOT introduce numbers that are not already
+  present in the per-ticker aspect blocks.
 
 Two-ticker cap. The graph parses tickers from the question and clips the
 list at 2; if the user named 3+ we fall back to a conversational redirect
-that asks them to compare two at a time. 3-way (and N-way) comparison UX is
-explicitly out of scope until the 2-ticker shape ships and we see demand.
+that asks them to compare two at a time.
 """
 
 from __future__ import annotations
@@ -28,47 +33,23 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from agent.disclaimer import DISCLAIMER
+from agent.thesis import AspectView
 
-# QNT-175: ``company`` joins the source enum because the comparison prompt now
-# tells the LLM to cite (source: company) for qualitative business-context
-# claims. Pydantic validates this Literal at structured-output parse time —
-# omitting ``company`` here would null-coerce or reject any company-citing
-# value the LLM emits.
+# Same source enum as quick_fact.py / focused.py — Pydantic validates the
+# Literal at structured-output parse time, and the LLM is told to cite
+# (source: company) for qualitative business-context claims.
 ComparisonSource = Literal["company", "technical", "fundamental", "news"]
 
 
-class ComparisonValue(BaseModel):
-    """One verbatim cited value attached to a ticker section.
-
-    Same contract as ``QuickFactAnswer``: ``value`` is copied byte-for-byte
-    from the corresponding ticker's report, ``source`` names which report
-    the value came from, ``label`` is the human-readable metric name.
-    """
-
-    label: str = Field(
-        description=(
-            "Short metric label as the user would read it — 'P/E', "
-            "'RSI', 'EPS', 'Net margin'. Used as the row header in the "
-            "comparison card; keep under ~20 chars."
-        ),
-    )
-    value: str = Field(
-        description=(
-            "The single value the comparison cites, copied VERBATIM from "
-            "the ticker's reports — '32.4', '$1,234.56', 'overbought'. "
-            "Do not reformat: if the report wrote '12.3', this field is "
-            "'12.3', not '12.30'."
-        ),
-    )
-    source: ComparisonSource = Field(
-        description=(
-            "Which report the cited value came from — company, technical, fundamental, or news."
-        ),
-    )
-
-
 class ComparisonSection(BaseModel):
-    """Per-ticker section inside a ComparisonAnswer."""
+    """Per-ticker section inside a ComparisonAnswer.
+
+    Mirrors the four-aspect shape of the QNT-208 Thesis so the comparison
+    card surfaces the same vocabulary as the single-ticker thesis card.
+    Each aspect carries a summary + supports + challenges + optional
+    aspect label (Premium/Inline/Discounted for fundamental,
+    Uptrend/Sideways/Downtrend for technical, null for company/news).
+    """
 
     ticker: str = Field(
         description=(
@@ -76,22 +57,23 @@ class ComparisonSection(BaseModel):
             "one of the tickers the agent was asked to compare."
         ),
     )
-    summary: str = Field(
+    company: AspectView = Field(
+        description="Business context aspect drawn from this ticker's company report.",
+    )
+    fundamental: AspectView = Field(
         description=(
-            "One- or two-sentence prose summary of this ticker's situation "
-            "drawn strictly from its supplied reports. Cite the source "
-            "inline using (source: company|technical|fundamental|news). No "
-            "numbers that do not appear in the reports."
+            "Valuation / earnings aspect drawn from this ticker's "
+            "fundamental report. Label is Premium / Inline / Discounted."
         ),
     )
-    key_values: list[ComparisonValue] = Field(
-        default_factory=list,
+    technical: AspectView = Field(
         description=(
-            "1-4 cited values that anchor the comparison for this "
-            "ticker. Pick metrics that the user's question implies — if "
-            "they asked about valuation, surface P/E; if about momentum, "
-            "RSI. Keep the list short — this is a card, not a table."
+            "Price-action / indicator aspect drawn from this ticker's "
+            "technical report. Label is Uptrend / Sideways / Downtrend."
         ),
+    )
+    news: AspectView = Field(
+        description="Headline-flow aspect drawn from this ticker's news report. Narrative only.",
     )
 
 
@@ -113,16 +95,11 @@ class ComparisonAnswer(BaseModel):
         description=(
             "Short qualitative paragraph contrasting the two sections — "
             "where they agree, where they diverge. Use only language and "
-            "numbers that already appear in the per-ticker sections. Do "
-            "NOT compute new ratios, deltas, or synthetic comparisons "
+            "numbers that already appear in the per-ticker aspect blocks. "
+            "Do NOT compute new ratios, deltas, or synthetic comparisons "
             "(e.g. 'NVDA's P/E is 2x AAPL's'). Phrase contrasts in "
             "qualitative terms ('NVDA trades at a richer multiple', "
-            "'AAPL shows weaker momentum'). Exception: when one ticker's "
-            "valuation multiple is materially richer on at least two of "
-            "P/E, EV/EBITDA, P/S (visible in the key_values above), "
-            "state explicitly which ticker is more expensive and on which "
-            "metrics (e.g. 'NVDA is more expensive than AAPL on both P/E "
-            "and EV/EBITDA'). Do not extend to a recommendation."
+            "'AAPL shows weaker momentum')."
         ),
     )
 
@@ -135,11 +112,23 @@ class ComparisonAnswer(BaseModel):
         parts: list[str] = []
         for section in self.sections:
             parts.append(f"## {section.ticker}")
-            parts.append(section.summary.strip() or "_(no summary supplied)_")
-            if section.key_values:
-                for kv in section.key_values:
-                    parts.append(f"- **{kv.label}:** {kv.value} (source: {kv.source})")
-            parts.append("")
+            for heading, aspect in (
+                ("Company", section.company),
+                ("Fundamental", section.fundamental),
+                ("Technical", section.technical),
+                ("News", section.news),
+            ):
+                parts.append(f"### {heading}")
+                if aspect.label:
+                    parts.append(f"**Label:** {aspect.label}")
+                parts.append(aspect.summary.strip() or "_(no summary supplied)_")
+                if aspect.supports:
+                    for point in aspect.supports:
+                        parts.append(f"+ {point.strip()}")
+                if aspect.challenges:
+                    for point in aspect.challenges:
+                        parts.append(f"- {point.strip()}")
+                parts.append("")
 
         parts.append("## Differences")
         parts.append(self.differences.strip() or "_(no differences supplied)_")
@@ -147,4 +136,4 @@ class ComparisonAnswer(BaseModel):
         return "\n".join(parts).strip()
 
 
-__all__ = ["ComparisonAnswer", "ComparisonSection", "ComparisonSource", "ComparisonValue"]
+__all__ = ["ComparisonAnswer", "ComparisonSection", "ComparisonSource"]

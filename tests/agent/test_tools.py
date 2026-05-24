@@ -342,13 +342,9 @@ def test_default_report_tools_compose_with_build_graph(
 
     from agent.thesis import Thesis
 
-    expected_thesis = Thesis(
-        setup="Setup (source: technical).",
-        bull_case=["bull"],
-        bear_case=[],
-        verdict_stance="constructive",
-        verdict_action="Hold.",
-    )
+    from ._thesis_factory import make_thesis
+
+    expected_thesis = make_thesis(supports=["bull"])
 
     class _StubLLM:
         """Two channels: ``invoke`` for plan, ``with_structured_output`` for

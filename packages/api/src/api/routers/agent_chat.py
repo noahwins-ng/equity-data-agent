@@ -18,8 +18,8 @@ Event contract
                     so the row can render without further parsing.
 
 ``prose_chunk``   — ``{delta}`` markdown deltas for the agent prose surface.
-                    For now the prose is the structured thesis ``setup``
-                    paragraph chunked by clause; a future revision can splice
+                    For now the prose is the structured thesis's company-aspect
+                    summary chunked by clause; a future revision can splice
                     explicit narrative output from the synthesize node.
 
 ``thesis``        — full :class:`~agent.thesis.Thesis` model dumped to JSON.
@@ -44,7 +44,7 @@ Event contract
 
 ``focused``       — full :class:`~agent.focused.FocusedAnalysis` dumped to
                     JSON (QNT-176). Emitted only when intent ∈
-                    {"fundamental", "technical", "news_sentiment"}; the
+                    {"fundamental", "technical", "news"}; the
                     panel renders a focused-analysis card and skips the
                     thesis card.
 
@@ -210,10 +210,20 @@ _CITATION_PATTERN = re.compile(r"\(source:\s*[A-Za-z|\s]+\)")
 
 
 def _count_citations(thesis: Thesis | None) -> int:
+    """Citations for the v2 four-aspect thesis (QNT-208).
+
+    Scans every aspect's summary + supports + challenges plus the verdict
+    rationale for ``(source: ...)`` parens -- same chip vocabulary the
+    panel renders.
+    """
     if thesis is None:
         return 0
-    fields = [thesis.setup, thesis.verdict_action, *thesis.bull_case, *thesis.bear_case]
-    return sum(len(_CITATION_PATTERN.findall(text or "")) for text in fields)
+    texts: list[str] = [thesis.verdict_rationale]
+    for aspect in (thesis.company, thesis.fundamental, thesis.technical, thesis.news):
+        texts.append(aspect.summary)
+        texts.extend(aspect.supports)
+        texts.extend(aspect.challenges)
+    return sum(len(_CITATION_PATTERN.findall(text or "")) for text in texts)
 
 
 def _count_quick_fact_citations(quick_fact: QuickFactAnswer | None) -> int:
@@ -233,43 +243,49 @@ def _count_quick_fact_citations(quick_fact: QuickFactAnswer | None) -> int:
 
 
 def _count_comparison_citations(comparison: ComparisonAnswer | None) -> int:
-    """Citations for the comparison path.
+    """Citations for the comparison path (QNT-208 four-aspect shape).
 
-    Each ``ComparisonValue`` counts as one citation (the structured
-    ``source`` field is required), plus any inline ``(source: …)`` parens
-    in the per-section summaries or the differences paragraph.
+    Scans every aspect block across both per-ticker sections plus the
+    differences paragraph for ``(source: ...)`` parens.
     """
     if comparison is None:
         return 0
-    structured = sum(len(s.key_values) for s in comparison.sections)
-    inline_texts = [s.summary for s in comparison.sections] + [comparison.differences]
-    inline = sum(len(_CITATION_PATTERN.findall(text or "")) for text in inline_texts)
-    return structured + inline
+    texts: list[str] = [comparison.differences]
+    for section in comparison.sections:
+        for aspect in (section.company, section.fundamental, section.technical, section.news):
+            texts.append(aspect.summary)
+            texts.extend(aspect.supports)
+            texts.extend(aspect.challenges)
+    return sum(len(_CITATION_PATTERN.findall(text or "")) for text in texts)
 
 
 def _count_focused_citations(focused: FocusedAnalysis | None) -> int:
-    """Citations for the focused-analysis path (QNT-176).
+    """Citations for the focused-analysis path (QNT-176, QNT-208).
 
     Each ``FocusedValue`` carries a structured source; each inline
-    ``(source: …)`` parens in the summary or key_points adds one. Mirrors
-    :func:`_count_comparison_citations` so the panel's "N cited" badge
-    counts the same surface across all card shapes.
+    ``(source: ...)`` parens in the summary / key_points / news catalyst
+    lists adds one.
     """
     if focused is None:
         return 0
     structured = len(focused.cited_values)
-    inline_texts = [focused.summary, *focused.key_points]
+    inline_texts: list[str] = [focused.summary, *focused.key_points]
+    if focused.existing_development:
+        inline_texts.append(focused.existing_development)
+    inline_texts.extend(focused.positive_catalysts)
+    inline_texts.extend(focused.negative_catalysts)
     inline = sum(len(_CITATION_PATTERN.findall(text or "")) for text in inline_texts)
     return structured + inline
 
 
 # ─── Prose chunking ─────────────────────────────────────────────────────────
 
-# Split the ``setup`` paragraph into clause-sized chunks so the panel can
-# render it progressively. A real token-stream would emit one chunk per LLM
-# token; the structured output runnable doesn't expose that, so clause-level
-# is the next-best granularity. Punctuation is kept on the chunk that ended
-# the clause.
+# Split a paragraph into clause-sized chunks so the panel can render it
+# progressively. Used by the thesis path (company-aspect summary) and by
+# the focused / comparison paths (focused summary, comparison differences).
+# A real token-stream would emit one chunk per LLM token; the structured
+# output runnable doesn't expose that, so clause-level is the next-best
+# granularity. Punctuation is kept on the chunk that ended the clause.
 _PROSE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
 
@@ -756,7 +772,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
                 yield _sse("prose_chunk", {"delta": chunk + " "})
                 await asyncio.sleep(0)
             yield _sse("quick_fact", quick_fact.model_dump())
-        elif intent in {"fundamental", "technical", "news_sentiment"} and isinstance(
+        elif intent in {"fundamental", "technical", "news"} and isinstance(
             focused, FocusedAnalysis
         ):
             # QNT-176: focused-analysis card. Stream the summary as prose
@@ -768,9 +784,10 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
             yield _sse("focused", focused.model_dump())
         elif isinstance(thesis, Thesis):
             # Stream prose. The structured-output runnable returns the entire
-            # setup paragraph at once, so we re-chunk it client-side. A future
+            # thesis at once, so we re-chunk the company-aspect summary as
+            # the opening paragraph the panel renders progressively. A future
             # revision could thread an LLM token stream into this slot.
-            for chunk in _split_prose(thesis.setup):
+            for chunk in _split_prose(thesis.company.summary):
                 yield _sse("prose_chunk", {"delta": chunk + " "})
                 await asyncio.sleep(0)  # cooperative yield so the body flushes
             yield _sse("thesis", thesis.model_dump())
@@ -794,7 +811,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:
             citations_count = _count_quick_fact_citations(
                 quick_fact if isinstance(quick_fact, QuickFactAnswer) else None
             )
-        elif intent in {"fundamental", "technical", "news_sentiment"}:
+        elif intent in {"fundamental", "technical", "news"}:
             citations_count = _count_focused_citations(
                 focused if isinstance(focused, FocusedAnalysis) else None
             )
