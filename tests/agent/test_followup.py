@@ -56,12 +56,15 @@ def _stub_quick_fact() -> QuickFactAnswer:
 
 
 class _StubLLM:
-    """Two-channel stub.
+    """Three-channel stub.
 
     - ``invoke`` returns an AIMessage (used by the plan-LLM call on quick_fact
       paths, never invoked on followup paths because plan short-circuits).
     - ``with_structured_output(schema).invoke`` dispatches by schema: Thesis
       returns the stub Thesis, QuickFactAnswer returns the stub QuickFact.
+    - ``stream`` returns an iterable of AIMessage chunks for the QNT-211
+      narrate node. Each chunk carries a ``.content`` token so the narrate
+      node can assemble the narrative + fire ``narrative_chunk`` events.
     """
 
     def __init__(self) -> None:
@@ -84,6 +87,14 @@ class _StubLLM:
 
     def with_structured_output(self, schema: type) -> MagicMock:
         return self._make_structured(schema)
+
+    def stream(self, *_args: Any, **_kwargs: Any) -> Any:
+        return iter(
+            [
+                AIMessage(content="On balance "),
+                AIMessage(content="the read here is cautious."),
+            ]
+        )
 
 
 @pytest.fixture
@@ -129,8 +140,10 @@ def test_followup_reuses_reports_and_skips_gather(
     stub_llm: _StubLLM,  # noqa: ARG001
     saver: Any,
 ) -> None:
-    """Same thread_id, turn 1 = thesis, turn 2 = 'why?' →
-    second turn returns followup intent + zero tool calls."""
+    """Same thread_id, turn 1 = thesis, turn 2 = pronoun-style metric ask →
+    second turn returns followup intent + zero tool calls + QuickFactAnswer
+    (QNT-211: the metric-ask gate keeps the structured card on this path).
+    """
     tools = {
         "technical": MagicMock(return_value="## technical\nRSI 78\n"),
         "fundamental": MagicMock(return_value="## fundamental\nP/E 80\n"),
@@ -151,13 +164,16 @@ def test_followup_reuses_reports_and_skips_gather(
     for t in tools.values():
         t.reset_mock()
 
-    # Turn 2: pronoun question on the same thread_id. The classifier sees
-    # the hydrated reports → has_prior_turn=True → routes to followup.
-    second = graph.invoke({"ticker": "TSLA", "question": "why?"}, config=config)
+    # Turn 2: pronoun-shaped followup that DOES name a metric — the
+    # QNT-211 metric-ask gate keeps this on the QuickFactAnswer path so
+    # the card still lands. "elaborate on the RSI" satisfies all three:
+    # has_prior_turn (state hydrated), short, no ticker named, followup
+    # token ("elaborate"), AND a quick-fact token ("rsi").
+    second = graph.invoke({"ticker": "TSLA", "question": "elaborate on the RSI"}, config=config)
     assert second["intent"] == "followup"
     # AC4: zero tool calls on the followup turn.
     assert _tool_calls(tools) == 0
-    # Followup populates quick_fact (we reuse the schema by design).
+    # Metric-ask path: QuickFactAnswer is populated.
     assert isinstance(second.get("quick_fact"), QuickFactAnswer)
 
 

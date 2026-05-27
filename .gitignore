@@ -36,6 +36,11 @@ htmlcov/
 .mypy_cache/
 .claude/scheduled_tasks.lock
 
+# Local QNT-209 agent SQLite when AGENT_DB_PATH is overridden to repo-root for dev
+agent.db
+agent.db-shm
+agent.db-wal
+
 # Personal / not-for-git docs
 docs/resume-blurb.md
 docs/AI Engineering improvement plan.md

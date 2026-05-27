@@ -20,12 +20,14 @@ from agent.prompts import (
     CONVERSATIONAL_SYSTEM_PROMPT,
     FOCUSED_SYSTEM_PROMPT,
     FOLLOWUP_SYSTEM_PROMPT,
+    NARRATE_SYSTEM_PROMPT,
     QUICK_FACT_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     build_comparison_prompt,
     build_conversational_prompt,
     build_focused_prompt,
     build_followup_prompt,
+    build_narrate_prompt,
     build_quick_fact_prompt,
     build_synthesis_prompt,
 )
@@ -66,6 +68,12 @@ def test_marker_present_in_followup_system_prompt() -> None:
     assert ANALYST_VOICE_ADR in FOLLOWUP_SYSTEM_PROMPT
 
 
+def test_marker_present_in_narrate_system_prompt() -> None:
+    """QNT-211: the streaming narrate node carries its own system prompt --
+    it must inherit the analyst voice or the bubble drifts from the card."""
+    assert ANALYST_VOICE_ADR in NARRATE_SYSTEM_PROMPT
+
+
 def _system_message(messages: list) -> str:
     """Extract the SystemMessage content from a build_*_prompt result."""
     for m in messages:
@@ -103,4 +111,14 @@ def test_marker_present_in_rendered_focused_prompt() -> None:
 
 def test_marker_present_in_rendered_followup_prompt() -> None:
     messages = build_followup_prompt("NVDA", "why?", {"technical": "x"}, prior_thesis=None)
+    assert ANALYST_VOICE_ADR in _system_message(messages)
+
+
+def test_marker_present_in_rendered_narrate_prompt() -> None:
+    messages = build_narrate_prompt(
+        intent="thesis",
+        ticker="NVDA",
+        question="thesis?",
+        payload_markdown="## Verdict\nOverweight\n",
+    )
     assert ANALYST_VOICE_ADR in _system_message(messages)

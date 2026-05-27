@@ -56,6 +56,7 @@ from agent.prompts import (
     build_conversational_prompt,
     build_focused_prompt,
     build_followup_prompt,
+    build_narrate_prompt,
     build_quick_fact_prompt,
     build_synthesis_prompt,
 )
@@ -221,6 +222,12 @@ class AgentState(TypedDict):
     conversational: NotRequired[ConversationalAnswer | None]
     focused: NotRequired[FocusedAnalysis | None]
     confidence: NotRequired[float]
+    # QNT-211: streaming analyst-voice paragraph produced by the narrate node
+    # AFTER synthesize. Persisted into the checkpointer so a follow-up turn
+    # can reference the prior narrative if it wants to. None when narrate
+    # was skipped (conversational intent) or when the LLM call failed --
+    # the structured card still renders, the bubble degrades.
+    narrative: NotRequired[str | None]
 
 
 def _build_plan_prompt(
@@ -428,6 +435,19 @@ def _resolve_comparison_tickers(primary: str, question: str) -> list[str]:
     if primary_upper in TICKERS and primary_upper not in chosen:
         chosen.append(primary_upper)
     return chosen[:2]
+
+
+def _followup_is_metric_ask(question: str) -> bool:
+    """Return True if a followup question targets a specific metric.
+
+    Reuses the same quick-fact token list the classifier heuristic uses
+    (RSI, P/E, EPS, volume, etc.). A hit means the followup should still
+    produce a QuickFactAnswer card; a miss routes to the narrative-only
+    path so narrate owns the response and no quick_fact event fires.
+    """
+    from agent.intent import _QUICK_FACT_TOKENS, _matches_any
+
+    return _matches_any(question.lower(), _QUICK_FACT_TOKENS) is not None
 
 
 def _hint_from_intent(intent: Intent) -> str | None:
@@ -730,6 +750,19 @@ def build_graph(
                 # No prior context to reason over — degrade to the redirect
                 # so the user sees an in-domain reply rather than blank.
                 return _fallback("I don't have a prior turn on this thread to follow up on.")
+            # QNT-211: narrative-only followup path. If the question is pure
+            # conversational continuation ("what does that mean for retail?")
+            # rather than a metric ask ("what's the P/E?"), skip the
+            # QuickFactAnswer LLM call entirely -- narrate owns the response
+            # and no quick_fact event fires downstream. The frontend renders
+            # the bubble alone, no card.
+            if not _followup_is_metric_ask(question):
+                logger.info(
+                    "synthesize %s: followup narrative-only (no metric ask)",
+                    ticker,
+                )
+                followup_confidence = 1.0 if reports else confidence
+                return {"quick_fact": None, "confidence": followup_confidence}
             prompt = build_followup_prompt(ticker, question, reports, prior_thesis)
             structured_llm = (
                 get_llm()
@@ -951,11 +984,114 @@ def build_graph(
         logger.info("synthesize %s: confidence=%s thesis=ok", ticker, confidence)
         return payload
 
+    def narrate_node(state: AgentState, config: RunnableConfig) -> dict[str, object]:
+        """QNT-211: stream a 1-4 sentence analyst-voice paragraph that wraps
+        whichever structured payload synthesize produced.
+
+        Tokens stream out via ``event_emitter("narrative_chunk", {"delta": ...})``
+        so the chat panel can render a prose bubble above the card before the
+        card composes. On any LLM failure we log, set ``narrative=None``, and
+        terminate normally — the structured card still renders.
+
+        Conversational intent skips this node: that path's answer is already
+        prose, so re-narrating would just echo it. Followup narrative-only
+        path (synthesize set ``quick_fact=None``) routes through here and
+        produces the only spoken response the user sees.
+        """
+        intent = state.get("intent", "thesis")
+        ticker = state["ticker"]
+        question = state.get("question", "")
+
+        # Conversational already speaks in the right voice -- nothing to
+        # narrate over. Same applies to ANY fallback-redirect path: when
+        # synthesize hits _fallback() for a thesis/focused/quick_fact/
+        # comparison failure it leaves the original ``intent`` intact AND
+        # populates ``state['conversational']`` with the deterministic
+        # domain_redirect. Without this guard narrate would re-narrate the
+        # redirect prose, producing a duplicate bubble above the same
+        # conversational card. Gate on the payload, not just the intent.
+        if intent == "conversational" or state.get("conversational") is not None:
+            return {"narrative": None}
+
+        # Pick the structured payload to summarise. Exactly one of these is
+        # populated on a successful synthesize; we render whichever it is to
+        # markdown so the narrator reads the same thing the panel renders.
+        payload_obj: object | None = (
+            state.get("thesis")
+            or state.get("quick_fact")
+            or state.get("comparison")
+            or state.get("focused")
+            or state.get("conversational")
+        )
+        payload_markdown = ""
+        to_md: Any = getattr(payload_obj, "to_markdown", None)
+        if callable(to_md):
+            try:
+                payload_markdown = str(to_md())
+            except Exception:  # noqa: BLE001 — never let formatting kill narrate
+                payload_markdown = ""
+
+        # Followup narrative-only path: quick_fact is None but a prior thesis
+        # is hydrated. Feed the prior thesis as the substrate the narrator
+        # reacts to. For other intents the payload above already carries
+        # everything narrate needs.
+        prior_thesis_markdown: str | None = None
+        if intent == "followup" and not payload_markdown:
+            prior_thesis = state.get("thesis")
+            prior_to_md: Any = getattr(prior_thesis, "to_markdown", None)
+            if callable(prior_to_md):
+                try:
+                    prior_thesis_markdown = str(prior_to_md())
+                except Exception:  # noqa: BLE001
+                    prior_thesis_markdown = None
+
+        prompt = build_narrate_prompt(
+            intent=str(intent),
+            ticker=ticker,
+            question=question,
+            payload_markdown=payload_markdown,
+            prior_thesis_markdown=prior_thesis_markdown,
+        )
+
+        try:
+            chunks: list[str] = []
+            stream = get_llm(temperature=0.3).stream(prompt, config=config)
+            for chunk in stream:
+                delta_obj = getattr(chunk, "content", None)
+                if delta_obj is None:
+                    continue
+                delta = str(delta_obj)
+                if not delta:
+                    continue
+                chunks.append(delta)
+                if event_emitter is not None:
+                    try:
+                        event_emitter("narrative_chunk", {"delta": delta})
+                    except Exception as exc:  # noqa: BLE001 — never let SSE plumbing crash narrate
+                        logger.warning(
+                            "narrate %s: event_emitter failed: %s (continuing)",
+                            ticker,
+                            exc,
+                        )
+            narrative = "".join(chunks).strip()
+        except Exception as exc:  # noqa: BLE001 — narrate is best-effort; card still renders
+            logger.warning(
+                "narrate %s: stream failed: %s: %s",
+                ticker,
+                type(exc).__name__,
+                exc,
+            )
+            return {"narrative": None}
+
+        logger.info("narrate %s: narrative_chars=%d", ticker, len(narrative))
+        return {"narrative": narrative or None}
+
     builder: StateGraph = StateGraph(AgentState)
     builder.add_node("classify", classify_node)
     builder.add_node("plan", plan_node)
     builder.add_node("gather", gather_node)
     builder.add_node("synthesize", synthesize_node)
+    builder.add_node("narrate", narrate_node)
     builder.add_edge(START, "classify")
     builder.add_edge("classify", "plan")
     builder.add_edge("plan", "gather")
@@ -965,7 +1101,12 @@ def build_graph(
     # conversational redirect via ``domain_redirect``. The panel never sees
     # a blank state again.
     builder.add_edge("gather", "synthesize")
-    builder.add_edge("synthesize", END)
+    # QNT-211: narrate streams a 1-4 sentence analyst-voice paragraph above
+    # whichever structured shape synthesize produced. Always runs (even on
+    # conversational + fallback redirects -- the node short-circuits those
+    # internally) so the topology stays linear.
+    builder.add_edge("synthesize", "narrate")
+    builder.add_edge("narrate", END)
     # QNT-209: passing a checkpointer enables the followup path — the next
     # invocation against the same thread_id sees ``reports`` hydrated from
     # the prior turn. None ⇒ ephemeral compile (curl, tests, non-frontend

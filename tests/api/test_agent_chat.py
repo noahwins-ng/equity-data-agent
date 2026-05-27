@@ -1728,3 +1728,242 @@ def test_thread_id_drives_checkpointer_compile(
         json={"ticker": "NVDA", "message": "thesis?", "thread_id": "session:NVDA"},
     )
     assert captured["checkpointer"] is sentinel_saver
+
+
+# ─── QNT-211: narrative_chunk SSE event ──────────────────────────────────
+
+
+def test_narrative_chunk_emitted_for_thesis_run(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC2 + AC3: narrative_chunk events arrive in the SSE stream for a
+    thesis run, AND the first narrative_chunk lands BEFORE the structured
+    ``thesis`` payload event. The narrate node fires its events via the
+    same event_emitter the classify node uses; ordering is enforced by the
+    drain loop yielding events as they arrive on the queue."""
+    thesis = _stub_thesis()
+
+    def _fake_build(
+        tools: dict[str, Any],
+        *,
+        event_emitter: Any = None,
+        **_kwargs: Any,
+    ) -> Any:
+        graph = MagicMock()
+
+        def invoke(state: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+            ticker = state["ticker"]
+            if event_emitter is not None:
+                event_emitter("intent", {"intent": "thesis"})
+            reports = {name: fn(ticker) for name, fn in tools.items()}
+            # narrate fires narrative_chunk events while the graph is still
+            # running — before the post-graph thesis event lands.
+            if event_emitter is not None:
+                event_emitter("narrative_chunk", {"delta": "I'd lean "})
+                event_emitter("narrative_chunk", {"delta": "Overweight here."})
+            return {
+                "ticker": ticker,
+                "intent": "thesis",
+                "plan": list(tools.keys()),
+                "reports": reports,
+                "errors": {},
+                "thesis": thesis,
+                "quick_fact": None,
+                "narrative": "I'd lean Overweight here.",
+                "confidence": 1.0,
+            }
+
+        graph.invoke.side_effect = invoke
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(
+        chat_module,
+        "default_report_tools",
+        lambda: {"technical": lambda t: f"# tech {t}\n"},
+    )
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
+    frames = _parse_sse(r.text)
+    events = [name for name, _ in frames]
+
+    # AC2: narrative_chunk arrived in the stream.
+    narrative_chunks = [data["delta"] for name, data in frames if name == "narrative_chunk"]
+    assert narrative_chunks == ["I'd lean ", "Overweight here."]
+
+    # AC3: first narrative_chunk lands BEFORE the structured thesis event.
+    narrative_indices = [i for i, (name, _) in enumerate(frames) if name == "narrative_chunk"]
+    thesis_indices = [i for i, (name, _) in enumerate(frames) if name == "thesis"]
+    assert narrative_indices and thesis_indices, (
+        f"expected both narrative_chunk and thesis events, got {events}"
+    )
+    assert narrative_indices[0] < thesis_indices[0], (
+        f"first narrative_chunk (index {narrative_indices[0]}) must arrive BEFORE "
+        f"thesis (index {thesis_indices[0]}); event order was {events}"
+    )
+
+
+def test_narrate_failure_still_emits_structured_payload(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC4: a narrate failure mid-graph leaves the structured payload
+    intact. No narrative_chunk events; the thesis card still lands; done
+    arrives normally."""
+    thesis = _stub_thesis()
+
+    def _fake_build(
+        tools: dict[str, Any],
+        *,
+        event_emitter: Any = None,
+        **_kwargs: Any,
+    ) -> Any:
+        graph = MagicMock()
+
+        def invoke(state: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+            ticker = state["ticker"]
+            if event_emitter is not None:
+                event_emitter("intent", {"intent": "thesis"})
+            reports = {name: fn(ticker) for name, fn in tools.items()}
+            # narrate failed silently — no narrative_chunk fires, state.narrative is None.
+            return {
+                "ticker": ticker,
+                "intent": "thesis",
+                "plan": list(tools.keys()),
+                "reports": reports,
+                "errors": {},
+                "thesis": thesis,
+                "quick_fact": None,
+                "narrative": None,
+                "confidence": 1.0,
+            }
+
+        graph.invoke.side_effect = invoke
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(
+        chat_module,
+        "default_report_tools",
+        lambda: {"technical": lambda t: f"# tech {t}\n"},
+    )
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
+    frames = _parse_sse(r.text)
+    events = [name for name, _ in frames]
+
+    # Structured payload still emitted.
+    assert "thesis" in events
+    # No narrative_chunk frames.
+    assert not any(name == "narrative_chunk" for name, _ in frames)
+    # Run terminated normally.
+    assert events[-1] == "done"
+
+
+def test_followup_narrative_only_emits_no_quick_fact_event(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC5: a followup run with quick_fact=None (narrative-only path) emits
+    narrative_chunk events but NO quick_fact event. The chat panel sees
+    only the bubble — no card lands."""
+
+    def _fake_build(
+        tools: dict[str, Any],
+        *,
+        event_emitter: Any = None,
+        **_kwargs: Any,
+    ) -> Any:
+        graph = MagicMock()
+
+        def invoke(state: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+            ticker = state["ticker"]
+            if event_emitter is not None:
+                event_emitter("intent", {"intent": "followup"})
+                event_emitter("narrative_chunk", {"delta": "That cuts both ways — "})
+                event_emitter("narrative_chunk", {"delta": "the retail read here is mixed."})
+            return {
+                "ticker": ticker,
+                "intent": "followup",
+                "plan": [],
+                "reports": {"technical": "stub"},
+                "errors": {},
+                "thesis": _stub_thesis(),  # hydrated from prior turn
+                "quick_fact": None,
+                "narrative": "That cuts both ways — the retail read here is mixed.",
+                "confidence": 1.0,
+            }
+
+        graph.invoke.side_effect = invoke
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    r = client.post(
+        "/api/v1/agent/chat",
+        json={"ticker": "NVDA", "message": "what does that mean for retail?"},
+    )
+    frames = _parse_sse(r.text)
+    events = [name for name, _ in frames]
+
+    # narrative_chunk events arrived.
+    assert any(name == "narrative_chunk" for name, _ in frames)
+    # No quick_fact event fired (state.quick_fact was None).
+    assert "quick_fact" not in events
+    # No thesis event either — the bubble stands alone.
+    assert "thesis" not in events
+    assert events[-1] == "done"
+
+
+def test_followup_metric_ask_emits_both_narrative_and_quick_fact(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC6: a followup with a metric ask ('elaborate on the RSI') emits
+    BOTH narrative_chunk events AND a quick_fact event."""
+    quick_fact = QuickFactAnswer(
+        answer="RSI 78 still overbought (source: technical).",
+        cited_value="78",
+        source="technical",
+    )
+
+    def _fake_build(
+        tools: dict[str, Any],
+        *,
+        event_emitter: Any = None,
+        **_kwargs: Any,
+    ) -> Any:
+        graph = MagicMock()
+
+        def invoke(state: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+            ticker = state["ticker"]
+            if event_emitter is not None:
+                event_emitter("intent", {"intent": "followup"})
+                event_emitter("narrative_chunk", {"delta": "RSI is still pegged overbought."})
+            return {
+                "ticker": ticker,
+                "intent": "followup",
+                "plan": [],
+                "reports": {"technical": "stub"},
+                "errors": {},
+                "thesis": _stub_thesis(),
+                "quick_fact": quick_fact,
+                "narrative": "RSI is still pegged overbought.",
+                "confidence": 1.0,
+            }
+
+        graph.invoke.side_effect = invoke
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    r = client.post(
+        "/api/v1/agent/chat", json={"ticker": "NVDA", "message": "elaborate on the RSI"}
+    )
+    frames = _parse_sse(r.text)
+    events = [name for name, _ in frames]
+
+    # Both surfaces fire.
+    assert any(name == "narrative_chunk" for name, _ in frames)
+    assert "quick_fact" in events
+    qf_data = next(data for name, data in frames if name == "quick_fact")
+    assert qf_data == quick_fact.model_dump()
