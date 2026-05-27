@@ -245,6 +245,15 @@ export type ProseChunkEvent = {
   delta: string;
 };
 
+// QNT-211: token-level deltas from the narrate node. Streamed AS the graph
+// runs (between the structured payload composing and the post-graph
+// thesis/quick_fact/etc. event firing) so the frontend can render a
+// 1-4 sentence analyst-voice prose bubble ABOVE the structured card
+// while the card itself is still being assembled.
+export type NarrativeChunkEvent = {
+  delta: string;
+};
+
 // QNT-208 v2: final verdict is a closed three-state set.
 export type Verdict = "Overweight" | "Neutral" | "Underweight";
 

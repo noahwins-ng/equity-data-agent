@@ -39,6 +39,7 @@ import {
   type HealthResponse,
   type Intent,
   type IntentEvent,
+  type NarrativeChunkEvent,
   type ProseChunkEvent,
   type QuickFactPayload,
   type ThesisPayload,
@@ -70,6 +71,11 @@ type ChatRun = {
   intent: Intent | null;
   toolRows: ToolRow[];
   proseChunks: string[];
+  // QNT-211: accumulated narrative_chunk deltas — rendered as a prose
+  // bubble ABOVE the structured card. Empty string means "no narrative
+  // yet" (narrate hasn't started or failed silently); the bubble only
+  // renders when non-empty.
+  narrative: string;
   thesis: ThesisPayload | null;
   quickFact: QuickFactPayload | null;
   comparison: ComparisonPayload | null;
@@ -351,6 +357,22 @@ function ProseBlock({ text }: { text: string }) {
         ),
       )}
     </p>
+  );
+}
+
+// ─── QNT-211: streaming narrative bubble ──────────────────────────────────
+//
+// Renders the narrate-node output ABOVE the structured card. Plain prose,
+// left-aligned, neutral surface — matches the rhythm of an analyst speaking
+// while the card composes beneath. The card is unchanged; the bubble is
+// purely additive.
+
+function NarrativeBubble({ text }: { text: string }) {
+  if (!text.trim()) return null;
+  return (
+    <div className="rounded border border-zinc-800 bg-zinc-900/40 px-3 py-2">
+      <ProseBlock text={text} />
+    </div>
   );
 }
 
@@ -867,6 +889,12 @@ function RunBlock({
       {/* Streamed prose (only when no card has arrived yet) */}
       {showStandaloneProse && <ProseBlock text={proseText} />}
 
+      {/* QNT-211: streaming analyst-voice bubble above the structured card.
+        Renders as soon as the first narrative_chunk arrives; for the
+        followup narrative-only path this is the ONLY surface (no card
+        renders since quickFact stays null). */}
+      {run.narrative && <NarrativeBubble text={run.narrative} />}
+
       {/* QNT-156: comparison card — renders when intent=comparison */}
       {run.comparison && (
         <ComparisonCard comparison={run.comparison} stats={run.stats} />
@@ -903,12 +931,16 @@ function RunBlock({
         />
       )}
 
-      {/* Disclaimer footer (QNT-195) — shown once any result card is present */}
+      {/* Disclaimer footer (QNT-195) — shown once any result card is present.
+        QNT-211: narrative-only followup runs surface no card but still
+        carry analyst prose that can cite reports; trigger the disclaimer
+        for those too. */}
       {(run.comparison ||
         run.quickFact ||
         run.focused ||
         run.thesis ||
-        run.conversational) &&
+        run.conversational ||
+        run.narrative) &&
         !isStreaming && (
           <p className="font-mono text-[10px] italic text-zinc-500">
             Informational only — not investment advice. Figures are from the
@@ -1091,6 +1123,7 @@ export function ChatPanel() {
           intent: null,
           toolRows: [],
           proseChunks: [],
+          narrative: "",
           thesis: null,
           quickFact: null,
           comparison: null,
@@ -1118,6 +1151,7 @@ export function ChatPanel() {
         intent: null,
         toolRows: [],
         proseChunks: [],
+        narrative: "",
         thesis: null,
         quickFact: null,
         comparison: null,
@@ -1172,6 +1206,12 @@ export function ChatPanel() {
               ...r,
               proseChunks: [...r.proseChunks, ev.delta],
             }));
+          } else if (event === "narrative_chunk") {
+            const ev = data as NarrativeChunkEvent;
+            updateRun(id, (r) => ({
+              ...r,
+              narrative: r.narrative + ev.delta,
+            }));
           } else if (event === "intent") {
             const ev = data as IntentEvent;
             updateRun(id, (r) => ({ ...r, intent: ev.intent }));
@@ -1201,7 +1241,8 @@ export function ChatPanel() {
                 !r.quickFact &&
                 !r.comparison &&
                 !r.conversational &&
-                !r.focused
+                !r.focused &&
+                !r.narrative
                   ? "errored"
                   : "done",
             }));

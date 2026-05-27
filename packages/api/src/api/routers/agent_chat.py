@@ -22,6 +22,16 @@ Event contract
                     summary chunked by clause; a future revision can splice
                     explicit narrative output from the synthesize node.
 
+``narrative_chunk`` — ``{delta}`` token-level deltas from the QNT-211 narrate
+                    node. Streamed AS the graph runs (between the structured
+                    payload composing and the post-graph ``thesis``/``quick_fact``/
+                    etc. event firing), so the frontend renders a 1-4 sentence
+                    analyst-voice prose bubble ABOVE the structured card while
+                    the card itself is still being assembled. Absent when the
+                    intent is ``conversational`` (that path's answer is already
+                    prose) or when the narrate LLM call failed (the structured
+                    card still renders; bubble degrades).
+
 ``thesis``        — full :class:`~agent.thesis.Thesis` model dumped to JSON.
                     Renders the Setup / Bull / Bear / Verdict card. Emitted
                     only when intent == "thesis".
@@ -891,7 +901,11 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                 yield _sse("prose_chunk", {"delta": chunk + " "})
                 await asyncio.sleep(0)
             yield _sse("focused", focused.model_dump())
-        elif isinstance(thesis, Thesis):
+        elif intent == "thesis" and isinstance(thesis, Thesis):
+            # QNT-211: gate on intent so the followup narrative-only path
+            # (intent=followup, quick_fact=None, thesis hydrated from the
+            # prior turn) doesn't re-emit a thesis event from the cached
+            # state. The bubble alone is the response.
             # Stream prose. The structured-output runnable returns the entire
             # thesis at once, so we re-chunk the company-aspect summary as
             # the opening paragraph the panel renders progressively. A future
