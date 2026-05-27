@@ -8,6 +8,8 @@ Kept in its own module so prompt edits don't ripple through ``graph.py``.
 from __future__ import annotations
 
 from agent.prompts.system import (
+    ANALYST_VOICE_ADR,
+    ANALYST_VOICE_BLOCK,
     COMPARISON_SYSTEM_PROMPT,
     CONVERSATIONAL_SYSTEM_PROMPT,
     FOCUSED_SYSTEM_PROMPT,
@@ -25,6 +27,8 @@ from agent.prompts.system import (
 )
 
 __all__ = [
+    "ANALYST_VOICE_ADR",
+    "ANALYST_VOICE_BLOCK",
     "COMPARISON_SYSTEM_PROMPT",
     "CONVERSATIONAL_SYSTEM_PROMPT",
     "FOCUSED_SYSTEM_PROMPT",
