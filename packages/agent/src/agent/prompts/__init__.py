@@ -10,6 +10,7 @@ from __future__ import annotations
 from agent.prompts.system import (
     ANALYST_VOICE_ADR,
     ANALYST_VOICE_BLOCK,
+    CLARIFY_SYSTEM_PROMPT,
     COMPARISON_SYSTEM_PROMPT,
     CONVERSATIONAL_SYSTEM_PROMPT,
     FOCUSED_SYSTEM_PROMPT,
@@ -19,6 +20,7 @@ from agent.prompts.system import (
     REPORT_TOOLS,
     SYSTEM_PROMPT,
     THESIS_ASPECTS,
+    build_clarify_prompt,
     build_comparison_prompt,
     build_conversational_prompt,
     build_focused_prompt,
@@ -31,6 +33,7 @@ from agent.prompts.system import (
 __all__ = [
     "ANALYST_VOICE_ADR",
     "ANALYST_VOICE_BLOCK",
+    "CLARIFY_SYSTEM_PROMPT",
     "COMPARISON_SYSTEM_PROMPT",
     "CONVERSATIONAL_SYSTEM_PROMPT",
     "FOCUSED_SYSTEM_PROMPT",
@@ -40,6 +43,7 @@ __all__ = [
     "REPORT_TOOLS",
     "SYSTEM_PROMPT",
     "THESIS_ASPECTS",
+    "build_clarify_prompt",
     "build_comparison_prompt",
     "build_conversational_prompt",
     "build_focused_prompt",

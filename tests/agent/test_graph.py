@@ -685,7 +685,10 @@ def test_classify_node_routes_to_quick_fact_for_rsi_question(
     stub_llm.structured_invoke.return_value = quick
     graph = build_graph({"technical": _mock_tool("tech")})
 
-    result = graph.invoke({"ticker": "NVDA", "question": "What's the RSI right now?"})
+    # QNT-212: the question names no ticker AND there's no prior turn, so
+    # the ambiguity detector would short-circuit to clarify. Anchor the
+    # question with a ticker so the quick-fact path actually runs.
+    result = graph.invoke({"ticker": "NVDA", "question": "What's NVDA's RSI right now?"})
 
     assert result["intent"] == "quick_fact"
     assert isinstance(result["quick_fact"], QuickFactAnswer)
@@ -704,7 +707,9 @@ def test_quick_fact_failure_surfaces_as_none_quick_fact(
     stub_llm.structured_invoke.side_effect = RuntimeError("schema-validation")
     graph = build_graph({"technical": _mock_tool("tech")})
 
-    result = graph.invoke({"ticker": "NVDA", "question": "What's the P/E?"})
+    # QNT-212: ticker named in question so the ambiguity detector doesn't
+    # short-circuit to clarify before synthesize gets a chance to fail.
+    result = graph.invoke({"ticker": "NVDA", "question": "What's NVDA's P/E?"})
 
     assert result["intent"] == "quick_fact"
     assert result["quick_fact"] is None
@@ -723,7 +728,12 @@ def test_classify_default_to_thesis_when_classify_intent_fails(
     )
     graph = build_graph({"technical": _mock_tool("tech")})
 
-    result = graph.invoke({"ticker": "NVDA", "question": "ambiguous mid-length question"})
+    # QNT-212: anchor with a ticker so the ambiguity detector doesn't route
+    # us to clarify before synthesize runs (the safe-default-to-thesis
+    # invariant lives in classify, which still fires the way the test asserts).
+    result = graph.invoke(
+        {"ticker": "NVDA", "question": "ambiguous mid-length question about NVDA"}
+    )
 
     assert result["intent"] == "thesis"
     assert isinstance(result["thesis"], Thesis)
@@ -741,7 +751,9 @@ def test_quick_fact_intent_narrows_plan_prompt(
     stub_llm.invoke.return_value = AIMessage(content="technical")
     graph = build_graph({"technical": _mock_tool("tech")})
 
-    graph.invoke({"ticker": "NVDA", "question": "What's the RSI?"})
+    # QNT-212: name the ticker so the ambiguity detector doesn't divert
+    # the run to clarify before plan_node ever calls the LLM.
+    graph.invoke({"ticker": "NVDA", "question": "What's NVDA's RSI?"})
 
     # The plan path uses raw .invoke() (not structured_output), so the
     # captured prompt sits on the plan-call args of the stub.
@@ -789,28 +801,42 @@ def test_classify_node_routes_to_comparison_for_two_ticker_question(
     assert set(result["reports_by_ticker"].keys()) == {"NVDA", "AAPL"}
 
 
-def test_comparison_with_only_one_resolved_ticker_falls_back_to_redirect(
+def test_comparison_with_only_one_resolved_ticker_routes_to_clarify(
     stub_llm: _StructuredLLM, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """If the classifier picks ``comparison`` but the question only names
-    one ticker, the graph cannot satisfy the request — synthesize emits a
-    deterministic conversational redirect with hint=comparison."""
+    """QNT-212 update: a comparison ask with only one named ticker is now
+    caught upstream by the ambiguity detector and routed to clarify --
+    the user is asked which second ticker to compare against, instead of
+    getting the pre-QNT-212 synthesize-fallback redirect.
+
+    The synthesize comparison-fallback branch still exists (defensive in
+    case a comparison slips past classify), but the live path is clarify.
+    """
     from agent.conversational import ConversationalAnswer
 
     monkeypatch.setattr(
         graph_module, "classify_intent_with_source", lambda _q, **_: ("comparison", "heuristic")
     )
     stub_llm.invoke.return_value = AIMessage(content="fundamental")
+    # Clarify's with_structured_output(ConversationalAnswer) call resolves
+    # against the same structured_invoke stub. Return a question shape.
+    stub_llm.structured_invoke.return_value = ConversationalAnswer(
+        answer="Which second ticker should I compare against?",
+        suggestions=["Compare NVDA vs AAPL", "Compare NVDA vs MSFT"],
+    )
     graph = build_graph({"fundamental": _mock_tool("fund")})
 
     # Only one ticker (NVDA) — not enough for a comparison.
     result = graph.invoke({"ticker": "NVDA", "question": "Compare NVDA against the broader market"})
 
     assert result["intent"] == "comparison"
-    assert result["comparison"] is None
+    assert result.get("ambiguity_kind") == "needs_second_ticker"
+    # Clarify never visits synthesize, so comparison is never written --
+    # absent or None both satisfy "no comparison payload landed".
+    assert result.get("comparison") is None
     assert isinstance(result["conversational"], ConversationalAnswer)
-    # Structured runnable was NEVER invoked — the fallback is deterministic.
-    assert stub_llm.structured_invoke.call_count == 0
+    # Clarify skips plan + gather + synthesize entirely.
+    assert result["intent_path"] == ["classify", "clarify", "narrate"]
 
 
 def test_classify_node_routes_to_conversational_for_off_domain_ask(
@@ -840,8 +866,11 @@ def test_classify_node_routes_to_conversational_for_off_domain_ask(
     assert result["thesis"] is None
     assert result["comparison"] is None
     assert result["quick_fact"] is None
-    # Conversational path skips gather entirely — no tool calls fired.
-    assert result["reports"] == {}
+    # QNT-212: conversational now short-circuits classify→synthesize, so
+    # plan/gather never run and ``reports`` is never written by the graph.
+    # ``get`` defaults to {} for the same "no tool calls fired" assertion.
+    assert result.get("reports", {}) == {}
+    assert result["intent_path"] == ["classify", "synthesize", "narrate"]
 
 
 def test_conversational_failure_falls_back_to_deterministic_redirect(

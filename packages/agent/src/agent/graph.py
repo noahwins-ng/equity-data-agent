@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from langchain_core.exceptions import OutputParserException
 from langchain_core.runnables import RunnableConfig
@@ -52,6 +52,7 @@ from agent.intent import ClassifierSource, Intent, classify_intent_with_source, 
 from agent.llm import get_llm
 from agent.prompts import (
     REPORT_TOOLS,
+    build_clarify_prompt,
     build_comparison_prompt,
     build_conversational_prompt,
     build_focused_prompt,
@@ -82,6 +83,7 @@ def _prompt_version() -> str:
     from hashlib import sha256
 
     from agent.prompts import (
+        CLARIFY_SYSTEM_PROMPT,
         COMPARISON_SYSTEM_PROMPT,
         CONVERSATIONAL_SYSTEM_PROMPT,
         FOCUSED_SYSTEM_PROMPT,
@@ -102,6 +104,8 @@ def _prompt_version() -> str:
         + FOCUSED_SYSTEM_PROMPT
         + "\n"
         + FOLLOWUP_SYSTEM_PROMPT
+        + "\n"
+        + CLARIFY_SYSTEM_PROMPT
         + "\n"
         + ",".join(sorted(REPORT_TOOLS))
     )
@@ -187,6 +191,29 @@ _FOCUSED_REPORT: dict[Intent, str] = {
 
 _MAX_TOOL_ATTEMPTS = 2  # first try + one retry
 
+# QNT-212: intents that need a named ticker (or hydrated prior turn) to
+# answer non-fabricated. With no ticker AND no prior turn we route to
+# clarify rather than ship a thesis built on a placeholder.
+_TICKER_REQUIRING_INTENTS: frozenset[Intent] = frozenset(
+    {"thesis", "quick_fact", "fundamental", "technical", "news"}
+)
+
+# QNT-212: short-circuit intents skip plan + gather and route classify
+# directly to synthesize. Conversational has no tools to gather; followup
+# reuses the checkpointer-hydrated reports verbatim.
+_SHORT_CIRCUIT_INTENTS: frozenset[Intent] = frozenset({"conversational", "followup"})
+
+AmbiguityKind = Literal["needs_second_ticker", "needs_ticker", "needs_prior_turn"]
+
+# QNT-212: deterministic fallback prose for when the clarify LLM call fails.
+# Reasons must stay digit-free -- ``domain_redirect`` rejects digits at the
+# boundary so a future caller cannot trip the hallucination guardrail.
+_CLARIFY_FALLBACK_REASON: dict[str, str] = {
+    "needs_ticker": "Which ticker did you have in mind?",
+    "needs_second_ticker": "Which second ticker should I compare against?",
+    "needs_prior_turn": "I don't have an earlier turn on this thread to follow up on.",
+}
+
 
 class AgentState(TypedDict):
     """State carried through the graph.
@@ -228,6 +255,18 @@ class AgentState(TypedDict):
     # was skipped (conversational intent) or when the LLM call failed --
     # the structured card still renders, the bubble degrades.
     narrative: NotRequired[str | None]
+    # QNT-212: ambiguity classification produced by classify_node. When set,
+    # the conditional edge from classify routes to clarify rather than the
+    # normal plan/synthesize path. None ⇒ question was unambiguous.
+    ambiguity_kind: NotRequired[AmbiguityKind | None]
+    # QNT-212: ordered list of node names actually visited this turn.
+    # Each node writes the FULL accumulated list (not a single element with
+    # a reducer) -- a reducer would also accumulate across turns out of the
+    # checkpointer, so turn 2 of a followup chain would see turn 1's path
+    # prepended. ``_wrap_path`` does the read+append; classify resets at
+    # the turn boundary. Surfaces on the SSE done event for latency-path
+    # debugging + AC validation.
+    intent_path: NotRequired[list[str]]
 
 
 def _build_plan_prompt(
@@ -420,6 +459,45 @@ def _coerce_focused(response: object) -> FocusedAnalysis | None:
     return None
 
 
+def _detect_ambiguity(
+    intent: Intent,
+    question: str,
+    *,
+    has_prior_turn: bool,
+) -> AmbiguityKind | None:
+    """Return the kind of ambiguity in ``question`` for ``intent``, or None.
+
+    QNT-212: heuristic-only check fired by classify_node right after the
+    intent resolves. The three triggers map directly to the AC1 scenarios:
+
+    * comparison + fewer than 2 tickers named in the question ⇒
+      ``needs_second_ticker`` — the user gestured at a compare but only
+      named one symbol. State.ticker is intentionally NOT counted; if the
+      user wanted to compare with the URL-context ticker they would have
+      typed "compare to AAPL", not "compare them".
+    * thesis / focused / quick_fact + no ticker named + no prior turn ⇒
+      ``needs_ticker``. Today this would route to a thesis built around
+      whatever placeholder state.ticker the request carries and fabricate
+      an answer; the new clarify path asks the user to anchor instead.
+    * followup + no prior turn ⇒ ``needs_prior_turn``. The followup
+      heuristic already requires has_prior_turn=True so this only fires
+      when the LLM classifier returns followup on a cold thread — a
+      defensive belt-and-braces against a misbehaving classifier.
+
+    Returns None when the question is unambiguous. The conditional edge in
+    build_graph routes None ⇒ plan/synthesize (existing behavior), non-None
+    ⇒ clarify.
+    """
+    question_tickers = extract_tickers(question)
+    if intent == "comparison" and len(question_tickers) < 2:
+        return "needs_second_ticker"
+    if intent in _TICKER_REQUIRING_INTENTS and not question_tickers and not has_prior_turn:
+        return "needs_ticker"
+    if intent == "followup" and not has_prior_turn:
+        return "needs_prior_turn"
+    return None
+
+
 def _resolve_comparison_tickers(primary: str, question: str) -> list[str]:
     """Return up to 2 tickers to compare, in user-named order.
 
@@ -534,6 +612,18 @@ def build_graph(
             intent = "thesis"
             classifier_source = "fallback"
         logger.info("classify %s: intent=%s source=%s", ticker, intent, classifier_source)
+        # QNT-212: heuristic ambiguity check on the resolved intent. Drives
+        # the conditional edge below: a non-None ambiguity_kind routes to
+        # clarify; None falls through to the existing plan/synthesize path
+        # (or the new conversational/followup short-circuits).
+        ambiguity_kind = _detect_ambiguity(intent, question, has_prior_turn=has_prior_turn)
+        if ambiguity_kind is not None:
+            logger.info(
+                "classify %s: ambiguity_kind=%s (intent=%s)",
+                ticker,
+                ambiguity_kind,
+                intent,
+            )
         # QNT-159: surface the routing decision BEFORE plan/gather/synthesize
         # run. The SSE wrapper provides an emitter that posts to its asyncio
         # queue so the chat panel sees ``intent`` as soon as it's known
@@ -546,7 +636,11 @@ def build_graph(
                 event_emitter("intent", {"intent": intent})
             except Exception as exc:  # noqa: BLE001 — never let SSE plumbing crash the graph
                 logger.warning("classify %s: event_emitter failed: %s (continuing)", ticker, exc)
-        return {"intent": intent, "classifier_source": classifier_source}
+        return {
+            "intent": intent,
+            "classifier_source": classifier_source,
+            "ambiguity_kind": ambiguity_kind,
+        }
 
     def plan_node(state: AgentState, config: RunnableConfig) -> dict[str, object]:
         ticker = state["ticker"]
@@ -1003,14 +1097,24 @@ def build_graph(
         question = state.get("question", "")
 
         # Conversational already speaks in the right voice -- nothing to
-        # narrate over. Same applies to ANY fallback-redirect path: when
-        # synthesize hits _fallback() for a thesis/focused/quick_fact/
-        # comparison failure it leaves the original ``intent`` intact AND
-        # populates ``state['conversational']`` with the deterministic
-        # domain_redirect. Without this guard narrate would re-narrate the
-        # redirect prose, producing a duplicate bubble above the same
-        # conversational card. Gate on the payload, not just the intent.
-        if intent == "conversational" or state.get("conversational") is not None:
+        # narrate over. Same applies to ANY synthesize fallback-redirect
+        # path: when synthesize hits _fallback() for a thesis/focused/
+        # quick_fact/comparison failure it leaves the original ``intent``
+        # intact AND populates ``state['conversational']`` with the
+        # deterministic domain_redirect. Without this guard narrate would
+        # re-narrate the redirect prose, producing a duplicate bubble above
+        # the same conversational card. Gate on the payload, not just the
+        # intent.
+        #
+        # QNT-212: the clarify path also populates ``state['conversational']``
+        # (with the asked-back question) but is NOT a fallback -- AC3 wants
+        # narrate to fire so the bubble streams above the clarify card.
+        # ``ambiguity_kind`` is the distinguishing signal: only the clarify
+        # route sets it. Allow narrate through when it's present.
+        is_clarify = state.get("ambiguity_kind") is not None
+        if intent == "conversational" or (
+            state.get("conversational") is not None and not is_clarify
+        ):
             return {"narrative": None}
 
         # Pick the structured payload to summarise. Exactly one of these is
@@ -1086,14 +1190,132 @@ def build_graph(
         logger.info("narrate %s: narrative_chars=%d", ticker, len(narrative))
         return {"narrative": narrative or None}
 
+    def clarify_node(state: AgentState, config: RunnableConfig) -> dict[str, object]:
+        """QNT-212: ask the user back when the question is ambiguous.
+
+        Single LLM call into the ConversationalAnswer schema, prompted in the
+        ADR-020 analyst voice. Output ``answer`` reads as a clarifying
+        question (e.g. "Which ticker did you have in mind?"); ``suggestions``
+        carries 0-3 concrete alternatives the user could click. On LLM
+        failure the node falls through to a deterministic ``domain_redirect``
+        payload so the panel still renders something in-domain — never a
+        stack trace.
+
+        Wired by the conditional edge from classify: only reachable when
+        ``state['ambiguity_kind']`` is set. Always exits through narrate;
+        narrate then short-circuits because ``state['conversational']`` is
+        populated (same gate the synthesize-fallback path uses).
+        """
+        ticker = state["ticker"]
+        question = state.get("question", "")
+        ambiguity_kind = state.get("ambiguity_kind")
+
+        prompt = build_clarify_prompt(
+            ambiguity_kind=str(ambiguity_kind) if ambiguity_kind else "needs_ticker",
+            question=question,
+            ticker=ticker,
+            tickers=TICKERS,
+        )
+        structured_llm = (
+            get_llm()
+            .with_structured_output(ConversationalAnswer)
+            .with_retry(
+                stop_after_attempt=2,
+                retry_if_exception_type=(ValidationError, OutputParserException),
+            )
+        )
+        try:
+            response = _linked_invoke(structured_llm, prompt, config, "clarify-prompt")
+        except Exception as exc:  # noqa: BLE001 — fall through to domain_redirect
+            logger.warning(
+                "clarify %s: structured output failed: %s: %s",
+                ticker,
+                type(exc).__name__,
+                exc,
+            )
+            response = None
+        conversational = _coerce_conversational(response)
+        if conversational is None:
+            fallback = domain_redirect(
+                reason=_CLARIFY_FALLBACK_REASON.get(
+                    str(ambiguity_kind), "I had trouble interpreting that."
+                ),
+                tickers=TICKERS,
+            )
+            logger.info(
+                "clarify %s: fallback to domain_redirect (%s)",
+                ticker,
+                ambiguity_kind,
+            )
+            return {"conversational": fallback}
+        logger.info("clarify %s: ambiguity_kind=%s clarify=ok", ticker, ambiguity_kind)
+        return {"conversational": conversational}
+
+    def _classify_router(state: AgentState) -> str:
+        """QNT-212: pick the next node from classify_node's output.
+
+        Ambiguity always wins -- a clarify run never burns the plan/gather
+        LLM call. Conversational and followup short-circuit to synthesize
+        so a greeting or a hydrated-thread followup doesn't walk the full
+        4-node pipeline. Everything else (thesis, focused, comparison,
+        quick_fact) falls through to plan as today.
+        """
+        if state.get("ambiguity_kind"):
+            return "clarify"
+        intent = state.get("intent", "thesis")
+        if intent in _SHORT_CIRCUIT_INTENTS:
+            return "synthesize"
+        return "plan"
+
+    def _wrap_path(
+        node_name: str, fn: Callable[..., dict[str, object]]
+    ) -> Callable[..., dict[str, object]]:
+        """QNT-212: append this node's name to ``intent_path`` after the
+        wrapped node returns. Classify is the per-turn entry node, so it
+        RESETS the list to ``["classify"]`` -- otherwise a checkpointer-
+        hydrated path from the prior turn would leak into the current turn's
+        intent_path. Every other node reads ``state["intent_path"]`` (already
+        merged with the prior nodes' returns) and appends its own name.
+
+        Done this way instead of with an ``Annotated[list, add]`` reducer
+        because the reducer accumulates the prior turn's path too -- the
+        checkpointer hydrates state before classify even runs.
+        """
+
+        def wrapped(state: AgentState, config: RunnableConfig) -> dict[str, object]:
+            result = fn(state, config)
+            if not isinstance(result, dict):
+                return result
+            if node_name == "classify":
+                result["intent_path"] = ["classify"]
+            else:
+                existing = list(state.get("intent_path") or [])
+                result["intent_path"] = [*existing, node_name]
+            return result
+
+        return wrapped
+
     builder: StateGraph = StateGraph(AgentState)
-    builder.add_node("classify", classify_node)
-    builder.add_node("plan", plan_node)
-    builder.add_node("gather", gather_node)
-    builder.add_node("synthesize", synthesize_node)
-    builder.add_node("narrate", narrate_node)
+    builder.add_node("classify", _wrap_path("classify", classify_node))
+    builder.add_node("plan", _wrap_path("plan", plan_node))
+    builder.add_node("gather", _wrap_path("gather", gather_node))
+    builder.add_node("synthesize", _wrap_path("synthesize", synthesize_node))
+    builder.add_node("narrate", _wrap_path("narrate", narrate_node))
+    builder.add_node("clarify", _wrap_path("clarify", clarify_node))
     builder.add_edge(START, "classify")
-    builder.add_edge("classify", "plan")
+    # QNT-212: classify routes by ambiguity / intent rather than always
+    # falling through to plan. Three destinations:
+    #   - clarify  : ambiguous question (no ticker, only one ticker for a
+    #                compare, etc.) — ask back, exit through narrate.
+    #   - synthesize: conversational greeting or followup-no-refetch — skip
+    #                 plan + gather, save the latency of 2 no-op nodes.
+    #   - plan     : thesis / focused / quick_fact / comparison — existing
+    #                full-pipeline behavior.
+    builder.add_conditional_edges(
+        "classify",
+        _classify_router,
+        {"clarify": "clarify", "synthesize": "synthesize", "plan": "plan"},
+    )
     builder.add_edge("plan", "gather")
     # QNT-156: always run synthesize. Empty reports no longer short-circuit
     # to END — synthesize handles every failure surface (no reports, empty
@@ -1101,6 +1323,11 @@ def build_graph(
     # conversational redirect via ``domain_redirect``. The panel never sees
     # a blank state again.
     builder.add_edge("gather", "synthesize")
+    # QNT-212: clarify exits through narrate the same way the rest of the
+    # pipeline does. narrate sees ``state['conversational']`` is populated
+    # and short-circuits (the bubble would duplicate the clarify question),
+    # but we keep the edge for topology consistency + intent_path tracking.
+    builder.add_edge("clarify", "narrate")
     # QNT-211: narrate streams a 1-4 sentence analyst-voice paragraph above
     # whichever structured shape synthesize produced. Always runs (even on
     # conversational + fallback redirects -- the node short-circuits those
@@ -1120,6 +1347,7 @@ __all__ = [
     "OPTIONAL_TOOLS",
     "REPORT_TOOLS",
     "AgentState",
+    "AmbiguityKind",
     "ComparisonAnswer",
     "ConversationalAnswer",
     "EventEmitter",

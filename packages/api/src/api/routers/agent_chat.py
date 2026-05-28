@@ -399,11 +399,20 @@ _DONE_FAILURE_PAYLOAD: dict[str, Any] = {
 }
 
 
-def _done_failure_payload(thread_id: str | None) -> dict[str, Any]:
-    """QNT-209: failure-path done payload carries ``thread_id`` so the
-    frontend can confirm what the backend used even when the run errored
-    or timed out before any payload was produced."""
-    return {**_DONE_FAILURE_PAYLOAD, "thread_id": thread_id}
+def _done_failure_payload(
+    thread_id: str | None,
+    intent_path: list[str] | None = None,
+) -> dict[str, Any]:
+    """QNT-209/212: failure-path done payload carries ``thread_id`` and
+    ``intent_path`` so the frontend can confirm both what the backend used
+    and which nodes ran even when the run errored or timed out before any
+    payload was produced. ``intent_path`` defaults to ``[]`` when no graph
+    node ran (unknown ticker, budget-exhausted redirect, etc.)."""
+    return {
+        **_DONE_FAILURE_PAYLOAD,
+        "thread_id": thread_id,
+        "intent_path": list(intent_path) if intent_path else [],
+    }
 
 
 # QNT-209: process-wide SqliteSaver singleton. Built lazily on the first chat
@@ -570,6 +579,10 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                 "confidence": 0.0,
                 "intent": "conversational",
                 "thread_id": thread_id,
+                # QNT-212: budget-exhausted redirect never reaches the graph,
+                # so no nodes ran -- empty path so consumers can rely on the
+                # field being present on every done event.
+                "intent_path": [],
             },
         )
         return
@@ -825,6 +838,13 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
         confidence = float(state.get("confidence", 0.0)) if isinstance(state, dict) else 0.0
         errors = state.get("errors") or {} if isinstance(state, dict) else {}
         reports = state.get("reports") or {} if isinstance(state, dict) else {}
+        # QNT-212: ordered list of nodes that actually fired this turn.
+        # Reads off the AgentState reducer field; defaults to ``[]`` for
+        # stubbed test graphs that don't populate it. Surfaced on every
+        # done event so the frontend (and Langfuse filters, ad-hoc grep)
+        # can see "did this turn skip plan + gather?" without inspecting
+        # the whole event stream.
+        intent_path = list(state.get("intent_path") or []) if isinstance(state, dict) else []
 
         # QNT-159: classify_node already streamed the ``intent`` event via the
         # queue-based emitter (so the panel saw it before the first tool_call).
@@ -960,6 +980,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                 "confidence": confidence,
                 "intent": intent,
                 "thread_id": thread_id,
+                "intent_path": intent_path,
             },
         )
     finally:

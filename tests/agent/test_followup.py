@@ -177,9 +177,18 @@ def test_followup_reuses_reports_and_skips_gather(
     assert isinstance(second.get("quick_fact"), QuickFactAnswer)
 
 
-def test_fresh_thread_falls_through_to_thesis(stub_llm: _StubLLM, saver: Any) -> None:  # noqa: ARG001
-    """Fresh thread_id, first message is 'why?' → no prior turn → thesis
-    safe default, and gather DOES run."""
+def test_fresh_thread_with_pronoun_routes_to_clarify(
+    stub_llm: _StubLLM,  # noqa: ARG001
+    saver: Any,
+) -> None:
+    """QNT-212 update: fresh thread_id, first message is 'why?' → no prior
+    turn AND no ticker → the new ambiguity detector fires the clarify path
+    instead of falling through to a fabricated thesis. gather does NOT run.
+
+    Pre-QNT-212 behaviour was thesis-default with gather firing; that path
+    silently produced a thesis built around whatever placeholder ticker
+    the request carried and is exactly the failure mode QNT-212 closes.
+    """
     tools = {
         "technical": MagicMock(return_value="## technical\nRSI 50\n"),
         "fundamental": MagicMock(return_value="## fundamental\nP/E 20\n"),
@@ -190,8 +199,12 @@ def test_fresh_thread_falls_through_to_thesis(stub_llm: _StubLLM, saver: Any) ->
     config: RunnableConfig = {"configurable": {"thread_id": "fresh:NVDA"}}
 
     result = graph.invoke({"ticker": "NVDA", "question": "why?"}, config=config)
-    assert result["intent"] == "thesis"
-    assert _tool_calls(tools) > 0  # gather ran
+    # The heuristic sees "why?" as a followup token, but has_prior_turn
+    # is False, so it defers. The LLM classifier then biases to thesis
+    # (safe default). With no ticker in the question AND no prior turn,
+    # the ambiguity detector fires ``needs_ticker`` and routes to clarify.
+    assert result.get("ambiguity_kind") == "needs_ticker"
+    assert _tool_calls(tools) == 0  # gather did NOT run -- clarify short-circuited
 
 
 def test_followup_thread_then_named_metric_routes_quick_fact(

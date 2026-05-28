@@ -25,6 +25,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from agent.conversational import ConversationalAnswer
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import AspectView, Thesis
 from api import main as main_module
@@ -115,6 +116,10 @@ def stub_graph(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
                 "thesis": thesis,
                 "quick_fact": None,
                 "confidence": 0.67,
+                # QNT-212: the real graph carries this through the AgentState
+                # ``_wrap_path`` helper; stub returns the canonical thesis
+                # path so the SSE endpoint surfaces it on the done event.
+                "intent_path": ["classify", "plan", "gather", "synthesize", "narrate"],
             }
 
         graph.invoke.side_effect = invoke
@@ -190,6 +195,15 @@ def test_happy_path_emits_canonical_sequence(
     # QNT-208: v2 stub has citations across multiple aspects; the exact
     # count is shape-dependent. Pin a non-zero floor.
     assert done_data["citations_count"] >= 3
+    # QNT-212 (AC5): every done event carries the ordered list of nodes
+    # the graph actually visited. Thesis path walks all five.
+    assert done_data["intent_path"] == [
+        "classify",
+        "plan",
+        "gather",
+        "synthesize",
+        "narrate",
+    ]
 
 
 def test_thesis_event_payload_matches_pydantic_dump(
@@ -1967,3 +1981,101 @@ def test_followup_metric_ask_emits_both_narrative_and_quick_fact(
     assert "quick_fact" in events
     qf_data = next(data for name, data in frames if name == "quick_fact")
     assert qf_data == quick_fact.model_dump()
+
+
+# ─── QNT-212: intent_path on every done event ──────────────────────────────
+
+
+@pytest.fixture
+def _path_stub_factory(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Helper: build a stub graph whose final state carries a specific
+    ``intent_path``. Tests pass the intent + path they want to assert
+    against; the helper wires the SSE endpoint to that canned state.
+
+    Returns a function so each test can request its own (intent, path)
+    pair without sharing state.
+    """
+
+    def _make(intent: str, intent_path: list[str], **extra_state: Any) -> None:
+        def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
+            graph = MagicMock()
+
+            def invoke(state: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+                ticker = state["ticker"]
+                base: dict[str, Any] = {
+                    "ticker": ticker,
+                    "intent": intent,
+                    "plan": [],
+                    "reports": {},
+                    "errors": {},
+                    "thesis": None,
+                    "quick_fact": None,
+                    "comparison": None,
+                    "conversational": None,
+                    "focused": None,
+                    "confidence": 0.0,
+                    "intent_path": list(intent_path),
+                }
+                base.update(extra_state)
+                return base
+
+            graph.invoke.side_effect = invoke
+            return graph
+
+        monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+        monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    return _make
+
+
+def test_done_carries_intent_path_for_greeting(
+    client: TestClient,
+    _path_stub_factory: Any,
+) -> None:
+    """AC5: a conversational greeting short-circuits classify→synthesize→
+    narrate. ``intent_path`` on the done event reflects that, omitting
+    plan and gather."""
+    _path_stub_factory(
+        intent="conversational",
+        intent_path=["classify", "synthesize", "narrate"],
+        conversational=ConversationalAnswer(answer="Hi! Ask me about a ticker.", suggestions=[]),
+    )
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "hi"})
+    frames = _parse_sse(r.text)
+    assert frames[-1][0] == "done"
+    done = frames[-1][1]
+    assert done["intent_path"] == ["classify", "synthesize", "narrate"]
+    assert "plan" not in done["intent_path"]
+    assert "gather" not in done["intent_path"]
+
+
+def test_done_carries_intent_path_for_clarify(
+    client: TestClient,
+    _path_stub_factory: Any,
+) -> None:
+    """AC5: an ambiguous question routes via clarify. ``intent_path`` on
+    the done event reads classify→clarify→narrate."""
+    _path_stub_factory(
+        intent="thesis",
+        intent_path=["classify", "clarify", "narrate"],
+        ambiguity_kind="needs_ticker",
+        conversational=ConversationalAnswer(
+            answer="Which ticker did you have in mind?", suggestions=[]
+        ),
+    )
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "what do you think?"})
+    frames = _parse_sse(r.text)
+    done = frames[-1][1]
+    assert done["intent_path"] == ["classify", "clarify", "narrate"]
+
+
+def test_done_intent_path_empty_on_unknown_ticker(client: TestClient) -> None:
+    """AC5 / failure-path contract: pre-graph failures (unknown ticker)
+    emit done with an empty ``intent_path`` so the frontend can rely on
+    the field being present on every done event."""
+    r = client.post("/api/v1/agent/chat", json={"ticker": "ZZZZ", "message": "hi"})
+    frames = _parse_sse(r.text)
+    done = frames[-1][1]
+    assert done["intent_path"] == []
