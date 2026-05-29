@@ -654,7 +654,10 @@ SMA-50, current price. For news: leave EMPTY (catalysts go in the \
 catalyst fields, not here).
 * verdict: per-focus label as below.
 * existing_development / positive_catalysts / negative_catalysts: \
-news-focus fields, see below.
+these fields are still required by the structured schema. For \
+focus="fundamental" or focus="technical", set existing_development to null \
+and both catalyst lists to empty arrays. For focus="news", populate them as \
+described below.
 
 # Per-focus verdict and shape
 
