@@ -122,6 +122,7 @@ def _prompt_version() -> str:
         FOLLOWUP_SYSTEM_PROMPT,
         QUICK_FACT_SYSTEM_PROMPT,
         SYSTEM_PROMPT,
+        WARM_CONVERSATIONAL_SYSTEM_PROMPT,
     )
 
     payload = (
@@ -132,6 +133,8 @@ def _prompt_version() -> str:
         + COMPARISON_SYSTEM_PROMPT
         + "\n"
         + CONVERSATIONAL_SYSTEM_PROMPT
+        + "\n"
+        + WARM_CONVERSATIONAL_SYSTEM_PROMPT
         + "\n"
         + FOCUSED_SYSTEM_PROMPT
         + "\n"
@@ -1110,7 +1113,15 @@ def build_graph(
             return {"quick_fact": followup, "confidence": followup_confidence}
 
         if intent == "conversational":
-            prompt = build_conversational_prompt(question)
+            # QNT-217: thread prior conversation into the conversational
+            # prompt. When history exists, build_conversational_prompt selects
+            # the warm-thread system prompt -- it stays in the latest analysis
+            # context and suppresses the cold-start capability card. A fresh
+            # thread (no history) keeps the cold capability response.
+            prompt = build_conversational_prompt(
+                question,
+                history=_history_before_current(state.get("messages"), question),
+            )
             structured_llm = (
                 get_llm()
                 .with_structured_output(ConversationalAnswer)

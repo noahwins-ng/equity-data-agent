@@ -23,6 +23,7 @@ from agent.prompts import (
     NARRATE_SYSTEM_PROMPT,
     QUICK_FACT_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
+    WARM_CONVERSATIONAL_SYSTEM_PROMPT,
     build_comparison_prompt,
     build_conversational_prompt,
     build_focused_prompt,
@@ -55,6 +56,12 @@ def test_marker_present_in_comparison_system_prompt() -> None:
 
 def test_marker_present_in_conversational_system_prompt() -> None:
     assert ANALYST_VOICE_ADR in CONVERSATIONAL_SYSTEM_PROMPT
+
+
+def test_marker_present_in_warm_conversational_system_prompt() -> None:
+    """QNT-217: the warm-thread conversational variant carries its own system
+    prompt -- it must inherit the analyst voice like the cold-start one."""
+    assert ANALYST_VOICE_ADR in WARM_CONVERSATIONAL_SYSTEM_PROMPT
 
 
 def test_marker_present_in_focused_system_prompt() -> None:
