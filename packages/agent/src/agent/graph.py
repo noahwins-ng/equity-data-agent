@@ -42,7 +42,7 @@ from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 from langchain_core.exceptions import OutputParserException
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from shared.tickers import TICKERS
 
 from agent.comparison import ComparisonAnswer
@@ -71,6 +71,36 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 ToolFn = Callable[[str], str]
+ReportToolName = Literal["company", "technical", "fundamental", "news"]
+
+
+class ThesisPlan(BaseModel):
+    """Structured plan for a thesis run.
+
+    The plan LLM picks a narrow report set, while the code keeps a
+    deterministic all-tools fallback if this shape cannot be produced.
+    """
+
+    tools: list[ReportToolName] = Field(
+        min_length=2,
+        max_length=4,
+        description="Two to four report tools to fetch. Always include company.",
+    )
+    rationale: str = Field(
+        min_length=1,
+        description=(
+            "One or two analyst-voice sentences explaining why these tools fit the question."
+        ),
+    )
+
+    @field_validator("tools")
+    @classmethod
+    def _validate_tools(cls, value: list[ReportToolName]) -> list[ReportToolName]:
+        if len(set(value)) != len(value):
+            raise ValueError("tools must be unique")
+        if "company" not in value:
+            raise ValueError("tools must include company")
+        return value
 
 
 def _prompt_version() -> str:
@@ -239,6 +269,7 @@ class AgentState(TypedDict):
     intent: NotRequired[Intent]
     classifier_source: NotRequired[ClassifierSource]
     plan: NotRequired[list[str]]
+    plan_rationale: NotRequired[str | None]
     reports: NotRequired[dict[str, str]]
     comparison_tickers: NotRequired[list[str]]
     reports_by_ticker: NotRequired[dict[str, dict[str, str]]]
@@ -311,6 +342,48 @@ def _build_plan_prompt(
         "Respond with a comma-separated list of report names to fetch from the available set. "
         f"{bias} Respond with the list only, no prose."
     )
+
+
+def _build_thesis_plan_prompt(ticker: str, question: str, available: list[str]) -> str:
+    """Prompt the thesis planner to choose a narrow, explainable report set."""
+    options = ", ".join(available)
+    return (
+        f"You are planning which reports to fetch for an investment thesis on {ticker}.\n"
+        f"Question: {question or '(general thesis)'}\n"
+        f"Available reports: {options}\n\n"
+        "Pick 2-4 of the available reports that are most relevant to the user's question. "
+        "Always include company when it is available; it is cheap context that anchors the "
+        "analysis in the business. Choose fundamental for valuation, earnings, margins, "
+        "or balance-sheet questions. Choose technical for chart, trend, momentum, RSI, "
+        "or setup questions. Choose news for headlines, catalysts, events, sentiment, "
+        "or what changed recently.\n\n"
+        "Return a structured plan with:\n"
+        "- tools: the selected report names only\n"
+        "- rationale: 1-2 analyst-note sentences that cite what the question is asking "
+        "about and why these reports are enough. Example voice: Your question is about "
+        "valuation, so I'll lean on fundamentals and the company profile; technicals "
+        "and news matter less here."
+    )
+
+
+def _coerce_thesis_plan(response: object) -> ThesisPlan | None:
+    """Normalise structured-output responses into a ``ThesisPlan``."""
+    if isinstance(response, ThesisPlan):
+        return response
+    if isinstance(response, dict):
+        parsed = response.get("parsed")
+        if isinstance(parsed, ThesisPlan):
+            return parsed
+    return None
+
+
+def _tools_from_thesis_plan(thesis_plan: ThesisPlan, available: list[str]) -> list[str]:
+    """Filter a structured thesis plan to registered tools, preserving registry order."""
+    chosen = set(thesis_plan.tools)
+    plan = [tool for tool in available if tool in chosen]
+    if "company" in available and "company" not in plan:
+        plan.insert(0, "company")
+    return plan if len(plan) >= 2 else list(available)
 
 
 def _parse_plan(raw: str, available: list[str], intent: Intent = "thesis") -> list[str]:
@@ -664,6 +737,7 @@ def build_graph(
             logger.info("plan %s: skipped (conversational)", ticker)
             return {
                 "plan": [],
+                "plan_rationale": None,
                 "reports": {},
                 "errors": {},
                 "comparison_tickers": [],
@@ -675,6 +749,7 @@ def build_graph(
             logger.warning("plan %s: no tools registered", ticker)
             return {
                 "plan": [],
+                "plan_rationale": None,
                 "reports": {},
                 "errors": {},
                 "comparison_tickers": [],
@@ -695,15 +770,12 @@ def build_graph(
                     comparison_tickers,
                 )
 
-        # Thesis + comparison fetch every available tool — the plan-LLM call
-        # was non-deterministic noise (one ticker got all 4 tools, an
-        # adjacent ticker dropped technical for the same prompt) and the
-        # plan-bias text was telling the model "include every report that
-        # is even marginally relevant" anyway. Skipping the LLM here makes
-        # thesis behavior deterministic, drops ~250 tokens per run, and
-        # removes the narrowing failure mode the QNT-175 force-include
-        # already half-fixed for ``company``. Quick_fact keeps the LLM call
-        # because narrowing to the single relevant report IS its purpose.
+        # Thesis uses a structured-output planner so focused questions avoid
+        # irrelevant report calls while still carrying a rationale narrate can
+        # optionally surface. Comparison still fetches every available tool:
+        # the same plan is run against two tickers, so narrowing can starve
+        # one side of the contrast. Quick_fact keeps its older comma-list
+        # planner because it only needs a tiny single-metric selection.
         #
         # QNT-176: focused-analysis intents narrow deterministically to
         # ``["company", <matching_report>]``. The user named the domain
@@ -711,13 +783,53 @@ def build_graph(
         if intent in _FOCUSED_REPORT:
             wanted = ("company", _FOCUSED_REPORT[intent])
             plan = [t for t in available if t in wanted]
+            plan_rationale = None
         elif intent == "quick_fact":
             prompt = _build_plan_prompt(ticker, question, available, intent)
             response = get_llm(temperature=0.0).invoke(prompt, config=config)
             content = response.content if hasattr(response, "content") else str(response)
             plan = _parse_plan(str(content), available, intent)
+            plan_rationale = None
+        elif intent == "thesis":
+            prompt = _build_thesis_plan_prompt(ticker, question, available)
+            structured_llm = (
+                get_llm(temperature=0.0)
+                .with_structured_output(ThesisPlan)
+                .with_retry(
+                    stop_after_attempt=2,
+                    retry_if_exception_type=(ValidationError, OutputParserException),
+                )
+            )
+            try:
+                response = structured_llm.invoke(prompt, config=config)
+            except Exception as exc:  # noqa: BLE001 — fall back to existing deterministic plan
+                logger.warning(
+                    "plan %s: thesis plan LLM failed for question %r: %s: %s; "
+                    "falling back to all tools",
+                    ticker,
+                    question,
+                    type(exc).__name__,
+                    exc,
+                )
+                thesis_plan = None
+            else:
+                thesis_plan = _coerce_thesis_plan(response)
+                if thesis_plan is None:
+                    logger.warning(
+                        "plan %s: thesis plan LLM returned invalid plan for question %r; "
+                        "falling back to all tools",
+                        ticker,
+                        question,
+                    )
+            if thesis_plan is None:
+                plan = list(available)
+                plan_rationale = None
+            else:
+                plan = _tools_from_thesis_plan(thesis_plan, available)
+                plan_rationale = thesis_plan.rationale.strip() or None
         else:
             plan = list(available)
+            plan_rationale = None
         logger.info(
             "plan %s: %s (intent=%s, comparison_tickers=%s)",
             ticker,
@@ -727,6 +839,7 @@ def build_graph(
         )
         return {
             "plan": plan,
+            "plan_rationale": plan_rationale,
             "reports": {},
             "errors": {},
             "comparison_tickers": comparison_tickers,
@@ -1155,6 +1268,7 @@ def build_graph(
             question=question,
             payload_markdown=payload_markdown,
             prior_thesis_markdown=prior_thesis_markdown,
+            plan_rationale=state.get("plan_rationale"),
         )
 
         try:
@@ -1354,7 +1468,9 @@ __all__ = [
     "FocusedAnalysis",
     "Intent",
     "QuickFactAnswer",
+    "ReportToolName",
     "Thesis",
+    "ThesisPlan",
     "ToolFn",
     "build_graph",
 ]
