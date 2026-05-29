@@ -52,6 +52,7 @@ from agent.intent import ClassifierSource, Intent, classify_intent_with_source, 
 from agent.llm import get_llm
 from agent.prompts import (
     REPORT_TOOLS,
+    ConversationMessage,
     build_clarify_prompt,
     build_comparison_prompt,
     build_conversational_prompt,
@@ -60,6 +61,7 @@ from agent.prompts import (
     build_narrate_prompt,
     build_quick_fact_prompt,
     build_synthesis_prompt,
+    trim_message_history,
 )
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
@@ -286,6 +288,10 @@ class AgentState(TypedDict):
     # was skipped (conversational intent) or when the LLM call failed --
     # the structured card still renders, the bubble degrades.
     narrative: NotRequired[str | None]
+    # QNT-216: compact, append-only transcript persisted by the checkpointer.
+    # Stores user turns and assistant surface text only; structured payloads
+    # are referenced compactly so full card JSON does not bloat prompt prefix.
+    messages: NotRequired[list[ConversationMessage]]
     # QNT-212: ambiguity classification produced by classify_node. When set,
     # the conditional edge from classify routes to clarify rather than the
     # normal plan/synthesize path. None ⇒ question was unambiguous.
@@ -601,6 +607,89 @@ def _followup_is_metric_ask(question: str) -> bool:
     return _matches_any(question.lower(), _QUICK_FACT_TOKENS) is not None
 
 
+def _history_before_current(
+    messages: list[ConversationMessage] | None,
+    question: str,
+) -> list[ConversationMessage]:
+    """Return prior transcript, excluding the current user turn if appended."""
+    history = trim_message_history(messages)
+    if (
+        history
+        and history[-1].get("role") == "user"
+        and history[-1].get("content") == question.strip()
+    ):
+        return history[:-1]
+    return history
+
+
+def _append_user_message(
+    messages: list[ConversationMessage] | None,
+    question: str,
+) -> list[ConversationMessage]:
+    """Append the current user turn to the compact transcript."""
+    content = question.strip()
+    if not content:
+        return trim_message_history(messages)
+    return trim_message_history(
+        [*trim_message_history(messages), {"role": "user", "content": content}]
+    )
+
+
+def _assistant_surface(state: AgentState, narrative: str | None) -> str | None:
+    """Compact assistant transcript entry for the completed turn."""
+    if narrative:
+        prefix = narrative.strip()
+    else:
+        prefix = ""
+
+    conversational = state.get("conversational")
+    if conversational is not None:
+        answer = getattr(conversational, "answer", "")
+        return (prefix or str(answer)).strip() or None
+
+    quick_fact = state.get("quick_fact")
+    if quick_fact is not None:
+        answer = getattr(quick_fact, "answer", "")
+        ref = "Structured payload: quick_fact"
+        return "\n".join(part for part in (prefix or str(answer), ref) if part).strip()
+
+    focused = state.get("focused")
+    if focused is not None:
+        focus = getattr(focused, "focus", "focused")
+        summary = getattr(focused, "summary", "")
+        ref = f"Structured payload: focused {focus}"
+        return "\n".join(part for part in (prefix or str(summary), ref) if part).strip()
+
+    comparison = state.get("comparison")
+    if comparison is not None:
+        differences = getattr(comparison, "differences", "")
+        return "\n".join(
+            part for part in (prefix or str(differences), "Structured payload: comparison") if part
+        ).strip()
+
+    thesis = state.get("thesis")
+    if thesis is not None:
+        verdict = getattr(thesis, "verdict", "thesis")
+        rationale = getattr(thesis, "verdict_rationale", "")
+        ref = f"Structured payload: thesis verdict={verdict}"
+        return "\n".join(part for part in (prefix or str(rationale), ref) if part).strip()
+
+    return prefix or None
+
+
+def _append_assistant_message(
+    state: AgentState,
+    narrative: str | None,
+) -> list[ConversationMessage]:
+    """Append the assistant surface for this turn and trim to the history limit."""
+    surface = _assistant_surface(state, narrative)
+    if not surface:
+        return trim_message_history(state.get("messages"))
+    return trim_message_history(
+        [*trim_message_history(state.get("messages")), {"role": "assistant", "content": surface}]
+    )
+
+
 def _hint_from_intent(intent: Intent) -> str | None:
     """Bucket the intent into a hint label for ``domain_redirect``.
 
@@ -664,21 +753,23 @@ def build_graph(
         # parent agent-chat trace.
         ticker = state["ticker"]
         question = state.get("question", "")
+        history = trim_message_history(state.get("messages"))
         # ``classify_intent`` already biases to "thesis" on internal LLM
         # failures, but a failure in the surrounding observability stack
         # would propagate and kill the run — same shape as plan_node /
         # synthesize_node which wrap their LLM call in BLE001. Mirror that
         # contract here so the bias-to-thesis invariant the rest of the
         # graph relies on cannot be defeated by an unrelated dependency.
-        # QNT-209: ``has_prior_turn`` flips on once the checkpointer hydrated
-        # ``reports`` from an earlier run on this thread. Cheapest available
-        # signal — no schema change to AgentState. Lets the followup heuristic
-        # accept short pronoun questions ("why?", "elaborate") that would
-        # otherwise fall through to the thesis safe default.
-        has_prior_turn = bool(state.get("reports"))
+        # QNT-216: prior turn can be detected from the transcript first, with
+        # the old QNT-209 reports/thesis hydration kept as backwards-compatible
+        # signal for checkpoints created before ``messages`` existed.
+        has_prior_turn = bool(history or state.get("reports") or state.get("thesis"))
         try:
             intent, classifier_source = classify_intent_with_source(
-                question, config=config, has_prior_turn=has_prior_turn
+                question,
+                config=config,
+                has_prior_turn=has_prior_turn,
+                history=history,
             )
         except Exception as exc:  # noqa: BLE001 — preserve the safe default
             logger.warning("classify %s: defaulting to thesis: %s", ticker, exc)
@@ -713,6 +804,7 @@ def build_graph(
             "intent": intent,
             "classifier_source": classifier_source,
             "ambiguity_kind": ambiguity_kind,
+            "messages": _append_user_message(history, question),
         }
 
     def plan_node(state: AgentState, config: RunnableConfig) -> dict[str, object]:
@@ -970,7 +1062,13 @@ def build_graph(
                 )
                 followup_confidence = 1.0 if reports else confidence
                 return {"quick_fact": None, "confidence": followup_confidence}
-            prompt = build_followup_prompt(ticker, question, reports, prior_thesis)
+            prompt = build_followup_prompt(
+                ticker,
+                question,
+                reports,
+                prior_thesis,
+                history=_history_before_current(state.get("messages"), question),
+            )
             structured_llm = (
                 get_llm()
                 .with_structured_output(QuickFactAnswer)
@@ -1048,7 +1146,12 @@ def build_graph(
             if not all(reports_by_ticker.get(t) for t in comparison_tickers):
                 return _fallback("I couldn't pull reports for both of those tickers right now.")
 
-            prompt = build_comparison_prompt(comparison_tickers, question, reports_by_ticker)
+            prompt = build_comparison_prompt(
+                comparison_tickers,
+                question,
+                reports_by_ticker,
+                history=_history_before_current(state.get("messages"), question),
+            )
             structured_llm = (
                 get_llm()
                 .with_structured_output(ComparisonAnswer)
@@ -1085,7 +1188,13 @@ def build_graph(
                 return _fallback(
                     "I couldn't pull a report to answer that focused analysis right now."
                 )
-            prompt = build_focused_prompt(intent, ticker, question, reports)
+            prompt = build_focused_prompt(
+                intent,
+                ticker,
+                question,
+                reports,
+                history=_history_before_current(state.get("messages"), question),
+            )
             structured_llm = (
                 get_llm()
                 .with_structured_output(FocusedAnalysis)
@@ -1125,7 +1234,12 @@ def build_graph(
         if intent == "quick_fact":
             if not reports:
                 return _fallback("I couldn't pull a report to answer that quick fact right now.")
-            prompt = build_quick_fact_prompt(ticker, question, reports)
+            prompt = build_quick_fact_prompt(
+                ticker,
+                question,
+                reports,
+                history=_history_before_current(state.get("messages"), question),
+            )
             structured_llm = (
                 get_llm()
                 .with_structured_output(QuickFactAnswer)
@@ -1159,7 +1273,12 @@ def build_graph(
         # Default thesis path
         if not reports:
             return _fallback("I couldn't pull any reports for that ticker right now.")
-        prompt = build_synthesis_prompt(ticker, question, reports)
+        prompt = build_synthesis_prompt(
+            ticker,
+            question,
+            reports,
+            history=_history_before_current(state.get("messages"), question),
+        )
         # ``with_structured_output(Thesis)`` forces the LLM into the four-section
         # schema. Errors from a misbehaving provider (Gemini occasionally
         # returns malformed tool-call JSON) surface as a fallback redirect
@@ -1228,7 +1347,10 @@ def build_graph(
         if intent == "conversational" or (
             state.get("conversational") is not None and not is_clarify
         ):
-            return {"narrative": None}
+            return {
+                "narrative": None,
+                "messages": _append_assistant_message(state, None),
+            }
 
         # Pick the structured payload to summarise. Exactly one of these is
         # populated on a successful synthesize; we render whichever it is to
@@ -1269,6 +1391,7 @@ def build_graph(
             payload_markdown=payload_markdown,
             prior_thesis_markdown=prior_thesis_markdown,
             plan_rationale=state.get("plan_rationale"),
+            history=_history_before_current(state.get("messages"), question),
         )
 
         try:
@@ -1299,10 +1422,17 @@ def build_graph(
                 type(exc).__name__,
                 exc,
             )
-            return {"narrative": None}
+            return {
+                "narrative": None,
+                "messages": _append_assistant_message(state, None),
+            }
 
         logger.info("narrate %s: narrative_chars=%d", ticker, len(narrative))
-        return {"narrative": narrative or None}
+        final_narrative = narrative or None
+        return {
+            "narrative": final_narrative,
+            "messages": _append_assistant_message(state, final_narrative),
+        }
 
     def clarify_node(state: AgentState, config: RunnableConfig) -> dict[str, object]:
         """QNT-212: ask the user back when the question is ambiguous.

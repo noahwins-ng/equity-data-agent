@@ -15,11 +15,13 @@ from agent.prompts.system import (
     CONVERSATIONAL_SYSTEM_PROMPT,
     FOCUSED_SYSTEM_PROMPT,
     FOLLOWUP_SYSTEM_PROMPT,
+    HISTORY_TURN_LIMIT,
     NARRATE_SYSTEM_PROMPT,
     QUICK_FACT_SYSTEM_PROMPT,
     REPORT_TOOLS,
     SYSTEM_PROMPT,
     THESIS_ASPECTS,
+    ConversationMessage,
     build_clarify_prompt,
     build_comparison_prompt,
     build_conversational_prompt,
@@ -28,6 +30,7 @@ from agent.prompts.system import (
     build_narrate_prompt,
     build_quick_fact_prompt,
     build_synthesis_prompt,
+    trim_message_history,
 )
 
 __all__ = [
@@ -36,8 +39,10 @@ __all__ = [
     "CLARIFY_SYSTEM_PROMPT",
     "COMPARISON_SYSTEM_PROMPT",
     "CONVERSATIONAL_SYSTEM_PROMPT",
+    "ConversationMessage",
     "FOCUSED_SYSTEM_PROMPT",
     "FOLLOWUP_SYSTEM_PROMPT",
+    "HISTORY_TURN_LIMIT",
     "NARRATE_SYSTEM_PROMPT",
     "QUICK_FACT_SYSTEM_PROMPT",
     "REPORT_TOOLS",
@@ -51,4 +56,5 @@ __all__ = [
     "build_narrate_prompt",
     "build_quick_fact_prompt",
     "build_synthesis_prompt",
+    "trim_message_history",
 ]

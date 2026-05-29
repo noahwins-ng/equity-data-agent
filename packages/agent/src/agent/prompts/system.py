@@ -39,9 +39,9 @@ the eval is the empirical check.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal, TypedDict
 
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 # Canonical tool registry. The graph (`agent.graph`) imports this rather than
 # duplicating it; the prompt's citation list and aspect headings hardcode
@@ -58,6 +58,53 @@ THESIS_ASPECTS: tuple[str, ...] = (
     "Technical",
     "News",
 )
+
+HISTORY_TURN_LIMIT = 10
+
+
+class ConversationMessage(TypedDict):
+    """Compact transcript record persisted in AgentState.
+
+    Keeping only role + rendered surface avoids storing full structured card
+    JSON in the checkpointer while still giving classifier/synthesis/narrate
+    enough dialogue context to answer follow-ups.
+    """
+
+    role: Literal["user", "assistant"]
+    content: str
+
+
+def trim_message_history(
+    messages: list[ConversationMessage] | None,
+    *,
+    max_turns: int = HISTORY_TURN_LIMIT,
+) -> list[ConversationMessage]:
+    """Bound transcript growth to the last ``max_turns`` user/assistant turns."""
+    if not messages:
+        return []
+    limit = max_turns * 2
+    return list(messages[-limit:])
+
+
+def _conversation_to_messages(history: list[ConversationMessage] | None) -> list[BaseMessage]:
+    """Render compact transcript records as LangChain chat messages."""
+    rendered: list[BaseMessage] = []
+    for item in trim_message_history(history):
+        content = item.get("content", "").strip()
+        if not content:
+            continue
+        if item.get("role") == "assistant":
+            rendered.append(AIMessage(content=content))
+        else:
+            rendered.append(HumanMessage(content=content))
+    return rendered
+
+
+def _stable_prefix(
+    system_prompt: str, history: list[ConversationMessage] | None
+) -> list[BaseMessage]:
+    """Return the byte-stable ``[system, history...]`` prompt prefix."""
+    return [SystemMessage(content=system_prompt), *_conversation_to_messages(history)]
 
 
 # QNT-210: stable marker token for the analyst-voice ADR, threaded into every
@@ -305,18 +352,19 @@ def build_synthesis_prompt(
     ticker: str,
     question: str,
     reports: dict[str, str],
+    history: list[ConversationMessage] | None = None,
 ) -> list[BaseMessage]:
-    """Compose the synthesize-node prompt as a system + user message pair.
+    """Compose the synthesize-node prompt as stable prefix + volatile suffix.
 
     Returning a messages list (rather than a flat string) ensures SYSTEM_PROMPT
     lands in the system turn -- providers weigh system instructions higher than
     user content, so "Never perform arithmetic" actually carries the authority
-    its framing implies. Reports are interpolated into the user message with
-    ``=== <name> report ===`` fences whose ``===`` chars are scrubbed from the
-    report body to prevent injection.
+    its framing implies. Prior conversation is placed in the cacheable prefix;
+    the current question and freshly gathered reports stay in the final user
+    message because they change per turn.
     """
     return [
-        SystemMessage(content=SYSTEM_PROMPT),
+        *_stable_prefix(SYSTEM_PROMPT, history),
         HumanMessage(content=_build_user_message(ticker, question, reports)),
     ]
 
@@ -374,6 +422,7 @@ def build_quick_fact_prompt(
     ticker: str,
     question: str,
     reports: dict[str, str],
+    history: list[ConversationMessage] | None = None,
 ) -> list[BaseMessage]:
     """Compose the quick-fact prompt as a system + user message pair.
 
@@ -382,7 +431,7 @@ def build_quick_fact_prompt(
     question; the system message governs the output shape.
     """
     return [
-        SystemMessage(content=QUICK_FACT_SYSTEM_PROMPT),
+        *_stable_prefix(QUICK_FACT_SYSTEM_PROMPT, history),
         HumanMessage(content=_build_user_message(ticker, question, reports)),
     ]
 
@@ -457,6 +506,7 @@ def build_comparison_prompt(
     tickers: list[str],
     question: str,
     reports_by_ticker: dict[str, dict[str, str]],
+    history: list[ConversationMessage] | None = None,
 ) -> list[BaseMessage]:
     """Compose the comparison prompt as a system + user message pair.
 
@@ -482,7 +532,7 @@ def build_comparison_prompt(
         f"# Task\nCompare {' vs '.join(tickers)}.\nQuestion: {task_question}\n\n# Reports\n{body}\n"
     )
     return [
-        SystemMessage(content=COMPARISON_SYSTEM_PROMPT),
+        *_stable_prefix(COMPARISON_SYSTEM_PROMPT, history),
         HumanMessage(content=user_msg),
     ]
 
@@ -677,6 +727,7 @@ def build_focused_prompt(
     ticker: str,
     question: str,
     reports: dict[str, str],
+    history: list[ConversationMessage] | None = None,
 ) -> list[BaseMessage]:
     """Compose the focused-analysis prompt as a system + user message pair.
 
@@ -703,7 +754,7 @@ def build_focused_prompt(
         f"# Reports\n{body}\n"
     )
     return [
-        SystemMessage(content=FOCUSED_SYSTEM_PROMPT),
+        *_stable_prefix(FOCUSED_SYSTEM_PROMPT, history),
         HumanMessage(content=user_msg),
     ]
 
@@ -791,6 +842,7 @@ def build_narrate_prompt(
     payload_markdown: str,
     prior_thesis_markdown: str | None = None,
     plan_rationale: str | None = None,
+    history: list[ConversationMessage] | None = None,
 ) -> list[BaseMessage]:
     """Compose the narrate-node prompt as a system + user message pair.
 
@@ -830,7 +882,7 @@ def build_narrate_prompt(
         f"{payload_block}{prior_block}{rationale_block}"
     )
     return [
-        SystemMessage(content=NARRATE_SYSTEM_PROMPT),
+        *_stable_prefix(NARRATE_SYSTEM_PROMPT, history),
         HumanMessage(content=user_msg),
     ]
 
@@ -919,6 +971,7 @@ def build_followup_prompt(
     question: str,
     reports: dict[str, str],
     prior_thesis: object | None,
+    history: list[ConversationMessage] | None = None,
 ) -> list[BaseMessage]:
     """Compose the followup prompt as a system + user message pair.
 
@@ -955,7 +1008,7 @@ def build_followup_prompt(
         f"{prior_section}"
     )
     return [
-        SystemMessage(content=FOLLOWUP_SYSTEM_PROMPT),
+        *_stable_prefix(FOLLOWUP_SYSTEM_PROMPT, history),
         HumanMessage(content=user_msg),
     ]
 
@@ -966,8 +1019,10 @@ __all__ = [
     "CLARIFY_SYSTEM_PROMPT",
     "COMPARISON_SYSTEM_PROMPT",
     "CONVERSATIONAL_SYSTEM_PROMPT",
+    "ConversationMessage",
     "FOCUSED_SYSTEM_PROMPT",
     "FOLLOWUP_SYSTEM_PROMPT",
+    "HISTORY_TURN_LIMIT",
     "NARRATE_SYSTEM_PROMPT",
     "QUICK_FACT_SYSTEM_PROMPT",
     "REPORT_TOOLS",
@@ -981,4 +1036,5 @@ __all__ = [
     "build_narrate_prompt",
     "build_quick_fact_prompt",
     "build_synthesis_prompt",
+    "trim_message_history",
 ]
