@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from agent import graph as graph_module
-from agent.graph import REPORT_TOOLS, build_graph
+from agent.graph import REPORT_TOOLS, ThesisPlan, build_graph
 from agent.prompts import (
     COMPARISON_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
@@ -323,8 +323,15 @@ def test_synthesize_node_invokes_llm_with_system_message(
     prompt back into a string."""
     from ._thesis_factory import make_thesis
 
-    plan_response = AIMessage(content="technical, fundamental, news")
     structured_response = make_thesis()
+    plan_runnable = MagicMock()
+    plan_runnable.invoke = MagicMock(
+        return_value=ThesisPlan(
+            tools=["company", "technical", "fundamental", "news"],
+            rationale="Balanced thesis, so all reports are relevant.",
+        )
+    )
+    plan_runnable.with_retry.return_value = plan_runnable
     structured_runnable = MagicMock()
     structured_runnable.invoke = MagicMock(return_value=structured_response)
     # with_retry() must return the same mock so .invoke stays configured
@@ -332,8 +339,15 @@ def test_synthesize_node_invokes_llm_with_system_message(
     structured_runnable.with_retry.return_value = structured_runnable
 
     llm = MagicMock()
-    llm.invoke = MagicMock(return_value=plan_response)
-    llm.with_structured_output = MagicMock(return_value=structured_runnable)
+    llm.invoke = MagicMock(return_value=AIMessage(content="technical, fundamental, news"))
+    llm.stream = MagicMock(return_value=iter([]))
+
+    def _structured(schema: object) -> MagicMock:
+        if schema is ThesisPlan:
+            return plan_runnable
+        return structured_runnable
+
+    llm.with_structured_output = MagicMock(side_effect=_structured)
 
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
 
@@ -359,10 +373,9 @@ def test_synthesize_node_invokes_llm_with_system_message(
     assert isinstance(synthesize_prompt[0], SystemMessage)
     assert synthesize_prompt[0].content == SYSTEM_PROMPT
     assert isinstance(synthesize_prompt[1], HumanMessage)
-    # The structured-output runnable was constructed from the Thesis schema.
-    llm.with_structured_output.assert_called_once()
-    schema_arg = llm.with_structured_output.call_args.args[0]
-    assert schema_arg is Thesis
+    # The structured-output runnables were constructed for plan, then synthesize.
+    schema_args = [call.args[0] for call in llm.with_structured_output.call_args_list]
+    assert schema_args == [ThesisPlan, Thesis]
 
 
 def test_thesis_aspects_match_issue_body() -> None:

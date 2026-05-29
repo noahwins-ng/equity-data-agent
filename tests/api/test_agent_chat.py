@@ -206,6 +206,67 @@ def test_happy_path_emits_canonical_sequence(
     ]
 
 
+def test_dynamic_thesis_plan_emits_only_chosen_tool_calls(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QNT-213: the SSE stream reflects the graph's narrowed thesis plan.
+
+    The API instruments every available report tool, but only wrapped tools
+    actually invoked by the graph should emit tool_call/tool_result frames.
+    """
+    thesis = _stub_thesis()
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
+        graph = MagicMock()
+
+        def invoke(state: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+            ticker = state["ticker"]
+            chosen = ["company", "fundamental"]
+            reports = {name: tools[name](ticker) for name in chosen}
+            return {
+                "ticker": ticker,
+                "intent": "thesis",
+                "plan": chosen,
+                "plan_rationale": (
+                    "Your question is about valuation, so fundamentals and "
+                    "company context matter most."
+                ),
+                "reports": reports,
+                "errors": {},
+                "thesis": thesis,
+                "quick_fact": None,
+                "confidence": 1.0,
+                "intent_path": ["classify", "plan", "gather", "synthesize", "narrate"],
+            }
+
+        graph.invoke.side_effect = invoke
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(
+        chat_module,
+        "default_report_tools",
+        lambda: {
+            "company": lambda t: f"## company {t}\n",
+            "technical": lambda t: f"## technical {t}\n",
+            "fundamental": lambda t: f"## fundamental {t}\n",
+            "news": lambda t: f"## news {t}\n",
+        },
+    )
+
+    r = client.post(
+        "/api/v1/agent/chat",
+        json={"ticker": "AAPL", "message": "is AAPL overvalued?"},
+    )
+    frames = _parse_sse(r.text)
+
+    tool_calls = [data["name"] for name, data in frames if name == "tool_call"]
+    tool_results = [data["name"] for name, data in frames if name == "tool_result"]
+    assert tool_calls == ["company", "fundamental"]
+    assert tool_results == ["company", "fundamental"]
+    assert "thesis" in [name for name, _ in frames]
+
+
 def test_thesis_event_payload_matches_pydantic_dump(
     client: TestClient,
     stub_graph: MagicMock,

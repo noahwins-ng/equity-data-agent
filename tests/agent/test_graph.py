@@ -28,6 +28,7 @@ from agent import graph as graph_module
 from agent.graph import (
     OPTIONAL_TOOLS,
     REPORT_TOOLS,
+    ThesisPlan,
     ToolFn,
     _confidence_from_reports,
     _parse_plan,
@@ -71,6 +72,14 @@ class _StructuredLLM:
     def __init__(self) -> None:
         self.invoke = MagicMock()
         self.invoke.return_value = AIMessage(content="technical, fundamental, news")
+        self._plan_runnable = MagicMock()
+        self._plan_runnable.invoke = MagicMock(
+            return_value=ThesisPlan(
+                tools=["company", "technical", "fundamental", "news"],
+                rationale="Balanced thesis, so all reports are relevant.",
+            )
+        )
+        self._plan_runnable.with_retry.return_value = self._plan_runnable
         self._structured_runnable = MagicMock()
         self._structured_runnable.invoke = MagicMock(return_value=_stub_thesis())
         # with_retry() must return the same mock so .invoke stays configured.
@@ -78,12 +87,18 @@ class _StructuredLLM:
         # a fresh auto-generated MagicMock would lose the return_value.
         self._structured_runnable.with_retry.return_value = self._structured_runnable
 
-    def with_structured_output(self, schema: object) -> MagicMock:  # noqa: ARG002
+    def with_structured_output(self, schema: object) -> MagicMock:
+        if schema is ThesisPlan:
+            return self._plan_runnable
         return self._structured_runnable
 
     @property
     def structured_invoke(self) -> MagicMock:
         return self._structured_runnable.invoke
+
+    @property
+    def plan_invoke(self) -> MagicMock:
+        return self._plan_runnable.invoke
 
 
 @pytest.fixture
@@ -248,7 +263,14 @@ def test_thesis_retries_on_validation_error_and_returns_valid_answer(
         def __init__(self) -> None:
             self.invoke = MagicMock(return_value=AIMessage(content="technical"))
 
-        def with_structured_output(self, schema: object) -> RunnableLambda:  # noqa: ARG002
+        def with_structured_output(self, schema: object) -> RunnableLambda:
+            if schema is ThesisPlan:
+                return RunnableLambda(
+                    lambda _input: ThesisPlan(
+                        tools=["company", "technical", "fundamental", "news"],
+                        rationale="Balanced thesis, so all reports are relevant.",
+                    )
+                )
             return RunnableLambda(_invoke)
 
     llm = _RetryCapableLLM()
@@ -365,11 +387,11 @@ def test_no_reports_gathered_falls_back_to_conversational_redirect(
     assert result["comparison"] is None
     assert isinstance(result["conversational"], ConversationalAnswer)
     assert result["errors"]["technical"].startswith("RuntimeError")
-    # Thesis intent skips the plan LLM call entirely (deterministic — fetch
-    # everything available); synthesize did NOT call the LLM either because
-    # gather produced no reports and the fallback is deterministic, not
-    # generated. So the chat-shape stub never sees an invoke.
+    # The thesis planner fires once, but synthesize does NOT call the LLM
+    # because gather produced no reports and the fallback is deterministic,
+    # not generated. So the chat-shape stub never sees an invoke.
     assert stub_llm.invoke.call_count == 0
+    assert stub_llm.plan_invoke.call_count == 1
     assert stub_llm.structured_invoke.call_count == 0
 
 
@@ -454,10 +476,14 @@ def test_llm_calls_carry_runtime_config_for_callback_propagation(
     graph = build_graph({"technical": _mock_tool("tech")})
     _run(graph)
 
-    # Thesis intent skips the plan LLM call (fetch-everything is
-    # deterministic), so only the synthesize structured-output call lands.
-    # Assert the call carried a ``config=`` kwarg — the keyword is the
+    # Thesis uses a structured plan call and a structured synthesize call.
+    # Assert both carried a ``config=`` kwarg — the keyword is the
     # CallbackHandler propagation channel.
+    assert llm.plan_invoke.call_count == 1
+    plan_call = llm.plan_invoke.call_args
+    assert "config" in plan_call.kwargs, (
+        f"plan llm.invoke must pass config=; got kwargs={plan_call.kwargs!r}"
+    )
     assert llm._structured_runnable.invoke.call_count == 1
     synth_call = llm._structured_runnable.invoke.call_args
     assert "config" in synth_call.kwargs, (
@@ -529,32 +555,22 @@ def test_parse_plan_drops_company_for_quick_fact() -> None:
     assert plan == ["technical"]
 
 
-def test_thesis_skips_plan_llm_and_fetches_all_available_tools(
+def test_thesis_calls_structured_plan_llm_and_fetches_chosen_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Thesis intent must NOT call the plan LLM — instead it fetches every
-    available tool deterministically. The plan-LLM was non-deterministic
-    noise (one ticker got all 4 tools, an adjacent ticker dropped technical
-    for the same prompt) and the bias text was already telling it to include
-    everything; force-include is the cleaner contract.
-
-    Pinned because regressing this would silently drop tool coverage on
-    arbitrary thesis runs — no unit test would catch it without this
-    explicit no-LLM-call assertion.
-    """
+    """QNT-213: thesis intent calls the structured planner, then synthesize."""
     llm = _StructuredLLM()
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
 
     graph = build_graph({name: _mock_tool(name) for name in REPORT_TOOLS})
     result = _run(graph)
 
-    # Thesis: zero plan-LLM calls (raw .invoke), one synthesize call
-    # (.structured_invoke). The plan node short-circuits to the
-    # fetch-everything deterministic branch on thesis intent, so only the
-    # structured-output synthesize lands.
+    # Thesis: one structured planner call, one synthesize call. The raw
+    # comma-list planner remains reserved for quick_fact below.
     assert llm.invoke.call_count == 0
+    assert llm.plan_invoke.call_count == 1
     assert llm._structured_runnable.invoke.call_count == 1
-    # And every available tool was fetched.
+    # The default stub chooses every available tool.
     assert set(result["reports"]) == set(REPORT_TOOLS)
 
 

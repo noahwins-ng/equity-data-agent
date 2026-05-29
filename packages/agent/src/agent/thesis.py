@@ -118,14 +118,16 @@ class Thesis(BaseModel):
         description=(
             "Valuation / earnings / margin aspect drawn from the "
             "fundamental report. ``label`` is one of Premium / Inline / "
-            "Discounted, quoted verbatim from the report."
+            "Discounted, quoted verbatim from the report. Use null when "
+            "the fundamental report was not supplied."
         ),
     )
     technical: AspectView = Field(
         description=(
             "Price-action / indicator aspect drawn from the technical "
             "report. ``label`` is one of Uptrend / Sideways / Downtrend, "
-            "quoted verbatim from the report."
+            "quoted verbatim from the report. Use null when the technical "
+            "report was not supplied."
         ),
     )
     news: AspectView = Field(

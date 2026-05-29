@@ -155,6 +155,12 @@ monthly wins; >=2 timeframes agreeing decides, otherwise Sideways).
   * **news** -- recent headline flow drawn from the news report. \
 ``label`` is null -- news is narrative-only.
 
+If a report for an aspect was NOT supplied in the user message, do not fill \
+that aspect from memory or from another report. Set that aspect's ``label`` \
+to null, set ``summary`` to "Not fetched for this question.", and leave \
+``supports`` and ``challenges`` empty. Base the verdict only on the supplied \
+reports.
+
 Each aspect carries three fields:
 
   * ``summary`` -- 2-3 sentences of analytical prose, cited.
@@ -286,7 +292,13 @@ def _build_user_message(
         body = "(no reports available)"
 
     task_question = question or "Provide a balanced investment thesis."
-    return f"# Task\nWrite a thesis for {ticker}.\nQuestion: {task_question}\n\n# Reports\n{body}\n"
+    supplied = ", ".join(reports) if reports else "none"
+    return (
+        f"# Task\nWrite a thesis for {ticker}.\n"
+        f"Question: {task_question}\n"
+        f"Supplied reports: {supplied}\n\n"
+        f"# Reports\n{body}\n"
+    )
 
 
 def build_synthesis_prompt(
@@ -778,6 +790,7 @@ def build_narrate_prompt(
     question: str,
     payload_markdown: str,
     prior_thesis_markdown: str | None = None,
+    plan_rationale: str | None = None,
 ) -> list[BaseMessage]:
     """Compose the narrate-node prompt as a system + user message pair.
 
@@ -795,6 +808,15 @@ def build_narrate_prompt(
         )
     else:
         prior_block = ""
+    if plan_rationale:
+        rationale_block = (
+            "\n# Planning rationale\n"
+            f"{_sanitize_report_body(plan_rationale)}\n"
+            "You may weave this into the prose if it helps explain why the analysis "
+            "leans on these reports. Omit it when it would feel forced.\n"
+        )
+    else:
+        rationale_block = ""
     if payload_markdown:
         payload_block = f"# Structured answer\n{_sanitize_report_body(payload_markdown)}\n"
     else:
@@ -805,7 +827,7 @@ def build_narrate_prompt(
         f"# Task\nNarrate the analyst answer for {ticker}.\n"
         f"Intent: {intent}\n"
         f"User question: {question or '(no question supplied)'}\n\n"
-        f"{payload_block}{prior_block}"
+        f"{payload_block}{prior_block}{rationale_block}"
     )
     return [
         SystemMessage(content=NARRATE_SYSTEM_PROMPT),
