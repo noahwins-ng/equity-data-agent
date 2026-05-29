@@ -966,12 +966,22 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
         else:
             citations_count = _count_citations(thesis if isinstance(thesis, Thesis) else None)
 
-        # QNT-209: tools_count reflects tools INVOKED this turn, not the
-        # size of the hydrated report bundle. On followup turns we reused
-        # the prior turn's reports verbatim and fired zero tools, so the
-        # frontend chip should read "0 sources" rather than the misleading
-        # 3-4 hydrated entries.
-        tools_count = 0 if intent == "followup" else len(reports)
+        # QNT-209/212: tools_count reflects tools INVOKED this turn, not the
+        # size of the hydrated report bundle. Any turn that skipped gather
+        # (followup, conversational, and clarify all short-circuit past
+        # plan+gather per QNT-212) reused or ignored the prior turn's
+        # checkpointer-hydrated reports and fired zero tools, so the frontend
+        # chip must read "0 sources" rather than the misleading hydrated
+        # count. ``gather`` in intent_path is the authoritative signal; the
+        # ``intent_path and`` guard preserves the old len(reports) fallback
+        # for stubbed test graphs that don't populate intent_path, and the
+        # explicit followup clause keeps the QNT-209 contract for those stubs
+        # (which set intent="followup" with hydrated reports but no path).
+        tools_count = (
+            0
+            if intent == "followup" or (intent_path and "gather" not in intent_path)
+            else len(reports)
+        )
         yield _sse(
             "done",
             {

@@ -2140,3 +2140,26 @@ def test_done_intent_path_empty_on_unknown_ticker(client: TestClient) -> None:
     frames = _parse_sse(r.text)
     done = frames[-1][1]
     assert done["intent_path"] == []
+
+
+def test_done_tools_count_zero_when_gather_skipped(
+    client: TestClient,
+    _path_stub_factory: Any,
+) -> None:
+    """QNT-212 fold: a conversational turn short-circuits past plan+gather,
+    but the checkpointer hydrates the prior turn's reports into final state.
+    ``tools_count`` must report tools INVOKED this turn (zero), not the size
+    of the hydrated bundle -- the chip otherwise read a misleading "2 sources"
+    on a turn that fired no tools."""
+    _path_stub_factory(
+        intent="conversational",
+        intent_path=["classify", "synthesize", "narrate"],
+        reports={"company": "hydrated", "fundamental": "hydrated"},
+        conversational=ConversationalAnswer(answer="I cover US equities.", suggestions=[]),
+    )
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "what about retail?"})
+    frames = _parse_sse(r.text)
+    done = frames[-1][1]
+    assert "gather" not in done["intent_path"]
+    assert done["tools_count"] == 0
