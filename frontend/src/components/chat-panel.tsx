@@ -399,7 +399,19 @@ const ASPECT_LABEL_PILL: Record<AspectLabel, string> = {
   Downtrend: "border-red-700/40 bg-red-900/20 text-red-300",
 };
 
+// QNT-213: the thesis planner narrows to a subset of report tools, so a
+// skipped aspect comes back filled with a sentinel summary (the synthesis
+// prompt instructs the LLM to emit "Not fetched for this question." verbatim
+// with a null label and empty bullets). Render nothing for those aspects
+// rather than an empty stub section — the card shows only what was researched.
+const NOT_FETCHED_SUMMARY = "not fetched for this question";
+
+function aspectWasFetched(aspect: AspectView): boolean {
+  return !aspect.summary.trim().toLowerCase().startsWith(NOT_FETCHED_SUMMARY);
+}
+
 function AspectBlock({ title, aspect }: { title: string; aspect: AspectView }) {
+  if (!aspectWasFetched(aspect)) return null;
   return (
     <div>
       <div className="mb-1 flex items-baseline gap-2">
