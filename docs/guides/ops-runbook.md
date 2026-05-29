@@ -796,6 +796,39 @@ CX41 totals: 16 GiB RAM. Pre-QNT-103 mem_limit allocation was 13.06 GiB (clickho
 
 **Response**: fix the upstream LiteLLM / provider issue and watch the fallback share drop in Langfuse within the next few requests. No data loss occurs — the agent answers every query, just with the heavier thesis shape. Safe to run in degraded mode until the provider recovers.
 
+### Per-intent p95 latency SLOs (QNT-188)
+
+**What it catches**: a single aggregate trace-latency number hides per-intent regressions — a `thesis` spinning to 30 s ("tool fan-out is slow") is a different fault from a `quick_fact` doing the same ("the LLM call itself is broken"). Every `agent-chat` trace carries an `intent:<value>` tag (`packages/api/src/api/routers/agent_chat.py`), so latency can be partitioned per intent. The SLOs below are `p95 + ~20% headroom`, derived from an observed baseline — they are not picked targets.
+
+**SLO table** — basis: 7-day window 2026-05-23 → 2026-05-30, N=159 `agent-chat` traces (8 intents per `agent/intent.py`):
+
+| Intent | N | p95 | SLO (p95 + 20%) |
+|---|---|---|---|
+| `thesis` | 58 | 22.5 s | **27 s** |
+| `conversational` | 41 | 10.5 s | **13 s** |
+| `followup` | 20 | 15.4 s | **19 s** |
+| `technical` | 14 | 18.4 s | **22 s** |
+| `fundamental` | 9 † | 12.9 s | **16 s** |
+| `quick_fact` | 7 † | 22.2 s | **27 s** ‡ |
+| `news` | 5 † | 16.2 s | **20 s** |
+| `comparison` | 4 † | 99.7 s | **120 s** ‡ |
+
+† Provisional — N < 10; treat the SLO as directional and re-derive once traffic accumulates.
+‡ Baseline reflects a known anomaly, not a healthy target — see caveats.
+
+**No automated alerting (by design).** Langfuse cannot alert on trace latency: automations trigger only on prompt-version events (`TriggerEventSource` enum = `prompt` only), and Spend Alerts are cost-based (out of scope on free LLM tiers). So these SLOs are a **manual operator check**, not a paging rule. Two viable automation paths were deferred (QNT-188): a scheduled Langfuse Metrics-API check → Discord, or per-intent Prometheus metrics + Grafana alert rules (same pattern as `ContainerMemoryHigh`). Revisit at ~10x traffic, when the intent taxonomy has stopped churning.
+
+**How to check**: in the Langfuse UI (`https://us.cloud.langfuse.com`), filter `agent-chat` traces by the `intent:<value>` tag over the last 7 days and read the latency distribution; compare the p95 against the table. To refresh the full baseline, pull traces via the public API (`GET /api/public/traces?name=agent-chat&fields=core,metrics`) and recompute percentiles per `intent:` tag — the one-shot script used for this baseline lives in the QNT-188 ticket history.
+
+**Response when an intent's p95 exceeds its SLO**:
+- `thesis`, `comparison` (multi-source / multi-ticker fan-out): the slowdown is almost always tool latency, not the LLM. Check the tool spans in a slow trace and the upstream FastAPI report endpoints / ClickHouse query times. `comparison` is intrinsically high-variance (2-ticker fan-out) — treat its SLO as a soft ceiling.
+- `quick_fact`, `conversational`, `news`, `fundamental`, `technical`: the LLM call dominates these short shapes, so a regression points at LiteLLM / provider latency or a prompt that ballooned the token count. Cross-reference the `model:*` tag and LiteLLM logs.
+
+**Caveats — the baseline is a moving target**:
+- The intent taxonomy changed between the Phase-1 baseline (2026-05-20, 7 intents incl. `news_sentiment`) and this one: `news_sentiment` was renamed `news` and `followup` was added (QNT-213/216/217 conversation-history work). Re-derive the table whenever `agent/intent.py` changes.
+- Latencies roughly **tripled** across that window (`thesis` p95 7.9 s → 22.5 s, `conversational` 1.6 s → 10.5 s) — the same conversation-history / dynamic-thesis-planning changes. The SLOs reflect the current, heavier architecture.
+- `quick_fact` p95 regressed from **1.7 s (Phase 1) to 22 s** and is stable across both windows (not a small-N artifact). A "quick fact" taking 22 s is a latent bug, not a target — investigate the quick_fact path before trusting its 27 s SLO.
+
 ---
 
 ## Weekly online eval schedule (QNT-192)
