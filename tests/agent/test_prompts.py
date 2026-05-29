@@ -595,6 +595,8 @@ def test_focused_prompt_per_focus_verdict_branches_present() -> None:
     assert "existing_development" in text
     assert "positive_catalysts" in text
     assert "negative_catalysts" in text
+    assert "set existing_development to null" in text
+    assert "catalyst lists to empty arrays" in text
 
 
 def test_comparison_prompt_allows_ranking_without_arithmetic_threshold() -> None:
