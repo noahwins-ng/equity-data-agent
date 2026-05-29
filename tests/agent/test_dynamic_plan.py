@@ -126,6 +126,19 @@ def test_chart_question_fetches_company_and_technical_only(
     assert set(result["reports"]) == {"company", "technical"}
 
 
+def test_thesis_plan_prompt_treats_broad_thesis_as_full_scope() -> None:
+    prompt = graph_module._build_thesis_plan_prompt(  # noqa: SLF001
+        "AAPL",
+        "what is AAPL thesis",
+        list(REPORT_TOOLS),
+    )
+
+    assert "broad thesis request" in prompt
+    assert "select every available report" in prompt
+    assert "company, fundamental, technical, and news" in prompt
+    assert "Do not narrow a broad thesis" in prompt
+
+
 def test_thesis_plan_failure_falls_back_to_all_tools_and_warns(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
