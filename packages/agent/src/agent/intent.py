@@ -34,16 +34,18 @@ Two-layer design:
    contracts. The conversational redirect is a SEPARATE path triggered by
    a positive classifier signal, not a fall-through.
 
-The classifier is intentionally stateless: it sees only the question
-string. Ticker, prior runs, and tools are not inputs — adding them would
-push toward "rich classifier with planning bias", which belongs in the
-plan node, not here.
+The classifier keeps shape-picking mostly stateless. QNT-216 relaxes that
+rule only for continuation detection: recent transcript turns may be supplied
+so an elliptical follow-up can route to ``followup`` instead of an off-domain
+conversational redirect. Ticker choice and tool planning still belong outside
+this module.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from typing import Literal
 
 from langchain_core.runnables import RunnableConfig
@@ -51,6 +53,7 @@ from pydantic import BaseModel, Field
 from shared.tickers import TICKERS
 
 from agent.llm import get_llm
+from agent.prompts import ConversationMessage
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +273,10 @@ _FOLLOWUP_TOKENS: tuple[str, ...] = (
     "expand on",
     "dig in",
     "what about that",
+    "what does that mean",
+    "what does this mean",
+    "what does that imply",
+    "what does this imply",
     "go deeper",
 )
 
@@ -321,10 +328,10 @@ def _heuristic_intent(question: str, *, has_prior_turn: bool = False) -> Intent 
     the LLM. The LLM is the fallback, not the primary — most questions in
     the chat are short and word-spotty enough for this layer to handle.
 
-    QNT-209: ``has_prior_turn`` is True when the caller hydrated state from
-    the checkpointer and saw reports from an earlier turn on this thread.
-    It gates the followup detection — bare "why?" without a prior turn has
-    no anchor and falls through to the thesis safe default.
+    QNT-216: ``has_prior_turn`` is True when the caller hydrated either
+    report state or recent transcript messages from an earlier turn. It gates
+    followup detection — bare "why?" without context has no anchor and falls
+    through to the safe default.
     """
     text = question.strip().lower()
     if not text:
@@ -403,6 +410,21 @@ def _heuristic_intent(question: str, *, has_prior_turn: bool = False) -> Intent 
     return None
 
 
+def _render_history_for_classifier(
+    history: Sequence[ConversationMessage] | None,
+) -> str:
+    """Compact recent transcript for continuation classification only."""
+    if not history:
+        return "(none)"
+    lines: list[str] = []
+    for item in history[-6:]:
+        role = item.get("role", "user")
+        content = item.get("content", "").strip()
+        if content:
+            lines.append(f"{role}: {content[:600]}")
+    return "\n".join(lines) if lines else "(none)"
+
+
 _CLASSIFY_PROMPT = """You classify a user's question to pick an answer shape.
 
 Respond with the structured field 'intent' set to one of:
@@ -457,6 +479,10 @@ ambiguous equity questions should NOT route here. Pick "fundamental", \
 domain; an open-ended "should I buy NVDA?" still routes to "thesis" even \
 though the answer happens to lean on fundamentals.
 
+Recent conversation (for follow-up detection only; do not use it to pick \
+tools, compute values, or infer a ticker that the user changed):
+{history}
+
 Question: {question}
 """
 
@@ -466,6 +492,7 @@ def classify_intent_with_source(
     *,
     config: RunnableConfig | None = None,
     has_prior_turn: bool = False,
+    history: Sequence[ConversationMessage] | None = None,
 ) -> tuple[Intent, ClassifierSource]:
     """Return ``(intent, source)`` for ``question``.
 
@@ -478,11 +505,12 @@ def classify_intent_with_source(
     QNT-181: ``config`` carries the LangGraph CallbackHandler so the
     LLM-fallback path's generation observation nests under the parent trace.
 
-    QNT-209: ``has_prior_turn`` is forwarded to the heuristic so a short
-    pronoun-style question on a hydrated thread can route to ``followup``
-    instead of falling through to the thesis safe default.
+    QNT-216: ``history`` is rendered into the LLM classifier prompt only for
+    the followup/ambiguity arm. The heuristic still handles obvious
+    continuation phrasing without an LLM call.
     """
-    heuristic = _heuristic_intent(question, has_prior_turn=has_prior_turn)
+    has_context = has_prior_turn or bool(history)
+    heuristic = _heuristic_intent(question, has_prior_turn=has_context)
     if heuristic is not None:
         logger.info("classify intent=%s via=heuristic question=%r", heuristic, question[:80])
         return heuristic, "heuristic"
@@ -490,7 +518,10 @@ def classify_intent_with_source(
     structured_llm = get_llm(temperature=0.0).with_structured_output(IntentDecision)
     try:
         response = structured_llm.invoke(
-            _CLASSIFY_PROMPT.format(question=question.strip()),
+            _CLASSIFY_PROMPT.format(
+                history=_render_history_for_classifier(history),
+                question=question.strip(),
+            ),
             config=config,
         )
     except Exception as exc:  # noqa: BLE001 — bias to thesis on any failure
@@ -513,6 +544,7 @@ def classify_intent(
     *,
     config: RunnableConfig | None = None,
     has_prior_turn: bool = False,
+    history: Sequence[ConversationMessage] | None = None,
 ) -> Intent:
     """Return the response shape to use for ``question``.
 
@@ -524,6 +556,7 @@ def classify_intent(
         question,
         config=config,
         has_prior_turn=has_prior_turn,
+        history=history,
     )
     return intent
 
