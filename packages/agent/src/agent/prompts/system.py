@@ -914,6 +914,28 @@ markdown.
 )
 
 
+# QNT-214 follow-up: the forward-looking "probe" close that lifts exploration
+# scores on substantive reads. Appended to NARRATE_SYSTEM_PROMPT only for
+# intents that conclude with a view (thesis/focused/comparison/followup) -- a
+# forced "what to watch" close reads as padding on a terse quick_fact lookup
+# and is off-key on a clarify bubble (the agent is asking, not concluding),
+# so those paths see the base prompt unchanged.
+NARRATE_PROBE_CLOSE_RULE = """7. Close with one concrete forward-looking \
+angle -- the single thing worth watching from here or the natural next \
+question a sharp analyst would raise (e.g. whether a trend holds into the \
+next print, which catalyst decides the read). This is analyst substance, not \
+a sign-off: name something specific tied to THIS read, never generic filler \
+("let me know if you have questions", "happy to dig deeper"). Stay \
+qualitative -- introduce no new number, cite nothing here. You may use up to \
+5 sentences total to fit this close.
+"""
+
+# Intents whose narration concludes with an analytical view, so the probe
+# close earns its place. quick_fact (terse lookup) and conversational are
+# excluded; clarify turns are excluded via the is_clarify flag below.
+_PROBE_CLOSE_INTENTS = frozenset({"thesis", "focused", "comparison", "followup"})
+
+
 def build_narrate_prompt(
     intent: str,
     ticker: str,
@@ -922,6 +944,7 @@ def build_narrate_prompt(
     prior_thesis_markdown: str | None = None,
     plan_rationale: str | None = None,
     history: list[ConversationMessage] | None = None,
+    is_clarify: bool = False,
 ) -> list[BaseMessage]:
     """Compose the narrate-node prompt as a system + user message pair.
 
@@ -960,8 +983,11 @@ def build_narrate_prompt(
         f"User question: {question or '(no question supplied)'}\n\n"
         f"{payload_block}{prior_block}{rationale_block}"
     )
+    system_prompt = NARRATE_SYSTEM_PROMPT
+    if intent in _PROBE_CLOSE_INTENTS and not is_clarify:
+        system_prompt += NARRATE_PROBE_CLOSE_RULE
     return [
-        *_stable_prefix(NARRATE_SYSTEM_PROMPT, history),
+        *_stable_prefix(system_prompt, history),
         HumanMessage(content=user_msg),
     ]
 
