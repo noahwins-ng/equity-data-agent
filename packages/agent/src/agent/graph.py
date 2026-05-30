@@ -1408,6 +1408,7 @@ def build_graph(
             prior_thesis_markdown=prior_thesis_markdown,
             plan_rationale=state.get("plan_rationale"),
             history=_history_before_current(state.get("messages"), question),
+            is_clarify=is_clarify,
         )
 
         try:
