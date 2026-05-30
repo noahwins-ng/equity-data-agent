@@ -4,7 +4,7 @@ Evaluation framework for the LangGraph agent. Lives in-tree under `packages/agen
 
 **Design intent**: this harness is the single most important piece of AI-Engineering signal in the repo. It operationalises the ADR-003 contract ("the LLM never calculates") and provides a measurable quality signal for the prompt across versions. Reusable enough to extract as a standalone repo later.
 
-## Three eval types — all required, not optional
+## Four eval types — all required, not optional
 
 ### (a) Numeric-claim hallucination detector — `hallucination.py`
 
@@ -31,6 +31,34 @@ Per run, for each record:
 
 For each record, assert every tool in `expected_tools` was actually called. Over-fetching is allowed (the planner is told to over-fetch when in doubt) — only under-fetching fails.
 
+### (d) Dialogue-quality judge — `dialogue_eval.py` + `goldens/dialogue.yaml`
+
+12+ hand-written multi-turn fixtures replay the agent through the same
+in-process graph path as the structured goldens. The judge is deliberately a
+different LiteLLM alias from the agent under test:
+`equity-agent/bench-gptoss120b` (`groq/openai/gpt-oss-120b`) scores the
+production default (`groq/llama-3.3-70b-versatile`). Python still owns the
+objective numeric-support check for the narrative bubble; the judge scores the
+subjective dialogue axes: `analyst_likeness`, `helpfulness`,
+`non_hallucination`, `exploration_quality`, and `voice_match`.
+
+Dialogue rows append to the same `history.csv` with `eval_type=dialogue` and
+blank structured-golden columns, preserving one reviewable quality ledger.
+
+QNT-214 baseline, captured after QNT-216 history landed:
+
+| Field | Value |
+|---|---:|
+| Run id | `20260530T055035Z-2b8838-dialogue` |
+| Dialogues | 12 |
+| Numeric support | 11/12 clean |
+| Composite | 0.774 |
+| Analyst-likeness | 0.779 |
+| Helpfulness | 0.800 |
+| Non-hallucination | 0.879 |
+| Exploration quality | 0.600 |
+| Voice match | 0.812 |
+
 ## Running locally
 
 Requires the API (`make dev-api`) and LiteLLM (`make dev-litellm`) running, plus an SSH tunnel to ClickHouse (`make tunnel`).
@@ -44,6 +72,10 @@ uv run python -m agent.evals --only NVDA
 
 # Write history elsewhere (CI / experimentation)
 uv run python -m agent.evals --history-path /tmp/eval-history.csv
+
+# Dialogue-quality evals; opt into Langfuse score emission for manual dev runs
+uv run python -m agent.evals.dialogue_eval --history-path /tmp/dialogue-history.csv
+uv run python -m agent.evals.dialogue_eval --emit-langfuse-scores
 ```
 
 Exit codes:

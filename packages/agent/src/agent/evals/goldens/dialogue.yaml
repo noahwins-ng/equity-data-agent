@@ -1,0 +1,100 @@
+dialogues:
+  - id: aapl-thesis-retail-followup
+    ticker: AAPL
+    turns:
+      - user: Give me an AAPL thesis.
+      - user: what does that mean for retail?
+    expected_signals: [analyst_likeness, exploration_quality, voice_match]
+    anchors:
+      pass: Followup should continue the AAPL thread instead of re-introducing AAPL from scratch.
+
+  - id: aapl-next-week-watch
+    ticker: AAPL
+    turns:
+      - user: What should I watch on AAPL next week?
+    expected_signals: [helpfulness, voice_match]
+    anchors:
+      pass: Answer should give actionable watch items without pretending to know future prices.
+
+  - id: nvda-thesis-narrative-numbers
+    ticker: NVDA
+    turns:
+      - user: Give me the current NVDA setup.
+    expected_signals: [non_hallucination, analyst_likeness]
+    anchors:
+      pass: Any number in the narrative must trace to a fetched report.
+
+  - id: aapl-compare-one-ticker-clarify
+    ticker: AAPL
+    turns:
+      - user: Compare AAPL with them.
+    expected_signals: [exploration_quality, voice_match]
+    anchors:
+      pass: Agent should ask which second ticker to compare, not invent a peer.
+
+  - id: vague-thoughts-clarify
+    ticker: TSLA
+    turns:
+      - user: What do you think?
+    expected_signals: [exploration_quality, voice_match]
+    anchors:
+      pass: Agent should ask what ticker or prior context the user means.
+
+  - id: greeting-capabilities
+    ticker: MSFT
+    turns:
+      - user: Hi, what can you help me with?
+    expected_signals: [helpfulness, voice_match]
+    anchors:
+      pass: Agent should be concise and suggest covered equity-analysis tasks.
+
+  - id: tsla-technical-why
+    ticker: TSLA
+    turns:
+      - user: Walk me through TSLA's chart setup.
+      - user: why?
+    expected_signals: [analyst_likeness, non_hallucination, voice_match]
+    anchors:
+      pass: Followup should read like a continuation and avoid unsupported numbers.
+
+  - id: msft-news-what-matters
+    ticker: MSFT
+    turns:
+      - user: What's driving MSFT headlines, and what actually matters?
+    expected_signals: [helpfulness, voice_match]
+    anchors:
+      pass: Agent should separate useful signal from headline noise.
+
+  - id: googl-overvalued-plan
+    ticker: GOOGL
+    turns:
+      - user: Is GOOGL overvalued?
+    expected_signals: [helpfulness, analyst_likeness, voice_match]
+    anchors:
+      pass: Agent should lean on valuation context and explain the basis without padding.
+
+  - id: meta-caution-thesis
+    ticker: META
+    turns:
+      - user: Should I be cautious about META here?
+    expected_signals: [voice_match, non_hallucination, helpfulness]
+    anchors:
+      pass: Agent should frame the risk view directly and ground any numbers.
+
+  - id: jpm-pronoun-after-thesis
+    ticker: JPM
+    turns:
+      - user: Give me a JPM thesis.
+      - user: compare that risk to the upside.
+    expected_signals: [exploration_quality, analyst_likeness]
+    anchors:
+      pass: Agent should understand "that risk" from the prior JPM turn.
+
+  - id: unh-news-risk
+    ticker: UNH
+    turns:
+      - user: Are there any concerning UNH news items lately?
+      - user: so what is the risk to watch?
+    expected_signals: [helpfulness, analyst_likeness, voice_match]
+    anchors:
+      pass: Agent should name a concrete risk watch item without over-claiming.
