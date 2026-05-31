@@ -48,7 +48,13 @@ from shared.tickers import TICKERS
 from agent.comparison import ComparisonAnswer
 from agent.conversational import ConversationalAnswer, domain_redirect
 from agent.focused import FocusedAnalysis
-from agent.intent import ClassifierSource, Intent, classify_intent_with_source, extract_tickers
+from agent.intent import (
+    ClassifierSource,
+    Intent,
+    classify_intent_with_source,
+    extract_tickers,
+    underspecified_gesture,
+)
 from agent.llm import get_llm
 from agent.prompts import (
     REPORT_TOOLS,
@@ -576,6 +582,20 @@ def _detect_ambiguity(
     ⇒ clarify.
     """
     question_tickers = extract_tickers(question)
+    # QNT-214 follow-up: a bare analysis/compare gesture that names no ticker
+    # and has no prior turn is ambiguous regardless of the intent label the
+    # classifier returned. The LLM frequently mislabels "what do you think?" /
+    # "compare them" as conversational, which would skip the clarify path
+    # QNT-212 built for exactly this. Mirror QNT-212: ask back rather than
+    # answer on the placeholder ``state.ticker``. A named ticker (handled by
+    # the branches below) still gets answered; warm threads keep their prior
+    # turn via the ``has_prior_turn`` guard.
+    if not question_tickers and not has_prior_turn:
+        gesture = underspecified_gesture(question)
+        if gesture == "compare":
+            return "needs_second_ticker"
+        if gesture == "view":
+            return "needs_ticker"
     if intent == "comparison" and len(question_tickers) < 2:
         return "needs_second_ticker"
     if intent in _TICKER_REQUIRING_INTENTS and not question_tickers and not has_prior_turn:

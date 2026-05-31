@@ -162,6 +162,44 @@ def test_detect_ambiguity_focused_no_ticker(intent: str) -> None:
     assert _detect_ambiguity(intent, "what's the read?", has_prior_turn=False) == "needs_ticker"  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize("question", ["What do you think?", "Your thoughts?", "what's your take"])
+def test_detect_ambiguity_view_gesture_conversational(question: str) -> None:
+    """QNT-214 follow-up: the LLM mislabels a bare 'what do you think?' as
+    conversational; the gesture branch still routes it to needs_ticker so the
+    agent asks back instead of ploughing into a generic redirect.
+    """
+    assert _detect_ambiguity("conversational", question, has_prior_turn=False) == "needs_ticker"
+
+
+def test_detect_ambiguity_compare_gesture_conversational() -> None:
+    """QNT-214 follow-up: a bare 'compare them' mislabelled conversational
+    routes to needs_second_ticker rather than fabricating a peer."""
+    assert (
+        _detect_ambiguity("conversational", "compare them", has_prior_turn=False)
+        == "needs_second_ticker"
+    )
+
+
+def test_detect_ambiguity_view_gesture_with_ticker_passes() -> None:
+    """A named ticker anchors the view gesture -- answer it, don't ask back."""
+    assert (
+        _detect_ambiguity("thesis", "what do you think about NVDA?", has_prior_turn=False) is None
+    )
+
+
+def test_detect_ambiguity_view_gesture_with_prior_turn_passes() -> None:
+    """On a warm thread a bare 'what do you think?' is a followup, not a
+    cold-start clarify -- the has_prior_turn guard keeps it off the gesture path."""
+    assert _detect_ambiguity("conversational", "what do you think?", has_prior_turn=True) is None
+
+
+@pytest.mark.parametrize("greeting", ["hi", "hello", "what can you do?", "what do you do?"])
+def test_detect_ambiguity_greetings_stay_conversational(greeting: str) -> None:
+    """Greetings / capability asks must NOT match the gesture tokens -- they
+    stay on the conversational path and get the capability card."""
+    assert _detect_ambiguity("conversational", greeting, has_prior_turn=False) is None
+
+
 def test_detect_ambiguity_thesis_no_ticker_with_prior_turn_passes() -> None:
     """A hydrated thread anchors the ambiguous ask -- no clarify fires."""
     assert _detect_ambiguity("thesis", "should I buy?", has_prior_turn=True) is None

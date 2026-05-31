@@ -280,6 +280,58 @@ _FOLLOWUP_TOKENS: tuple[str, ...] = (
     "go deeper",
 )
 
+# QNT-214 follow-up: bare "give me a view" / "compare them" gestures that name
+# no ticker. The LLM classifier frequently labels these ``conversational``
+# (they carry no analytical keyword), which ploughs into a generic redirect
+# instead of asking what to analyse. Detected post-classification by the
+# graph's ambiguity gate and routed to clarify (needs_ticker /
+# needs_second_ticker), mirroring the QNT-212 contract that a subject-less
+# analysis ask should ask back rather than answer on the placeholder
+# ``state.ticker``. ``CLARIFY_SYSTEM_PROMPT``'s needs_ticker branch already
+# uses "what do you think?" as its worked example. Kept disjoint from
+# ``_CONVERSATIONAL_TOKENS`` so greetings / capability asks stay conversational.
+_VIEW_GESTURE_TOKENS: tuple[str, ...] = (
+    "what do you think",
+    "what's your take",
+    "whats your take",
+    "your take",
+    "your view",
+    "your opinion",
+    "your read",
+    "your thoughts",
+    "thoughts",
+    "what do you reckon",
+    "how does it look",
+    "how's it looking",
+    "hows it looking",
+)
+_COMPARE_GESTURE_TOKENS: tuple[str, ...] = (
+    "compare them",
+    "compare these",
+    "compare those",
+    "compare the two",
+    "compare both",
+)
+
+
+def underspecified_gesture(question: str) -> Literal["view", "compare"] | None:
+    """Return 'compare'/'view' if ``question`` is a subject-less analysis ask.
+
+    These are the bare "what do you think?" / "compare them" phrasings that
+    carry analytical intent but name no ticker. The graph's ambiguity gate
+    uses this (alongside a no-ticker / no-prior-turn guard) to route such
+    asks to clarify. Returns None for everything else, including greetings
+    and capability asks, which match a disjoint token list. Whole-word
+    matched via :func:`_matches_any`.
+    """
+    text = question.lower().strip()
+    if _matches_any(text, _COMPARE_GESTURE_TOKENS) is not None:
+        return "compare"
+    if _matches_any(text, _VIEW_GESTURE_TOKENS) is not None:
+        return "view"
+    return None
+
+
 # Short questions are more likely quick-fact. Tuned conservatively: a 12-word
 # question can still be open-ended, so this is one signal among several.
 _SHORT_QUESTION_WORD_LIMIT = 12
