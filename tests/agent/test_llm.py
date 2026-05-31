@@ -1,5 +1,10 @@
 import pytest
-from agent.llm import _ALIAS_BY_PROVIDER, get_llm, set_model_override
+from agent.llm import (
+    _ALIAS_BY_PROVIDER,
+    get_llm,
+    set_model_override,
+    set_temperature_override,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -11,8 +16,10 @@ def _reset_override():
     at module-import time.
     """
     set_model_override(None)
+    set_temperature_override(None)
     yield
     set_model_override(None)
+    set_temperature_override(None)
 
 
 def test_alias_map_covers_both_providers():
@@ -73,3 +80,22 @@ def test_model_override_unset_falls_back_to_provider(monkeypatch):
     set_model_override(None)
     llm = get_llm()
     assert llm.model_name == "equity-agent/gemini"
+
+
+def test_temperature_override_wins_over_explicit_arg(monkeypatch):
+    """QNT-218: the eval determinism override beats even an explicit temperature."""
+    from shared import config as cfg
+
+    monkeypatch.setattr(cfg.settings, "EQUITY_AGENT_PROVIDER", "groq")
+    set_temperature_override(0.0)
+    # narrate streams at 0.3; the override must still pin it to 0.0.
+    assert get_llm(temperature=0.3).temperature == 0.0
+
+
+def test_temperature_override_unset_uses_call_arg(monkeypatch):
+    from shared import config as cfg
+
+    monkeypatch.setattr(cfg.settings, "EQUITY_AGENT_PROVIDER", "groq")
+    set_temperature_override(None)
+    assert get_llm(temperature=0.3).temperature == 0.3
+    assert get_llm().temperature == 0.2

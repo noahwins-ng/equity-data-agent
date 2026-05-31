@@ -75,6 +75,21 @@ def set_model_override(alias: str | None) -> None:
     _MODEL_OVERRIDE = alias
 
 
+# QNT-218 dialogue-eval determinism override. When set, every ``get_llm()`` call
+# ignores its ``temperature`` argument and uses this value instead. The dialogue
+# eval pins it to 0.0 around a sweep so the agent-under-test stops contributing
+# sampling variance (narrate streams at 0.3, plan/synthesize default to 0.2).
+# This removes *sampling* variance only -- Groq's MoE serving is still
+# non-deterministic, which is why the eval also reports per-axis error bars.
+_TEMPERATURE_OVERRIDE: float | None = None
+
+
+def set_temperature_override(temperature: float | None) -> None:
+    """Force every subsequent ``get_llm()`` to use ``temperature``, or clear with None."""
+    global _TEMPERATURE_OVERRIDE
+    _TEMPERATURE_OVERRIDE = temperature
+
+
 def _current_alias() -> str:
     """Return the alias ``get_llm()`` would currently use.
 
@@ -212,11 +227,15 @@ def get_llm(temperature: float = 0.2) -> ChatOpenAI:
     if tracker is not None:
         callbacks.append(_UsageCallback(tracker))
 
+    effective_temperature = (
+        _TEMPERATURE_OVERRIDE if _TEMPERATURE_OVERRIDE is not None else temperature
+    )
+
     return ChatOpenAI(
         model=alias,
         base_url=settings.LITELLM_BASE_URL,
         api_key="litellm-proxy",  # pyright: ignore[reportArgumentType]  # proxy ignores; real keys server-side
-        temperature=temperature,
+        temperature=effective_temperature,
         # QNT-150: bound every LLM call so a hung LiteLLM proxy / stalled
         # provider can't keep an SSE chat connection open forever.
         timeout=settings.LLM_REQUEST_TIMEOUT,
@@ -230,5 +249,6 @@ __all__ = [
     "get_llm",
     "reset_token_tracker",
     "set_model_override",
+    "set_temperature_override",
     "set_token_tracker",
 ]
