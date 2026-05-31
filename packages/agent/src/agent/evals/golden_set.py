@@ -89,6 +89,16 @@ HISTORY_FIELDS = (
     "dialogue_composite",
     "judge_model",
     "agent_model",
+    # QNT-218: per-run aggregate band, written on a single eval_type="dialogue_summary"
+    # row per run. Axis columns above carry the mean; these carry its standard error
+    # across fixtures, and dialogue_n the fixture count. Blank on per-fixture rows.
+    "analyst_likeness_se",
+    "helpfulness_se",
+    "non_hallucination_se",
+    "exploration_quality_se",
+    "voice_match_se",
+    "dialogue_composite_se",
+    "dialogue_n",
 )
 
 

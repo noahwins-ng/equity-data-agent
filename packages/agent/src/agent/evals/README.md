@@ -43,9 +43,19 @@ subjective dialogue axes: `analyst_likeness`, `helpfulness`,
 `non_hallucination`, `exploration_quality`, and `voice_match`.
 
 Dialogue rows append to the same `history.csv` with `eval_type=dialogue` and
-blank structured-golden columns, preserving one reviewable quality ledger.
+blank structured-golden columns, preserving one reviewable quality ledger. Each
+run also appends one `eval_type=dialogue_summary` row carrying the per-axis mean
+(axis columns) plus its standard error (`*_se` columns) and the fixture count
+(`dialogue_n`) — see "Making the dialogue eval trustworthy" below.
 
-QNT-214 baseline, captured after QNT-216 history landed:
+> **Superseded baseline (temp=0.2 era).** The QNT-214 baseline below was
+> captured with the agent-under-test at `temperature=0.2`. QNT-218 pins the
+> agent to `temperature=0` during the eval, so these numbers are **not
+> comparable** to any temp=0 run and must not be used as the QNT-215 reference.
+> The QNT-215 `+0.10 / +0.15` lift thresholds were calibrated off this stale
+> baseline and must be re-derived against the temp=0 baseline before use.
+
+QNT-214 baseline (temp=0.2, superseded), captured after QNT-216 history landed:
 
 | Field | Value |
 |---|---:|
@@ -58,6 +68,47 @@ QNT-214 baseline, captured after QNT-216 history landed:
 | Non-hallucination | 0.879 |
 | Exploration quality | 0.600 |
 | Voice match | 0.812 |
+
+### Making the dialogue eval trustworthy (QNT-218)
+
+The harness is a measurement instrument; QNT-218 hardens it so a single sweep
+carries its own uncertainty, rather than averaging noise away with repeated
+sweeps (which would drain the Groq budget).
+
+- **Determinism.** The agent-under-test is pinned to `temperature=0` for the
+  duration of each fixture (`set_temperature_override`, reset in a `finally`).
+  The judge is already temp=0. This removes *sampling* variance only — Groq's
+  MoE serving is still non-deterministic, which is exactly why the per-axis
+  error bars below still matter. (It is therefore wrong to call a temp=0 run
+  "deterministic".)
+- **Self-aware single run.** Each axis mean is an average over the 12 fixtures,
+  so one run reports its own dispersion band: `SE = sd_fixtures / sqrt(n)`,
+  persisted on the `dialogue_summary` row and printed by `summarise`. This is a
+  **descriptive scatter** of one sweep, not a lift test.
+- **The QNT-215 gate is a paired per-fixture test, not two independent means.**
+  The fixtures are shared between baseline and candidate, so the gate
+  (`paired_delta_gate`) pairs them: `delta_i = candidate_i - baseline_i`,
+  `SE_delta = sd(delta_i) / sqrt(n)`. A **lift** axis (`analyst_likeness`,
+  `exploration_quality`) passes when `mean_delta > k * SE_delta` (`k=2`); every
+  other axis is a **guardrail** (`non_hallucination`, `helpfulness`,
+  `voice_match` — QNT-215's "no regression elsewhere") that passes when it does
+  not significantly regress (`mean_delta >= -k * SE_delta`). The two tuples
+  partition `DIALOGUE_AXES` so no axis goes silently unchecked. Pairing cancels
+  the shared fixture-difficulty term an independent two-sample SE would
+  double-count, so it is both tighter and conceptually correct. Note the gated
+  lift lives on the *noisy* axes QNT-215's topology is trying to move —
+  `non_hallucination` is a must-not-regress guardrail, never the gate metric.
+- **Replication policy.** A full sweep replicated `n=2-3` times is reserved for
+  the single final QNT-215 go/no-go decision, run **once on a verified clean
+  rate-limit window** — never as routine iteration cadence. Directional
+  iteration uses a single run on the targeted fixture(s). Routine multi-sweep
+  averaging was explicitly rejected: it spends the scarce Groq budget on every
+  iteration to average out a variance source temp-pinning removes for free.
+- **Clean-window guards.** `precheck_environment()` fails fast (before any token
+  is spent) if the LiteLLM proxy or report API is unreachable, so a sweep can
+  never silently run on empty reports. `contamination_warning()` flags a run
+  whose median fixture latency clears `CONTAMINATION_LATENCY_MS` (≈throttling)
+  or that dropped any judge call, so a contaminated aggregate is never trusted.
 
 ## Running locally
 

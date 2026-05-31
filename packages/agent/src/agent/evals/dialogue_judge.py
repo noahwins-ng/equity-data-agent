@@ -114,6 +114,9 @@ def build_judge_llm(*, agent_model_alias: str = AGENT_UNDER_TEST_ALIAS) -> ChatO
         api_key="litellm-proxy",  # pyright: ignore[reportArgumentType]
         temperature=0.0,
         timeout=settings.LLM_REQUEST_TIMEOUT,
+        # QNT-218: explicit exponential backoff so a transient Groq 429 retries
+        # rather than dropping the fixture to a (contaminating) None score.
+        max_retries=3,
     )
 
 
