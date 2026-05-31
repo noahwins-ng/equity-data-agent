@@ -320,8 +320,10 @@ def test_paired_gate_catches_regression_elsewhere() -> None:
         "helpfulness",
         "voice_match",
     )
-    baseline = {f: dict.fromkeys(axes, 0.6) for f in ("f1", "f2")}
-    candidate = {f: {**dict.fromkeys(axes, 0.9), "voice_match": 0.3} for f in ("f1", "f2")}
+    baseline: dict[str, dict[str, float]] = {f: {a: 0.6 for a in axes} for f in ("f1", "f2")}
+    candidate: dict[str, dict[str, float]] = {
+        f: {a: (0.3 if a == "voice_match" else 0.9) for a in axes} for f in ("f1", "f2")
+    }
     results = paired_delta_gate(baseline, candidate)
     by_axis = {r.axis: r for r in results}
     assert by_axis["voice_match"].kind == "guardrail"
