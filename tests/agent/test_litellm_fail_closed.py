@@ -51,8 +51,8 @@ _PAID_PROVIDER_PREFIXES = (
     "perplexity/",
 )
 
-# Free-tier providers permitted on the chat path.
-_FREE_PROVIDER_PREFIXES = ("groq/", "gemini/", "google/")
+# Free-tier / no-card providers permitted on the chat path.
+_FREE_PROVIDER_PREFIXES = ("groq/", "cerebras/", "gemini/", "google/")
 
 
 def _model_routes_to_free_tier(model: str) -> bool:
@@ -131,6 +131,31 @@ def test_chat_default_fallback_chain_is_free_tier_only() -> None:
     assert not failures, "\n".join(failures)
 
 
+def test_chat_default_has_cerebras_before_groq_gptoss_fallback() -> None:
+    """The chat path should use Cerebras gpt-oss before Groq gpt-oss so a
+    Groq TPD outage still has provider-level quota diversity."""
+    config = _load_config()
+    fallbacks_cfg = config.get("litellm_settings", {}).get("fallbacks", [])
+    fallback_map = {
+        alias: fallback_aliases
+        for fb_entry in fallbacks_cfg
+        for alias, fallback_aliases in fb_entry.items()
+    }
+
+    assert fallback_map["equity-agent/default"] == [
+        "equity-agent/fallback-llama4scout",
+        "equity-agent/fallback-cerebras-gptoss120b",
+        "equity-agent/fallback-groq-gptoss120b",
+    ]
+    assert fallback_map["equity-agent/fallback-llama4scout"] == [
+        "equity-agent/fallback-cerebras-gptoss120b",
+        "equity-agent/fallback-groq-gptoss120b",
+    ]
+    assert fallback_map["equity-agent/fallback-cerebras-gptoss120b"] == [
+        "equity-agent/fallback-groq-gptoss120b"
+    ]
+
+
 def test_no_chat_alias_references_paid_provider_directly() -> None:
     """Belt-and-braces: every alias that COULD be reached from the chat
     path (default, gemini, and any alias they fall back to) must route
@@ -143,7 +168,7 @@ def test_no_chat_alias_references_paid_provider_directly() -> None:
 
     # Build the reachable set: chat aliases + their fallbacks (transitive).
     reachable = {"equity-agent/default", "equity-agent/gemini"}
-    for _ in range(3):  # depth bound — chains in this repo are <= 1 hop
+    for _ in range(4):  # depth bound — chains in this repo are <= 3 hops
         new_reachable = set(reachable)
         for fb_entry in fallbacks_cfg:
             for alias, fallback_aliases in fb_entry.items():
@@ -157,8 +182,8 @@ def test_no_chat_alias_references_paid_provider_directly() -> None:
         if not _model_routes_to_free_tier(model):
             bad.append(f"{alias} -> {model}")
     assert not bad, (
-        "Chat-path aliases must all route to free-tier providers (groq / "
-        "gemini / google). Offending aliases:\n  " + "\n  ".join(bad)
+        "Chat-path aliases must all route to free/no-card providers (groq / "
+        "cerebras / gemini / google). Offending aliases:\n  " + "\n  ".join(bad)
     )
 
 

@@ -58,6 +58,16 @@ def test_fresh_thread_uses_cold_capability_prompt() -> None:
     assert ANALYST_VOICE_ADR in system
 
 
+def test_cold_capability_prompt_asks_for_next_step() -> None:
+    """Capability asks should invite the next ticker/angle, not stop at a generic card."""
+    prompt = build_conversational_prompt("Hi, what can you help me with?")
+    system = _system_text(prompt).lower()
+
+    assert "ask one direct next-step question" in system
+    assert "exactly 3 concrete starter questions" in system
+    assert "avoid generic" in system
+
+
 def test_warm_thread_suppresses_cold_capability_prompt() -> None:
     """AC2 + AC4: with prior analysis context, the warm prompt is used --
     no cold capability copy, and the prior ticker/stance is threaded in."""

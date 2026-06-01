@@ -838,6 +838,10 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
         confidence = float(state.get("confidence", 0.0)) if isinstance(state, dict) else 0.0
         errors = state.get("errors") or {} if isinstance(state, dict) else {}
         reports = state.get("reports") or {} if isinstance(state, dict) else {}
+        plan = list(state.get("plan") or []) if isinstance(state, dict) else []
+        supervisor_iterations = (
+            int(state.get("supervisor_iterations", 0)) if isinstance(state, dict) else 0
+        )
         # QNT-212: ordered list of nodes that actually fired this turn.
         # Reads off the AgentState reducer field; defaults to ``[]`` for
         # stubbed test graphs that don't populate it. Surfaced on every
@@ -977,11 +981,14 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
         # for stubbed test graphs that don't populate intent_path, and the
         # explicit followup clause keeps the QNT-209 contract for those stubs
         # (which set intent="followup" with hydrated reports but no path).
-        tools_count = (
-            0
-            if intent == "followup" or (intent_path and "gather" not in intent_path)
-            else len(reports)
-        )
+        if "explore_supervisor" in intent_path:
+            tools_count = len(plan)
+        else:
+            tools_count = (
+                0
+                if intent == "followup" or (intent_path and "gather" not in intent_path)
+                else len(reports)
+            )
         yield _sse(
             "done",
             {
@@ -991,6 +998,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                 "intent": intent,
                 "thread_id": thread_id,
                 "intent_path": intent_path,
+                "supervisor_iterations": supervisor_iterations,
             },
         )
     finally:

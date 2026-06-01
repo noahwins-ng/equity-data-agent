@@ -6,11 +6,11 @@
 # client (agent) does not need to know them.
 #
 # QNT-128/QNT-129: default stays Llama-3.3-70B (Groq free-tier TPD 100K) with
-# Llama-4-Scout-17B as auto-fallback (TPD 500K). One eval sweep is ~50–70K
-# tokens, so the 100K Llama bucket is enough for ~2 sweeps/day; the Scout
-# fallback adds 5× more headroom for heavy iteration days while staying
-# strictly better on every quality measure than the Qwen3-32B fallback it
-# replaced.
+# Llama-4-Scout-17B as auto-fallback (TPD 500K). QNT-215 adds
+# Cerebras-hosted gpt-oss-120b as a second emergency fallback for eval/dev days
+# where both Llama buckets are exhausted, with Groq-hosted gpt-oss-120b as the
+# last same-provider fallback. This is capacity insurance, not a quality
+# promotion; Scout remains the preferred fallback.
 #
 # Why Scout over Qwen: the QNT-129 free-tier bench
 # (docs/model-bench-2026-04.md) ran 16-record golden sweeps on every
@@ -53,6 +53,25 @@ model_list:
       model: groq/meta-llama/llama-4-scout-17b-16e-instruct
       api_key: os.environ/GROQ_API_KEY
 
+  - model_name: equity-agent/fallback-cerebras-gptoss120b
+    # QNT-215: second fallback behind Scout for capacity only. Cerebras gives
+    # provider-level quota diversity when Groq TPD is exhausted.
+    litellm_params:
+      model: cerebras/gpt-oss-120b
+      api_key: os.environ/CEREBRAS_API_KEY
+      reasoning_effort: low
+      extra_headers:
+        User-Agent: equity-data-agent-litellm/1.0
+
+  - model_name: equity-agent/fallback-groq-gptoss120b
+    # QNT-215: final same-provider fallback behind Cerebras. The QNT-129
+    # bench found gpt-oss-120b safe on hard contracts but too defensive for
+    # primary thesis quality, so keep it behind the stronger Llama fallback.
+    litellm_params:
+      model: groq/openai/gpt-oss-120b
+      api_key: os.environ/GROQ_API_KEY
+      reasoning_effort: low
+
   - model_name: equity-agent/gemini
     litellm_params:
       # QNT-123: Pro returns `limit: 0` on Google AI Studio free tier as of
@@ -73,6 +92,14 @@ model_list:
       api_key: os.environ/GROQ_API_KEY
       rpm: 25       # ~80% of Groq published 30 RPM (rounded to nearest 5)
       tpm: 6500     # ~80% of Groq published 8K TPM (rounded to nearest 500)
+
+  - model_name: equity-agent/bench-cerebras-gptoss120b
+    litellm_params:
+      model: cerebras/gpt-oss-120b
+      api_key: os.environ/CEREBRAS_API_KEY
+      reasoning_effort: low
+      extra_headers:
+        User-Agent: equity-data-agent-litellm/1.0
 
   - model_name: equity-agent/bench-gptoss20b
     litellm_params:
@@ -130,9 +157,18 @@ model_list:
 litellm_settings:
   drop_params: true
   # Auto-failover on 429 (rate limit) — when Llama-3.3-70B exhausts its
-  # 100K TPD, requests transparently switch to Llama-4-Scout (500K TPD)
-  # without the agent or eval needing to know. Only `equity-agent/default`
-  # falls back; `equity-agent/gemini` and the bench aliases stay direct so
-  # opting in is always an explicit choice.
+  # 100K TPD, requests transparently switch to Llama-4-Scout (500K TPD),
+  # then Cerebras-hosted gpt-oss-120b if Scout is also exhausted. The
+  # Groq-hosted gpt-oss alias stays last as a same-provider fallback.
+  # `equity-agent/gemini` and the bench aliases stay direct so opting in is
+  # always an explicit choice.
   fallbacks:
-    - equity-agent/default: ["equity-agent/fallback-llama4scout"]
+    - equity-agent/default:
+        - equity-agent/fallback-llama4scout
+        - equity-agent/fallback-cerebras-gptoss120b
+        - equity-agent/fallback-groq-gptoss120b
+    - equity-agent/fallback-llama4scout:
+        - equity-agent/fallback-cerebras-gptoss120b
+        - equity-agent/fallback-groq-gptoss120b
+    - equity-agent/fallback-cerebras-gptoss120b:
+        - equity-agent/fallback-groq-gptoss120b

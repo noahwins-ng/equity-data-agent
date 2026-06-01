@@ -88,9 +88,46 @@ All tables use `ReplacingMergeTree` for idempotency. FastAPI queries **must** us
 - `GET /api/v1/health` — service health check
 
 **Agent endpoint**:
-- `POST /api/v1/agent/chat` — stateless single-analysis; request: `{ticker, message}`, SSE events: `tool_call` → `thinking` → `thesis` → `done`. **Public-facing** — protected by SlowAPI rate limit + per-IP/global Groq token budgets + project-pinned CORS + prompt-injection input filter (QNT-161, ADR-017). See "Public-API Contract & Abuse Controls" below.
+- `POST /api/v1/agent/chat` — report-grounded chat; request: `{ticker, message, thread_id?}`, SSE events include `intent`, `tool_call`, `tool_result`, `narrative_chunk`, one structured payload (`thesis` / `quick_fact` / `comparison` / `focused` / `conversational`), then `done`. `thread_id` enables per-session message history; omitted requests run ephemerally. **Public-facing** — protected by SlowAPI rate limit + per-IP/global Groq token budgets + project-pinned CORS + prompt-injection input filter (QNT-161, ADR-017). See "Public-API Contract & Abuse Controls" below.
 
 **Cross-cutting**: All `{ticker}` endpoints validate against `shared.tickers.TICKERS` and return 404 for unknown tickers. **No API authentication** by design (read-only public market data + a portfolio chat panel that must stay one-click reachable to recruiters). Rate limiting + token budgeting on the LLM-bearing chat endpoint substitutes for auth — see "Public-API Contract & Abuse Controls" and ADR-017 for the full reasoning.
+
+## Agent LangGraph Flow
+
+QNT-215 keeps the existing classify-driven pipeline as the default path and
+adds a narrow exploration-supervisor route only for unambiguous, anchored
+exploratory questions.
+
+```mermaid
+flowchart TD
+  START --> classify
+  classify --> router{"route decision"}
+
+  router -->|"ambiguity_kind set"| clarify
+  router -->|"conversational or ordinary followup"| synthesize
+  router -->|"broad exploratory + anchored"| explore_supervisor
+  router -->|"normal analytical request"| plan
+
+  clarify --> narrate
+  plan --> gather
+  gather --> synthesize
+  explore_supervisor --> synthesize
+  synthesize --> narrate
+  narrate --> END
+```
+
+- Greetings, capability asks, and ordinary warm-thread follow-ups skip report
+  gathering: `classify -> synthesize -> narrate`.
+- Ambiguous questions ask back without tools: `classify -> clarify -> narrate`.
+- Normal thesis, quick fact, comparison, and focused requests use the stable
+  report pipeline: `classify -> plan -> gather -> synthesize -> narrate`.
+- Broad exploratory prompts such as "what's interesting about AAPL this week?"
+  or "what should I watch on AAPL next week?" route through
+  `explore_supervisor`, which may inspect up to three existing report tools
+  before handing accumulated reports to the same synthesis and narrate nodes.
+  Timely broad scans are news-led, then add a complementary lens.
+  Named-lens prompts such as "drill into the news angle" stay on the existing
+  focused or warm-follow-up paths to avoid routing overlap.
 
 ## The Agentic Boundary
 
@@ -149,7 +186,7 @@ All per-ticker Dagster assets use `StaticPartitionsDefinition` over the 10 ticke
 
 LiteLLM proxy (v1.81.14-stable, pinned) routes model requests (see ADR-011):
 - **Default**: Groq (`https://api.groq.com/openai/v1`, `llama-3.3-70b-versatile`) via `GROQ_API_KEY`. Picked over Llama-4-Scout after QNT-138's clean-window bench (cosine 0.364 vs Scout's 0.342, both 16/16 hallucination_ok). ~500 tok/s inference, email-only free tier.
-- **Auto-fallback**: Llama-4-Scout-17B (`equity-agent/fallback-llama4scout`) — same Groq provider/key, 5× the default's daily TPD. Selected on a quality-then-capacity basis after QNT-129's bench rejected Qwen3-32B (regressed 15/16 → 11/16 hallucination_ok despite the TPD headroom).
+- **Auto-fallbacks**: Llama-4-Scout-17B (`equity-agent/fallback-llama4scout`) first — same Groq provider/key, 5× the default's daily TPD. Selected on a quality-then-capacity basis after QNT-129's bench rejected Qwen3-32B (regressed 15/16 → 11/16 hallucination_ok despite the TPD headroom). QNT-215 adds Cerebras-hosted `gpt-oss-120b` as emergency provider-diverse capacity after Scout, then Groq-hosted `gpt-oss-120b` as the final same-provider fallback.
 - **Override**: Google AI Studio Gemini 2.5 Flash via `GEMINI_API_KEY` — free-tier quality override (15 RPM / 1500 RPD) for the hero demo thesis. (Pro was the original pick in ADR-011 but returned `limit: 0` on free tier at first live test — see QNT-123 and ADR-011 §Revision history.)
 - **Eval harness**: `python -m agent.evals` runs a 16-question golden set across all 10 portfolio tickers; results persist to `packages/agent/src/agent/evals/history.csv`. Hallucination check enforces ADR-003 (every numeric literal must trace to a tool-output report, with sign-magnitude equivalence per QNT-128). See `docs/model-bench-2026-04.md` for cross-model results.
 - **Tracing**: Langfuse (`us.cloud.langfuse.com`) captures every plan → gather → synthesize span per run.

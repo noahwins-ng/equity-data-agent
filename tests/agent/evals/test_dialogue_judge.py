@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 from agent.evals.dialogue_judge import (
     JUDGE_MODEL_ALIAS,
+    JUDGE_RESOLVED_MODEL,
     DialogueAxisScore,
     DialogueJudgeScore,
     build_judge_llm,
@@ -117,3 +118,8 @@ def test_returns_none_on_judge_error() -> None:
 def test_dedicated_judge_alias_rejects_self_judging() -> None:
     with pytest.raises(ValueError, match="must differ"):
         build_judge_llm(agent_model_alias=JUDGE_MODEL_ALIAS)
+
+
+def test_dialogue_judge_uses_cerebras_gptoss120b_alias() -> None:
+    assert JUDGE_MODEL_ALIAS == "equity-agent/bench-cerebras-gptoss120b"
+    assert JUDGE_RESOLVED_MODEL == "cerebras/gpt-oss-120b"

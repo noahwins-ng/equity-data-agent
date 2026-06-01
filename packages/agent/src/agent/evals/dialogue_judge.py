@@ -19,8 +19,8 @@ from shared.config import settings
 
 logger = logging.getLogger(__name__)
 
-JUDGE_MODEL_ALIAS = "equity-agent/bench-gptoss120b"
-JUDGE_RESOLVED_MODEL = "groq/openai/gpt-oss-120b"
+JUDGE_MODEL_ALIAS = "equity-agent/bench-cerebras-gptoss120b"
+JUDGE_RESOLVED_MODEL = "cerebras/gpt-oss-120b"
 AGENT_UNDER_TEST_ALIAS = "equity-agent/default"
 AGENT_UNDER_TEST_RESOLVED_MODEL = "groq/llama-3.3-70b-versatile"
 
@@ -29,7 +29,7 @@ class DialogueAxisScore(BaseModel):
     """One bounded dialogue score plus a compact debugging rationale."""
 
     score: float = Field(ge=0.0, le=1.0)
-    rationale: str = Field(min_length=1)
+    rationale: str
 
 
 class DialogueJudgeScore(BaseModel):
@@ -114,7 +114,7 @@ def build_judge_llm(*, agent_model_alias: str = AGENT_UNDER_TEST_ALIAS) -> ChatO
         api_key="litellm-proxy",  # pyright: ignore[reportArgumentType]
         temperature=0.0,
         timeout=settings.LLM_REQUEST_TIMEOUT,
-        # QNT-218: explicit exponential backoff so a transient Groq 429 retries
+        # QNT-218: explicit exponential backoff so a transient provider 429 retries
         # rather than dropping the fixture to a (contaminating) None score.
         max_retries=3,
     )
