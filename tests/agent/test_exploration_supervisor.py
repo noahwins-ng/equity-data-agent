@@ -134,6 +134,35 @@ def test_exploratory_question_routes_to_supervisor_and_calls_multiple_tools(
     assert tools["fundamental"].call_count == 0
 
 
+def test_broad_exploration_still_routes_when_classifier_labels_news(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_intent(monkeypatch, "news")
+    _patch_llm(
+        monkeypatch,
+        _ExplorationLLM(
+            [
+                ExplorationDecision(action="news", rationale="Start with current headlines."),
+                ExplorationDecision(action="technical", rationale="Check the market setup."),
+                ExplorationDecision(action="finish", rationale="Enough context."),
+            ]
+        ),
+    )
+    tools = _tools()
+
+    result = build_graph(tools).invoke(
+        {"ticker": "AAPL", "question": "What is interesting about AAPL this week?"}
+    )
+
+    assert result["intent_path"] == ["classify", "explore_supervisor", "synthesize", "narrate"]
+    assert result["plan"] == ["news", "technical"]
+    assert result["supervisor_iterations"] == 3
+    assert tools["news"].call_count == 1
+    assert tools["technical"].call_count == 1
+    assert tools["company"].call_count == 0
+    assert tools["fundamental"].call_count == 0
+
+
 def test_news_led_broad_exploration_finish_gets_complementary_lens(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
