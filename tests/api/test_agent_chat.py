@@ -267,6 +267,62 @@ def test_dynamic_thesis_plan_emits_only_chosen_tool_calls(
     assert "thesis" in [name for name, _ in frames]
 
 
+def test_exploration_supervisor_done_payload_counts_plan_tools(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QNT-215: exploration skips gather but still counts tools invoked this turn."""
+    thesis = _stub_thesis()
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
+        graph = MagicMock()
+
+        def invoke(state: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+            ticker = state["ticker"]
+            reports = {"company": tools["company"](ticker), "news": tools["news"](ticker)}
+            return {
+                "ticker": ticker,
+                "intent": "thesis",
+                "plan": ["company", "news"],
+                "reports": reports,
+                "errors": {},
+                "thesis": thesis,
+                "quick_fact": None,
+                "confidence": 1.0,
+                "supervisor_iterations": 1,
+                "intent_path": ["classify", "explore_supervisor", "synthesize", "narrate"],
+            }
+
+        graph.invoke.side_effect = invoke
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(
+        chat_module,
+        "default_report_tools",
+        lambda: {
+            "company": lambda t: f"## company {t}\n",
+            "technical": lambda t: f"## technical {t}\n",
+            "fundamental": lambda t: f"## fundamental {t}\n",
+            "news": lambda t: f"## news {t}\n",
+        },
+    )
+
+    r = client.post(
+        "/api/v1/agent/chat",
+        json={"ticker": "AAPL", "message": "What's interesting about AAPL this week?"},
+    )
+    frames = _parse_sse(r.text)
+
+    assert [data["name"] for name, data in frames if name == "tool_call"] == [
+        "company",
+        "news",
+    ]
+    done = frames[-1][1]
+    assert done["tools_count"] == 2
+    assert done["supervisor_iterations"] == 1
+    assert done["intent_path"] == ["classify", "explore_supervisor", "synthesize", "narrate"]
+
+
 def test_thesis_event_payload_matches_pydantic_dump(
     client: TestClient,
     stub_graph: MagicMock,

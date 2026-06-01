@@ -50,8 +50,11 @@ _ALIAS_BY_PROVIDER = {
 _RESOLVED_MODEL_BY_ALIAS: dict[str, str] = {
     "equity-agent/default": "groq/llama-3.3-70b-versatile",
     "equity-agent/fallback-llama4scout": "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+    "equity-agent/fallback-cerebras-gptoss120b": "cerebras/gpt-oss-120b",
+    "equity-agent/fallback-groq-gptoss120b": "groq/openai/gpt-oss-120b",
     "equity-agent/gemini": "gemini/gemini-2.5-flash",
     "equity-agent/bench-gptoss120b": "groq/openai/gpt-oss-120b",
+    "equity-agent/bench-cerebras-gptoss120b": "cerebras/gpt-oss-120b",
     "equity-agent/bench-gptoss20b": "groq/openai/gpt-oss-20b",
     "equity-agent/bench-llama4scout": "groq/meta-llama/llama-4-scout-17b-16e-instruct",
     "equity-agent/bench-qwen3-32b": "groq/qwen/qwen3-32b",

@@ -36,7 +36,7 @@ For each record, assert every tool in `expected_tools` was actually called. Over
 12+ hand-written multi-turn fixtures replay the agent through the same
 in-process graph path as the structured goldens. The judge is deliberately a
 different LiteLLM alias from the agent under test:
-`equity-agent/bench-gptoss120b` (`groq/openai/gpt-oss-120b`) scores the
+`equity-agent/bench-cerebras-gptoss120b` (`cerebras/gpt-oss-120b`) scores the
 production default (`groq/llama-3.3-70b-versatile`). Python still owns the
 objective numeric-support check for the narrative bubble; the judge scores the
 subjective dialogue axes: `analyst_likeness`, `helpfulness`,

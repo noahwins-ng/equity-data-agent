@@ -40,6 +40,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from langchain_core.exceptions import OutputParserException
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -109,6 +110,17 @@ class ThesisPlan(BaseModel):
         if "company" not in value:
             raise ValueError("tools must include company")
         return value
+
+
+class ExplorationDecision(BaseModel):
+    """One bounded QNT-215 exploration-supervisor decision."""
+
+    action: Literal["company", "technical", "fundamental", "news", "finish"] = Field(
+        description="Next report tool to inspect, or finish when enough context is gathered."
+    )
+    rationale: str = Field(
+        description="One analyst-note sentence explaining the next step.",
+    )
 
 
 def _prompt_version() -> str:
@@ -231,6 +243,29 @@ _FOCUSED_REPORT: dict[Intent, str] = {
 }
 
 _MAX_TOOL_ATTEMPTS = 2  # first try + one retry
+_MAX_EXPLORATION_ITERATIONS = 3
+_EXPLORATION_TRIGGERS: tuple[str, ...] = (
+    "what's interesting",
+    "what is interesting",
+    "what stands out",
+    "what should i watch",
+    "anything interesting",
+    "interesting about",
+)
+_EXPLORATION_EXCLUSIONS: tuple[str, ...] = (
+    # These are named lens or warm-follow-up requests. Let the existing
+    # focused/followup paths handle them so exploration only owns broad scans.
+    "news angle",
+    "fundamental angle",
+    "technical angle",
+    "valuation angle",
+    "chart angle",
+    "headline",
+    "catalyst",
+    "drill into",
+    "dig into",
+    "go deeper",
+)
 
 # QNT-212: intents that need a named ticker (or hydrated prior turn) to
 # answer non-fabricated. With no ticker AND no prior turn we route to
@@ -291,6 +326,7 @@ class AgentState(TypedDict):
     conversational: NotRequired[ConversationalAnswer | None]
     focused: NotRequired[FocusedAnalysis | None]
     confidence: NotRequired[float]
+    supervisor_iterations: NotRequired[int]
     # QNT-211: streaming analyst-voice paragraph produced by the narrate node
     # AFTER synthesize. Persisted into the checkpointer so a follow-up turn
     # can reference the prior narrative if it wants to. None when narrate
@@ -386,6 +422,140 @@ def _build_thesis_plan_prompt(ticker: str, question: str, available: list[str]) 
     )
 
 
+def _is_exploratory_question(question: str) -> bool:
+    """Return True for the narrow QNT-215 exploration trigger set."""
+    lowered = question.lower()
+    return any(trigger in lowered for trigger in _EXPLORATION_TRIGGERS) and not any(
+        trigger in lowered for trigger in _EXPLORATION_EXCLUSIONS
+    )
+
+
+def _has_exploration_anchor(
+    question: str,
+    *,
+    has_prior_turn: bool,
+) -> bool:
+    """Exploration needs an explicit ticker in the question or prior context."""
+    return bool(extract_tickers(question) or has_prior_turn)
+
+
+def _exploration_focus(question: str) -> Intent | None:
+    """Return a focused intent when the exploratory ask names a specific lens."""
+    lowered = question.lower()
+    if "news angle" in lowered or "headline" in lowered or "catalyst" in lowered:
+        return "news"
+    if "fundamental angle" in lowered or "valuation angle" in lowered:
+        return "fundamental"
+    if "technical angle" in lowered or "chart angle" in lowered:
+        return "technical"
+    return None
+
+
+def _minimum_exploration_tools(question: str, available: list[str]) -> int:
+    """Broad exploratory asks need a second lens before synthesis."""
+    if not available:
+        return 0
+    return min(2, len(available))
+
+
+def _is_news_led_exploration(question: str) -> bool:
+    """Timely broad scans should start from recent developments."""
+    lowered = question.lower()
+    return any(
+        phrase in lowered
+        for phrase in (
+            "what's interesting",
+            "what is interesting",
+            "interesting about",
+            "what should i watch",
+            "this week",
+            "next week",
+            "watch",
+        )
+    )
+
+
+def _fallback_exploration_tool(
+    question: str,
+    available: list[str],
+    gathered: list[str],
+) -> str | None:
+    """Deterministic second lens when the supervisor tries to finish too early."""
+    remaining = [name for name in available if name not in gathered]
+    if not remaining:
+        return None
+    if _is_news_led_exploration(question):
+        preferred = ("news", "technical", "fundamental", "company")
+    else:
+        preferred = ("company", "news", "technical", "fundamental")
+    for name in preferred:
+        if name in remaining:
+            return name
+    return remaining[0]
+
+
+def _build_exploration_prompt(
+    ticker: str,
+    question: str,
+    available: list[str],
+    gathered: list[str],
+    history: list[ConversationMessage],
+) -> list[SystemMessage | HumanMessage]:
+    """Prompt the exploration supervisor for exactly one next tool decision."""
+    remaining = [name for name in available if name not in gathered]
+    transcript = "\n".join(
+        f"{item['role']}: {item['content']}" for item in trim_message_history(history, max_turns=4)
+    )
+    return [
+        SystemMessage(
+            content=(
+                "You are the exploration supervisor for a report-grounded US-equities analyst. "
+                "Choose the next pre-rendered report to inspect, or finish if enough context is "
+                "gathered. You never calculate and you never invent data; reports are the only "
+                "data source. Prefer the smallest useful sequence. For broad exploratory asks "
+                "such as 'what's interesting', 'what stands out', or 'what should I watch', "
+                "inspect at least two complementary reports before finishing; do not stop "
+                "after only company context when another report is available. For timely broad "
+                "scans such as 'what's interesting this week' or 'what should I watch next "
+                "week', inspect news first, then add a complementary lens."
+            )
+        ),
+        HumanMessage(
+            content=(
+                f"Ticker: {ticker}\n"
+                f"Question: {question}\n"
+                f"Available reports: {', '.join(available)}\n"
+                f"Already gathered this turn: {', '.join(gathered) or 'none'}\n"
+                f"Remaining reports: {', '.join(remaining) or 'none'}\n"
+                f"Recent thread:\n{transcript or '(none)'}\n\n"
+                "Return one structured decision. action must be one of the available reports "
+                "or finish."
+            )
+        ),
+    ]
+
+
+def _coerce_exploration_decision(response: object) -> ExplorationDecision | None:
+    """Normalise structured-output responses into an ``ExplorationDecision``."""
+    if isinstance(response, ExplorationDecision):
+        return response
+    if isinstance(response, dict):
+        parsed = response.get("parsed")
+        if isinstance(parsed, ExplorationDecision):
+            return parsed
+    return None
+
+
+def _exploration_output_intent(question: str, plan: list[str], original: Intent) -> Intent:
+    """Choose which existing synthesis branch should consume exploration reports."""
+    focus = _exploration_focus(question)
+    if focus is not None and focus in plan:
+        return focus
+    if original in _FOCUSED_REPORT and _FOCUSED_REPORT[original] in plan:
+        return original
+    return "thesis"
+
+
 def _coerce_thesis_plan(response: object) -> ThesisPlan | None:
     """Normalise structured-output responses into a ``ThesisPlan``."""
     if isinstance(response, ThesisPlan):
@@ -435,7 +605,13 @@ def _confidence_from_reports(reports: dict[str, str], plan: list[str]) -> float:
     calibrated, so we anchor it to report coverage instead."""
     if not plan:
         return 0.0
-    return round(len(reports) / len(plan), 2)
+    present = sum(1 for name in plan if name in reports and not _is_tool_error(reports[name]))
+    return round(present / len(plan), 2)
+
+
+def _is_tool_error(result: str) -> bool:
+    """Stable agent.tools error prefix."""
+    return result.startswith("[error]")
 
 
 def _call_with_retry(tool: ToolFn, ticker: str, name: str) -> tuple[str | None, str | None]:
@@ -481,6 +657,10 @@ def _gather_reports(
         if result is None:
             if not optional:
                 errors[name] = error or "failed-after-retries"
+            continue
+        if _is_tool_error(result):
+            if not optional:
+                errors[name] = result
             continue
         reports[name] = result
     return reports, errors
@@ -1028,6 +1208,187 @@ def build_graph(
         )
         return {"reports": reports, "errors": errors, "reports_by_ticker": {}}
 
+    def explore_supervisor_node(state: AgentState, config: RunnableConfig) -> dict[str, object]:
+        """QNT-215: bounded exploratory tool selection before synthesis.
+
+        This is deliberately an internal route, not a replacement topology:
+        classify only sends unambiguous, anchored exploratory turns here. The
+        node gathers at most three existing report tools, then hands the
+        accumulated reports to the normal synthesize/narrate tail.
+        """
+        ticker = state["ticker"]
+        question = state.get("question", "")
+        original_intent = state.get("intent", "thesis")
+        available = [t for t in REPORT_TOOLS if t in tools]
+        prior_history = _history_before_current(state.get("messages"), question)
+        reports: dict[str, str] = dict(state.get("reports") or {})
+        errors: dict[str, str] = {}
+        plan: list[str] = []
+        rationales: list[str] = []
+
+        if not available:
+            logger.warning("explore_supervisor %s: no tools registered", ticker)
+            return {
+                "intent": "thesis",
+                "plan": [],
+                "plan_rationale": None,
+                "reports": {},
+                "errors": {},
+                "reports_by_ticker": {},
+                "supervisor_iterations": 0,
+            }
+
+        structured_llm = (
+            get_llm(temperature=0.0)
+            .with_structured_output(ExplorationDecision)
+            .with_retry(
+                stop_after_attempt=2,
+                retry_if_exception_type=(ValidationError, OutputParserException),
+            )
+        )
+
+        iterations = 0
+        minimum_tools = _minimum_exploration_tools(question, available)
+        try:
+            for iterations in range(1, _MAX_EXPLORATION_ITERATIONS + 1):
+                prompt = _build_exploration_prompt(
+                    ticker,
+                    question,
+                    available,
+                    plan,
+                    prior_history,
+                )
+                response = _linked_invoke(
+                    structured_llm,
+                    prompt,
+                    config,
+                    "exploration-supervisor-prompt",
+                )
+                decision = _coerce_exploration_decision(response)
+                if decision is None:
+                    raise ValueError("invalid exploration decision")
+
+                action = decision.action
+                if action == "finish" and len(plan) < minimum_tools:
+                    fallback_action = _fallback_exploration_tool(question, available, plan)
+                    if fallback_action is None:
+                        logger.info(
+                            "explore_supervisor %s: finish after %d iterations plan=%s",
+                            ticker,
+                            iterations,
+                            plan,
+                        )
+                        break
+                    action = fallback_action
+                    rationales.append(
+                        "Broad exploration needs another complementary report before synthesis."
+                    )
+                elif action == "finish":
+                    logger.info(
+                        "explore_supervisor %s: finish after %d iterations plan=%s",
+                        ticker,
+                        iterations,
+                        plan,
+                    )
+                    break
+                if (
+                    not plan
+                    and _is_news_led_exploration(question)
+                    and "news" in available
+                    and action != "news"
+                ):
+                    action = "news"
+                    rationales.append("Timely broad exploration starts with recent news.")
+                if action not in available or action in plan:
+                    fallback_action = None
+                    if len(plan) < minimum_tools:
+                        fallback_action = _fallback_exploration_tool(question, available, plan)
+                    if fallback_action is not None:
+                        action = fallback_action
+                        rationales.append(
+                            "Broad exploration needs another complementary report before synthesis."
+                        )
+                    else:
+                        logger.info(
+                            "explore_supervisor %s: stopping on unusable action=%s plan=%s",
+                            ticker,
+                            action,
+                            plan,
+                        )
+                        break
+                if action not in available or action in plan:
+                    logger.info(
+                        "explore_supervisor %s: stopping on unusable action=%s plan=%s",
+                        ticker,
+                        action,
+                        plan,
+                    )
+                    break
+
+                tool_reports, tool_errors = _gather_reports(ticker, [action], tools)
+                plan.append(action)
+                rationales.append(decision.rationale.strip())
+                reports.update(tool_reports)
+                errors.update(tool_errors)
+                logger.info(
+                    "explore_supervisor %s: iteration=%d action=%s gathered=%s errors=%s",
+                    ticker,
+                    iterations,
+                    action,
+                    sorted(tool_reports),
+                    sorted(tool_errors),
+                )
+        except Exception as exc:  # noqa: BLE001 — deterministic all-tools fallback
+            logger.warning(
+                "explore_supervisor %s: failed for question %r: %s: %s; falling back to all tools",
+                ticker,
+                question,
+                type(exc).__name__,
+                exc,
+            )
+            fallback_reports, fallback_errors = _gather_reports(ticker, list(available), tools)
+            return {
+                "intent": "thesis",
+                "plan": list(available),
+                "plan_rationale": None,
+                "reports": fallback_reports,
+                "errors": fallback_errors,
+                "reports_by_ticker": {},
+                "comparison_tickers": [],
+                "supervisor_iterations": 0,
+            }
+
+        if not plan:
+            logger.info(
+                "explore_supervisor %s: empty plan; falling back to all tools",
+                ticker,
+            )
+            fallback_reports, fallback_errors = _gather_reports(ticker, list(available), tools)
+            return {
+                "intent": "thesis",
+                "plan": list(available),
+                "plan_rationale": None,
+                "reports": fallback_reports,
+                "errors": fallback_errors,
+                "reports_by_ticker": {},
+                "comparison_tickers": [],
+                "supervisor_iterations": 0,
+            }
+
+        output_intent = _exploration_output_intent(question, plan, original_intent)
+        rationale = " ".join(r for r in rationales if r) or None
+        return {
+            "intent": output_intent,
+            "plan": plan,
+            "plan_rationale": rationale,
+            "reports": reports,
+            "errors": errors,
+            "reports_by_ticker": {},
+            "comparison_tickers": [],
+            "supervisor_iterations": iterations,
+            "confidence": _confidence_from_reports(reports, plan),
+        }
+
     def synthesize_node(state: AgentState, config: RunnableConfig) -> dict[str, object]:
         ticker = state["ticker"]
         question = state.get("question", "")
@@ -1220,7 +1581,8 @@ def build_graph(
             return payload
 
         if intent in _FOCUSED_REPORT:
-            if not reports:
+            focus_report = _FOCUSED_REPORT[intent]
+            if focus_report not in reports:
                 return _fallback(
                     "I couldn't pull a report to answer that focused analysis right now."
                 )
@@ -1533,19 +1895,30 @@ def build_graph(
         return {"conversational": conversational}
 
     def _classify_router(state: AgentState) -> str:
-        """QNT-212: pick the next node from classify_node's output.
+        """QNT-212/QNT-215: pick the next node from classify_node's output.
 
         Ambiguity always wins -- a clarify run never burns the plan/gather
-        LLM call. Conversational and followup short-circuit to synthesize
-        so a greeting or a hydrated-thread followup doesn't walk the full
-        4-node pipeline. Everything else (thesis, focused, comparison,
-        quick_fact) falls through to plan as today.
+        LLM call. Conversational and followup short-circuit to synthesize so
+        warm thread behavior stays unchanged. QNT-215 exploration is
+        intentionally limited to broad thesis-shaped asks; focused,
+        quick_fact, comparison, clarify, and normal follow-up flows keep
+        their existing routes.
         """
         if state.get("ambiguity_kind"):
             return "clarify"
         intent = state.get("intent", "thesis")
         if intent in _SHORT_CIRCUIT_INTENTS:
             return "synthesize"
+        if intent != "thesis":
+            return "plan"
+        question = state.get("question", "")
+        prior_history = _history_before_current(state.get("messages"), question)
+        has_prior_turn = bool(prior_history or state.get("reports") or state.get("thesis"))
+        if _is_exploratory_question(question) and _has_exploration_anchor(
+            question,
+            has_prior_turn=has_prior_turn,
+        ):
+            return "explore_supervisor"
         return "plan"
 
     def _wrap_path(
@@ -1583,6 +1956,10 @@ def build_graph(
     builder.add_node("synthesize", _wrap_path("synthesize", synthesize_node))
     builder.add_node("narrate", _wrap_path("narrate", narrate_node))
     builder.add_node("clarify", _wrap_path("clarify", clarify_node))
+    builder.add_node(
+        "explore_supervisor",
+        _wrap_path("explore_supervisor", explore_supervisor_node),
+    )
     builder.add_edge(START, "classify")
     # QNT-212: classify routes by ambiguity / intent rather than always
     # falling through to plan. Three destinations:
@@ -1590,12 +1967,19 @@ def build_graph(
     #                compare, etc.) — ask back, exit through narrate.
     #   - synthesize: conversational greeting or followup-no-refetch — skip
     #                 plan + gather, save the latency of 2 no-op nodes.
+    #   - explore_supervisor: anchored exploratory ask — bounded iterative
+    #                         report selection, then normal synthesize/narrate.
     #   - plan     : thesis / focused / quick_fact / comparison — existing
     #                full-pipeline behavior.
     builder.add_conditional_edges(
         "classify",
         _classify_router,
-        {"clarify": "clarify", "synthesize": "synthesize", "plan": "plan"},
+        {
+            "clarify": "clarify",
+            "synthesize": "synthesize",
+            "explore_supervisor": "explore_supervisor",
+            "plan": "plan",
+        },
     )
     builder.add_edge("plan", "gather")
     # QNT-156: always run synthesize. Empty reports no longer short-circuit
@@ -1604,6 +1988,7 @@ def build_graph(
     # conversational redirect via ``domain_redirect``. The panel never sees
     # a blank state again.
     builder.add_edge("gather", "synthesize")
+    builder.add_edge("explore_supervisor", "synthesize")
     # QNT-212: clarify exits through narrate the same way the rest of the
     # pipeline does. narrate sees ``state['conversational']`` is populated
     # and short-circuits (the bubble would duplicate the clarify question),
@@ -1632,6 +2017,7 @@ __all__ = [
     "ComparisonAnswer",
     "ConversationalAnswer",
     "EventEmitter",
+    "ExplorationDecision",
     "FocusedAnalysis",
     "Intent",
     "QuickFactAnswer",

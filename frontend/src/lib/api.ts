@@ -392,6 +392,7 @@ export type DoneEvent = {
   citations_count: number;
   confidence: number;
   intent?: Intent;
+  supervisor_iterations?: number;
   // QNT-209: echoed by the backend for confirmation. Null when the request
   // omitted thread_id (ephemeral path).
   thread_id?: string | null;

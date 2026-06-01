@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     # LiteLLM proxy (see ADR-011 — Groq default, Gemini 2.5 Flash override)
     LITELLM_BASE_URL: str = "http://localhost:4000"
     GROQ_API_KEY: str = ""
+    CEREBRAS_API_KEY: str = ""
     GEMINI_API_KEY: str = ""
     EQUITY_AGENT_PROVIDER: str = "groq"  # "groq" | "gemini"
     # Per-LLM-call request timeout in seconds. Bound for any single

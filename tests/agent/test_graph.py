@@ -210,6 +210,21 @@ def test_gather_reports_required_tool_missing_from_map_records_error() -> None:
     assert errors["technical"] == "tool-not-registered"
 
 
+def test_gather_reports_tool_error_string_records_error() -> None:
+    reports, errors = graph_module._gather_reports(
+        "NVDA",
+        plan=["technical", "news"],
+        tools={
+            "technical": _mock_tool("[error] http-500: unavailable"),
+            "news": _mock_tool("[error] http-500: unavailable"),
+        },
+    )
+
+    assert reports == {}
+    assert errors["technical"] == "[error] http-500: unavailable for NVDA"
+    assert "news" not in errors
+
+
 def test_synthesize_returns_none_when_structured_output_fails(
     stub_llm: _StructuredLLM,
 ) -> None:
@@ -611,6 +626,10 @@ def test_parse_plan_force_includes_company_for_comparison() -> None:
 
 def test_confidence_full_coverage() -> None:
     assert _confidence_from_reports({"a": "", "b": "", "c": ""}, ["a", "b", "c"]) == 1.0
+
+
+def test_confidence_ignores_tool_error_reports() -> None:
+    assert _confidence_from_reports({"a": "[error] http-500: unavailable"}, ["a"]) == 0.0
 
 
 def test_confidence_partial_coverage() -> None:
@@ -1190,6 +1209,26 @@ def test_focused_intent_falls_back_to_redirect_when_reports_empty(
 
     assert result["focused"] is None
     assert isinstance(result["conversational"], ConversationalAnswer)
+
+
+def test_focused_intent_requires_matching_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Company context alone is not enough for a focused analysis card."""
+    from agent.conversational import ConversationalAnswer
+
+    llm = _StructuredLLM()
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+    from agent import intent as intent_module
+
+    monkeypatch.setattr(intent_module, "get_llm", lambda *_a, **_kw: llm)
+
+    graph = build_graph({"company": _mock_tool("company")})
+    result = graph.invoke({"ticker": "NVDA", "question": "give me a fundamental analysis of NVDA"})
+
+    assert result["focused"] is None
+    assert isinstance(result["conversational"], ConversationalAnswer)
+    assert llm.structured_invoke.call_count == 0
 
 
 def test_focused_intent_corrects_mismatched_focus_field(
