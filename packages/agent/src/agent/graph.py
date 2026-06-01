@@ -266,6 +266,19 @@ _EXPLORATION_EXCLUSIONS: tuple[str, ...] = (
     "dig into",
     "go deeper",
 )
+_EXPLORATION_NAMED_LENS_TERMS: tuple[str, ...] = (
+    "technically",
+    "technical",
+    "fundamentally",
+    "fundamental",
+    "valuation",
+    "chart",
+    "news angle",
+    "headline",
+    "headlines",
+    "catalyst",
+    "catalysts",
+)
 
 # QNT-212: intents that need a named ticker (or hydrated prior turn) to
 # answer non-fabricated. With no ticker AND no prior turn we route to
@@ -437,6 +450,12 @@ def _has_exploration_anchor(
 ) -> bool:
     """Exploration needs an explicit ticker in the question or prior context."""
     return bool(extract_tickers(question) or has_prior_turn)
+
+
+def _has_named_exploration_lens(question: str) -> bool:
+    """Return True when an exploratory phrase also names a specific lens."""
+    lowered = question.lower()
+    return any(term in lowered for term in _EXPLORATION_NAMED_LENS_TERMS)
 
 
 def _exploration_focus(question: str) -> Intent | None:
@@ -1899,24 +1918,28 @@ def build_graph(
 
         Ambiguity always wins -- a clarify run never burns the plan/gather
         LLM call. Conversational and followup short-circuit to synthesize so
-        warm thread behavior stays unchanged. QNT-215 exploration is
-        intentionally limited to broad thesis-shaped asks; focused,
-        quick_fact, comparison, clarify, and normal follow-up flows keep
-        their existing routes.
+        warm thread behavior stays unchanged. QNT-215 exploration owns broad
+        anchored scan prompts even when the classifier labels them as news,
+        but named-lens, quick_fact, comparison, clarify, and normal follow-up
+        flows keep their existing routes.
         """
         if state.get("ambiguity_kind"):
             return "clarify"
         intent = state.get("intent", "thesis")
         if intent in _SHORT_CIRCUIT_INTENTS:
             return "synthesize"
-        if intent != "thesis":
+        if intent in {"quick_fact", "comparison"}:
             return "plan"
         question = state.get("question", "")
         prior_history = _history_before_current(state.get("messages"), question)
         has_prior_turn = bool(prior_history or state.get("reports") or state.get("thesis"))
-        if _is_exploratory_question(question) and _has_exploration_anchor(
-            question,
-            has_prior_turn=has_prior_turn,
+        if (
+            _is_exploratory_question(question)
+            and not _has_named_exploration_lens(question)
+            and _has_exploration_anchor(
+                question,
+                has_prior_turn=has_prior_turn,
+            )
         ):
             return "explore_supervisor"
         return "plan"
