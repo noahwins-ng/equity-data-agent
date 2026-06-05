@@ -99,3 +99,12 @@ def test_temperature_override_unset_uses_call_arg(monkeypatch):
     set_temperature_override(None)
     assert get_llm(temperature=0.3).temperature == 0.3
     assert get_llm().temperature == 0.2
+
+
+def test_stream_usage_enabled(monkeypatch):
+    """QNT-219: streamed runs (narrate) must request token usage in the final
+    chunk, else Langfuse records 0 tokens for every streamed generation."""
+    from shared import config as cfg
+
+    monkeypatch.setattr(cfg.settings, "EQUITY_AGENT_PROVIDER", "groq")
+    assert get_llm().stream_usage is True
