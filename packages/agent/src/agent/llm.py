@@ -242,6 +242,12 @@ def get_llm(temperature: float = 0.2) -> ChatOpenAI:
         # QNT-150: bound every LLM call so a hung LiteLLM proxy / stalled
         # provider can't keep an SSE chat connection open forever.
         timeout=settings.LLM_REQUEST_TIMEOUT,
+        # QNT-219: emit token usage on streamed runs (narrate streams via
+        # .stream()). Without this, LangChain's ChatOpenAI omits the usage
+        # block on streamed generations, so Langfuse recorded 0 prompt/
+        # completion tokens for all 96 narrate calls in the 14-day baseline.
+        # No-op for non-streamed .invoke() calls.
+        stream_usage=True,
         callbacks=callbacks or None,
     )
 
