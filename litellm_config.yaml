@@ -81,6 +81,19 @@ model_list:
       model: gemini/gemini-2.5-flash
       api_key: os.environ/GEMINI_API_KEY
 
+  - model_name: equity-agent/small
+    # QNT-220 (#7): per-node tiering small alias. classify / plan run on this
+    # fast/small model; synthesize / narrate keep equity-agent/default (70b).
+    # gpt-oss-20b is Groq free-tier (TPD-budgeted, not the 20-req/DAY ceiling
+    # that made gemini-2.5-flash non-viable for the hot path) and is
+    # prompt-cache-capable on Groq (only gpt-oss models cache), aligning with
+    # the QNT-223 cache direction. Falls back to the 70b default on Groq TPD
+    # exhaustion so a 429 degrades cost, not function.
+    litellm_params:
+      model: groq/openai/gpt-oss-20b
+      api_key: os.environ/GROQ_API_KEY
+      reasoning_effort: low
+
   # ─── QNT-129 bench aliases ──────────────────────────────────
   # Caps below are 80% of published free-tier limits. Format:
   # rpm = published_rpm × 0.8, tpm = published_tpm × 0.8 (or omitted
@@ -167,6 +180,11 @@ litellm_settings:
         - equity-agent/fallback-llama4scout
         - equity-agent/fallback-cerebras-gptoss120b
         - equity-agent/fallback-groq-gptoss120b
+    # QNT-220 (#7): small tier falls back to the 70b default on Groq TPD
+    # exhaustion -- classify/plan stay functional, just lose the cost win.
+    - equity-agent/small:
+        - equity-agent/default
+        - equity-agent/fallback-llama4scout
     - equity-agent/fallback-llama4scout:
         - equity-agent/fallback-cerebras-gptoss120b
         - equity-agent/fallback-groq-gptoss120b

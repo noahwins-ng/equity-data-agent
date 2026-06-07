@@ -897,6 +897,52 @@ def test_company_context_now_handles_missing_fundamentals(
     assert "Daily trend:" in report
 
 
+# ---------- company compact profile (QNT-220 #8) ----------
+
+
+def test_company_report_compact_keeps_numbers_drops_lists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Compact profile keeps CONTEXT NOW numbers + business + risks verbatim but
+    drops the competitor / watch lists, and is strictly smaller than full."""
+    from api.templates.company import build_company_report
+
+    _company_install(monkeypatch, pe=25.0, rev_yoy=12.0)
+    full = build_company_report("NVDA", "full")
+    compact = build_company_report("NVDA", "compact")
+
+    # Numeric grounding block preserved verbatim (hallucination-scorer safe).
+    assert "## CONTEXT NOW" in compact
+    assert "Latest P/E: 25.00" in compact
+    assert "Latest revenue YoY: +12.00%" in compact
+    # Qualitative grounding kept.
+    assert "## BUSINESS" in compact
+    assert "## KEY RISKS" in compact
+    # Trimmed sections.
+    assert "## KEY COMPETITORS" not in compact
+    assert "## WATCH" not in compact
+    # Full report is unchanged and larger.
+    assert "## KEY COMPETITORS" in full
+    assert "## WATCH" in full
+    assert len(compact) < len(full)
+
+
+def test_company_report_default_profile_is_full(monkeypatch: pytest.MonkeyPatch) -> None:
+    from api.templates.company import build_company_report
+
+    _company_install(monkeypatch)
+    assert build_company_report("NVDA") == build_company_report("NVDA", "full")
+
+
+def test_company_report_unknown_profile_400(monkeypatch: pytest.MonkeyPatch) -> None:
+    from api.templates.company import build_company_report
+
+    _company_install(monkeypatch)
+    with pytest.raises(HTTPException) as exc:
+        build_company_report("NVDA", "tiny")
+    assert exc.value.status_code == 400
+
+
 # ---------- summary ----------
 
 

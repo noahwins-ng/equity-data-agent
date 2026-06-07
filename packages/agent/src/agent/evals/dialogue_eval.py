@@ -34,7 +34,7 @@ from agent.evals.hallucination import HallucinationResult
 from agent.evals.hallucination import check as check_hallucination
 from agent.graph import build_graph
 from agent.llm import current_model_info, set_temperature_override
-from agent.tools import default_report_tools
+from agent.tools import default_report_tools, get_company_report_compact
 from agent.tracing import flush as flush_langfuse
 from agent.tracing import langfuse, make_callback_handler, propagate_attributes
 
@@ -395,7 +395,12 @@ def run_fixture(
                 }
             )
 
-        graph = build_graph(default_report_tools(), checkpointer=SqliteSaver(conn))
+        # QNT-220 (#8): mirror production -- thesis/comparison use compact company.
+        graph = build_graph(
+            default_report_tools(),
+            checkpointer=SqliteSaver(conn),
+            compact_company_tool=get_company_report_compact,
+        )
         state: dict[str, Any] = {}
         for turn in fixture.turns:
             if handler is not None:

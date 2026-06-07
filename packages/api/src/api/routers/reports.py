@@ -37,5 +37,7 @@ def summary_report(ticker: str) -> str:
 
 
 @router.get("/company/{ticker}", response_class=PlainTextResponse)
-def company_report(ticker: str) -> str:
-    return build_company_report(ticker.upper())
+def company_report(ticker: str, profile: str = "full") -> str:
+    # QNT-220 (#8): ``?profile=compact`` trims the static prose for the agent
+    # thesis/comparison hot path; ``full`` (default) keeps the complete profile.
+    return build_company_report(ticker.upper(), profile)

@@ -52,7 +52,7 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 from shared.tickers import TICKERS
 
-from agent.llm import get_llm
+from agent.llm import SMALL_NODE_ALIAS, get_llm
 from agent.prompts import ConversationMessage
 
 logger = logging.getLogger(__name__)
@@ -567,7 +567,11 @@ def classify_intent_with_source(
         logger.info("classify intent=%s via=heuristic question=%r", heuristic, question[:80])
         return heuristic, "heuristic"
 
-    structured_llm = get_llm(temperature=0.0).with_structured_output(IntentDecision)
+    # QNT-220 (#7): the classifier is a small structured call -- tier it to the
+    # fast/small alias rather than the 70b synthesis model.
+    structured_llm = get_llm(temperature=0.0, model_alias=SMALL_NODE_ALIAS).with_structured_output(
+        IntentDecision
+    )
     try:
         response = structured_llm.invoke(
             _CLASSIFY_PROMPT.format(

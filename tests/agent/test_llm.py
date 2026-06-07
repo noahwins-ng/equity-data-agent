@@ -1,6 +1,7 @@
 import pytest
 from agent.llm import (
     _ALIAS_BY_PROVIDER,
+    SMALL_NODE_ALIAS,
     get_llm,
     set_model_override,
     set_temperature_override,
@@ -99,6 +100,38 @@ def test_temperature_override_unset_uses_call_arg(monkeypatch):
     set_temperature_override(None)
     assert get_llm(temperature=0.3).temperature == 0.3
     assert get_llm().temperature == 0.2
+
+
+# ─── QNT-220 (#7) per-node model tiering ────────────────────────────────────
+
+
+def test_small_node_alias_is_a_known_litellm_alias():
+    """The tiering alias must be resolvable by litellm_config.yaml. QNT-220 uses
+    a Groq small model (gpt-oss-20b) -- gemini-2.5-flash free tier caps at 20
+    requests/DAY, non-viable for a node that runs on 100% of turns."""
+    assert SMALL_NODE_ALIAS == "equity-agent/small"
+
+
+def test_model_alias_routes_to_small_alias(monkeypatch):
+    """QNT-220: a per-node ``model_alias`` overrides the provider default so
+    classify/plan/exploration can run on the small model while the provider
+    env still points the rest of the graph at the 70b default."""
+    from shared import config as cfg
+
+    monkeypatch.setattr(cfg.settings, "EQUITY_AGENT_PROVIDER", "groq")
+    assert get_llm(model_alias=SMALL_NODE_ALIAS).model_name == "equity-agent/small"
+    # No alias -> provider default (synthesize/narrate path).
+    assert get_llm().model_name == "equity-agent/default"
+
+
+def test_eval_model_override_wins_over_per_node_alias(monkeypatch):
+    """Precedence: the eval ``--model`` sweep must beat per-node tiering so one
+    flag still benchmarks every node on the same model (QNT-129 contract)."""
+    from shared import config as cfg
+
+    monkeypatch.setattr(cfg.settings, "EQUITY_AGENT_PROVIDER", "groq")
+    set_model_override("equity-agent/bench-gptoss120b")
+    assert get_llm(model_alias=SMALL_NODE_ALIAS).model_name == "equity-agent/bench-gptoss120b"
 
 
 def test_stream_usage_enabled(monkeypatch):

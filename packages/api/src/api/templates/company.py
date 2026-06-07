@@ -130,10 +130,26 @@ def _context_now_lines(ticker: str) -> list[str]:
     return lines
 
 
-def build_company_report(ticker: str) -> str:
-    """Build a static business-context report for ``ticker`` with a live CONTEXT NOW block."""
+def build_company_report(ticker: str, profile: str = "full") -> str:
+    """Build a static business-context report for ``ticker`` with a live CONTEXT NOW block.
+
+    ``profile`` selects how much static prose to render (QNT-220 #8). The company
+    report is force-injected into every thesis and comparison (QNT-175), so its
+    size is a fixed per-turn tax on ~84% of agent turns.
+
+    * ``"full"`` (default) -- the complete profile: CONTEXT NOW, business
+      description, competitors, risks, and watch metrics. Used by focused
+      fundamental/company asks and any direct ``/reports/company`` consumer.
+    * ``"compact"`` -- trims the static lists the thesis rarely cites
+      (competitors, watch) while keeping the ``## CONTEXT NOW`` numeric block
+      **verbatim** (every number the hallucination scorer traces) plus the
+      business description and key risks that ground the qualitative aspects.
+      Consumed by the agent on the thesis/comparison/exploration hot path.
+    """
     if ticker not in TICKERS:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    if profile not in ("full", "compact"):
+        raise HTTPException(status_code=400, detail=f"Unknown profile: {profile}")
 
     meta = TICKER_METADATA.get(ticker, {})
     name = cast(str, meta.get("name", ticker))
@@ -147,7 +163,7 @@ def build_company_report(ticker: str) -> str:
     today = date.today().isoformat()
     context_lines = _context_now_lines(ticker)
 
-    lines = [
+    header = [
         f"# COMPANY REPORT — {ticker}",
         f"{name} — {sector}, {industry}",
         f"As of {today}",
@@ -156,6 +172,14 @@ def build_company_report(ticker: str) -> str:
         "",
         "## BUSINESS",
         description,
+    ]
+    if profile == "compact":
+        # Numbers (CONTEXT NOW) verbatim + business + risks; drop the
+        # competitor / watch lists the thesis rarely quotes.
+        return "\n".join([*header, "", "## KEY RISKS", *_format_bullets(risks)])
+
+    lines = [
+        *header,
         "",
         "## KEY COMPETITORS",
         *_format_bullets(competitors),
