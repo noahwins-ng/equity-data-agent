@@ -305,7 +305,10 @@ export type Intent =
   | "fundamental"
   | "technical"
   | "news"
-  | "followup";
+  | "followup"
+  // QNT-220 follow-up: broad anchored exploratory scans. Set by
+  // explore_supervisor (never the classifier); renders the exploration card.
+  | "exploration";
 
 export type FocusKind = "fundamental" | "technical" | "news";
 
@@ -385,6 +388,25 @@ export type FocusedAnalysisPayload = {
   existing_development: string | null;
   positive_catalysts: string[];
   negative_catalysts: string[];
+};
+
+// QNT-220 follow-up: exploration-scan response shape. Mirrors
+// ``agent.exploration.ExplorationAnswer``. A verdict-free, multi-lens scan —
+// a headline of what stands out, cross-lens observations, and verbatim cited
+// value chips. No verdict and no forward "watch next" by contract (no report
+// carries dated catalysts to copy from).
+export type ExplorationSource = "company" | "technical" | "fundamental" | "news";
+
+export type ExplorationValue = {
+  label: string;
+  value: string;
+  source: ExplorationSource;
+};
+
+export type ExplorationAnswerPayload = {
+  headline: string;
+  observations: string[];
+  cited_values: ExplorationValue[];
 };
 
 export type DoneEvent = {

@@ -37,6 +37,7 @@ from agent.comparison import ComparisonAnswer
 from agent.conversational import ConversationalAnswer
 from agent.evals.hallucination import HallucinationResult
 from agent.evals.hallucination import check as check_hallucination
+from agent.exploration import ExplorationAnswer
 from agent.focused import FocusedAnalysis
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
@@ -58,7 +59,8 @@ def _render_answer(state: dict[str, Any]) -> str:
     to the user. For prod scoring we want to score what the user actually
     saw -- so conversational wins over thesis when both are present.
 
-    Order: comparison > conversational > quick_fact > focused > thesis.
+    Order: comparison > conversational > quick_fact > focused > exploration
+    > thesis.
     """
     comparison = state.get("comparison")
     if isinstance(comparison, ComparisonAnswer):
@@ -72,6 +74,9 @@ def _render_answer(state: dict[str, Any]) -> str:
     focused = state.get("focused")
     if isinstance(focused, FocusedAnalysis):
         return focused.to_markdown()
+    exploration = state.get("exploration")
+    if isinstance(exploration, ExplorationAnswer):
+        return exploration.to_markdown()
     thesis = state.get("thesis")
     if isinstance(thesis, Thesis):
         return thesis.to_markdown()

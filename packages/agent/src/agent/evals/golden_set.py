@@ -46,6 +46,7 @@ from agent.evals.judge import score as judge_score_fn
 from agent.evals.similarity import cosine
 from agent.evals.tool_calls import check as check_tool_calls
 from agent.evals.tool_calls import wrap_with_recorder
+from agent.exploration import ExplorationAnswer
 from agent.focused import FocusedAnalysis
 from agent.graph import build_graph
 from agent.quick_fact import QuickFactAnswer
@@ -313,6 +314,7 @@ def run_record(record: GoldenRecord, *, llm_for_judge: Any | None = None) -> Eva
     comparison_obj = state.get("comparison")
     conversational_obj = state.get("conversational")
     focused_obj = state.get("focused")
+    exploration_obj = state.get("exploration")
     if isinstance(comparison_obj, ComparisonAnswer):
         thesis = comparison_obj.to_markdown()
     elif isinstance(thesis_obj, Thesis):
@@ -321,6 +323,8 @@ def run_record(record: GoldenRecord, *, llm_for_judge: Any | None = None) -> Eva
         thesis = quick_fact_obj.to_markdown()
     elif isinstance(focused_obj, FocusedAnalysis):
         thesis = focused_obj.to_markdown()
+    elif isinstance(exploration_obj, ExplorationAnswer):
+        thesis = exploration_obj.to_markdown()
     elif isinstance(conversational_obj, ConversationalAnswer):
         thesis = conversational_obj.to_markdown()
     else:

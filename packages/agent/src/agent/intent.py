@@ -57,7 +57,12 @@ from agent.prompts import ConversationMessage
 
 logger = logging.getLogger(__name__)
 
-Intent = Literal[
+# Intents the classifier LLM is allowed to emit. Kept as a distinct, narrower
+# Literal from ``Intent`` so ``IntentDecision``'s JSON Schema enum never offers
+# "exploration" to the model -- that value is set ONLY by
+# ``explore_supervisor_node`` after routing, never picked by the classifier
+# (QNT-220 follow-up).
+ClassifierIntent = Literal[
     "thesis",
     "quick_fact",
     "comparison",
@@ -68,6 +73,21 @@ Intent = Literal[
     "followup",
 ]
 
+# Full set of response shapes carried in AgentState. Superset of
+# ``ClassifierIntent`` with the internal-only "exploration" shape produced by
+# the deterministic explore_supervisor scan (QNT-220 follow-up).
+Intent = Literal[
+    "thesis",
+    "quick_fact",
+    "comparison",
+    "conversational",
+    "fundamental",
+    "technical",
+    "news",
+    "followup",
+    "exploration",
+]
+
 # Which code path resolved the intent — written into AgentState by classify_node
 # so Langfuse trace tags carry classifier_source:<value> (QNT-189).
 ClassifierSource = Literal["heuristic", "llm", "fallback"]
@@ -76,7 +96,7 @@ ClassifierSource = Literal["heuristic", "llm", "fallback"]
 class IntentDecision(BaseModel):
     """Structured-output schema for the classifier LLM call."""
 
-    intent: Intent = Field(
+    intent: ClassifierIntent = Field(
         description=(
             "The response shape to use. 'thesis' for open-ended investment "
             "questions that warrant a Setup / Bull / Bear / Verdict treatment. "
@@ -618,6 +638,7 @@ def classify_intent(
 
 
 __all__ = [
+    "ClassifierIntent",
     "ClassifierSource",
     "Intent",
     "IntentDecision",

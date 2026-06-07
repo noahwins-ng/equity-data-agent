@@ -58,6 +58,12 @@ Event contract
                     panel renders a focused-analysis card and skips the
                     thesis card.
 
+``exploration``   — full :class:`~agent.exploration.ExplorationAnswer` dumped
+                    to JSON (QNT-220 follow-up). Emitted only when intent ==
+                    "exploration" (set by explore_supervisor, never by the
+                    classifier); the panel renders a verdict-free, multi-lens
+                    scan card and skips the thesis card.
+
 ``intent``        — ``{intent}`` one-shot event emitted right after the
                     classify node decides which shape will be produced
                     (QNT-149). Lets the panel preempt its layout while
@@ -105,6 +111,7 @@ from typing import Any
 from agent.comparison import ComparisonAnswer
 from agent.conversational import ConversationalAnswer, domain_redirect
 from agent.eval_scores import push_to_trace_id as push_eval_scores
+from agent.exploration import ExplorationAnswer
 from agent.focused import FocusedAnalysis
 from agent.graph import OPTIONAL_TOOLS, build_graph
 from agent.llm import (
@@ -291,6 +298,20 @@ def _count_focused_citations(focused: FocusedAnalysis | None) -> int:
         inline_texts.append(focused.existing_development)
     inline_texts.extend(focused.positive_catalysts)
     inline_texts.extend(focused.negative_catalysts)
+    inline = sum(len(_CITATION_PATTERN.findall(text or "")) for text in inline_texts)
+    return structured + inline
+
+
+def _count_exploration_citations(exploration: ExplorationAnswer | None) -> int:
+    """Citations for the exploration-scan path (QNT-220 follow-up).
+
+    Each ``ExplorationValue`` carries a structured source; each inline
+    ``(source: ...)`` parens in the headline / observations adds one.
+    """
+    if exploration is None:
+        return 0
+    structured = len(exploration.cited_values)
+    inline_texts: list[str] = [exploration.headline, *exploration.observations]
     inline = sum(len(_CITATION_PATTERN.findall(text or "")) for text in inline_texts)
     return structured + inline
 
@@ -845,6 +866,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
         comparison = state.get("comparison") if isinstance(state, dict) else None
         conversational = state.get("conversational") if isinstance(state, dict) else None
         focused = state.get("focused") if isinstance(state, dict) else None
+        exploration = state.get("exploration") if isinstance(state, dict) else None
         intent = state.get("intent", "thesis") if isinstance(state, dict) else "thesis"
         confidence = float(state.get("confidence", 0.0)) if isinstance(state, dict) else 0.0
         errors = state.get("errors") or {} if isinstance(state, dict) else {}
@@ -936,6 +958,14 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                 yield _sse("prose_chunk", {"delta": chunk + " "})
                 await asyncio.sleep(0)
             yield _sse("focused", focused.model_dump())
+        elif intent == "exploration" and isinstance(exploration, ExplorationAnswer):
+            # QNT-220 follow-up: exploration-scan card. Stream the headline as
+            # prose so the panel has something before the full payload lands,
+            # then emit the structured event.
+            for chunk in _split_prose(exploration.headline):
+                yield _sse("prose_chunk", {"delta": chunk + " "})
+                await asyncio.sleep(0)
+            yield _sse("exploration", exploration.model_dump())
         elif intent == "thesis" and isinstance(thesis, Thesis):
             # QNT-211: gate on intent so the followup narrative-only path
             # (intent=followup, quick_fact=None, thesis hydrated from the
@@ -972,6 +1002,10 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
         elif intent in {"fundamental", "technical", "news"}:
             citations_count = _count_focused_citations(
                 focused if isinstance(focused, FocusedAnalysis) else None
+            )
+        elif intent == "exploration":
+            citations_count = _count_exploration_citations(
+                exploration if isinstance(exploration, ExplorationAnswer) else None
             )
         elif intent == "conversational":
             # Conversational answers carry no citations by design — the

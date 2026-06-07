@@ -16,6 +16,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from agent import graph as graph_module
+from agent.exploration import ExplorationAnswer
 from agent.focused import FocusedAnalysis
 from agent.graph import REPORT_TOOLS, _deterministic_exploration_plan, build_graph
 from agent.thesis import Thesis
@@ -48,6 +49,14 @@ class _SynthLLM:
             positive_catalysts=[],
             negative_catalysts=[],
         )
+        self.exploration = ExplorationAnswer(
+            headline="Headlines and the chart both stand out (source: news, source: technical).",
+            observations=[
+                "Fresh headlines are driving the tape (source: news).",
+                "Momentum is stretched (source: technical).",
+            ],
+            cited_values=[],
+        )
 
     def with_structured_output(self, schema: type) -> _Runnable:
         self.bound_schemas.append(schema)
@@ -55,6 +64,8 @@ class _SynthLLM:
             return _Runnable(result=self.thesis)
         if schema is FocusedAnalysis:
             return _Runnable(result=self.focused)
+        if schema is ExplorationAnswer:
+            return _Runnable(result=self.exploration)
         return _Runnable(result=None)
 
     def stream(self, *_args: Any, **_kwargs: Any) -> Any:
@@ -136,7 +147,10 @@ def test_news_led_exploration_routes_and_gathers_two_lenses(
     )
 
     assert result["intent_path"] == ["classify", "explore_supervisor", "synthesize", "narrate"]
-    assert result["intent"] == "thesis"
+    # QNT-220 follow-up: a broad scan always renders as the dedicated
+    # exploration card, regardless of the classifier's original label.
+    assert result["intent"] == "exploration"
+    assert isinstance(result["exploration"], ExplorationAnswer)
     assert result["plan"] == ["news", "technical"]
     assert result["supervisor_iterations"] == 2
     assert set(result["reports"]) == {"news", "technical"}
@@ -144,9 +158,9 @@ def test_news_led_exploration_routes_and_gathers_two_lenses(
     assert tools["technical"].call_count == 1
     assert tools["company"].call_count == 0
     assert tools["fundamental"].call_count == 0
-    # AC5: the supervisor made no LLM call -- only synthesize bound a schema.
-    assert Thesis in llm.bound_schemas
-    assert all(schema in (Thesis, FocusedAnalysis) for schema in llm.bound_schemas)
+    # AC5: the supervisor made no LLM call -- the only schema bound this turn is
+    # the ExplorationAnswer card from synthesize, never an exploration-decision.
+    assert llm.bound_schemas == [ExplorationAnswer]
 
 
 def test_broad_exploration_still_routes_when_classifier_labels_news(
@@ -161,12 +175,38 @@ def test_broad_exploration_still_routes_when_classifier_labels_news(
     )
 
     assert result["intent_path"] == ["classify", "explore_supervisor", "synthesize", "narrate"]
+    # A "news"-labeled broad scan still resolves to the exploration card, not
+    # the single-lens focused-news card.
+    assert result["intent"] == "exploration"
     assert result["plan"] == ["news", "technical"]
     assert result["supervisor_iterations"] == 2
     assert tools["news"].call_count == 1
     assert tools["technical"].call_count == 1
     assert tools["company"].call_count == 0
     assert tools["fundamental"].call_count == 0
+
+
+def test_non_timely_exploration_uses_compact_company_when_supplied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-220 (#8) invariant: exploration is in _COMPACT_COMPANY_INTENTS, so a
+    non-news-led [company, news] scan pulls the COMPACT company report, not the
+    full one."""
+    _patch_intent(monkeypatch, "thesis")
+    _patch_llm(monkeypatch, _SynthLLM())
+    tools = _tools()
+    compact_company = MagicMock(return_value="## company\n(compact)\n")
+
+    result = build_graph(tools, compact_company_tool=compact_company).invoke(
+        {"ticker": "AAPL", "question": "What stands out on AAPL?"}
+    )
+
+    assert result["intent"] == "exploration"
+    assert result["plan"] == ["company", "news"]
+    # The compact variant was used for the company slot; the full tool was not.
+    assert compact_company.call_count == 1
+    assert tools["company"].call_count == 0
+    assert tools["news"].call_count == 1
 
 
 def test_news_led_watch_prompt_gets_complementary_lens(
