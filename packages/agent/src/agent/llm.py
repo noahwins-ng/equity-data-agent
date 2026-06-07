@@ -38,6 +38,20 @@ _ALIAS_BY_PROVIDER = {
     "gemini": "equity-agent/gemini",
 }
 
+# QNT-220 (#7) per-node model tiering. ``classify`` / ``plan`` / the
+# exploration decision are simple structured calls (in -> short structured
+# out) that the 70b model is wildly oversized for (the 14-day baseline showed
+# classify spending 1,251 input tokens to produce an ~11-token decision). Those
+# nodes call ``get_llm(model_alias=SMALL_NODE_ALIAS)``; ``synthesize`` /
+# ``narrate`` keep the default 70b by calling ``get_llm()`` with no alias. One
+# constant per tier so AC3's "revert any node where the small model regresses"
+# is a one-line change. The alias must exist in ``litellm_config.yaml``.
+#
+# QNT-220: gpt-oss-20b on Groq (free-tier TPD), NOT gemini-2.5-flash -- the
+# gemini free tier caps at 20 requests/DAY which is non-viable for a node that
+# runs on 100% of turns (see reference_gemini_free_tier_rpd).
+SMALL_NODE_ALIAS = "equity-agent/small"
+
 # QNT-182: Static map from LiteLLM alias to the upstream provider/model the
 # alias resolves to, kept in sync with ``litellm_config.yaml``. Used to stamp
 # Langfuse traces with the real model name -- LangChain only sees the alias
@@ -53,6 +67,7 @@ _RESOLVED_MODEL_BY_ALIAS: dict[str, str] = {
     "equity-agent/fallback-cerebras-gptoss120b": "cerebras/gpt-oss-120b",
     "equity-agent/fallback-groq-gptoss120b": "groq/openai/gpt-oss-120b",
     "equity-agent/gemini": "gemini/gemini-2.5-flash",
+    "equity-agent/small": "groq/openai/gpt-oss-20b",
     "equity-agent/bench-gptoss120b": "groq/openai/gpt-oss-120b",
     "equity-agent/bench-cerebras-gptoss120b": "cerebras/gpt-oss-120b",
     "equity-agent/bench-gptoss20b": "groq/openai/gpt-oss-20b",
@@ -213,9 +228,24 @@ class _UsageCallback(BaseCallbackHandler):
         self._tracker.add(total)
 
 
-def get_llm(temperature: float = 0.2) -> ChatOpenAI:
+def get_llm(temperature: float = 0.2, model_alias: str | None = None) -> ChatOpenAI:
+    """Return a ChatOpenAI bound to a LiteLLM alias.
+
+    Alias precedence (highest first):
+
+    1. ``_MODEL_OVERRIDE`` — the eval bench sweep (``--model``) re-routes every
+       node to one model; it must still win over per-node tiering so a single
+       ``--model bench-X`` flag benchmarks the whole graph (QNT-129).
+    2. ``model_alias`` — QNT-220 (#7) per-node tiering: ``classify`` / ``plan``
+       / exploration-decision pass :data:`SMALL_NODE_ALIAS` so simple structured
+       calls run on a small/fast model. ``None`` (synthesize/narrate) falls
+       through to the provider default.
+    3. provider default — ``EQUITY_AGENT_PROVIDER`` lookup.
+    """
     if _MODEL_OVERRIDE is not None:
         alias = _MODEL_OVERRIDE
+    elif model_alias is not None:
+        alias = model_alias
     else:
         provider = settings.EQUITY_AGENT_PROVIDER.lower()
         if provider not in _ALIAS_BY_PROVIDER:
@@ -253,6 +283,7 @@ def get_llm(temperature: float = 0.2) -> ChatOpenAI:
 
 
 __all__ = [
+    "SMALL_NODE_ALIAS",
     "TokenUsageTracker",
     "current_model_info",
     "get_llm",

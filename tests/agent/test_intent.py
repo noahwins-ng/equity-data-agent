@@ -153,6 +153,23 @@ def test_llm_include_raw_dict_with_parsed_intent(monkeypatch: pytest.MonkeyPatch
     assert classify_intent("Tell me about UNH") == "quick_fact"
 
 
+def test_llm_classifier_uses_small_tiering_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QNT-220 (#7): when the heuristic abstains the LLM classifier must resolve
+    the small tiering alias, not the 70b default."""
+    from agent.llm import SMALL_NODE_ALIAS
+
+    structured = MagicMock()
+    structured.invoke = MagicMock(return_value=IntentDecision(intent="thesis"))
+    llm = MagicMock()
+    llm.with_structured_output = MagicMock(return_value=structured)
+    get_llm_spy = MagicMock(return_value=llm)
+    monkeypatch.setattr(intent_module, "get_llm", get_llm_spy)
+
+    classify_intent("Give me your read on UNH")  # heuristic abstains -> LLM fires
+
+    assert get_llm_spy.call_args.kwargs.get("model_alias") == SMALL_NODE_ALIAS
+
+
 def test_heuristic_short_circuits_llm_call(monkeypatch: pytest.MonkeyPatch) -> None:
     """A heuristic-matched question must NOT call the LLM — saves token cost
     on the common case."""

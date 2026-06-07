@@ -115,7 +115,7 @@ from agent.llm import (
 )
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
-from agent.tools import default_report_tools
+from agent.tools import default_report_tools, get_company_report_compact
 from agent.tracing import langfuse, make_callback_handler, propagate_attributes
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
@@ -620,6 +620,12 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
 
         base_tools = default_report_tools()
         instrumented = _instrument_tools(base_tools, queue, loop, ticker)
+        # QNT-220 (#8): compact company variant for the thesis/comparison hot
+        # path. Instrumented under the "company" key so the tool_call event +
+        # panel label stay "company"; only the payload (full vs compact) differs.
+        compact_company = _instrument_tools(
+            {"company": get_company_report_compact}, queue, loop, ticker
+        )["company"]
         # QNT-209: attach the SqliteSaver only when the request named a
         # thread_id. The ephemeral compile path keeps the existing behavior
         # for curl / tests / non-frontend callers — no checkpoint rows, no
@@ -635,7 +641,12 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                     touch_thread(conn, thread_id)  # type: ignore[arg-type]
             except Exception as exc:  # noqa: BLE001 — sidecar touch must not block the run
                 logger.warning("touch_thread failed for %s: %s", thread_id, exc)
-        graph = build_graph(instrumented, event_emitter=_emit, checkpointer=checkpointer)  # type: ignore[arg-type]
+        graph = build_graph(
+            instrumented,
+            event_emitter=_emit,
+            checkpointer=checkpointer,  # type: ignore[arg-type]
+            compact_company_tool=compact_company,
+        )
 
         # QNT-181: tag every Langfuse trace with a per-request session_id
         # (uuid4) and a per-IP user_id (truncated sha256 of client_ip). The

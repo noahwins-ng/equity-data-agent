@@ -17,6 +17,7 @@ from agent import graph as graph_module
 from agent import tools as tools_module
 from agent.tools import (
     default_report_tools,
+    get_company_report_compact,
     get_fundamental_report,
     get_news_report,
     get_summary_report,
@@ -95,6 +96,15 @@ def test_report_tool_returns_body_on_200(
     url, params = recorder.calls[0]
     assert url == f"http://test-api:8000{endpoint}"
     assert params is None
+
+
+def test_company_compact_hits_profile_query_param(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QNT-220 (#8): the compact tool targets the company endpoint with
+    ``?profile=compact`` so the API renders the trimmed payload."""
+    recorder = _install_recorder(monkeypatch, lambda _u, _p: _ok("compact body"))
+    assert get_company_report_compact("nvda") == "compact body"
+    url, _params = recorder.calls[0]
+    assert url == "http://test-api:8000/api/v1/reports/company/NVDA?profile=compact"
 
 
 def test_report_tool_uppercases_ticker(monkeypatch: pytest.MonkeyPatch) -> None:

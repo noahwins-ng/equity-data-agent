@@ -1,4 +1,13 @@
-"""Tests for the QNT-215 exploration-supervisor route."""
+"""Tests for the QNT-215 exploration route, rewritten for the QNT-220 (#4)
+deterministic policy.
+
+The exploration supervisor no longer asks the LLM for one tool decision at a
+time. It runs a deterministic broad-scan policy (min-two complementary lenses,
+news-first when the ask is timely) at **zero LLM calls**, then hands the
+gathered reports to the normal synthesize/narrate tail. These tests assert the
+deterministic plans match the guardrail the old loop encoded (plan-parity) and
+that the supervisor never binds an exploration-decision schema (AC5).
+"""
 
 from __future__ import annotations
 
@@ -8,7 +17,7 @@ from unittest.mock import MagicMock
 import pytest
 from agent import graph as graph_module
 from agent.focused import FocusedAnalysis
-from agent.graph import REPORT_TOOLS, ExplorationDecision, build_graph
+from agent.graph import REPORT_TOOLS, _deterministic_exploration_plan, build_graph
 from agent.thesis import Thesis
 from langchain_core.messages import AIMessage
 
@@ -16,31 +25,23 @@ from ._thesis_factory import make_thesis
 
 
 class _Runnable:
-    def __init__(self, result: object | None = None, error: Exception | None = None) -> None:
-        self.invoke = MagicMock(side_effect=error if error is not None else None)
-        if error is None:
-            self.invoke.return_value = result
+    def __init__(self, result: object | None = None) -> None:
+        self.invoke = MagicMock(return_value=result)
         self.with_retry = MagicMock(return_value=self)
 
 
-class _ExplorationLLM:
-    def __init__(
-        self,
-        decisions: list[ExplorationDecision] | None = None,
-        *,
-        decision_error: Exception | None = None,
-    ) -> None:
-        self.decisions = list(decisions or [])
-        self.decision_error = decision_error
-        self.invoke = MagicMock(return_value=AIMessage(content="technical"))
+class _SynthLLM:
+    """Synthesis/narrate LLM stub. Records every schema bound via
+    ``with_structured_output`` so a test can assert the supervisor never asks
+    for an exploration decision (it makes no LLM call at all)."""
+
+    def __init__(self) -> None:
+        self.bound_schemas: list[type] = []
         self.thesis = make_thesis()
-        self.exploration_runnable = _Runnable(error=decision_error)
-        if decision_error is None:
-            self.exploration_runnable.invoke.side_effect = self._next_decision
         self.focused = FocusedAnalysis(
             focus="news",
             summary="News flow is the relevant angle (source: news).",
-            key_points=["Latest headlines anchor the follow-up (source: news)."],
+            key_points=["Latest headlines anchor the read (source: news)."],
             cited_values=[],
             verdict=None,
             existing_development="The running story is news-led (source: news).",
@@ -48,14 +49,8 @@ class _ExplorationLLM:
             negative_catalysts=[],
         )
 
-    def _next_decision(self, *_args: Any, **_kwargs: Any) -> ExplorationDecision:
-        if self.decisions:
-            return self.decisions.pop(0)
-        return ExplorationDecision(action="finish", rationale="Done.")
-
     def with_structured_output(self, schema: type) -> _Runnable:
-        if schema is ExplorationDecision:
-            return self.exploration_runnable
+        self.bound_schemas.append(schema)
         if schema is Thesis:
             return _Runnable(result=self.thesis)
         if schema is FocusedAnalysis:
@@ -64,6 +59,10 @@ class _ExplorationLLM:
 
     def stream(self, *_args: Any, **_kwargs: Any) -> Any:
         return iter([AIMessage(content="Exploration narrative.")])
+
+    # plan/quick-fact comma-list path (unused on exploration turns)
+    def invoke(self, *_args: Any, **_kwargs: Any) -> Any:
+        return AIMessage(content="company")
 
 
 def _tools() -> dict[str, MagicMock]:
@@ -75,7 +74,7 @@ def _tools() -> dict[str, MagicMock]:
     }
 
 
-def _patch_llm(monkeypatch: pytest.MonkeyPatch, llm: _ExplorationLLM) -> None:
+def _patch_llm(monkeypatch: pytest.MonkeyPatch, llm: _SynthLLM) -> None:
     monkeypatch.setattr(graph_module, "get_llm", lambda *_args, **_kwargs: llm)
 
 
@@ -87,14 +86,35 @@ def _patch_intent(monkeypatch: pytest.MonkeyPatch, intent: str = "thesis") -> No
     )
 
 
+# ─── _deterministic_exploration_plan parity (pure, 0 LLM) ────────────────────
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("What's interesting about AAPL this week?", ["news", "technical"]),
+        ("What is interesting about AAPL this week?", ["news", "technical"]),
+        ("What should I watch on AAPL next week?", ["news", "technical"]),
+        ("What stands out on AAPL?", ["company", "news"]),
+        ("Anything interesting about AAPL?", ["news", "technical"]),
+    ],
+)
+def test_deterministic_plan_matches_guardrail(question: str, expected: list[str]) -> None:
+    assert _deterministic_exploration_plan(question, list(REPORT_TOOLS)) == expected
+
+
+def test_deterministic_plan_empty_when_no_tools() -> None:
+    assert _deterministic_exploration_plan("What's interesting about AAPL?", []) == []
+
+
+# ─── Graph-level routing ─────────────────────────────────────────────────────
+
+
 def test_non_exploratory_thesis_keeps_existing_pipeline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_intent(monkeypatch, "thesis")
-    _patch_llm(
-        monkeypatch,
-        _ExplorationLLM([ExplorationDecision(action="news", rationale="Should not run.")]),
-    )
+    _patch_llm(monkeypatch, _SynthLLM())
     tools = _tools()
 
     result = build_graph(tools).invoke({"ticker": "AAPL", "question": "Give me an AAPL thesis."})
@@ -103,20 +123,12 @@ def test_non_exploratory_thesis_keeps_existing_pipeline(
     assert "supervisor_iterations" not in result
 
 
-def test_exploratory_question_routes_to_supervisor_and_calls_multiple_tools(
+def test_news_led_exploration_routes_and_gathers_two_lenses(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_intent(monkeypatch, "thesis")
-    _patch_llm(
-        monkeypatch,
-        _ExplorationLLM(
-            [
-                ExplorationDecision(action="company", rationale="Start with business context."),
-                ExplorationDecision(action="news", rationale="Then inspect recent headlines."),
-                ExplorationDecision(action="finish", rationale="Enough context."),
-            ]
-        ),
-    )
+    llm = _SynthLLM()
+    _patch_llm(monkeypatch, llm)
     tools = _tools()
 
     result = build_graph(tools).invoke(
@@ -126,28 +138,22 @@ def test_exploratory_question_routes_to_supervisor_and_calls_multiple_tools(
     assert result["intent_path"] == ["classify", "explore_supervisor", "synthesize", "narrate"]
     assert result["intent"] == "thesis"
     assert result["plan"] == ["news", "technical"]
-    assert result["supervisor_iterations"] == 3
+    assert result["supervisor_iterations"] == 2
     assert set(result["reports"]) == {"news", "technical"}
-    assert tools["company"].call_count == 0
     assert tools["news"].call_count == 1
     assert tools["technical"].call_count == 1
+    assert tools["company"].call_count == 0
     assert tools["fundamental"].call_count == 0
+    # AC5: the supervisor made no LLM call -- only synthesize bound a schema.
+    assert Thesis in llm.bound_schemas
+    assert all(schema in (Thesis, FocusedAnalysis) for schema in llm.bound_schemas)
 
 
 def test_broad_exploration_still_routes_when_classifier_labels_news(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_intent(monkeypatch, "news")
-    _patch_llm(
-        monkeypatch,
-        _ExplorationLLM(
-            [
-                ExplorationDecision(action="news", rationale="Start with current headlines."),
-                ExplorationDecision(action="technical", rationale="Check the market setup."),
-                ExplorationDecision(action="finish", rationale="Enough context."),
-            ]
-        ),
-    )
+    _patch_llm(monkeypatch, _SynthLLM())
     tools = _tools()
 
     result = build_graph(tools).invoke(
@@ -156,26 +162,18 @@ def test_broad_exploration_still_routes_when_classifier_labels_news(
 
     assert result["intent_path"] == ["classify", "explore_supervisor", "synthesize", "narrate"]
     assert result["plan"] == ["news", "technical"]
-    assert result["supervisor_iterations"] == 3
+    assert result["supervisor_iterations"] == 2
     assert tools["news"].call_count == 1
     assert tools["technical"].call_count == 1
     assert tools["company"].call_count == 0
     assert tools["fundamental"].call_count == 0
 
 
-def test_news_led_broad_exploration_finish_gets_complementary_lens(
+def test_news_led_watch_prompt_gets_complementary_lens(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_intent(monkeypatch, "thesis")
-    _patch_llm(
-        monkeypatch,
-        _ExplorationLLM(
-            [
-                ExplorationDecision(action="company", rationale="Start with business context."),
-                ExplorationDecision(action="finish", rationale="Enough context."),
-            ]
-        ),
-    )
+    _patch_llm(monkeypatch, _SynthLLM())
     tools = _tools()
 
     result = build_graph(tools).invoke(
@@ -183,9 +181,26 @@ def test_news_led_broad_exploration_finish_gets_complementary_lens(
     )
 
     assert result["plan"] == ["news", "technical"]
-    assert tools["company"].call_count == 0
     assert tools["news"].call_count == 1
     assert tools["technical"].call_count == 1
+    assert tools["company"].call_count == 0
+    assert tools["fundamental"].call_count == 0
+
+
+def test_non_timely_broad_exploration_leads_with_company_and_news(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_intent(monkeypatch, "thesis")
+    _patch_llm(monkeypatch, _SynthLLM())
+    tools = _tools()
+
+    result = build_graph(tools).invoke({"ticker": "AAPL", "question": "What stands out on AAPL?"})
+
+    assert result["plan"] == ["company", "news"]
+    assert result["supervisor_iterations"] == 2
+    assert tools["company"].call_count == 1
+    assert tools["news"].call_count == 1
+    assert tools["technical"].call_count == 0
     assert tools["fundamental"].call_count == 0
 
 
@@ -193,15 +208,7 @@ def test_warm_thread_news_angle_skips_exploration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_intent(monkeypatch, "followup")
-    _patch_llm(
-        monkeypatch,
-        _ExplorationLLM(
-            [
-                ExplorationDecision(action="news", rationale="The user asked for the news angle."),
-                ExplorationDecision(action="finish", rationale="News is enough."),
-            ]
-        ),
-    )
+    _patch_llm(monkeypatch, _SynthLLM())
     tools = _tools()
 
     result = build_graph(tools).invoke(
@@ -230,10 +237,7 @@ def test_warm_thread_broad_interesting_followup_skips_exploration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_intent(monkeypatch, "followup")
-    _patch_llm(
-        monkeypatch,
-        _ExplorationLLM([ExplorationDecision(action="news", rationale="Should not run.")]),
-    )
+    _patch_llm(monkeypatch, _SynthLLM())
     tools = _tools()
 
     result = build_graph(tools).invoke(
@@ -261,10 +265,7 @@ def test_named_lens_with_ticker_uses_focused_pipeline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_intent(monkeypatch, "news")
-    _patch_llm(
-        monkeypatch,
-        _ExplorationLLM([ExplorationDecision(action="news", rationale="Should not run.")]),
-    )
+    _patch_llm(monkeypatch, _SynthLLM())
     tools = _tools()
 
     result = build_graph(tools).invoke(
@@ -285,10 +286,7 @@ def test_named_lens_watch_prompt_uses_focused_pipeline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_intent(monkeypatch, "technical")
-    _patch_llm(
-        monkeypatch,
-        _ExplorationLLM([ExplorationDecision(action="technical", rationale="Should not run.")]),
-    )
+    _patch_llm(monkeypatch, _SynthLLM())
     tools = _tools()
 
     result = build_graph(tools).invoke(
@@ -305,43 +303,16 @@ def test_named_lens_watch_prompt_uses_focused_pipeline(
     assert tools["fundamental"].call_count == 0
 
 
-def test_exploration_iteration_cap_finishes_gracefully(
+def test_exploration_with_empty_tools_falls_back_to_thesis(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_intent(monkeypatch, "thesis")
-    _patch_llm(
-        monkeypatch,
-        _ExplorationLLM(
-            [
-                ExplorationDecision(action="company", rationale="Context first."),
-                ExplorationDecision(action="technical", rationale="Check the setup."),
-                ExplorationDecision(action="fundamental", rationale="Check valuation."),
-                ExplorationDecision(action="news", rationale="Should not be reached."),
-            ]
-        ),
-    )
-    tools = _tools()
+    _patch_llm(monkeypatch, _SynthLLM())
 
-    result = build_graph(tools).invoke({"ticker": "AAPL", "question": "What stands out on AAPL?"})
-
-    assert result["plan"] == ["company", "technical", "fundamental"]
-    assert result["supervisor_iterations"] == 3
-    assert tools["news"].call_count == 0
-
-
-def test_exploration_failure_falls_back_to_all_tools(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_intent(monkeypatch, "thesis")
-    _patch_llm(monkeypatch, _ExplorationLLM(decision_error=RuntimeError("planner down")))
-    tools = _tools()
-
-    result = build_graph(tools).invoke(
+    result = build_graph({}).invoke(
         {"ticker": "AAPL", "question": "What's interesting about AAPL this week?"}
     )
 
-    assert result["intent_path"] == ["classify", "explore_supervisor", "synthesize", "narrate"]
     assert result["intent"] == "thesis"
-    assert result["plan"] == list(REPORT_TOOLS)
-    assert set(result["reports"]) == set(REPORT_TOOLS)
+    assert result.get("plan", []) == []
     assert result["supervisor_iterations"] == 0

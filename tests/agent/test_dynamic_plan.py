@@ -182,6 +182,37 @@ def test_plan_rationale_reaches_narrate_prompt(
     assert rationale in str(user_message.content)
 
 
+def test_thesis_plan_uses_small_alias_synthesis_keeps_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-220 (#7): the plan call resolves the small tiering alias while the
+    synthesize call keeps the default 70b -- asserts the per-node alias mapping."""
+    from agent.llm import SMALL_NODE_ALIAS
+
+    bindings: list[tuple[type, str | None]] = []
+
+    class _SpyLLM(_PlanAwareLLM):
+        def __init__(self, alias: str | None) -> None:
+            super().__init__(
+                ThesisPlan(tools=["company", "fundamental"], rationale="Valuation read.")
+            )
+            self._alias = alias
+
+        def with_structured_output(self, schema: type) -> _Runnable:
+            bindings.append((schema, self._alias))
+            return super().with_structured_output(schema)
+
+    def _factory(*_args: Any, model_alias: str | None = None, **_kwargs: Any) -> _SpyLLM:
+        return _SpyLLM(model_alias)
+
+    monkeypatch.setattr(graph_module, "get_llm", _factory)
+
+    build_graph(_tools()).invoke({"ticker": "AAPL", "question": "Is AAPL overvalued?"})
+
+    assert [a for s, a in bindings if s is ThesisPlan] == [SMALL_NODE_ALIAS]
+    assert [a for s, a in bindings if s is Thesis] == [None]
+
+
 def test_partial_thesis_prompt_names_supplied_reports_and_missing_aspect_rule() -> None:
     prompt = build_synthesis_prompt(
         "AAPL",

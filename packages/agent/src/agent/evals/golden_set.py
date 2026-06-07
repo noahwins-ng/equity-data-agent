@@ -50,7 +50,7 @@ from agent.focused import FocusedAnalysis
 from agent.graph import build_graph
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
-from agent.tools import default_report_tools
+from agent.tools import default_report_tools, get_company_report_compact
 
 logger = logging.getLogger(__name__)
 
@@ -272,10 +272,17 @@ def run_record(record: GoldenRecord, *, llm_for_judge: Any | None = None) -> Eva
     propagating — one broken ticker shouldn't stop a 16-record sweep.
     """
     wrapped, recorder = wrap_with_recorder(default_report_tools())
+    # QNT-220 (#8): mirror production -- thesis/comparison consume the compact
+    # company report. Wrap it under the same "company" recorder key so
+    # tool_call_ok still logs "company" while the eval exercises the real
+    # compact payload the SSE path ships.
+    compact_wrapped, _ = wrap_with_recorder(
+        {"company": get_company_report_compact}, recorder=recorder
+    )
 
     started = time.perf_counter()
     try:
-        graph = build_graph(wrapped)
+        graph = build_graph(wrapped, compact_company_tool=compact_wrapped["company"])
         state = graph.invoke({"ticker": record.ticker, "question": record.question})
     except Exception as exc:  # noqa: BLE001 — surface as failed row, keep loop alive
         logger.exception("eval %s: build_graph or graph.invoke raised", record.id)

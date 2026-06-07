@@ -148,6 +148,21 @@ def get_company_report(ticker: str) -> str:
     return _report_tool("company", ticker)
 
 
+def get_company_report_compact(ticker: str) -> str:
+    """QNT-220 (#8): compact company profile for the thesis/comparison hot path.
+
+    Same endpoint as ``get_company_report`` with ``?profile=compact`` -- keeps
+    the CONTEXT NOW numbers + business + risks, drops the competitor / watch
+    lists the thesis rarely quotes. The agent swaps this in for the ``company``
+    slot on thesis/comparison/exploration turns (QNT-175's force-include rule)
+    while focused asks keep the full report."""
+    ticker_upper, err = _normalize_ticker(ticker)
+    if err is not None:
+        return err
+    url = f"{_base_url()}/api/v1/reports/company/{ticker_upper}?profile=compact"
+    return _fetch_text(url, name="company-report-compact")
+
+
 def search_news(ticker: str, query: str) -> str:
     """Semantic news search against Qdrant, returned as pretty JSON.
 
@@ -218,6 +233,7 @@ def default_report_tools() -> dict[str, Callable[[str], str]]:
 __all__ = [
     "default_report_tools",
     "get_company_report",
+    "get_company_report_compact",
     "get_fundamental_report",
     "get_news_report",
     "get_summary_report",

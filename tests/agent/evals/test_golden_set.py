@@ -89,7 +89,9 @@ def stub_graph(monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str, Any]], No
     graph = MagicMock()
     graph.invoke.return_value = state
 
-    def fake_build_graph(tools: dict[str, Any]) -> MagicMock:
+    def fake_build_graph(
+        tools: dict[str, Any], **_kwargs: Any
+    ) -> MagicMock:  # QNT-220: accepts compact_company_tool kwarg
         # Touch each tool so the recorder records its call — without this
         # the tool-call check would always see an empty recorder.
         for fn in tools.values():
