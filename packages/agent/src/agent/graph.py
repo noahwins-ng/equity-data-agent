@@ -47,6 +47,7 @@ from shared.tickers import TICKERS
 
 from agent.comparison import ComparisonAnswer
 from agent.conversational import ConversationalAnswer, domain_redirect
+from agent.exploration import ExplorationAnswer
 from agent.focused import FocusedAnalysis
 from agent.intent import (
     ClassifierSource,
@@ -62,6 +63,7 @@ from agent.prompts import (
     build_clarify_prompt,
     build_comparison_prompt,
     build_conversational_prompt,
+    build_exploration_prompt,
     build_focused_prompt,
     build_followup_prompt,
     build_narrate_prompt,
@@ -124,6 +126,7 @@ def _prompt_version() -> str:
         CLARIFY_SYSTEM_PROMPT,
         COMPARISON_SYSTEM_PROMPT,
         CONVERSATIONAL_SYSTEM_PROMPT,
+        EXPLORATION_SYSTEM_PROMPT,
         FOCUSED_SYSTEM_PROMPT,
         FOLLOWUP_SYSTEM_PROMPT,
         QUICK_FACT_SYSTEM_PROMPT,
@@ -143,6 +146,8 @@ def _prompt_version() -> str:
         + WARM_CONVERSATIONAL_SYSTEM_PROMPT
         + "\n"
         + FOCUSED_SYSTEM_PROMPT
+        + "\n"
+        + EXPLORATION_SYSTEM_PROMPT
         + "\n"
         + FOLLOWUP_SYSTEM_PROMPT
         + "\n"
@@ -281,8 +286,10 @@ _SHORT_CIRCUIT_INTENTS: frozenset[Intent] = frozenset({"conversational", "follow
 
 # QNT-220 (#8): intents that force-include the company report (QNT-175) and so
 # get the compact company variant when one is supplied. Focused
-# fundamental/technical/news asks keep the full report.
-_COMPACT_COMPANY_INTENTS: frozenset[Intent] = frozenset({"thesis", "comparison"})
+# fundamental/technical/news asks keep the full report. Exploration (QNT-220
+# follow-up) is a hot path whose non-news-led plan includes company, so it
+# inherits the compact variant to preserve the lever #8 token savings.
+_COMPACT_COMPANY_INTENTS: frozenset[Intent] = frozenset({"thesis", "comparison", "exploration"})
 
 AmbiguityKind = Literal["needs_second_ticker", "needs_ticker", "needs_prior_turn"]
 
@@ -330,6 +337,7 @@ class AgentState(TypedDict):
     comparison: NotRequired[ComparisonAnswer | None]
     conversational: NotRequired[ConversationalAnswer | None]
     focused: NotRequired[FocusedAnalysis | None]
+    exploration: NotRequired[ExplorationAnswer | None]
     confidence: NotRequired[float]
     supervisor_iterations: NotRequired[int]
     # QNT-211: streaming analyst-voice paragraph produced by the narrate node
@@ -450,18 +458,6 @@ def _has_named_exploration_lens(question: str) -> bool:
     return any(term in lowered for term in _EXPLORATION_NAMED_LENS_TERMS)
 
 
-def _exploration_focus(question: str) -> Intent | None:
-    """Return a focused intent when the exploratory ask names a specific lens."""
-    lowered = question.lower()
-    if "news angle" in lowered or "headline" in lowered or "catalyst" in lowered:
-        return "news"
-    if "fundamental angle" in lowered or "valuation angle" in lowered:
-        return "fundamental"
-    if "technical angle" in lowered or "chart angle" in lowered:
-        return "technical"
-    return None
-
-
 def _minimum_exploration_tools(question: str, available: list[str]) -> int:
     """Broad exploratory asks need a second lens before synthesis."""
     if not available:
@@ -517,16 +513,6 @@ def _exploration_rationale(question: str, plan: list[str]) -> str | None:
     if _is_news_led_exploration(question):
         return f"Timely broad scan, news-first across {lenses}."
     return f"Broad exploratory scan across {lenses}."
-
-
-def _exploration_output_intent(question: str, plan: list[str], original: Intent) -> Intent:
-    """Choose which existing synthesis branch should consume exploration reports."""
-    focus = _exploration_focus(question)
-    if focus is not None and focus in plan:
-        return focus
-    if original in _FOCUSED_REPORT and _FOCUSED_REPORT[original] in plan:
-        return original
-    return "thesis"
 
 
 def _coerce_thesis_plan(response: object) -> ThesisPlan | None:
@@ -705,6 +691,17 @@ def _coerce_focused(response: object) -> FocusedAnalysis | None:
     return None
 
 
+def _coerce_exploration(response: object) -> ExplorationAnswer | None:
+    """Normalise whatever ``llm.invoke`` hands back into an ``ExplorationAnswer``."""
+    if isinstance(response, ExplorationAnswer):
+        return response
+    if isinstance(response, dict):
+        parsed = response.get("parsed")
+        if isinstance(parsed, ExplorationAnswer):
+            return parsed
+    return None
+
+
 def _detect_ambiguity(
     intent: Intent,
     question: str,
@@ -841,6 +838,12 @@ def _assistant_surface(state: AgentState, narrative: str | None) -> str | None:
         ref = f"Structured payload: focused {focus}"
         return "\n".join(part for part in (prefix or str(summary), ref) if part).strip()
 
+    exploration = state.get("exploration")
+    if exploration is not None:
+        headline = getattr(exploration, "headline", "")
+        ref = "Structured payload: exploration"
+        return "\n".join(part for part in (prefix or str(headline), ref) if part).strip()
+
     comparison = state.get("comparison")
     if comparison is not None:
         differences = getattr(comparison, "differences", "")
@@ -901,6 +904,10 @@ def _hint_from_intent(intent: Intent) -> str | None:
         return "technical"
     if intent == "news":
         return "news"
+    # QNT-220 follow-up: a failed exploration scan is broad by nature, so bias
+    # the fallback redirect toward the thesis suggestion bank.
+    if intent == "exploration":
+        return "thesis"
     return None
 
 
@@ -1216,7 +1223,6 @@ def build_graph(
         """
         ticker = state["ticker"]
         question = state.get("question", "")
-        original_intent = state.get("intent", "thesis")
         available = [t for t in REPORT_TOOLS if t in tools]
         reports: dict[str, str] = dict(state.get("reports") or {})
 
@@ -1238,12 +1244,12 @@ def build_graph(
         # plan anyway (see _deterministic_exploration_plan). Gather the planned
         # lenses in one shot and hand them to the normal synthesize/narrate tail.
         plan = _deterministic_exploration_plan(question, available)
-        # QNT-220 (#8): gate compaction on the *output* intent, not a hardcoded
-        # "thesis". A non-news-led broad scan can resolve to a focused output
-        # intent (e.g. classifier labeled it "news", plan includes company), and
-        # _effective_tools keeps the FULL company report for focused intents --
-        # honouring build_graph's "focused asks keep the full report" invariant.
-        output_intent = _exploration_output_intent(question, plan, original_intent)
+        # QNT-220 follow-up: a broad anchored scan always renders as the
+        # dedicated exploration card -- a verdict-free, multi-lens shape -- so
+        # the output intent is constant. "exploration" is in
+        # _COMPACT_COMPANY_INTENTS, so the non-news-led [company, news] plan
+        # still gets the compact company report (lever #8 savings preserved).
+        output_intent: Intent = "exploration"
         tool_reports, errors = _gather_reports(ticker, plan, _effective_tools(output_intent))
         reports.update(tool_reports)
         logger.info(
@@ -1285,6 +1291,7 @@ def build_graph(
                 "comparison": None,
                 "conversational": None,
                 "focused": None,
+                "exploration": None,
                 "confidence": confidence,
             }
 
@@ -1456,6 +1463,44 @@ def build_graph(
                 confidence,
                 [s.ticker for s in comparison.sections],
             )
+            return payload
+
+        if intent == "exploration":
+            # QNT-220 follow-up: a broad anchored scan rendered as the
+            # dedicated verdict-free, multi-lens exploration card. Mirrors the
+            # focused path's structured-output + fallback contract.
+            if not reports:
+                return _fallback("I couldn't pull any reports to scan for that right now.")
+            prompt = build_exploration_prompt(
+                ticker,
+                question,
+                reports,
+                history=_history_before_current(state.get("messages"), question),
+            )
+            structured_llm = (
+                get_llm()
+                .with_structured_output(ExplorationAnswer)
+                .with_retry(
+                    stop_after_attempt=2,
+                    retry_if_exception_type=(ValidationError, OutputParserException),
+                )
+            )
+            try:
+                response = _linked_invoke(structured_llm, prompt, config, "exploration-prompt")
+            except Exception as exc:  # noqa: BLE001 — surface as fallback redirect
+                logger.warning(
+                    "synthesize %s: exploration structured output failed: %s: %s",
+                    ticker,
+                    type(exc).__name__,
+                    exc,
+                )
+                response = None
+            exploration = _coerce_exploration(response)
+            if exploration is None:
+                return _fallback("I had trouble pulling that scan together.")
+            payload = _empty_payload()
+            payload["exploration"] = exploration
+            logger.info("synthesize %s: confidence=%s exploration=ok", ticker, confidence)
             return payload
 
         if intent in _FOCUSED_REPORT:
@@ -1636,6 +1681,7 @@ def build_graph(
             or state.get("quick_fact")
             or state.get("comparison")
             or state.get("focused")
+            or state.get("exploration")
             or state.get("conversational")
         )
         payload_markdown = ""
@@ -1899,6 +1945,7 @@ __all__ = [
     "ComparisonAnswer",
     "ConversationalAnswer",
     "EventEmitter",
+    "ExplorationAnswer",
     "FocusedAnalysis",
     "Intent",
     "QuickFactAnswer",

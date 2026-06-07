@@ -1395,6 +1395,64 @@ def test_focused_intent_emits_focused_event_not_thesis(
     assert done_data["citations_count"] >= 2
 
 
+# ─── QNT-220 follow-up: exploration-scan SSE wiring ─────────────────────────
+
+
+def test_exploration_intent_emits_exploration_event_not_thesis(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the graph returns the exploration intent, the SSE stream emits an
+    ``exploration`` event (not thesis/focused) and the done payload reports the
+    exploration intent + a non-zero citations count from the cited values."""
+    from agent.exploration import ExplorationAnswer, ExplorationValue
+
+    exploration = ExplorationAnswer(
+        headline="Headlines and the chart both stand out (source: news).",
+        observations=["RSI-14 daily 71, overbought (source: technical)."],
+        cited_values=[ExplorationValue(label="RSI", value="71", source="technical")],
+    )
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
+        graph = MagicMock()
+        graph.invoke.return_value = {
+            "ticker": "NVDA",
+            "intent": "exploration",
+            "plan": ["news", "technical"],
+            "reports": {"news": "stub", "technical": "stub"},
+            "errors": {},
+            "thesis": None,
+            "quick_fact": None,
+            "comparison": None,
+            "conversational": None,
+            "focused": None,
+            "exploration": exploration,
+            "confidence": 1.0,
+        }
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    r = client.post(
+        "/api/v1/agent/chat",
+        json={"ticker": "NVDA", "message": "what's interesting about NVDA?"},
+    )
+    frames = _parse_sse(r.text)
+    events = [name for name, _ in frames]
+
+    assert "exploration" in events
+    assert "thesis" not in events
+    assert "focused" not in events
+    exploration_data = next(data for name, data in frames if name == "exploration")
+    assert exploration_data == exploration.model_dump()
+
+    done_data = frames[-1][1]
+    assert events[-1] == "done"
+    assert done_data["intent"] == "exploration"
+    # one structured cited_value + one inline (source: …) parens => >= 2.
+    assert done_data["citations_count"] >= 2
+
+
 def test_chat_request_rejects_legacy_toggle_fields() -> None:
     """QNT-176: ``tools_enabled`` and ``cite_sources`` are removed from
     ``ChatRequest``. Pydantic models are open by default (extra fields

@@ -1,5 +1,6 @@
 from agent.comparison import ComparisonAnswer, ComparisonSection
 from agent.conversational import ConversationalAnswer, domain_redirect
+from agent.exploration import ExplorationAnswer, ExplorationValue
 from agent.focused import FocusedAnalysis, FocusedValue, FocusKind
 from agent.graph import AgentState, ToolFn, build_graph
 from agent.intent import (
@@ -46,6 +47,8 @@ __all__ = [
     "ComparisonAnswer",
     "ComparisonSection",
     "ConversationalAnswer",
+    "ExplorationAnswer",
+    "ExplorationValue",
     "FocusedAnalysis",
     "FocusedValue",
     "FocusKind",

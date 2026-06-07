@@ -89,7 +89,11 @@ def test_every_intent_has_at_least_one_golden() -> None:
     # hydrated on the same thread — so a single-shot golden can't exercise
     # it. Per AC9 the followup intent does not contaminate the 16-question
     # contract; coverage lives in tests/agent/test_followup.py instead.
-    required = named - {"thesis", "followup"}
+    # ``exploration`` (QNT-220 follow-up) is internal-only — it is set by
+    # explore_supervisor after routing, never picked by the classifier, so it
+    # can't be a pinned ``expected_intent``; coverage lives in
+    # tests/agent/test_exploration_supervisor.py instead.
+    required = named - {"thesis", "followup", "exploration"}
     missing = required - pinned
     assert not missing, (
         f"goldens missing pinned records for intents: {sorted(missing)} (found: {sorted(pinned)})"

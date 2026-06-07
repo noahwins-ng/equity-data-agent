@@ -132,13 +132,13 @@ def test_focused_fundamental_keeps_full_company(monkeypatch: pytest.MonkeyPatch)
     assert "full" in result["reports"]["company"]
 
 
-def test_exploration_with_focused_output_keeps_full_company(
+def test_exploration_uses_compact_company(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A non-news-led broad scan that the classifier labels a focused intent
-    ('news') routes through explore_supervisor, plans [company, news], and
-    resolves output_intent='news' (focused) -> synthesis must get the FULL
-    company report, not compact (the node gates compaction on output_intent)."""
+    """QNT-220 follow-up: a broad scan always renders as the exploration card,
+    and ``exploration`` is in _COMPACT_COMPANY_INTENTS, so a non-news-led
+    [company, news] scan gets the COMPACT company report (the lever #8 token
+    savings now extend to the exploration hot path)."""
     _patch(monkeypatch, "news")
     full, compact = _full_and_compact()
     tools = {"company": full, **_other_tools()}
@@ -149,9 +149,9 @@ def test_exploration_with_focused_output_keeps_full_company(
 
     assert "explore_supervisor" in result["intent_path"]
     assert result["plan"] == ["company", "news"]
-    assert result["intent"] == "news"
-    assert full.call_count == 1
-    assert compact.call_count == 0
+    assert result["intent"] == "exploration"
+    assert compact.call_count == 1
+    assert full.call_count == 0
 
 
 def test_no_compact_tool_uses_full_everywhere(monkeypatch: pytest.MonkeyPatch) -> None:
