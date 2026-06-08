@@ -1238,6 +1238,20 @@ def build_graph(
                 "supervisor_iterations": 0,
             }
 
+        # QNT-220 follow-up: announce the exploration intent NOW, before the
+        # slow gather/synthesize/narrate phases. classify_node already emitted
+        # the classifier's raw label (e.g. "thesis"); without this the SSE
+        # streaming label would read "streaming thesis..." for the whole turn
+        # and only correct to the exploration card post-graph. Reaching this
+        # node means the route is committed to exploration, so re-emit here.
+        if event_emitter is not None:
+            try:
+                event_emitter("intent", {"intent": "exploration"})
+            except Exception as exc:  # noqa: BLE001 — never let SSE plumbing crash the graph
+                logger.warning(
+                    "explore_supervisor %s: event_emitter failed: %s (continuing)", ticker, exc
+                )
+
         # QNT-220 (#4): deterministic broad-exploration policy -- 0 LLM calls.
         # The old QNT-215 loop asked the LLM for one tool at a time but never
         # showed it the report bodies, so the deterministic guardrail drove the
