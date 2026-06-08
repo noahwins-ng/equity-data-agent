@@ -18,6 +18,7 @@ intact. Quick-fact and intent-routing tests live below.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -32,6 +33,8 @@ from agent.graph import (
     ToolFn,
     _composite_confidence,
     _confidence_from_reports,
+    _format_search_hits,
+    _is_targeted_news,
     _parse_plan,
     _runtime_grounding_check,
     build_graph,
@@ -1293,3 +1296,158 @@ def test_hint_from_intent_focused_resolves_to_real_bank_label() -> None:
         hint = _hint_from_intent(intent)  # type: ignore[arg-type]
         assert hint is not None, f"intent {intent!r} produced None hint"
         assert hint in bank_labels, f"intent {intent!r} hint {hint!r} not in {bank_labels}"
+
+
+# ─── QNT-222: semantic news search (RAG) wiring ──────────────────────────────
+
+
+def _news_focused_llm() -> _StructuredLLM:
+    """An ``_StructuredLLM`` whose structured channel returns a news focused card."""
+    from agent.focused import FocusedAnalysis
+
+    llm = _StructuredLLM()
+    llm._structured_runnable.invoke = MagicMock(
+        return_value=FocusedAnalysis(
+            focus="news",
+            summary="news summary",
+            key_points=[],
+            cited_values=[],
+            existing_development="running story",
+            positive_catalysts=[],
+            negative_catalysts=[],
+        ),
+    )
+    return llm
+
+
+def _recording_search_news(rows: list[dict[str, str]]) -> MagicMock:
+    """A 2-arg search_news stub that records (ticker, query) calls."""
+    return MagicMock(return_value=json.dumps(rows))
+
+
+@pytest.mark.parametrize(
+    "token_question",
+    [
+        "any litigation news on NVDA?",
+        "what did the CEO say about the buyback on NVDA?",
+        "any news about the recall on NVDA?",
+        "any lawsuit news on NVDA?",
+    ],
+)
+def test_targeted_news_routes_through_search_news_with_question_as_query(
+    monkeypatch: pytest.MonkeyPatch, token_question: str
+) -> None:
+    """AC1: a targeted-news ask calls ``search_news(ticker, question)`` and the
+    retrieved headlines are folded into the news report the focused synthesis
+    consumes."""
+    monkeypatch.setattr(
+        graph_module, "classify_intent_with_source", lambda _q, **_: ("news", "llm")
+    )
+    llm = _news_focused_llm()
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+
+    search = _recording_search_news(
+        [{"headline": "NVDA sued over chip patents", "source": "Reuters", "date": "2026-06-01"}]
+    )
+    graph = build_graph(
+        {name: _mock_tool(name) for name in REPORT_TOOLS},
+        search_news_tool=search,
+    )
+    result = graph.invoke({"ticker": "NVDA", "question": token_question})
+
+    # Called exactly once with the ticker and the verbatim question as query.
+    search.assert_called_once_with("NVDA", token_question)
+    # Retrieved headline is folded into the news report.
+    assert "NVDA sued over chip patents" in result["reports"]["news"]
+
+
+def test_generic_news_ask_does_not_call_search_news(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC1: a generic news ask keeps the cheap canned report and never fires
+    the semantic search path."""
+    monkeypatch.setattr(
+        graph_module, "classify_intent_with_source", lambda _q, **_: ("news", "llm")
+    )
+    llm = _news_focused_llm()
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+
+    search = _recording_search_news([{"headline": "x", "source": "y", "date": "z"}])
+    graph = build_graph(
+        {name: _mock_tool(name) for name in REPORT_TOOLS},
+        search_news_tool=search,
+    )
+    result = graph.invoke({"ticker": "NVDA", "question": "what's the news on NVDA?"})
+
+    search.assert_not_called()
+    # Canned mock report is used untouched.
+    assert result["reports"]["news"] == "news for NVDA"
+
+
+def test_targeted_news_with_empty_hits_keeps_canned_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A targeted ask whose search returns no matches leaves the canned news
+    digest intact rather than blanking it."""
+    monkeypatch.setattr(
+        graph_module, "classify_intent_with_source", lambda _q, **_: ("news", "llm")
+    )
+    llm = _news_focused_llm()
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+
+    search = MagicMock(return_value="[]")
+    graph = build_graph(
+        {name: _mock_tool(name) for name in REPORT_TOOLS},
+        search_news_tool=search,
+    )
+    result = graph.invoke({"ticker": "NVDA", "question": "any litigation news on NVDA?"})
+
+    search.assert_called_once()
+    assert result["reports"]["news"] == "news for NVDA"
+
+
+def test_non_news_intent_never_calls_search_news(
+    monkeypatch: pytest.MonkeyPatch, stub_llm: _StructuredLLM
+) -> None:
+    """The targeted-news gate is scoped to the news intent: a thesis ask that
+    happens to contain a catalyst word must not fire the search path."""
+    monkeypatch.setattr(
+        graph_module, "classify_intent_with_source", lambda _q, **_: ("thesis", "heuristic")
+    )
+    search = MagicMock(return_value="[]")
+    graph = build_graph(
+        {name: _mock_tool(name) for name in REPORT_TOOLS},
+        search_news_tool=search,
+    )
+    graph.invoke({"ticker": "NVDA", "question": "should I buy NVDA given the lawsuit?"})
+
+    search.assert_not_called()
+
+
+def test_is_targeted_news_distinguishes_targeted_from_generic() -> None:
+    assert _is_targeted_news("any litigation news on NVDA?") is True
+    assert _is_targeted_news("what did the CEO say about the buyback?") is True
+    assert _is_targeted_news("any recall news on TSLA?") is True
+    # Generic news asks name no specific event/entity.
+    assert _is_targeted_news("what's the news on AAPL?") is False
+    assert _is_targeted_news("headlines on META") is False
+    # Whole-word matching: "sue" must not fire on "issue", "sec" not on "second".
+    assert _is_targeted_news("what are the issues this second?") is False
+
+
+def test_format_search_hits_renders_rows_and_degrades_to_empty() -> None:
+    rows = json.dumps(
+        [
+            {"headline": "AAPL faces antitrust probe", "source": "Bloomberg", "date": "2026-05-02"},
+            {"headline": "buyback expanded", "source": "WSJ", "date": "2026-05-03"},
+        ]
+    )
+    block = _format_search_hits(rows)
+    assert "AAPL faces antitrust probe" in block
+    assert "Bloomberg, 2026-05-02" in block
+    # One "- " bullet per row so _summarise_report counts them as headlines.
+    assert block.count("\n- ") == 2
+    # Degraded paths return "" so the caller skips the merge.
+    assert _format_search_hits("[]") == ""
+    assert _format_search_hits("not json") == ""
+    assert _format_search_hits("[1, 2, 3]") == ""
