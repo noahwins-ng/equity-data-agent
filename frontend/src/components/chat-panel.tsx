@@ -929,6 +929,11 @@ function RunBlock({
 }) {
   const proseText = run.proseChunks.join("");
   const isStreaming = run.status === "streaming";
+  const groundingPct =
+    typeof run.stats?.grounding_rate === "number"
+      ? Math.max(0, Math.min(100, Math.round(run.stats.grounding_rate * 100)))
+      : null;
+  const showGroundingWarning = groundingPct !== null && groundingPct < 100;
   // Hide free-form prose when the run produced any structured card —
   // each card renders its own prose with chips. Only show standalone
   // prose when the run is mid-stream and no card has arrived yet.
@@ -1039,6 +1044,16 @@ function RunBlock({
           conversational={run.conversational}
           onSuggestion={onSuggestion}
         />
+      )}
+
+      {showGroundingWarning && (
+        <div
+          role="alert"
+          className="rounded border border-amber-700/40 bg-amber-950/30 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-amber-200"
+        >
+          Some numbers in this answer were not found in the supplied reports.
+          Groundedness: {groundingPct}%. Verify before relying on them.
+        </div>
       )}
 
       {/* Disclaimer footer (QNT-195) — shown once any result card is present.
