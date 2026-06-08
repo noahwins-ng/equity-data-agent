@@ -100,6 +100,16 @@ function activeTickerFromPath(path: string | null): string | null {
   return m ? m[1].toUpperCase() : null;
 }
 
+function redactUnsupportedNumbers(text: string, unsupported: readonly string[] = []): string {
+  let cleaned = text;
+  for (const raw of unsupported.filter(Boolean).sort((a, b) => b.length - a.length)) {
+    const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(`(^|[^\\d.])(${escaped})(?=$|[^\\d.])`, "g");
+    cleaned = cleaned.replace(pattern, "$1[unsupported number]");
+  }
+  return cleaned;
+}
+
 // ─── Inline data chip parser ──────────────────────────────────────────────
 //
 // The synthesis prompt produces inline citations like `(source: technical)`
@@ -1364,9 +1374,14 @@ export function ChatPanel() {
             updateRun(id, (r) => ({ ...r, exploration: ev }));
           } else if (event === "done") {
             const ev = data as DoneEvent;
+            const unsupported = ev.grounding_unsupported ?? [];
             updateRun(id, (r) => ({
               ...r,
               stats: ev,
+              narrative: redactUnsupportedNumbers(r.narrative, unsupported),
+              proseChunks: r.proseChunks.map((chunk) =>
+                redactUnsupportedNumbers(chunk, unsupported),
+              ),
               status:
                 r.errors.length > 0 &&
                 !r.thesis &&

@@ -1666,6 +1666,10 @@ def test_runtime_grounding_score_pushed_when_present(
 
     r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "hi"})
     assert r.status_code == 200
+    frames = _parse_sse(r.text)
+    done = next(data for name, data in frames if name == "done")
+    assert done["grounding_rate"] == 0.5
+    assert done["grounding_unsupported"] == ["99"]
 
     grounding_call = next(
         call

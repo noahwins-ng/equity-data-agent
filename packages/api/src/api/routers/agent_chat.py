@@ -1049,6 +1049,11 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                 "citations_count": citations_count,
                 "confidence": confidence,
                 "grounding_rate": grounding_rate,
+                "grounding_unsupported": (
+                    list(state.get("grounding_unsupported", []))
+                    if isinstance(state, dict)
+                    else []
+                ),
                 "intent": intent,
                 "thread_id": thread_id,
                 "intent_path": intent_path,
