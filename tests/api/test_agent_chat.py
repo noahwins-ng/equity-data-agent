@@ -191,6 +191,7 @@ def test_happy_path_emits_canonical_sequence(
     # Final done payload carries real stats.
     done_data = frames[-1][1]
     assert done_data["confidence"] == 0.67
+    assert done_data["grounding_rate"] == 1.0
     assert done_data["tools_count"] == 3
     # QNT-208: v2 stub has citations across multiple aspects; the exact
     # count is shape-dependent. Pin a non-zero floor.
@@ -1637,6 +1638,52 @@ def test_eval_scores_flag_fabricated_number(
     # ``HallucinationResult.reason()`` formats the unsupported tokens into
     # the comment — the fabricated 99 must show up there.
     assert "99" in halluc_call.kwargs["comment"]
+
+
+def test_runtime_grounding_score_pushed_when_present(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_lf = _install_fake_langfuse(monkeypatch)
+
+    def _fake_build(_tools: dict[str, Any], **_kwargs: Any) -> Any:
+        graph = MagicMock()
+        graph.invoke.return_value = {
+            "ticker": "NVDA",
+            "intent": "conversational",
+            "plan": [],
+            "reports": {},
+            "errors": {},
+            "conversational": ConversationalAnswer(answer="Hi.", suggestions=[]),
+            "confidence": 0.5,
+            "grounding_rate": 0.5,
+            "grounding_unsupported": ["99"],
+        }
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "hi"})
+    assert r.status_code == 200
+
+    grounding_call = next(
+        call
+        for call in fake_lf.create_score.call_args_list
+        if call.kwargs["name"] == "runtime_grounding_rate"
+    )
+    assert grounding_call.kwargs["trace_id"] == "test-trace-id"
+    assert grounding_call.kwargs["value"] == 0.5
+    assert "99" in grounding_call.kwargs["comment"]
+    fake_lf._create_trace_tags_via_ingestion.assert_called_once_with(
+        trace_id="test-trace-id",
+        tags=[
+            "intent:conversational",
+            "model:groq/llama-3.3-70b-versatile",
+            "runtime_grounding:miss",
+            "runtime_grounding_rate:0.50",
+        ],
+    )
 
 
 def test_eval_scores_skipped_when_langfuse_disabled(

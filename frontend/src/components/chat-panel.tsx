@@ -501,7 +501,7 @@ function ThesisCard({
           {confidencePct !== null && (
             <div className="mt-2">
               <div className="mb-0.5 flex justify-between font-mono text-[10px] uppercase tracking-wider text-zinc-500">
-                <span>Confidence</span>
+                <span>Answer groundedness</span>
                 <span>{confidencePct}%</span>
               </div>
               <div className="h-1 w-full overflow-hidden rounded bg-zinc-800">
@@ -1055,7 +1055,8 @@ function RunBlock({
         !isStreaming && (
           <p className="font-mono text-[10px] italic text-zinc-500">
             Informational only — not investment advice. Figures are from the
-            supplied reports and may be stale; verify before acting.
+            supplied reports and may be stale. Groundedness is source support,
+            not market-call probability; verify before acting.
           </p>
         )}
 

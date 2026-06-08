@@ -779,6 +779,13 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                     classifier_source = state_obj.get("classifier_source")
                     if isinstance(classifier_source, str) and classifier_source:
                         tags.append(f"classifier_source:{classifier_source}")
+                    grounding_rate = state_obj.get("grounding_rate")
+                    if isinstance(grounding_rate, int | float):
+                        rate = max(0.0, min(1.0, float(grounding_rate)))
+                        tags.append(
+                            "runtime_grounding:clean" if rate >= 1.0 else "runtime_grounding:miss"
+                        )
+                        tags.append(f"runtime_grounding_rate:{rate:.2f}")
                     langfuse._create_trace_tags_via_ingestion(  # noqa: SLF001 — no public v4 equivalent
                         trace_id=trace_id,
                         tags=tags,
@@ -869,6 +876,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
         exploration = state.get("exploration") if isinstance(state, dict) else None
         intent = state.get("intent", "thesis") if isinstance(state, dict) else "thesis"
         confidence = float(state.get("confidence", 0.0)) if isinstance(state, dict) else 0.0
+        grounding_rate = float(state.get("grounding_rate", 1.0)) if isinstance(state, dict) else 1.0
         errors = state.get("errors") or {} if isinstance(state, dict) else {}
         reports = state.get("reports") or {} if isinstance(state, dict) else {}
         plan = list(state.get("plan") or []) if isinstance(state, dict) else []
@@ -1040,6 +1048,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                 "tools_count": tools_count,
                 "citations_count": citations_count,
                 "confidence": confidence,
+                "grounding_rate": grounding_rate,
                 "intent": intent,
                 "thread_id": thread_id,
                 "intent_path": intent_path,

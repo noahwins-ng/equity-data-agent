@@ -413,6 +413,7 @@ export type DoneEvent = {
   tools_count: number;
   citations_count: number;
   confidence: number;
+  grounding_rate?: number;
   intent?: Intent;
   supervisor_iterations?: number;
   // QNT-209: echoed by the backend for confirmation. Null when the request
