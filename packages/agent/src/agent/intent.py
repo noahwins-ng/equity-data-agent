@@ -332,22 +332,40 @@ _COMPARE_GESTURE_TOKENS: tuple[str, ...] = (
     "compare the two",
     "compare both",
 )
+# Bare exploratory asks ("what's interesting?") that name no ticker. Treated as
+# a "view" gesture so a tickerless scan routes to clarify ("interesting about
+# which ticker?") instead of falling through to the generic conversational
+# capability card. Mirrors graph.py ``_EXPLORATION_TRIGGERS`` (the canonical
+# exploration-route set); kept as a local copy because ``agent.graph`` imports
+# from this module, so importing it back would be circular. When a ticker IS
+# named the no-ticker guard in ``_detect_ambiguity`` skips this and the
+# exploration route fires normally.
+_EXPLORATION_GESTURE_TOKENS: tuple[str, ...] = (
+    "what's interesting",
+    "whats interesting",
+    "what is interesting",
+    "anything interesting",
+    "what stands out",
+    "what should i watch",
+)
 
 
 def underspecified_gesture(question: str) -> Literal["view", "compare"] | None:
     """Return 'compare'/'view' if ``question`` is a subject-less analysis ask.
 
-    These are the bare "what do you think?" / "compare them" phrasings that
-    carry analytical intent but name no ticker. The graph's ambiguity gate
-    uses this (alongside a no-ticker / no-prior-turn guard) to route such
-    asks to clarify. Returns None for everything else, including greetings
-    and capability asks, which match a disjoint token list. Whole-word
-    matched via :func:`_matches_any`.
+    These are the bare "what do you think?" / "compare them" / "what's
+    interesting?" phrasings that carry analytical intent but name no ticker.
+    The graph's ambiguity gate uses this (alongside a no-ticker / no-prior-turn
+    guard) to route such asks to clarify. Returns None for everything else,
+    including greetings and capability asks, which match a disjoint token list.
+    Whole-word matched via :func:`_matches_any`.
     """
     text = question.lower().strip()
     if _matches_any(text, _COMPARE_GESTURE_TOKENS) is not None:
         return "compare"
     if _matches_any(text, _VIEW_GESTURE_TOKENS) is not None:
+        return "view"
+    if _matches_any(text, _EXPLORATION_GESTURE_TOKENS) is not None:
         return "view"
     return None
 

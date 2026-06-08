@@ -6,9 +6,9 @@ Covers the AC1 / AC2 / AC3 / AC4 scenarios:
 2. A clarify run routes classify → clarify → narrate, skipping plan + gather
    entirely (zero tool calls).
 3. The clarify response is a ConversationalAnswer whose ``answer`` reads
-   like a question; narrate ran and emitted no chunks (the bubble
-   short-circuits over a conversational payload, same gate as the
-   synthesize-fallback path).
+   like a question; narrate runs AND emits chunks (an engaging lead-in
+   bubble above the clarify card) on every clarify turn, regardless of the
+   classifier's intent label (QNT-220 follow-up).
 4. A clarify LLM raise falls through to ``domain_redirect`` and still
    emits a ConversationalAnswer; the done event still lands.
 
@@ -171,6 +171,25 @@ def test_detect_ambiguity_view_gesture_conversational(question: str) -> None:
     assert _detect_ambiguity("conversational", question, has_prior_turn=False) == "needs_ticker"
 
 
+@pytest.mark.parametrize(
+    "question",
+    ["what's interesting?", "What stands out?", "anything interesting?", "what should I watch?"],
+)
+def test_detect_ambiguity_exploration_gesture_no_ticker(question: str) -> None:
+    """QNT-220 follow-up: the exact /ticker/NVDA case. A tickerless exploration
+    ask ('what's interesting?') the LLM labels conversational must clarify the
+    ticker rather than fall through to the generic capability card."""
+    assert _detect_ambiguity("conversational", question, has_prior_turn=False) == "needs_ticker"
+
+
+def test_detect_ambiguity_exploration_gesture_with_ticker_passes() -> None:
+    """A named ticker anchors the exploration ask -- it routes to the
+    exploration card, not clarify."""
+    assert (
+        _detect_ambiguity("thesis", "what's interesting about NVDA?", has_prior_turn=False) is None
+    )
+
+
 def test_detect_ambiguity_compare_gesture_conversational() -> None:
     """QNT-214 follow-up: a bare 'compare them' mislabelled conversational
     routes to needs_second_ticker rather than fabricating a peer."""
@@ -272,6 +291,29 @@ def test_clarify_responds_with_question_shaped_conversational(
         "expected narrate to emit narrative_chunk events on the clarify path"
     )
     # And the assembled narrative landed in state.
+    assert result.get("narrative")
+
+
+def test_clarify_narrates_even_when_classified_conversational(
+    stub_llm: _StubLLM, monkeypatch: pytest.MonkeyPatch
+) -> None:  # noqa: ARG001
+    """QNT-220 follow-up: a clarify turn the classifier labels 'conversational'
+    must STILL emit the narrate bubble. Previously the leading
+    ``intent == 'conversational'`` gate skipped narrate, so the bubble appeared
+    or vanished depending on the classifier's label for the same ambiguous
+    question."""
+    monkeypatch.setattr(
+        graph_module, "classify_intent_with_source", lambda *a, **k: ("conversational", "llm")
+    )
+    events: list[tuple[str, dict[str, object]]] = []
+    graph = build_graph(_default_tools(), event_emitter=lambda e, d: events.append((e, dict(d))))
+    result = graph.invoke({"ticker": "NVDA", "question": "what do you think?"})
+
+    assert result.get("ambiguity_kind") == "needs_ticker"
+    assert result["intent_path"] == ["classify", "clarify", "narrate"]
+    assert any(name == "narrative_chunk" for name, _ in events), (
+        "clarify must narrate even when the classifier labels it conversational"
+    )
     assert result.get("narrative")
 
 
@@ -392,3 +434,40 @@ def test_clarify_state_persists_for_resume(stub_llm: _StubLLM) -> None:  # noqa:
     assert isinstance(second.get("thesis"), Thesis)
     # Tools fired on the second turn only.
     assert sum(t.call_count for t in tools.values()) > 0
+
+
+def test_narrate_prompt_clarify_does_not_restate_question() -> None:
+    """QNT-220 follow-up: on a clarify turn the narrate bubble must be a warm
+    lead-in, NOT a paraphrase of the clarify card's question. The clarify rule
+    is appended, the question is framed as context (not content to narrate),
+    and the forward-looking probe close is suppressed."""
+    from agent.prompts.system import build_narrate_prompt
+
+    msgs = build_narrate_prompt(
+        intent="thesis",
+        ticker="NVDA",
+        question="what do you think?",
+        payload_markdown="Which of the covered names did you want a read on?",
+        is_clarify=True,
+    )
+    rendered = "\n".join(str(getattr(m, "content", m)) for m in msgs)
+    assert "must not end in a question mark" in rendered  # clarify rule present
+    assert "Close with one concrete forward-looking" not in rendered  # no probe close
+    assert "NOT repeat" in rendered  # question is context, not the thing to narrate
+
+
+def test_narrate_prompt_non_clarify_keeps_probe_close() -> None:
+    """A normal thesis narration still gets the forward-looking probe close and
+    none of the clarify framing."""
+    from agent.prompts.system import build_narrate_prompt
+
+    msgs = build_narrate_prompt(
+        intent="thesis",
+        ticker="NVDA",
+        question="thesis on NVDA",
+        payload_markdown="Setup ... Verdict: Overweight",
+        is_clarify=False,
+    )
+    rendered = "\n".join(str(getattr(m, "content", m)) for m in msgs)
+    assert "Close with one concrete forward-looking" in rendered
+    assert "must not end in a question mark" not in rendered
