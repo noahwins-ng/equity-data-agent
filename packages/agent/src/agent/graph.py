@@ -1677,10 +1677,18 @@ def build_graph(
         # (with the asked-back question) but is NOT a fallback -- AC3 wants
         # narrate to fire so the bubble streams above the clarify card.
         # ``ambiguity_kind`` is the distinguishing signal: only the clarify
-        # route sets it. Allow narrate through when it's present.
+        # route sets it.
+        #
+        # QNT-220 follow-up: gate ONLY on ``not is_clarify``. Previously the
+        # leading ``intent == "conversational"`` clause meant a clarify turn the
+        # classifier happened to label conversational skipped narrate (no
+        # bubble), while the same ambiguous question labeled thesis got one --
+        # the bubble flickered in/out with the classifier label. A clarify turn
+        # always gets the (now non-restating, engaging) lead-in; genuine
+        # conversational greetings and synthesize fallback-redirects still skip.
         is_clarify = state.get("ambiguity_kind") is not None
-        if intent == "conversational" or (
-            state.get("conversational") is not None and not is_clarify
+        if not is_clarify and (
+            intent == "conversational" or state.get("conversational") is not None
         ):
             return {
                 "narrative": None,
