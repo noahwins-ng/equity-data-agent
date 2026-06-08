@@ -35,6 +35,7 @@ Exactly one of ``state['thesis']`` / ``state['quick_fact']`` /
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
@@ -83,6 +84,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 ToolFn = Callable[[str], str]
+# QNT-222: search_news has a two-arg (ticker, query) signature that does not
+# fit the single-arg ``ToolFn`` plan-surface dispatch, so it travels as its own
+# typed callable rather than as a ``REPORT_TOOLS`` entry.
+SearchToolFn = Callable[[str, str], str]
 ReportToolName = Literal["company", "technical", "fundamental", "news"]
 
 
@@ -236,6 +241,39 @@ _FOCUSED_REPORT: dict[Intent, str] = {
     "technical": "technical",
     "news": "news",
 }
+
+# QNT-222: a news ask is "targeted" when it names a specific event/entity
+# (litigation, an executive, a buyback, a recall, ...) rather than asking for
+# the general headline flow. Targeted asks additionally fire ``search_news``
+# (semantic vector search over equity_news) and fold the retrieved headlines
+# into the news focused synthesis; generic "news on AAPL" keeps using only the
+# cheap canned digest. Matched whole-word via ``agent.intent._matches_any``.
+_TARGETED_NEWS_TOKENS: tuple[str, ...] = (
+    "litigation",
+    "lawsuit",
+    "lawsuits",
+    "sue",
+    "sued",
+    "suing",
+    "settlement",
+    "ceo",
+    "cfo",
+    "executive",
+    "buyback",
+    "buybacks",
+    "repurchase",
+    "recall",
+    "recalls",
+    "investigation",
+    "probe",
+    "antitrust",
+    "merger",
+    "acquisition",
+    "layoff",
+    "layoffs",
+    "fraud",
+    "sec",
+)
 
 _MAX_TOOL_ATTEMPTS = 2  # first try + one retry
 _EXPLORATION_TRIGGERS: tuple[str, ...] = (
@@ -682,6 +720,52 @@ def _gather_reports(
     return reports, errors
 
 
+def _is_targeted_news(question: str) -> bool:
+    """QNT-222: True when a news ask names a specific event/entity worth a
+    semantic news search (litigation, CEO, buyback, lawsuit, recall, ...).
+
+    Reuses the classifier's whole-word matcher so "sue" doesn't fire on
+    "issue" and "sec" doesn't fire on "second". Generic news asks
+    ("news on AAPL", "headlines on META") match nothing and return False.
+    """
+    from agent.intent import _matches_any
+
+    return _matches_any(question.lower(), _TARGETED_NEWS_TOKENS) is not None
+
+
+def _format_search_hits(raw: str) -> str:
+    """QNT-222: render ``search_news`` JSON rows into a news-report-shaped block.
+
+    ``search_news`` returns ``json.dumps([{headline, source, date, score, url},
+    ...])`` on a hit and ``"[]"`` on every degraded path (Qdrant outage, HTTP
+    error, empty match set, invalid ticker/query). We render headline + date +
+    source as ``"- "`` bullets so the block reads like the canned news report
+    the focused-news prompt already consumes (and ``_summarise_report`` counts
+    as headlines). Returns ``""`` when there is nothing usable so the caller can
+    skip the merge entirely.
+    """
+    try:
+        rows = json.loads(raw)
+    except (ValueError, TypeError):
+        return ""
+    if not isinstance(rows, list) or not rows:
+        return ""
+    lines: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        headline = str(row.get("headline", "")).strip()
+        if not headline:
+            continue
+        date = str(row.get("date", "")).strip()
+        source = str(row.get("source", "")).strip()
+        meta = ", ".join(part for part in (source, date) if part)
+        lines.append(f"- {headline}" + (f" ({meta})" if meta else ""))
+    if not lines:
+        return ""
+    return "## Headlines matching your question\n" + "\n".join(lines)
+
+
 def _coerce_thesis(response: object) -> Thesis | None:
     """Normalise whatever ``llm.invoke`` hands back into a ``Thesis``.
 
@@ -974,6 +1058,7 @@ def build_graph(
     event_emitter: EventEmitter | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
     compact_company_tool: ToolFn | None = None,
+    search_news_tool: SearchToolFn | None = None,
 ) -> CompiledStateGraph:
     """Compile the classify -> plan -> gather -> synthesize graph (QNT-149, QNT-159).
 
@@ -996,6 +1081,18 @@ def build_graph(
     company report is force-injected per QNT-175). When None, the full
     ``tools['company']`` is used everywhere (existing CLI / eval / test
     behavior). Focused fundamental/company asks always keep the full report.
+
+    QNT-222: ``search_news_tool`` is an optional ``(ticker, query) -> str``
+    callable (semantic vector search over the Qdrant equity_news collection).
+    It travels outside the ``tools`` map because its two-arg signature does not
+    fit the single-arg plan-surface dispatch (``_call_with_retry`` /
+    ``_instrument_tools``) and ``default_report_tools`` keeps it off the plan
+    surface by design. On the news focused path, when the question is a
+    *targeted* news ask (:func:`_is_targeted_news` -- litigation, CEO, buyback,
+    lawsuit, recall, ...), gather calls it with the user's question as the query
+    and folds the retrieved headlines into the news report. Generic news asks
+    and every non-news intent ignore it. None ⇒ canned-digest-only (CLI / eval /
+    tests).
     """
 
     def _effective_tools(intent: Intent) -> dict[str, ToolFn]:
@@ -1262,6 +1359,25 @@ def build_graph(
 
         # QNT-220 (#8): thesis gets the compact company variant when supplied.
         reports, errors = _gather_reports(ticker, plan, _effective_tools(intent))
+
+        # QNT-222: targeted news asks (litigation, CEO, buyback, lawsuit,
+        # recall, ...) additionally pull semantically-relevant headlines via
+        # search_news and fold them into the news report so the focused-news
+        # synthesis can cite them. Generic "news on AAPL" keeps using only the
+        # canned digest. search_news never raises (it degrades to "[]"), but we
+        # guard defensively so a wrapper bug can't crash gather.
+        question = state.get("question", "")
+        if intent == "news" and search_news_tool is not None and _is_targeted_news(question):
+            try:
+                hits = _format_search_hits(search_news_tool(ticker, question))
+            except Exception as exc:  # noqa: BLE001 — search is additive; never crash gather
+                logger.warning("gather %s: search_news failed: %s (continuing)", ticker, exc)
+                hits = ""
+            if hits:
+                existing = reports.get("news")
+                reports["news"] = f"{existing}\n\n{hits}" if existing else hits
+                logger.info("gather %s: folded targeted-news hits into news report", ticker)
+
         logger.info(
             "gather %s: gathered=%s errors=%s",
             ticker,

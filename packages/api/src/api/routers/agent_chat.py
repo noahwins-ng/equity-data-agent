@@ -104,7 +104,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC
 from typing import Any
 
@@ -122,7 +122,7 @@ from agent.llm import (
 )
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
-from agent.tools import default_report_tools, get_company_report_compact
+from agent.tools import default_report_tools, get_company_report_compact, search_news
 from agent.tracing import langfuse, make_callback_handler, propagate_attributes
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
@@ -185,6 +185,8 @@ _TOOL_LABELS: dict[str, str] = {
     "technical": "Reading technicals",
     "fundamental": "Checking fundamentals",
     "news": "Scanning news",
+    # QNT-222: semantic news search fired on targeted news asks.
+    "news_search": "Searching news",
 }
 
 
@@ -408,6 +410,55 @@ def _instrument_tools(
         # the inner call in tests if needed.
         wrapped[name].__wrapped_ticker__ = ticker  # type: ignore[attr-defined]
     return wrapped
+
+
+def _instrument_search_news(
+    fn: Callable[[str, str], str],
+    queue: asyncio.Queue[tuple[str, dict[str, Any]]],
+    loop: asyncio.AbstractEventLoop,
+) -> Callable[[str, str], str]:
+    """QNT-222: ``tool_call`` / ``tool_result`` instrumentation for the two-arg
+    ``search_news(ticker, query)`` tool.
+
+    ``_instrument_tools`` wraps single-arg report tools; the semantic search
+    tool carries the user's question as a second arg, so it gets its own
+    wrapper. The ``tool_call`` event surfaces the search path on the panel
+    (AC2); the result summary reports the number of retrieved headlines.
+    """
+
+    def _post(event: str, data: dict[str, Any]) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, (event, data))
+
+    def wrapper(ticker: str, query: str) -> str:
+        started_at = time.time()
+        _post(
+            "tool_call",
+            {
+                "name": "news_search",
+                "label": _tool_label("news_search"),
+                "args": {"ticker": ticker, "query": query},
+                "started_at": started_at,
+            },
+        )
+        result = fn(ticker, query)
+        latency_ms = int((time.time() - started_at) * 1000)
+        try:
+            hit_count = len(json.loads(result)) if result else 0
+        except (ValueError, TypeError):
+            hit_count = 0
+        _post(
+            "tool_result",
+            {
+                "name": "news_search",
+                "label": _tool_label("news_search"),
+                "latency_ms": latency_ms,
+                "summary": f"{hit_count} headlines" if hit_count else "no matches",
+                "ok": True,
+            },
+        )
+        return result
+
+    return wrapper
 
 
 # ─── Streaming generator ────────────────────────────────────────────────────
@@ -647,6 +698,10 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
         compact_company = _instrument_tools(
             {"company": get_company_report_compact}, queue, loop, ticker
         )["company"]
+        # QNT-222: semantic news search, wired as its own (ticker, query) tool
+        # outside the single-arg plan-surface map. Fired by the graph only on
+        # targeted news asks (litigation, CEO, buyback, lawsuit, recall, ...).
+        search_news_tool = _instrument_search_news(search_news, queue, loop)
         # QNT-209: attach the SqliteSaver only when the request named a
         # thread_id. The ephemeral compile path keeps the existing behavior
         # for curl / tests / non-frontend callers — no checkpoint rows, no
@@ -667,6 +722,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
             event_emitter=_emit,
             checkpointer=checkpointer,  # type: ignore[arg-type]
             compact_company_tool=compact_company,
+            search_news_tool=search_news_tool,
         )
 
         # QNT-181: tag every Langfuse trace with a per-request session_id
@@ -1050,9 +1106,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                 "confidence": confidence,
                 "grounding_rate": grounding_rate,
                 "grounding_unsupported": (
-                    list(state.get("grounding_unsupported", []))
-                    if isinstance(state, dict)
-                    else []
+                    list(state.get("grounding_unsupported", [])) if isinstance(state, dict) else []
                 ),
                 "intent": intent,
                 "thread_id": thread_id,
