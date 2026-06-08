@@ -134,6 +134,29 @@ def test_non_exploratory_thesis_keeps_existing_pipeline(
     assert "supervisor_iterations" not in result
 
 
+def test_explore_supervisor_emits_exploration_intent_early(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The supervisor announces ``intent=exploration`` as soon as it routes, so
+    the SSE streaming label corrects from the classifier's raw label
+    ("thesis") to the exploration card BEFORE the slow synthesize/narrate
+    phases -- not only post-graph. Regression guard for the 'streaming thesis'
+    flicker."""
+    _patch_intent(monkeypatch, "thesis")
+    _patch_llm(monkeypatch, _SynthLLM())
+    tools = _tools()
+    events: list[tuple[str, dict[str, object]]] = []
+
+    build_graph(tools, event_emitter=lambda name, payload: events.append((name, payload))).invoke(
+        {"ticker": "AAPL", "question": "What's interesting about AAPL this week?"}
+    )
+
+    intent_events = [payload for name, payload in events if name == "intent"]
+    # classify emits the raw label first; explore_supervisor then re-announces
+    # exploration before any downstream work.
+    assert intent_events == [{"intent": "thesis"}, {"intent": "exploration"}]
+
+
 def test_news_led_exploration_routes_and_gathers_two_lenses(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
