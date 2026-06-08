@@ -414,6 +414,7 @@ export type DoneEvent = {
   citations_count: number;
   confidence: number;
   grounding_rate?: number;
+  grounding_unsupported?: string[];
   intent?: Intent;
   supervisor_iterations?: number;
   // QNT-209: echoed by the backend for confirmation. Null when the request
