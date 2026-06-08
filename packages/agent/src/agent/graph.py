@@ -242,38 +242,13 @@ _FOCUSED_REPORT: dict[Intent, str] = {
     "news": "news",
 }
 
-# QNT-222: a news ask is "targeted" when it names a specific event/entity
-# (litigation, an executive, a buyback, a recall, ...) rather than asking for
-# the general headline flow. Targeted asks additionally fire ``search_news``
-# (semantic vector search over equity_news) and fold the retrieved headlines
-# into the news focused synthesis; generic "news on AAPL" keeps using only the
-# cheap canned digest. Matched whole-word via ``agent.intent._matches_any``.
-_TARGETED_NEWS_TOKENS: tuple[str, ...] = (
-    "litigation",
-    "lawsuit",
-    "lawsuits",
-    "sue",
-    "sued",
-    "suing",
-    "settlement",
-    "ceo",
-    "cfo",
-    "executive",
-    "buyback",
-    "buybacks",
-    "repurchase",
-    "recall",
-    "recalls",
-    "investigation",
-    "probe",
-    "antitrust",
-    "merger",
-    "acquisition",
-    "layoff",
-    "layoffs",
-    "fraud",
-    "sec",
-)
+# QNT-222 follow-up: intents whose synthesis consumes the news report, so a
+# semantic-news-search hit (folded into ``reports["news"]``) actually reaches
+# the prompt. The classifier's ``needs_news_search`` flag is intent-independent,
+# but fundamental/technical focused reads are forbidden from citing news
+# (FOCUSED_SYSTEM_PROMPT rule 3), so firing search there would be a wasted
+# Qdrant call. Gate the RAG fetch to the intents that can use it.
+_NEWS_SEARCH_INTENTS: frozenset[Intent] = frozenset({"news", "quick_fact", "thesis"})
 
 _MAX_TOOL_ATTEMPTS = 2  # first try + one retry
 _EXPLORATION_TRIGGERS: tuple[str, ...] = (
@@ -410,6 +385,12 @@ class AgentState(TypedDict):
     # the conditional edge from classify routes to clarify rather than the
     # normal plan/synthesize path. None ⇒ question was unambiguous.
     ambiguity_kind: NotRequired[AmbiguityKind | None]
+    # QNT-222 follow-up: classifier signal for whether to fire the semantic news
+    # search (search_news / RAG). Set by classify_node from
+    # classify_intent_with_source; read by gather_node. Intent-independent -- a
+    # targeted-event ask ("what did the CEO say about the buyback?") gets this
+    # even when its intent is quick_fact or thesis rather than news.
+    needs_news_search: NotRequired[bool]
     # QNT-212: ordered list of node names actually visited this turn.
     # Each node writes the FULL accumulated list (not a single element with
     # a reducer) -- a reducer would also accumulate across turns out of the
@@ -718,19 +699,6 @@ def _gather_reports(
             continue
         reports[name] = result
     return reports, errors
-
-
-def _is_targeted_news(question: str) -> bool:
-    """QNT-222: True when a news ask names a specific event/entity worth a
-    semantic news search (litigation, CEO, buyback, lawsuit, recall, ...).
-
-    Reuses the classifier's whole-word matcher so "sue" doesn't fire on
-    "issue" and "sec" doesn't fire on "second". Generic news asks
-    ("news on AAPL", "headlines on META") match nothing and return False.
-    """
-    from agent.intent import _matches_any
-
-    return _matches_any(question.lower(), _TARGETED_NEWS_TOKENS) is not None
 
 
 def _format_search_hits(raw: str) -> str:
@@ -1087,12 +1055,14 @@ def build_graph(
     It travels outside the ``tools`` map because its two-arg signature does not
     fit the single-arg plan-surface dispatch (``_call_with_retry`` /
     ``_instrument_tools``) and ``default_report_tools`` keeps it off the plan
-    surface by design. On the news focused path, when the question is a
-    *targeted* news ask (:func:`_is_targeted_news` -- litigation, CEO, buyback,
-    lawsuit, recall, ...), gather calls it with the user's question as the query
-    and folds the retrieved headlines into the news report. Generic news asks
-    and every non-news intent ignore it. None ⇒ canned-digest-only (CLI / eval /
-    tests).
+    surface by design. When the classifier sets ``needs_news_search`` (a
+    targeted-event ask -- litigation, CEO, buyback, lawsuit, recall,
+    partnership, ... -- judged semantically, independent of intent), gather
+    calls it with the user's question as the query and folds the retrieved
+    headlines into ``reports["news"]`` for the synthesis to cite. Scoped to
+    ``_NEWS_SEARCH_INTENTS`` (news / quick_fact / thesis). Generic news asks
+    leave the flag False and keep the canned digest. None ⇒ canned-digest-only
+    (CLI / eval / tests).
     """
 
     def _effective_tools(intent: Intent) -> dict[str, ToolFn]:
@@ -1126,7 +1096,7 @@ def build_graph(
         # signal for checkpoints created before ``messages`` existed.
         has_prior_turn = bool(history or state.get("reports") or state.get("thesis"))
         try:
-            intent, classifier_source = classify_intent_with_source(
+            intent, classifier_source, needs_news_search = classify_intent_with_source(
                 question,
                 config=config,
                 has_prior_turn=has_prior_turn,
@@ -1136,7 +1106,14 @@ def build_graph(
             logger.warning("classify %s: defaulting to thesis: %s", ticker, exc)
             intent = "thesis"
             classifier_source = "fallback"
-        logger.info("classify %s: intent=%s source=%s", ticker, intent, classifier_source)
+            needs_news_search = False
+        logger.info(
+            "classify %s: intent=%s source=%s needs_news_search=%s",
+            ticker,
+            intent,
+            classifier_source,
+            needs_news_search,
+        )
         # QNT-212: heuristic ambiguity check on the resolved intent. Drives
         # the conditional edge below: a non-None ambiguity_kind routes to
         # clarify; None falls through to the existing plan/synthesize path
@@ -1165,6 +1142,7 @@ def build_graph(
             "intent": intent,
             "classifier_source": classifier_source,
             "ambiguity_kind": ambiguity_kind,
+            "needs_news_search": needs_news_search,
             "messages": _append_user_message(history, question),
         }
 
@@ -1361,13 +1339,22 @@ def build_graph(
         reports, errors = _gather_reports(ticker, plan, _effective_tools(intent))
 
         # QNT-222: targeted news asks (litigation, CEO, buyback, lawsuit,
-        # recall, ...) additionally pull semantically-relevant headlines via
-        # search_news and fold them into the news report so the focused-news
-        # synthesis can cite them. Generic "news on AAPL" keeps using only the
-        # canned digest. search_news never raises (it degrades to "[]"), but we
-        # guard defensively so a wrapper bug can't crash gather.
+        # recall, partnership, ...) additionally pull semantically-relevant
+        # headlines via search_news and fold them into the news report so the
+        # synthesis can cite them. The trigger is the classifier's
+        # intent-independent ``needs_news_search`` flag (QNT-222 follow-up) --
+        # so "what did the CEO say about the buyback?" fires it even as a
+        # quick_fact, not just on a literal news intent. Scoped to the intents
+        # whose synthesis actually reads the news report (_NEWS_SEARCH_INTENTS);
+        # generic "news on AAPL" leaves the flag False and keeps the canned
+        # digest. search_news never raises (it degrades to "[]"), but we guard
+        # defensively so a wrapper bug can't crash gather.
         question = state.get("question", "")
-        if intent == "news" and search_news_tool is not None and _is_targeted_news(question):
+        if (
+            state.get("needs_news_search")
+            and intent in _NEWS_SEARCH_INTENTS
+            and search_news_tool is not None
+        ):
             try:
                 hits = _format_search_hits(search_news_tool(ticker, question))
             except Exception as exc:  # noqa: BLE001 — search is additive; never crash gather

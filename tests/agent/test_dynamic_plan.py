@@ -66,7 +66,7 @@ def force_thesis_intent(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda *_args, **_kwargs: ("thesis", "heuristic"),
+        lambda *_args, **_kwargs: ("thesis", "heuristic", False),
     )
 
 

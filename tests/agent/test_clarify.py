@@ -303,7 +303,9 @@ def test_clarify_narrates_even_when_classified_conversational(
     or vanished depending on the classifier's label for the same ambiguous
     question."""
     monkeypatch.setattr(
-        graph_module, "classify_intent_with_source", lambda *a, **k: ("conversational", "llm")
+        graph_module,
+        "classify_intent_with_source",
+        lambda *a, **k: ("conversational", "llm", False),
     )
     events: list[tuple[str, dict[str, object]]] = []
     graph = build_graph(_default_tools(), event_emitter=lambda e, d: events.append((e, dict(d))))
