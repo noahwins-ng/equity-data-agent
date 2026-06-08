@@ -436,24 +436,48 @@ def test_clarify_state_persists_for_resume(stub_llm: _StubLLM) -> None:  # noqa:
     assert sum(t.call_count for t in tools.values()) > 0
 
 
-def test_narrate_prompt_clarify_does_not_restate_question() -> None:
-    """QNT-220 follow-up: on a clarify turn the narrate bubble must be a warm
-    lead-in, NOT a paraphrase of the clarify card's question. The clarify rule
-    is appended, the question is framed as context (not content to narrate),
-    and the forward-looking probe close is suppressed."""
-    from agent.prompts.system import build_narrate_prompt
+def test_clarify_bubble_is_deterministic_not_llm(
+    stub_llm: _StubLLM,
+) -> None:  # noqa: ARG001
+    """QNT-220 follow-up: the clarify bubble must be a DETERMINISTIC lead-in,
+    never an LLM narration. A clarify turn gathered zero reports, so an LLM
+    bubble fabricates a stance (observed in prod: "the read is constructive for
+    NVDA" with no data). Assert the narrative is the exact deterministic phrase
+    keyed to the ambiguity kind -- never the stub LLM's stream output."""
+    from agent.graph import _CLARIFY_LEAD_IN
 
-    msgs = build_narrate_prompt(
-        intent="thesis",
+    events: list[tuple[str, dict[str, object]]] = []
+    graph = build_graph(_default_tools(), event_emitter=lambda e, d: events.append((e, dict(d))))
+    result = graph.invoke({"ticker": "NVDA", "question": "what do you think?"})
+
+    assert result["ambiguity_kind"] == "needs_ticker"
+    # The exact deterministic phrase -- NOT the stub LLM's stream chunks.
+    assert result["narrative"] == _CLARIFY_LEAD_IN["needs_ticker"]
+    assert "Hi there" not in (result.get("narrative") or "")
+    # And it streamed as the bubble.
+    assert any(
+        name == "narrative_chunk" and data.get("delta") == _CLARIFY_LEAD_IN["needs_ticker"]
+        for name, data in events
+    )
+
+
+def test_clarify_prompt_offers_url_context_ticker() -> None:
+    """QNT-220 follow-up: a needs_ticker clarify must reference the page's
+    URL-context ticker (the user is looking at it) rather than asking a generic
+    'which name?'. Stays within QNT-212 -- it OFFERS the ticker, it does not
+    silently answer on it."""
+    from agent.prompts.system import build_clarify_prompt
+
+    msgs = build_clarify_prompt(
+        ambiguity_kind="needs_ticker",
+        question="what's interesting?",
         ticker="NVDA",
-        question="what do you think?",
-        payload_markdown="Which of the covered names did you want a read on?",
-        is_clarify=True,
+        tickers=("NVDA", "AAPL", "MSFT"),
     )
     rendered = "\n".join(str(getattr(m, "content", m)) for m in msgs)
-    assert "must not end in a question mark" in rendered  # clarify rule present
-    assert "Close with one concrete forward-looking" not in rendered  # no probe close
-    assert "NOT repeat" in rendered  # question is context, not the thing to narrate
+    assert "URL-context ticker: NVDA" in rendered  # the symbol is in the prompt
+    assert "offer it as the likely subject" in rendered  # instructed to use it
+    assert "do NOT silently answer" in rendered  # but not auto-confirm (QNT-212)
 
 
 def test_narrate_prompt_non_clarify_keeps_probe_close() -> None:
