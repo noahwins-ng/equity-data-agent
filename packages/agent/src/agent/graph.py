@@ -47,6 +47,8 @@ from shared.tickers import TICKERS
 
 from agent.comparison import ComparisonAnswer
 from agent.conversational import ConversationalAnswer, domain_redirect
+from agent.evals.hallucination import HallucinationResult
+from agent.evals.hallucination import check as check_grounding
 from agent.exploration import ExplorationAnswer
 from agent.focused import FocusedAnalysis
 from agent.intent import (
@@ -353,6 +355,8 @@ class AgentState(TypedDict):
     focused: NotRequired[FocusedAnalysis | None]
     exploration: NotRequired[ExplorationAnswer | None]
     confidence: NotRequired[float]
+    grounding_rate: NotRequired[float]
+    grounding_unsupported: NotRequired[list[str]]
     supervisor_iterations: NotRequired[int]
     # QNT-211: streaming analyst-voice paragraph produced by the narrate node
     # AFTER synthesize. Persisted into the checkpointer so a follow-up turn
@@ -573,13 +577,52 @@ def _parse_plan(raw: str, available: list[str], intent: Intent = "thesis") -> li
 
 
 def _confidence_from_reports(reports: dict[str, str], plan: list[str]) -> float:
-    """Confidence = fraction of planned reports that were actually gathered.
-    An honest heuristic — LLM self-reported confidence is known to be poorly
-    calibrated, so we anchor it to report coverage instead."""
+    """Coverage factor = fraction of planned reports actually gathered."""
     if not plan:
         return 0.0
     present = sum(1 for name in plan if name in reports and not _is_tool_error(reports[name]))
     return round(present / len(plan), 2)
+
+
+def _grounding_rate(result: HallucinationResult) -> float:
+    """Fraction of answer numbers traceable to a fetched report."""
+    total = len(result.thesis_numbers)
+    if total == 0:
+        return 1.0
+    supported = total - len(result.unsupported)
+    return round(supported / total, 2)
+
+
+def _composite_confidence(
+    coverage: float,
+    grounding_rate: float = 1.0,
+    freshness: float = 1.0,
+) -> float:
+    """Answer-groundedness score = coverage x grounding x freshness.
+
+    ``coverage`` is report availability, ``grounding_rate`` is numeric support,
+    and ``freshness`` is reserved for report as-of dates. Until report templates
+    expose a uniform as-of date, freshness is neutral at 1.0.
+    """
+    return round(max(0.0, min(1.0, coverage * grounding_rate * freshness)), 2)
+
+
+def _runtime_report_texts(state: AgentState) -> list[str]:
+    """Return report bodies gathered for this run, including comparison reports."""
+    reports_by_ticker = state.get("reports_by_ticker") or {}
+    if reports_by_ticker:
+        flat: list[str] = []
+        for ticker_reports in reports_by_ticker.values():
+            flat.extend(str(report) for report in ticker_reports.values())
+        return flat
+    reports = state.get("reports") or {}
+    return [str(report) for report in reports.values()]
+
+
+def _runtime_grounding_check(answer: str, reports: list[str]) -> tuple[HallucinationResult, float]:
+    """Advisory runtime numeric grounding check for completed answer text."""
+    result = check_grounding(answer, reports)
+    return result, _grounding_rate(result)
 
 
 def _is_tool_error(result: str) -> bool:
@@ -1807,9 +1850,36 @@ def build_graph(
 
         logger.info("narrate %s: narrative_chars=%d", ticker, len(narrative))
         final_narrative = narrative or None
+        coverage = float(state.get("confidence", 0.0))
+        grounding_answer = "\n\n".join(
+            text for text in (final_narrative, payload_markdown, prior_thesis_markdown) if text
+        )
+        grounding_result, grounding_rate = _runtime_grounding_check(
+            grounding_answer,
+            _runtime_report_texts(state),
+        )
+        confidence = _composite_confidence(coverage, grounding_rate)
+        if grounding_result.ok:
+            logger.info(
+                "narrate %s: grounding_rate=%s confidence=%s",
+                ticker,
+                grounding_rate,
+                confidence,
+            )
+        else:
+            logger.warning(
+                "narrate %s: grounding miss rate=%s unsupported=%s confidence=%s",
+                ticker,
+                grounding_rate,
+                grounding_result.reason(),
+                confidence,
+            )
         return {
             "narrative": final_narrative,
             "messages": _append_assistant_message(state, final_narrative),
+            "grounding_rate": grounding_rate,
+            "grounding_unsupported": list(grounding_result.unsupported),
+            "confidence": confidence,
         }
 
     def clarify_node(state: AgentState, config: RunnableConfig) -> dict[str, object]:

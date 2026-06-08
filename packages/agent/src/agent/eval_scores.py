@@ -169,6 +169,21 @@ def push_to_trace_id(state: dict[str, Any], trace_id: str | None) -> None:
             data_type="NUMERIC",
             comment=(f"missing: {', '.join(sorted(missing_tools))}" if missing_tools else "clean"),
         )
+        grounding_rate = state.get("grounding_rate")
+        if isinstance(grounding_rate, int | float):
+            unsupported = state.get("grounding_unsupported") or []
+            comment = (
+                f"unsupported: {', '.join(str(v) for v in unsupported[:8])}"
+                if unsupported
+                else "clean"
+            )
+            langfuse.create_score(
+                trace_id=trace_id,
+                name="runtime_grounding_rate",
+                value=float(grounding_rate),
+                data_type="NUMERIC",
+                comment=comment,
+            )
     except Exception as exc:  # noqa: BLE001 — telemetry must not crash the request
         logger.warning("eval-score push failed: %s", exc)
 

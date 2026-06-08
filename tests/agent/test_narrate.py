@@ -128,6 +128,32 @@ def test_narrate_assembles_text_and_emits_chunks_in_order(stub_llm: _StubLLM) ->
     assert chunks == ["I'd lean ", "Overweight ", "on this one."]
 
 
+def test_narrate_grounding_miss_is_advisory_after_chunks(
+    stub_llm: _StubLLM,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-221: runtime grounding runs after completed streaming, lowers
+    confidence, and never blocks the structured card or bubble."""
+    stub_llm.stream_chunks = ["RSI is ", "99."]
+    events, emit = _make_emitter()
+    original_check = graph_module._runtime_grounding_check
+
+    def wrapped_check(answer: str, reports: list[str]) -> Any:
+        assert any(event == "narrative_chunk" for event, _ in events)
+        return original_check(answer, reports)
+
+    monkeypatch.setattr(graph_module, "_runtime_grounding_check", wrapped_check)
+    graph = build_graph(_default_tools(), event_emitter=emit)
+
+    result = graph.invoke({"ticker": "TSLA", "question": "is TSLA overvalued?"})
+
+    assert isinstance(result.get("thesis"), Thesis)
+    assert result.get("narrative") == "RSI is 99."
+    assert result["grounding_rate"] < 1.0
+    assert result["confidence"] < 1.0
+    assert "99" in result["grounding_unsupported"]
+
+
 def test_narrate_failure_does_not_break_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

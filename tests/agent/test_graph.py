@@ -30,8 +30,10 @@ from agent.graph import (
     REPORT_TOOLS,
     ThesisPlan,
     ToolFn,
+    _composite_confidence,
     _confidence_from_reports,
     _parse_plan,
+    _runtime_grounding_check,
     build_graph,
 )
 from agent.quick_fact import QuickFactAnswer
@@ -170,6 +172,25 @@ def test_full_flow_produces_thesis_and_confidence(stub_llm: _StructuredLLM) -> N
     # plan LLM omits it, so the gathered set covers every REPORT_TOOLS entry.
     assert set(result["reports"]) == set(REPORT_TOOLS)
     assert result["errors"] == {}
+
+
+def test_runtime_grounding_rate_lowers_composite_confidence() -> None:
+    clean, clean_rate = _runtime_grounding_check("RSI is 62.", ["RSI is 62."])
+    miss, miss_rate = _runtime_grounding_check("RSI is 99.", ["RSI is 62."])
+
+    assert clean.ok is True
+    assert clean_rate == 1.0
+    assert miss.ok is False
+    assert miss_rate < 1.0
+    assert _composite_confidence(1.0, clean_rate) == 1.0
+    assert _composite_confidence(1.0, miss_rate) < 1.0
+
+
+def test_composite_confidence_covers_each_factor() -> None:
+    assert _composite_confidence(1.0, 1.0, 1.0) == 1.0
+    assert _composite_confidence(0.5, 1.0, 1.0) == 0.5
+    assert _composite_confidence(1.0, 0.5, 1.0) == 0.5
+    assert _composite_confidence(1.0, 1.0, 0.5) == 0.5
 
 
 def test_missing_news_tool_is_silently_skipped(stub_llm: _StructuredLLM) -> None:
