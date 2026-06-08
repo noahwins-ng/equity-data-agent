@@ -302,6 +302,20 @@ _CLARIFY_FALLBACK_REASON: dict[str, str] = {
     "needs_prior_turn": "I don't have an earlier turn on this thread to follow up on.",
 }
 
+# QNT-220 follow-up: deterministic clarify lead-in bubbles. A clarify turn
+# gathered ZERO reports, so an LLM-narrated bubble invents a stance with nothing
+# to ground it (observed in prod: "On balance, the read is constructive for
+# NVDA..." on a turn that fetched no data). The lead-in carries no analysis, so
+# per ADR-003 (no reasoning => no LLM) it is emitted deterministically: always a
+# content-free, engaging, digit-free readiness line that never restates the
+# clarify card's question.
+_CLARIFY_LEAD_IN: dict[str, str] = {
+    "needs_ticker": "Happy to dig into any of the names I track.",
+    "needs_second_ticker": "Happy to run that comparison for you.",
+    "needs_prior_turn": "Happy to pick this up whenever you're ready.",
+}
+_CLARIFY_LEAD_IN_DEFAULT = "Happy to dig in."
+
 
 class AgentState(TypedDict):
     """State carried through the graph.
@@ -1693,6 +1707,25 @@ def build_graph(
             return {
                 "narrative": None,
                 "messages": _append_assistant_message(state, None),
+            }
+
+        # QNT-220 follow-up: clarify turns get a DETERMINISTIC lead-in, never an
+        # LLM narration. No reports were gathered on a clarify turn, so letting
+        # the narrator speak invents a stance (prod: "the read is constructive
+        # for NVDA" with zero data). Emit a content-free readiness line keyed to
+        # the ambiguity kind; the clarify card below owns the actual question.
+        if is_clarify:
+            lead_in = _CLARIFY_LEAD_IN.get(
+                str(state.get("ambiguity_kind")), _CLARIFY_LEAD_IN_DEFAULT
+            )
+            if event_emitter is not None:
+                try:
+                    event_emitter("narrative_chunk", {"delta": lead_in})
+                except Exception as exc:  # noqa: BLE001 — never let SSE plumbing crash narrate
+                    logger.warning("narrate %s: clarify emit failed: %s (continuing)", ticker, exc)
+            return {
+                "narrative": lead_in,
+                "messages": _append_assistant_message(state, lead_in),
             }
 
         # Pick the structured payload to summarise. Exactly one of these is

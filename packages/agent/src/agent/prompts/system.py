@@ -1032,22 +1032,6 @@ qualitative -- introduce no new number, cite nothing here. You may use up to \
 _PROBE_CLOSE_INTENTS = frozenset({"thesis", "focused", "comparison", "followup"})
 
 
-# QNT-220 follow-up: clarify-turn narration rule. The clarify card below the
-# bubble already asks the user "which ticker?"; without this the narrator
-# re-reads that card and parrots the question in hedge voice ("On balance, the
-# read is that we need a specific name..."). This makes the bubble a short,
-# warm lead-in that does NOT restate or pose the question -- the card owns it.
-NARRATE_CLARIFY_RULE = """7. This is a CLARIFY turn: the card directly below \
-your paragraph already asks the user one clarifying question (which ticker, or \
-which second ticker to compare). Do NOT repeat, rephrase, or answer that \
-question, and do NOT pose any question yourself -- your sentence must not end \
-in a question mark. Speak ONE short, warm, engaging sentence that signals you \
-are ready to dig in the moment they name one -- energy like "Happy to get into \
-any of the names I track." Do not list tickers and do not say "we need a \
-specific name". One sentence, qualitative, no digits.
-"""
-
-
 def build_narrate_prompt(
     intent: str,
     ticker: str,
@@ -1083,15 +1067,7 @@ def build_narrate_prompt(
         )
     else:
         rationale_block = ""
-    if is_clarify:
-        # Don't feed the clarify card's question text as the thing to narrate --
-        # the narrator would just paraphrase it. Frame it as context instead.
-        payload_block = (
-            "# Context\nThe card directly below your paragraph asks the user one "
-            "clarifying question (which ticker, or which second ticker to compare). "
-            "You are NOT answering it and must NOT repeat it.\n"
-        )
-    elif payload_markdown:
+    if payload_markdown:
         payload_block = f"# Structured answer\n{_sanitize_report_body(payload_markdown)}\n"
     else:
         payload_block = (
@@ -1104,9 +1080,7 @@ def build_narrate_prompt(
         f"{payload_block}{prior_block}{rationale_block}"
     )
     system_prompt = NARRATE_SYSTEM_PROMPT
-    if is_clarify:
-        system_prompt += NARRATE_CLARIFY_RULE
-    elif intent in _PROBE_CLOSE_INTENTS:
+    if intent in _PROBE_CLOSE_INTENTS and not is_clarify:
         system_prompt += NARRATE_PROBE_CLOSE_RULE
     return [
         *_stable_prefix(system_prompt, history),
@@ -1128,9 +1102,14 @@ their question, ask it in plain analyst voice, and stop.
 
 # Ambiguity kinds (provided in the user message)
 * needs_ticker: the user asked for a thesis / focused read / quick fact but \
-named no ticker (e.g. "what do you think?"). Ask which of the covered \
-tickers they want to talk about. Suggest two or three concrete questions \
-the user could click as a starting point.
+named no ticker (e.g. "what do you think?"). A URL-context ticker is given in \
+the user message: the user is almost certainly looking at THAT name, so offer \
+it as the likely subject while still letting them pick another -- e.g. "Did \
+you want that read on <URL-context ticker>, or another name?". Reference the \
+URL-context ticker by symbol; do NOT silently answer as if they confirmed it. \
+If no URL-context ticker is given, ask which of the covered tickers they mean. \
+Suggest two or three concrete questions the user could click, biasing the \
+first toward the URL-context ticker.
 * needs_second_ticker: the user asked for a comparison but only named one \
 ticker. Ask which second ticker they want to compare against. Suggest two \
 or three concrete pairings drawn from the covered list.
