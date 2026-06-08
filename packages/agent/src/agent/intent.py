@@ -113,6 +113,24 @@ class IntentDecision(BaseModel):
             "ticker."
         ),
     )
+    needs_news_search: bool = Field(
+        default=False,
+        description=(
+            "Set True ONLY when the question asks about a SPECIFIC named news "
+            "event, development, or entity -- e.g. litigation or a lawsuit, a "
+            "regulatory probe / antitrust action, what an executive (CEO/CFO) "
+            "said, a buyback or dividend change, a recall, a partnership / deal "
+            "/ acquisition, a product launch, or a specific guidance change. "
+            "This is independent of the 'intent' field above: a targeted news "
+            "ask can be phrased as a quick_fact ('what did the CEO say about "
+            "the buyback?') or a thesis ('is NVDA a buy given the lawsuit?') -- "
+            "still set True. Set False for a GENERIC news ask ('what's the news "
+            "on AAPL?', 'any headlines on META?', 'how's sentiment?') and for "
+            "any question not about a specific recent event. True triggers a "
+            "semantic news search over the headline archive; a generic news ask "
+            "does not need it."
+        ),
+    )
 
 
 # Tokens that strongly suggest a single-metric lookup. Hits here force
@@ -350,6 +368,61 @@ _EXPLORATION_GESTURE_TOKENS: tuple[str, ...] = (
 )
 
 
+# QNT-222 follow-up: keyword fallback for the semantic-news-search signal. The
+# PRIMARY signal is the LLM classifier's ``needs_news_search`` flag (set in the
+# same structured-output call, judged semantically). This token list is only the
+# cheap fallback for the two paths where no LLM judgment is available: the
+# heuristic short-circuit and the LLM-failure bias-to-thesis path. Whole-word
+# matched via ``_matches_any`` ("sue" never fires on "issue", "sec" not on
+# "second"). A targeted news ask names a specific event/entity.
+_TARGETED_NEWS_TOKENS: tuple[str, ...] = (
+    "litigation",
+    "lawsuit",
+    "lawsuits",
+    "sue",
+    "sued",
+    "suing",
+    "settlement",
+    "ceo",
+    "cfo",
+    "executive",
+    "buyback",
+    "buybacks",
+    "repurchase",
+    "recall",
+    "recalls",
+    "investigation",
+    "probe",
+    "antitrust",
+    "merger",
+    "acquisition",
+    "acquire",
+    "acquires",
+    "partnership",
+    "partner",
+    "deal",
+    "stake",
+    "layoff",
+    "layoffs",
+    "fraud",
+    "sec",
+    "catalyst",
+    "catalysts",
+)
+
+
+def _is_targeted_news(question: str) -> bool:
+    """QNT-222: keyword fallback for "is this a targeted news ask?".
+
+    True when the question names a specific event/entity worth a semantic news
+    search (litigation, CEO, buyback, lawsuit, recall, partnership, ...). Used
+    only when the LLM classifier did not run (heuristic short-circuit) or failed
+    -- on the LLM path the model's ``needs_news_search`` judgment is trusted
+    instead. Whole-word matched so "sue" doesn't fire on "issue".
+    """
+    return _matches_any(question.lower(), _TARGETED_NEWS_TOKENS) is not None
+
+
 def underspecified_gesture(question: str) -> Literal["view", "compare"] | None:
     """Return 'compare'/'view' if ``question`` is a subject-less analysis ask.
 
@@ -569,6 +642,17 @@ ambiguous equity questions should NOT route here. Pick "fundamental", \
 domain; an open-ended "should I buy NVDA?" still routes to "thesis" even \
 though the answer happens to lean on fundamentals.
 
+Separately, set the boolean 'needs_news_search' True when the question asks \
+about a SPECIFIC named news event, development, or entity -- litigation / a \
+lawsuit, a regulatory probe or antitrust action, what an executive said, a \
+buyback or dividend change, a recall, a partnership / deal / acquisition, a \
+product launch, or a specific guidance change. This is independent of the \
+intent label: "what did the CEO say about the buyback?" is intent=quick_fact \
+but needs_news_search=True; "is NVDA a buy given the lawsuit?" is intent=thesis \
+but needs_news_search=True. Set it False for a generic news ask ("what's the \
+news on AAPL?", "any headlines?", "how's sentiment?") and for anything not \
+about a specific recent event.
+
 Recent conversation (for follow-up detection only; do not use it to pick \
 tools, compute values, or infer a ticker that the user changed):
 {history}
@@ -583,14 +667,21 @@ def classify_intent_with_source(
     config: RunnableConfig | None = None,
     has_prior_turn: bool = False,
     history: Sequence[ConversationMessage] | None = None,
-) -> tuple[Intent, ClassifierSource]:
-    """Return ``(intent, source)`` for ``question``.
+) -> tuple[Intent, ClassifierSource, bool]:
+    """Return ``(intent, source, needs_news_search)`` for ``question``.
 
     ``source`` identifies which code path resolved the intent:
     - ``"heuristic"`` — keyword matcher decided without an LLM call
     - ``"llm"`` — heuristic abstained; structured-output call succeeded
     - ``"fallback"`` — LLM call failed/timed out or returned unexpected shape;
       biased to ``"thesis"`` as the safe default
+
+    QNT-222 follow-up: ``needs_news_search`` says whether to fire the semantic
+    news search (search_news / RAG), independent of the intent label. On the
+    ``"llm"`` path it is the model's own ``needs_news_search`` judgment (a
+    targeted-event ask can be any intent shape). On the ``"heuristic"`` and
+    ``"fallback"`` paths no LLM judgment is available, so it falls back to the
+    ``_is_targeted_news`` keyword signal.
 
     QNT-181: ``config`` carries the LangGraph CallbackHandler so the
     LLM-fallback path's generation observation nests under the parent trace.
@@ -603,7 +694,7 @@ def classify_intent_with_source(
     heuristic = _heuristic_intent(question, has_prior_turn=has_context)
     if heuristic is not None:
         logger.info("classify intent=%s via=heuristic question=%r", heuristic, question[:80])
-        return heuristic, "heuristic"
+        return heuristic, "heuristic", _is_targeted_news(question)
 
     # QNT-220 (#7): the classifier is a small structured call -- tier it to the
     # fast/small alias rather than the 70b synthesis model.
@@ -620,17 +711,25 @@ def classify_intent_with_source(
         )
     except Exception as exc:  # noqa: BLE001 — bias to thesis on any failure
         logger.warning("classify llm failed, defaulting to thesis: %s", exc)
-        return "thesis", "fallback"
+        return "thesis", "fallback", _is_targeted_news(question)
 
+    decision: IntentDecision | None = None
     if isinstance(response, IntentDecision):
-        logger.info("classify intent=%s via=llm question=%r", response.intent, question[:80])
-        return response.intent, "llm"
-    if isinstance(response, dict):
+        decision = response
+    elif isinstance(response, dict):
         parsed = response.get("parsed")
         if isinstance(parsed, IntentDecision):
-            return parsed.intent, "llm"
+            decision = parsed
+    if decision is not None:
+        logger.info(
+            "classify intent=%s needs_news_search=%s via=llm question=%r",
+            decision.intent,
+            decision.needs_news_search,
+            question[:80],
+        )
+        return decision.intent, "llm", decision.needs_news_search
     logger.warning("classify llm returned unexpected shape, defaulting to thesis")
-    return "thesis", "fallback"
+    return "thesis", "fallback", _is_targeted_news(question)
 
 
 def classify_intent(
@@ -646,7 +745,7 @@ def classify_intent(
     only need the intent. Use ``classify_intent_with_source`` when the
     classifier path (heuristic / llm / fallback) also matters.
     """
-    intent, _ = classify_intent_with_source(
+    intent, _, _ = classify_intent_with_source(
         question,
         config=config,
         has_prior_turn=has_prior_turn,

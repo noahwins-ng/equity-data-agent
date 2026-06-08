@@ -284,7 +284,7 @@ def test_groq_quota_error_falls_back_to_conversational_redirect(
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: _QuotaLLM())
     # Force intent=thesis so the synthesize path is the one that crashes.
     monkeypatch.setattr(
-        graph_module, "classify_intent_with_source", lambda _q, **_: ("thesis", "heuristic")
+        graph_module, "classify_intent_with_source", lambda _q, **_: ("thesis", "heuristic", False)
     )
 
     # Minimal tool returning a non-empty report so synthesize doesn't

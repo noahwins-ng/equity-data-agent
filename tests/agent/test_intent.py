@@ -426,7 +426,7 @@ def test_with_source_heuristic_path() -> None:
     """A heuristic-matched question returns source='heuristic'."""
     from agent.intent import classify_intent_with_source
 
-    intent, source = classify_intent_with_source("What's the RSI?")
+    intent, source, _flag = classify_intent_with_source("What's the RSI?")
     assert intent == "quick_fact"
     assert source == "heuristic"
 
@@ -436,7 +436,7 @@ def test_with_source_llm_path(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_llm_pipeline(monkeypatch, IntentDecision(intent="thesis"))
     from agent.intent import classify_intent_with_source
 
-    intent, source = classify_intent_with_source("Tell me about UNH")
+    intent, source, _flag = classify_intent_with_source("Tell me about UNH")
     assert intent == "thesis"
     assert source == "llm"
 
@@ -446,7 +446,7 @@ def test_with_source_fallback_path_on_llm_exception(monkeypatch: pytest.MonkeyPa
     _patch_llm_pipeline(monkeypatch, None, invoke_raises=RuntimeError("timeout"))
     from agent.intent import classify_intent_with_source
 
-    intent, source = classify_intent_with_source("Tell me about UNH")
+    intent, source, _flag = classify_intent_with_source("Tell me about UNH")
     assert intent == "thesis"
     assert source == "fallback"
 
@@ -456,7 +456,7 @@ def test_with_source_fallback_path_on_unexpected_shape(monkeypatch: pytest.Monke
     _patch_llm_pipeline(monkeypatch, {"parsed": None, "parsing_error": "x"})
     from agent.intent import classify_intent_with_source
 
-    intent, source = classify_intent_with_source("Tell me about UNH")
+    intent, source, _flag = classify_intent_with_source("Tell me about UNH")
     assert intent == "thesis"
     assert source == "fallback"
 
@@ -467,6 +467,55 @@ def test_with_source_llm_include_raw_dict(monkeypatch: pytest.MonkeyPatch) -> No
     _patch_llm_pipeline(monkeypatch, {"parsed": decision, "raw": "..."})
     from agent.intent import classify_intent_with_source
 
-    intent, source = classify_intent_with_source("Tell me about UNH")
+    intent, source, _flag = classify_intent_with_source("Tell me about UNH")
     assert intent == "quick_fact"
     assert source == "llm"
+
+
+# ─── QNT-222 follow-up: needs_news_search signal ─────────────────────────────
+
+
+def test_needs_news_search_uses_llm_flag_on_llm_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On the LLM path the model's own needs_news_search judgment is returned --
+    independent of intent (a targeted ask can be quick_fact)."""
+    _patch_llm_pipeline(monkeypatch, IntentDecision(intent="quick_fact", needs_news_search=True))
+    from agent.intent import classify_intent_with_source
+
+    intent, source, needs_news_search = classify_intent_with_source(
+        "what did the CEO say about the buyback?"
+    )
+    assert (intent, source) == ("quick_fact", "llm")
+    assert needs_news_search is True
+
+
+def test_needs_news_search_llm_flag_false_is_respected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A generic news ask the LLM marks False does not trip the keyword net."""
+    _patch_llm_pipeline(monkeypatch, IntentDecision(intent="news", needs_news_search=False))
+    from agent.intent import classify_intent_with_source
+
+    _intent, _source, needs_news_search = classify_intent_with_source("what's the news on AAPL?")
+    assert needs_news_search is False
+
+
+def test_needs_news_search_keyword_fallback_on_heuristic_path() -> None:
+    """When the heuristic short-circuits (no LLM), the keyword net carries the
+    signal -- "any catalysts" is a heuristic news hit AND a targeted token."""
+    from agent.intent import classify_intent_with_source
+
+    intent, source, needs_news_search = classify_intent_with_source("any catalysts for NVDA?")
+    assert source == "heuristic"
+    assert needs_news_search is True
+
+
+def test_is_targeted_news_distinguishes_targeted_from_generic() -> None:
+    from agent.intent import _is_targeted_news
+
+    assert _is_targeted_news("any litigation news on NVDA?") is True
+    assert _is_targeted_news("what did the CEO say about the buyback?") is True
+    assert _is_targeted_news("any recall news on TSLA?") is True
+    assert _is_targeted_news("what's the latest on the Micron partnership?") is True
+    # Generic news asks name no specific event/entity.
+    assert _is_targeted_news("what's the news on AAPL?") is False
+    assert _is_targeted_news("headlines on META") is False
+    # Whole-word matching: "sue" must not fire on "issue", "sec" not on "second".
+    assert _is_targeted_news("what are the issues this second?") is False
