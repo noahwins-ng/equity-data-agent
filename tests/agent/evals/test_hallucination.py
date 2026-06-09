@@ -51,6 +51,46 @@ class TestExtractNumbers:
         assert extract_numbers(text) == frozenset({"72.5"})
 
 
+class TestPeriodIdiom:
+    """Time-window labels ("5-year low", "52-week high") are not numeric claims.
+
+    Regression for the QNT-221 advisory guard: the report writes the lookback
+    window in a compact form ("over last 5y", "near 5y low") that the regex's
+    word boundary already ignores, but the model paraphrases it to "5-year",
+    where the hyphen lets a bare "5" leak through as a counted number. On the
+    real TSLA trace b7c2187 (2026-06-09) that single phantom number dropped a
+    clean thesis's grounding from 1.0 to 0.91.
+    """
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("near the 5-year low", set()),
+            ("52-week high of 408.95", {"408.95"}),
+            ("the 200-day moving average is 875", {"875"}),
+            ("over the past 3 months", set()),
+            ("a 6-month high", set()),
+        ],
+    )
+    def test_window_labels_are_dropped(self, text: str, expected: set[str]) -> None:
+        assert set(extract_numbers(text)) == expected
+
+    def test_non_period_hyphen_compound_still_counts(self) -> None:
+        # Defence: the unit list is closed to period words. A valuation idiom
+        # like "20-times earnings" is a real numeric claim, not a window label,
+        # so its number must still be checked.
+        assert "20" in extract_numbers("trading at 20-times earnings")
+
+    def test_five_year_low_idiom_not_flagged(self) -> None:
+        # Real TSLA trace b7c2187: report wrote "near 5y low", model wrote
+        # "near the 5-year low" — the bare "5" was the sole unsupported number.
+        thesis = "P/E of 397.70 is near the 5-year low (source: fundamental)."
+        reports = ["P/E (quarterly): 397.70 (range 397.70-404.82 over last 5y, near 5y low)"]
+        result = check(thesis, reports)
+        assert result.ok
+        assert result.unsupported == ()
+
+
 class TestCheck:
     """End-to-end behaviour of the hallucination detector."""
 
