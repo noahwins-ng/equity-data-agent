@@ -1452,6 +1452,133 @@ def test_flag_false_never_calls_search_even_on_news_intent(
     search.assert_not_called()
 
 
+def test_targeted_news_drops_focused_card_and_surfaces_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-226 AC3: a targeted news ask (needs_news_search True) WITH retrieved
+    hits takes the narrative-only shape -- synthesize sets focused=None and skips
+    the focused-card LLM call, narrate owns the spoken answer, and the retrieved
+    hits are surfaced as ``retrieved_sources`` for the frontend provenance list."""
+    monkeypatch.setattr(
+        graph_module, "classify_intent_with_source", lambda _q, **_: ("news", "llm", True)
+    )
+    # Structured channel returns a focused card -- it must NOT be consumed on
+    # the narrative-only path (the assertion below pins that the call is skipped).
+    llm = _news_focused_llm()
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+
+    search = _recording_search_news(
+        [
+            {
+                "headline": "NVDA strikes Micron HBM4 supply deal",
+                "source": "Reuters",
+                "date": "2026-06-01",
+                "url": "https://ex.com/a",
+            }
+        ]
+    )
+    graph = build_graph(
+        {name: _mock_tool(name) for name in REPORT_TOOLS},
+        search_news_tool=search,
+    )
+    result = graph.invoke({"ticker": "NVDA", "question": "any news on NVDA and the Micron deal?"})
+
+    # Focused card dropped; the focused-card LLM call was never made.
+    assert result["focused"] is None
+    llm.structured_invoke.assert_not_called()
+    # Retrieved hits surfaced as structured provenance.
+    sources = result["retrieved_sources"]
+    assert sources == [
+        {
+            "headline": "NVDA strikes Micron HBM4 supply deal",
+            "source": "Reuters",
+            "date": "2026-06-01",
+            "url": "https://ex.com/a",
+        }
+    ]
+    # And folded into the news report the narrator speaks from.
+    assert "NVDA strikes Micron HBM4 supply deal" in result["reports"]["news"]
+
+
+def test_broad_news_keeps_focused_card(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QNT-226 AC3: a broad news read (needs_news_search False) keeps the full
+    focused-news card and surfaces no retrieved sources."""
+    from agent.focused import FocusedAnalysis
+
+    monkeypatch.setattr(
+        graph_module, "classify_intent_with_source", lambda _q, **_: ("news", "llm", False)
+    )
+    llm = _news_focused_llm()
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+
+    search = MagicMock(return_value="[]")
+    graph = build_graph(
+        {name: _mock_tool(name) for name in REPORT_TOOLS},
+        search_news_tool=search,
+    )
+    result = graph.invoke({"ticker": "NVDA", "question": "give me a news read on NVDA"})
+
+    search.assert_not_called()
+    assert isinstance(result["focused"], FocusedAnalysis)
+    llm.structured_invoke.assert_called_once()
+    assert not result.get("retrieved_sources")
+
+
+def test_targeted_news_empty_hits_keeps_focused_card(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QNT-226 AC3 safety net: when the flag is set but search returns NO hits
+    (Qdrant down / no matches), the narrative-only shape is NOT taken -- the full
+    focused card renders so the canned digest still has a structured surface and
+    the run can never go blank."""
+    from agent.focused import FocusedAnalysis
+
+    monkeypatch.setattr(
+        graph_module, "classify_intent_with_source", lambda _q, **_: ("news", "llm", True)
+    )
+    llm = _news_focused_llm()
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+
+    search = MagicMock(return_value="[]")
+    graph = build_graph(
+        {name: _mock_tool(name) for name in REPORT_TOOLS},
+        search_news_tool=search,
+    )
+    result = graph.invoke({"ticker": "NVDA", "question": "any litigation news on NVDA?"})
+
+    search.assert_called_once()
+    assert isinstance(result["focused"], FocusedAnalysis)
+    assert not result.get("retrieved_sources")
+
+
+def test_parse_search_sources_extracts_fields_and_degrades() -> None:
+    """QNT-226: structured provenance parse keeps headline/source/date/url and
+    degrades to [] on every bad-payload path (mirrors _format_search_hits)."""
+    raw = json.dumps(
+        [
+            {
+                "headline": "AAPL antitrust probe",
+                "source": "Bloomberg",
+                "date": "2026-05-02",
+                "url": "https://ex.com/x",
+                "score": 0.6,
+                "body": "ignored",
+            },
+            {"headline": "", "source": "WSJ"},  # no headline -> skipped
+        ]
+    )
+    sources = graph_module._parse_search_sources(raw)
+    assert sources == [
+        {
+            "headline": "AAPL antitrust probe",
+            "source": "Bloomberg",
+            "date": "2026-05-02",
+            "url": "https://ex.com/x",
+        }
+    ]
+    assert graph_module._parse_search_sources("[]") == []
+    assert graph_module._parse_search_sources("not json") == []
+    assert graph_module._parse_search_sources("[1, 2, 3]") == []
+
+
 def test_format_search_hits_renders_rows_and_degrades_to_empty() -> None:
     rows = json.dumps(
         [

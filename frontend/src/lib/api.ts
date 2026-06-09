@@ -409,6 +409,23 @@ export type ExplorationAnswerPayload = {
   cited_values: ExplorationValue[];
 };
 
+// QNT-226: one retrieved article surfaced by the agent's semantic news
+// search. Mirrors the rows the `/search/news` endpoint returns (minus the
+// score + body the prompt uses) — the provenance list shows what RAG found.
+export type RetrievedSource = {
+  headline: string;
+  source: string;
+  date: string;
+  url: string;
+};
+
+// QNT-226: emitted once after the graph completes when a targeted news ask
+// surfaced semantic-search hits. The panel renders a compact clickable
+// "Retrieved sources" list. Absent when no search ran this turn.
+export type RetrievedSourcesEvent = {
+  sources: RetrievedSource[];
+};
+
 export type DoneEvent = {
   tools_count: number;
   citations_count: number;

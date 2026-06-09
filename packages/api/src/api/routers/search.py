@@ -32,6 +32,45 @@ router = APIRouter(prefix="/api/v1/search", tags=["search"])
 COLLECTION = "equity_news"
 EMBED_MODEL = "sentence-transformers/all-minilm-l6-v2"
 
+# QNT-226: relevance filter. MiniLM-L6 cosine scores on short finance text are
+# query-dependent and cluster tightly -- a clean-window calibration pull showed
+# top scores ranging 0.42 ("TSLA with ASML") to 0.63 ("NVDA CEO data center")
+# across queries, with genuinely-relevant hits on a weak-signal query landing
+# BELOW a strong query's padding (the ASML-deal headline scored 0.37, under
+# generic Tesla-stock noise at 0.42). So a query-independent absolute floor is
+# unsafe: any floor high enough to cut a strong query's tail would erase a weak
+# query's signal. We keep hits within ``_RELEVANCE_GAP`` of the top score, which
+# trims clear low-score padding relative to the best match without a fixed
+# cutoff. ``_MIN_SCORE`` is a degenerate-query guard only -- it never binds on
+# observed real queries (the lowest relevant hit measured was ~0.35) and exists
+# to drop a query that matches nothing (uniformly sub-0.30 scores).
+#
+# This is a tail-trim, not a precision fix: on weak-discrimination queries
+# MiniLM ranks noise above signal, and no gap value reorders that -- a larger
+# embedding model is the real fix (out of scope per the ticket). Lexical
+# re-ranking on query entities would help but is its own change.
+_RELEVANCE_GAP = 0.08
+_MIN_SCORE = 0.30
+
+
+def _apply_relevance_filter(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop hits that fall a relevance gap below the top match.
+
+    ``rows`` arrives pre-sorted by descending score (Qdrant ranks the response),
+    so ``rows[0]`` is the top match. Keeps every row at or above
+    ``max(top - _RELEVANCE_GAP, _MIN_SCORE)``. An empty response is returned
+    unchanged; a single row is kept unless its score is below ``_MIN_SCORE`` (the
+    degenerate-query guard — a lone sub-floor hit means the query matched
+    nothing meaningful and is dropped).
+    """
+    if not rows:
+        return rows
+    top = rows[0]["score"]
+    if not isinstance(top, int | float):
+        return rows
+    cutoff = max(top - _RELEVANCE_GAP, _MIN_SCORE)
+    return [r for r in rows if isinstance(r["score"], int | float) and r["score"] >= cutoff]
+
 
 @router.get("/news")
 def search_news(
@@ -111,4 +150,7 @@ def search_news(
                 "body": payload.get("body") or "",
             }
         )
-    return rows
+    # QNT-226: trim low-relevance padding before returning. The agent folds
+    # these rows into the synthesis prompt AND surfaces them as provenance, so
+    # dropping the tail here benefits both consumers in one place.
+    return _apply_relevance_filter(rows)
