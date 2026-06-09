@@ -104,6 +104,7 @@ def test_returns_ranked_payload_with_iso_date(
                         "url": "https://finance.example.com/a",
                         "headline": "NVDA beats earnings",
                         "source": "yahoo_finance",
+                        "body": "NVIDIA reported record data-center revenue.",
                     },
                 ),
                 _FakeScoredPoint(
@@ -124,6 +125,8 @@ def test_returns_ranked_payload_with_iso_date(
 
     r = client.get("/api/v1/search/news", params={"query": "earnings", "ticker": "NVDA"})
     assert r.status_code == 200
+    # QNT-225: body (the article summary) is surfaced; a point with no body
+    # payload (pre-QNT-225 / headline-only) round-trips as "".
     assert r.json() == [
         {
             "headline": "NVDA beats earnings",
@@ -131,6 +134,7 @@ def test_returns_ranked_payload_with_iso_date(
             "date": "2026-04-21",
             "score": 0.92,
             "url": "https://finance.example.com/a",
+            "body": "NVIDIA reported record data-center revenue.",
         },
         {
             "headline": "Chip demand mixed",
@@ -138,6 +142,7 @@ def test_returns_ranked_payload_with_iso_date(
             "date": "2026-04-20",
             "score": 0.81,
             "url": "https://finance.example.com/b",
+            "body": "",
         },
     ]
 

@@ -24,8 +24,9 @@ search_news
   Input:    ticker ∈ TICKERS, query (1..512 chars).
   Upstream: GET /api/v1/search/news?ticker={ticker}&query={query}&limit=5
   Return:   pretty-serialised JSON array of {headline, source, date, score,
-            url}. Degraded: "[]" on Qdrant outage, HTTP error, empty match
-            set, or invalid ticker / query.
+            url, body}. ``body`` is the article summary (QNT-225), "" for
+            points embedded before QNT-225. Degraded: "[]" on Qdrant outage,
+            HTTP error, empty match set, or invalid ticker / query.
 
 ``search_news`` degrades to ``"[]"`` rather than ``[error] ...`` on purpose:
 the FastAPI endpoint already maps Qdrant outages to an empty 200 list

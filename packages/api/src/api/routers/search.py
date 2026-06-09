@@ -104,6 +104,11 @@ def search_news(
                 "date": date_str,
                 "score": point.score,
                 "url": payload.get("url"),
+                # QNT-225: the article summary (Finnhub body) so the agent reads
+                # the story, not just the headline. Empty string for points
+                # embedded before QNT-225 (headline-only) until they roll out of
+                # the 7-day window; the agent renders it only when present.
+                "body": payload.get("body") or "",
             }
         )
     return rows

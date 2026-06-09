@@ -1468,3 +1468,37 @@ def test_format_search_hits_renders_rows_and_degrades_to_empty() -> None:
     assert _format_search_hits("[]") == ""
     assert _format_search_hits("not json") == ""
     assert _format_search_hits("[1, 2, 3]") == ""
+
+
+def test_format_search_hits_renders_body_under_headline() -> None:
+    """QNT-225: the article summary (body) is rendered, indented, under its
+    headline so the synthesis reads the story -- and a row with an empty body
+    still renders the headline alone."""
+    rows = json.dumps(
+        [
+            {
+                "headline": "NVDA and SK Hynix announce memory partnership",
+                "source": "Reuters",
+                "date": "2026-06-05",
+                "body": "Nvidia and SK Hynix signed a multi-year deal to co-develop "
+                "next-generation HBM for AI data centers.",
+            },
+            {"headline": "Micron mentioned in memory-shortage note", "source": "WSJ", "body": ""},
+        ]
+    )
+    block = _format_search_hits(rows)
+    assert "- NVDA and SK Hynix announce memory partnership (Reuters, 2026-06-05)" in block
+    assert "  Nvidia and SK Hynix signed a multi-year deal" in block
+    # Empty-body row renders the headline only -- no stray indented blank line.
+    assert "  \n" not in block
+
+
+def test_format_search_hits_truncates_long_body() -> None:
+    """QNT-225: an over-long body is cut on a word boundary with an ellipsis to
+    bound the prompt cost."""
+    long_body = "word " * 200  # ~1000 chars
+    rows = json.dumps([{"headline": "h", "source": "s", "date": "d", "body": long_body}])
+    block = _format_search_hits(rows)
+    body_line = next(line for line in block.splitlines() if line.startswith("  "))
+    assert body_line.endswith("...")
+    assert len(body_line.strip()) <= 284  # 280 + ellipsis, word-boundary cut
