@@ -152,6 +152,7 @@ def _sample_df() -> pd.DataFrame:
                 "id": 111111111111111111,
                 "ticker": "NVDA",
                 "headline": "NVDA beats earnings, stock jumps 10%",
+                "body": "NVIDIA reported record data-center revenue and raised guidance.",
                 "url": "https://finance.example.com/a",
                 "source": "yahoo_finance",
                 "published_at": datetime(2026, 4, 21, 14, 30, 0),
@@ -160,6 +161,9 @@ def _sample_df() -> pd.DataFrame:
                 "id": 222222222222222222,
                 "ticker": "NVDA",
                 "headline": "Chip demand outlook mixed for Q2",
+                # Empty body (some Finnhub rows carry no summary) -> embed text
+                # falls back to the headline alone; payload body is "".
+                "body": "",
                 "url": "https://finance.example.com/b",
                 "source": "yahoo_finance",
                 "published_at": datetime(2026, 4, 22, 9, 0, 0),
@@ -206,23 +210,31 @@ def test_builds_document_points_and_upserts(qdrant_recorder: _Recorder) -> None:
     assert first.id == point_id("NVDA", 111111111111111111)
     assert second.id == point_id("NVDA", 222222222222222222)
 
+    # QNT-225: the embed text is headline + body when a body is present, and
+    # falls back to the headline alone when the Finnhub summary is empty.
     assert isinstance(first.vector, Document)
-    assert first.vector.text == "NVDA beats earnings, stock jumps 10%"
+    assert first.vector.text == (
+        "NVDA beats earnings, stock jumps 10%\n\n"
+        "NVIDIA reported record data-center revenue and raised guidance."
+    )
     assert first.vector.model == EMBED_MODEL
     assert isinstance(second.vector, Document)
     assert second.vector.text == "Chip demand outlook mixed for Q2"
     assert second.vector.model == EMBED_MODEL
 
     # pd.Timestamp.timestamp() on a naive value treats it as UTC (ClickHouse's
-    # native storage); matches the asset's conversion path.
+    # native storage); matches the asset's conversion path. QNT-225: payload
+    # now carries body (the summary the search endpoint returns to the agent).
     expected_ts = datetime(2026, 4, 21, 14, 30, 0, tzinfo=UTC).timestamp()
     assert first.payload == {
         "ticker": "NVDA",
         "published_at": int(expected_ts),
         "url": "https://finance.example.com/a",
         "headline": "NVDA beats earnings, stock jumps 10%",
+        "body": "NVIDIA reported record data-center revenue and raised guidance.",
         "source": "yahoo_finance",
     }
+    assert second.payload["body"] == ""
     assert {p.payload["ticker"] for p in call.points} == {"NVDA"}
 
 
@@ -480,6 +492,7 @@ def test_cross_ticker_dataframe_produces_distinct_ids(qdrant_recorder: _Recorder
                 "id": shared_url_id,
                 "ticker": "MSFT",
                 "headline": "Tesla Q1 earnings review",
+                "body": "",
                 "url": "https://example.com/shared-article",
                 "source": "yahoo_finance",
                 "published_at": datetime(2026, 4, 21, 14, 30, 0),

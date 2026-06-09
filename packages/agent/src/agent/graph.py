@@ -701,16 +701,35 @@ def _gather_reports(
     return reports, errors
 
 
-def _format_search_hits(raw: str) -> str:
-    """QNT-222: render ``search_news`` JSON rows into a news-report-shaped block.
+# QNT-225: max chars of the article body (Finnhub summary) rendered under each
+# retrieved headline. Bounds the added prompt cost (~5 hits/turn) while giving
+# the synthesis enough story to disambiguate an event from a name-drop. Whole
+# sentences aren't guaranteed; we cut on a word boundary and add an ellipsis.
+_SEARCH_BODY_MAX_CHARS = 280
 
-    ``search_news`` returns ``json.dumps([{headline, source, date, score, url},
-    ...])`` on a hit and ``"[]"`` on every degraded path (Qdrant outage, HTTP
-    error, empty match set, invalid ticker/query). We render headline + date +
-    source as ``"- "`` bullets so the block reads like the canned news report
-    the focused-news prompt already consumes (and ``_summarise_report`` counts
-    as headlines). Returns ``""`` when there is nothing usable so the caller can
-    skip the merge entirely.
+
+def _truncate_body(body: str) -> str:
+    """Trim an article body to ``_SEARCH_BODY_MAX_CHARS`` on a word boundary."""
+    body = body.strip()
+    if len(body) <= _SEARCH_BODY_MAX_CHARS:
+        return body
+    cut = body[:_SEARCH_BODY_MAX_CHARS].rsplit(" ", 1)[0].rstrip()
+    return f"{cut}..."
+
+
+def _format_search_hits(raw: str) -> str:
+    """QNT-222/225: render ``search_news`` JSON rows into a news-report-shaped block.
+
+    ``search_news`` returns ``json.dumps([{headline, source, date, score, url,
+    body}, ...])`` on a hit and ``"[]"`` on every degraded path (Qdrant outage,
+    HTTP error, empty match set, invalid ticker/query). We render headline +
+    date + source as ``"- "`` bullets so the block reads like the canned news
+    report the focused-news prompt already consumes (the SSE tool_result
+    summary also counts ``"- "`` headline lines). QNT-225: when a row carries ``body`` (the Finnhub
+    summary), a truncated copy is indented under the headline so the synthesis
+    reads the story, not just the title -- empty for points embedded before
+    QNT-225 until they roll out of the 7-day window. Returns ``""`` when there
+    is nothing usable so the caller can skip the merge entirely.
     """
     try:
         rows = json.loads(raw)
@@ -729,6 +748,9 @@ def _format_search_hits(raw: str) -> str:
         source = str(row.get("source", "")).strip()
         meta = ", ".join(part for part in (source, date) if part)
         lines.append(f"- {headline}" + (f" ({meta})" if meta else ""))
+        body = _truncate_body(str(row.get("body", "")))
+        if body:
+            lines.append(f"  {body}")
     if not lines:
         return ""
     return "## Headlines matching your question\n" + "\n".join(lines)

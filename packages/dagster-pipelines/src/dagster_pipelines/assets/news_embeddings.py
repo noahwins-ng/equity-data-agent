@@ -58,7 +58,7 @@ NEWS_COLLECTION_SPEC = QdrantCollectionSpec(
 # the rolling-7d semantic search index ADR-009 designed for; the 1y backfill
 # stays in ClickHouse for the news card on the ticker-detail page.
 _FRESH_WINDOW_SQL = f"""
-SELECT id, ticker, headline, url, source, published_at
+SELECT id, ticker, headline, body, url, source, published_at
 FROM equity_raw.news_raw FINAL
 WHERE ticker = %(ticker)s
   AND published_at >= now() - INTERVAL {WINDOW_DAYS} DAY
@@ -195,19 +195,31 @@ def news_embeddings(
             published_at: pd.Timestamp = pd.Timestamp(record["published_at"]).tz_localize(  # type: ignore[assignment]
                 "UTC"
             )
+            # QNT-225: embed headline + body (the Finnhub summary, stored in
+            # news_raw.body) so semantic retrieval can distinguish a real event
+            # ("X announces a partnership with Y") from a headline that merely
+            # name-drops an entity in a different story. MiniLM truncates past
+            # ~256 tokens, so an over-long body is bounded server-side. body can
+            # be empty (some Finnhub rows carry no summary) -- fall back to the
+            # headline alone. The full body is also stored in the payload so the
+            # search endpoint can return it to the agent.
+            headline = str(record["headline"])
+            body = str(record["body"] or "").strip()
+            embed_text = f"{headline}\n\n{body}" if body else headline
             points.append(
                 PointStruct(
                     id=pid,
                     # Document is embedded server-side by Qdrant using the named
                     # model; no local inference, no model weights, no CPU/memory
                     # cost on the dagster run-worker beyond the HTTP round-trip.
-                    vector=Document(text=str(record["headline"]), model=EMBED_MODEL),
+                    vector=Document(text=embed_text, model=EMBED_MODEL),
                     payload={
                         "ticker": str(record["ticker"]),
                         # Qdrant integer index requires int; store unix seconds.
                         "published_at": int(published_at.timestamp()),
                         "url": str(record["url"]),
-                        "headline": str(record["headline"]),
+                        "headline": headline,
+                        "body": body,
                         "source": str(record["source"]),
                     },
                 )
