@@ -43,11 +43,14 @@ import {
   type NarrativeChunkEvent,
   type ProseChunkEvent,
   type QuickFactPayload,
+  type RetrievedSource,
+  type RetrievedSourcesEvent,
   type ThesisPayload,
   type ToolCallEvent,
   type ToolResultEvent,
   type Verdict,
 } from "@/lib/api";
+import { hasAnswerSurface } from "./chat-run";
 import { parseSseStream } from "@/lib/sse";
 
 // ─── Local message-tape model ─────────────────────────────────────────────
@@ -83,6 +86,9 @@ type ChatRun = {
   conversational: ConversationalPayload | null;
   focused: FocusedAnalysisPayload | null;
   exploration: ExplorationAnswerPayload | null;
+  // QNT-226: articles the semantic news search surfaced this turn. Rendered
+  // as a compact clickable provenance list. Empty when no search ran.
+  retrievedSources: RetrievedSource[];
   errors: ChatErrorEvent[];
   stats: DoneEvent | null;
 };
@@ -928,6 +934,57 @@ function ExplorationCard({
   );
 }
 
+// ─── Retrieved sources (QNT-226) ──────────────────────────────────────────
+//
+// Provenance for the agent's semantic news search: the articles RAG actually
+// surfaced this turn, shown as a compact clickable list under the analyst
+// voice. On a targeted news ask the focused-news card is dropped (the voice
+// answers it), so this list is the structured surface that shows the user
+// WHICH headlines grounded the answer. Mirrors the external-link idiom in
+// ticker/news-card.tsx (new tab, noopener).
+
+function RetrievedSources({ sources }: { sources: RetrievedSource[] }) {
+  if (sources.length === 0) return null;
+  return (
+    <section
+      aria-label="Retrieved sources"
+      className="rounded border border-zinc-800 bg-zinc-950/40 p-2"
+    >
+      <h3 className="px-1 pb-1 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+        Retrieved sources · {sources.length}
+      </h3>
+      <ul className="space-y-0.5">
+        {sources.map((src, i) => (
+          <li key={`${src.url || src.headline}-${i}`}>
+            {src.url ? (
+              <a
+                href={src.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="group flex flex-col rounded px-1 py-1 transition hover:bg-zinc-900 focus-visible:bg-zinc-900 focus-visible:outline-none"
+              >
+                <span className="text-xs text-zinc-200 group-hover:text-emerald-300">
+                  {src.headline}
+                </span>
+                <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+                  {[src.source, src.date].filter(Boolean).join(" · ")}
+                </span>
+              </a>
+            ) : (
+              <div className="flex flex-col px-1 py-1">
+                <span className="text-xs text-zinc-200">{src.headline}</span>
+                <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+                  {[src.source, src.date].filter(Boolean).join(" · ")}
+                </span>
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 // ─── Run renderer (one user prompt → one streamed answer) ────────────────
 
 function RunBlock({
@@ -1056,6 +1113,11 @@ function RunBlock({
         />
       )}
 
+      {/* QNT-226: provenance for the semantic news search. On a targeted news
+        ask the focused-news card is dropped, so this clickable list is the
+        structured surface showing which articles grounded the spoken answer. */}
+      <RetrievedSources sources={run.retrievedSources} />
+
       {showGroundingWarning && (
         <div
           role="alert"
@@ -1070,14 +1132,7 @@ function RunBlock({
         QNT-211: narrative-only followup runs surface no card but still
         carry analyst prose that can cite reports; trigger the disclaimer
         for those too. */}
-      {(run.comparison ||
-        run.quickFact ||
-        run.focused ||
-        run.exploration ||
-        run.thesis ||
-        run.conversational ||
-        run.narrative) &&
-        !isStreaming && (
+      {hasAnswerSurface(run) && !isStreaming && (
           <p className="font-mono text-[10px] italic text-zinc-500">
             Informational only — not investment advice. Figures are from the
             supplied reports and may be stale. Groundedness is source support,
@@ -1267,6 +1322,7 @@ export function ChatPanel() {
           conversational: null,
           focused: null,
           exploration: null,
+          retrievedSources: [],
           errors: [
             {
               detail: "Pick a ticker from the watchlist before asking the analyst.",
@@ -1296,6 +1352,7 @@ export function ChatPanel() {
         conversational: null,
         focused: null,
         exploration: null,
+        retrievedSources: [],
         errors: [],
         stats: null,
       };
@@ -1372,6 +1429,9 @@ export function ChatPanel() {
           } else if (event === "exploration") {
             const ev = data as ExplorationAnswerPayload;
             updateRun(id, (r) => ({ ...r, exploration: ev }));
+          } else if (event === "retrieved_sources") {
+            const ev = data as RetrievedSourcesEvent;
+            updateRun(id, (r) => ({ ...r, retrievedSources: ev.sources }));
           } else if (event === "done") {
             const ev = data as DoneEvent;
             const unsupported = ev.grounding_unsupported ?? [];
@@ -1382,17 +1442,10 @@ export function ChatPanel() {
               proseChunks: r.proseChunks.map((chunk) =>
                 redactUnsupportedNumbers(chunk, unsupported),
               ),
-              status:
-                r.errors.length > 0 &&
-                !r.thesis &&
-                !r.quickFact &&
-                !r.comparison &&
-                !r.conversational &&
-                !r.focused &&
-                !r.exploration &&
-                !r.narrative
-                  ? "errored"
-                  : "done",
+              // A run is "errored" only when it hit a terminal error AND
+              // produced no answer surface at all (QNT-226: retrieved sources
+              // count as a surface — see hasAnswerSurface).
+              status: r.errors.length > 0 && !hasAnswerSurface(r) ? "errored" : "done",
             }));
           } else if (event === "error") {
             const ev = data as ChatErrorEvent;

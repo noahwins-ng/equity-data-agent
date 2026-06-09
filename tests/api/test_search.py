@@ -108,8 +108,11 @@ def test_returns_ranked_payload_with_iso_date(
                     },
                 ),
                 _FakeScoredPoint(
+                    # Within _RELEVANCE_GAP of the top hit so both survive the
+                    # QNT-226 filter — this test pins payload shape + ranking +
+                    # body passthrough, not the filter (covered separately).
                     point_id=222,
-                    score=0.81,
+                    score=0.88,
                     payload={
                         "ticker": "NVDA",
                         "published_at": _ts(2026, 4, 20),
@@ -140,7 +143,7 @@ def test_returns_ranked_payload_with_iso_date(
             "headline": "Chip demand mixed",
             "source": "yahoo_finance",
             "date": "2026-04-20",
-            "score": 0.81,
+            "score": 0.88,
             "url": "https://finance.example.com/b",
             "body": "",
         },
@@ -153,6 +156,69 @@ def test_returns_ranked_payload_with_iso_date(
     assert isinstance(fake.last_query, Document)
     assert fake.last_query.text == "earnings"
     assert fake.last_query.model == search_module.EMBED_MODEL
+
+
+def test_relevance_filter_drops_cluster_tail(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # QNT-226: scores mirror a real clean-window calibration pull (top hits
+    # cluster ~0.53-0.59, a clear tail hit at 0.43). With _RELEVANCE_GAP=0.08
+    # the cutoff is 0.59 - 0.08 = 0.51, so the three clustered hits survive and
+    # the 0.43 tail is dropped. Pins the tail-trim behaviour without depending
+    # on a query-independent absolute floor (which the calibration showed is
+    # unsafe across queries).
+    fake = _FakeClient(
+        _FakeQueryResponse(
+            points=[
+                _FakeScoredPoint(point_id=1, score=0.59, payload={"headline": "strong A"}),
+                _FakeScoredPoint(point_id=2, score=0.56, payload={"headline": "strong B"}),
+                _FakeScoredPoint(point_id=3, score=0.53, payload={"headline": "strong C"}),
+                _FakeScoredPoint(point_id=4, score=0.43, payload={"headline": "tail padding"}),
+            ]
+        )
+    )
+    _install_fake(monkeypatch, fake)
+
+    r = client.get("/api/v1/search/news", params={"query": "earnings", "ticker": "NVDA"})
+    assert r.status_code == 200
+    headlines = [row["headline"] for row in r.json()]
+    assert headlines == ["strong A", "strong B", "strong C"]
+
+
+def test_single_hit_survives_relevance_filter(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A lone hit is its own top score, so the gap can't strip it — a weak-signal
+    # query that returns one match still surfaces it (above the degenerate floor).
+    fake = _FakeClient(
+        _FakeQueryResponse(
+            points=[_FakeScoredPoint(point_id=9, score=0.42, payload={"headline": "only hit"})]
+        )
+    )
+    _install_fake(monkeypatch, fake)
+
+    r = client.get("/api/v1/search/news", params={"query": "asml", "ticker": "TSLA"})
+    assert r.status_code == 200
+    assert [row["headline"] for row in r.json()] == ["only hit"]
+
+
+def test_degenerate_query_below_floor_is_dropped(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # QNT-226 degenerate-query guard: a query that matches nothing meaningful
+    # returns uniformly sub-_MIN_SCORE (0.30) hits. The top-relative gap alone
+    # would keep them (each is within the gap of the top), so the floor is what
+    # drops them — a lone 0.28 hit is below the floor and filtered out.
+    fake = _FakeClient(
+        _FakeQueryResponse(
+            points=[_FakeScoredPoint(point_id=7, score=0.28, payload={"headline": "noise"})]
+        )
+    )
+    _install_fake(monkeypatch, fake)
+
+    r = client.get("/api/v1/search/news", params={"query": "zzzzz", "ticker": "NVDA"})
+    assert r.status_code == 200
+    assert r.json() == []
 
 
 def test_ticker_filter_is_applied(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

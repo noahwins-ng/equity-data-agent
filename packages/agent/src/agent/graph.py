@@ -391,6 +391,13 @@ class AgentState(TypedDict):
     # targeted-event ask ("what did the CEO say about the buyback?") gets this
     # even when its intent is quick_fact or thesis rather than news.
     needs_news_search: NotRequired[bool]
+    # QNT-226: provenance for the semantic news search. When gather fires
+    # search_news (targeted news ask), it stores the retrieved hits here as
+    # ``{headline, source, date, url}`` dicts so the SSE wrapper can surface a
+    # clickable "Retrieved sources" list to the frontend. Absent when no search
+    # ran or it returned nothing. Set by gather_node, read by the SSE endpoint
+    # (gated on gather having run so a followup turn doesn't re-emit prior hits).
+    retrieved_sources: NotRequired[list[dict[str, str]]]
     # QNT-212: ordered list of node names actually visited this turn.
     # Each node writes the FULL accumulated list (not a single element with
     # a reducer) -- a reducer would also accumulate across turns out of the
@@ -754,6 +761,39 @@ def _format_search_hits(raw: str) -> str:
     if not lines:
         return ""
     return "## Headlines matching your question\n" + "\n".join(lines)
+
+
+def _parse_search_sources(raw: str) -> list[dict[str, str]]:
+    """QNT-226: extract ``{headline, source, date, url}`` rows from ``search_news`` JSON.
+
+    Mirrors :func:`_format_search_hits` parsing but keeps the structured fields
+    (not a markdown block) so the SSE wrapper can surface them as a clickable
+    provenance list. ``search_news`` returns ``"[]"`` on every degraded path, so
+    a bad/empty payload yields ``[]`` and the caller surfaces no sources. Rows
+    with no headline are skipped (nothing to render).
+    """
+    try:
+        rows = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(rows, list):
+        return []
+    sources: list[dict[str, str]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        headline = str(row.get("headline") or "").strip()
+        if not headline:
+            continue
+        sources.append(
+            {
+                "headline": headline,
+                "source": str(row.get("source") or "").strip(),
+                "date": str(row.get("date") or "").strip(),
+                "url": str(row.get("url") or "").strip(),
+            }
+        )
+    return sources
 
 
 def _coerce_thesis(response: object) -> Thesis | None:
@@ -1372,20 +1412,30 @@ def build_graph(
         # digest. search_news never raises (it degrades to "[]"), but we guard
         # defensively so a wrapper bug can't crash gather.
         question = state.get("question", "")
+        retrieved_sources: list[dict[str, str]] = []
         if (
             state.get("needs_news_search")
             and intent in _NEWS_SEARCH_INTENTS
             and search_news_tool is not None
         ):
             try:
-                hits = _format_search_hits(search_news_tool(ticker, question))
+                raw = search_news_tool(ticker, question)
             except Exception as exc:  # noqa: BLE001 — search is additive; never crash gather
                 logger.warning("gather %s: search_news failed: %s (continuing)", ticker, exc)
-                hits = ""
+                raw = "[]"
+            # QNT-226: parse once into both the prompt block (folded into the
+            # news report) and the structured provenance list (surfaced to the
+            # frontend). Same rows, two renderings.
+            retrieved_sources = _parse_search_sources(raw)
+            hits = _format_search_hits(raw)
             if hits:
                 existing = reports.get("news")
                 reports["news"] = f"{existing}\n\n{hits}" if existing else hits
-                logger.info("gather %s: folded targeted-news hits into news report", ticker)
+                logger.info(
+                    "gather %s: folded %d targeted-news hits into news report",
+                    ticker,
+                    len(retrieved_sources),
+                )
 
         logger.info(
             "gather %s: gathered=%s errors=%s",
@@ -1393,7 +1443,12 @@ def build_graph(
             sorted(reports),
             sorted(errors),
         )
-        return {"reports": reports, "errors": errors, "reports_by_ticker": {}}
+        return {
+            "reports": reports,
+            "errors": errors,
+            "reports_by_ticker": {},
+            "retrieved_sources": retrieved_sources,
+        }
 
     def explore_supervisor_node(state: AgentState, config: RunnableConfig) -> dict[str, object]:  # noqa: ARG001 — config kept for LangGraph node contract; deterministic policy makes no LLM call
         """QNT-215: bounded exploratory tool selection before synthesis.
@@ -1705,6 +1760,27 @@ def build_graph(
                 return _fallback(
                     "I couldn't pull a report to answer that focused analysis right now."
                 )
+            # QNT-226: targeted news ask -> lighter shape. When the classifier
+            # flagged needs_news_search AND search_news actually returned
+            # provenance, skip the focused-card LLM call and let narrate own the
+            # spoken answer (mirrors the QNT-211 followup narrative-only path:
+            # synthesize returns the payload slot as None, narrate speaks). The
+            # retrieved-sources list renders below the voice as the structured
+            # surface, so the user still sees the articles even if narrate
+            # degrades. Gated on retrieved_sources being non-empty: a degraded
+            # search (Qdrant down, zero hits) keeps the full focused card, since
+            # the canned digest is then the only substrate and the structured
+            # card is the right shape for it.
+            if (
+                intent == "news"
+                and state.get("needs_news_search")
+                and state.get("retrieved_sources")
+            ):
+                logger.info(
+                    "synthesize %s: targeted-news narrative-only (focused card dropped)",
+                    ticker,
+                )
+                return {"focused": None, "confidence": confidence}
             prompt = build_focused_prompt(
                 intent,
                 ticker,
@@ -1928,6 +2004,28 @@ def build_graph(
                     prior_thesis_markdown = str(prior_to_md())
                 except Exception:  # noqa: BLE001
                     prior_thesis_markdown = None
+
+        # QNT-226: targeted-news narrative-only path (synthesize set
+        # focused=None). No structured payload exists, so feed the gathered
+        # news report -- which already carries the folded RAG hits -- as the
+        # substrate the narrator speaks from. Without this the prompt would say
+        # "no structured payload -- speak from the prior turn" and the narrator
+        # would invent an answer with nothing to ground it. The runtime
+        # grounding check below runs against the same reports, so ADR-003
+        # numeric grounding still applies to the spoken answer. The guard
+        # mirrors the synthesize-side condition exactly (needs_news_search +
+        # retrieved_sources) so it only fires on the path synthesize dropped the
+        # card for -- never on a normal news run whose focused payload happened
+        # to render empty.
+        if (
+            intent == "news"
+            and not payload_markdown
+            and state.get("needs_news_search")
+            and state.get("retrieved_sources")
+        ):
+            news_report = (state.get("reports") or {}).get("news")
+            if news_report:
+                payload_markdown = str(news_report)
 
         prompt = build_narrate_prompt(
             intent=str(intent),

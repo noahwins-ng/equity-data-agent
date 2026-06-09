@@ -64,6 +64,12 @@ Event contract
                     classifier); the panel renders a verdict-free, multi-lens
                     scan card and skips the thesis card.
 
+``retrieved_sources`` — ``{sources: [{headline, source, date, url}, ...]}``
+                    emitted (QNT-226) when the agent's semantic news search
+                    surfaced hits this turn. The panel renders a compact
+                    clickable provenance list. Only fires when ``gather`` ran
+                    (a followup turn reuses hydrated state and re-emits nothing).
+
 ``intent``        — ``{intent}`` one-shot event emitted right after the
                     classify node decides which shape will be produced
                     (QNT-149). Lets the panel preempt its layout while
@@ -946,6 +952,15 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
         # can see "did this turn skip plan + gather?" without inspecting
         # the whole event stream.
         intent_path = list(state.get("intent_path") or []) if isinstance(state, dict) else []
+        # QNT-226: provenance for the semantic news search. Gather stores the
+        # retrieved hits; we surface them as a clickable "Retrieved sources"
+        # list. Gated on ``gather`` having run this turn (mirrors the
+        # tools_count guard below) so a followup turn -- which skips gather and
+        # reuses checkpointer-hydrated state -- does not re-emit the prior
+        # turn's sources.
+        retrieved_sources = (
+            list(state.get("retrieved_sources") or []) if isinstance(state, dict) else []
+        )
 
         # QNT-159: classify_node already streamed the ``intent`` event via the
         # queue-based emitter (so the panel saw it before the first tool_call).
@@ -1054,6 +1069,13 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                 yield _sse("prose_chunk", {"delta": chunk + " "})
                 await asyncio.sleep(0)
             yield _sse("conversational", conversational.model_dump())
+
+        # QNT-226: emit the retrieved-sources provenance list (headline / source
+        # / date / url) the agent's semantic news search surfaced this turn.
+        # Only when gather actually ran -- a followup turn reuses hydrated state
+        # and must not re-show the prior turn's sources.
+        if retrieved_sources and "gather" in intent_path:
+            yield _sse("retrieved_sources", {"sources": retrieved_sources})
 
         if intent == "comparison":
             citations_count = _count_comparison_citations(

@@ -1396,6 +1396,103 @@ def test_focused_intent_emits_focused_event_not_thesis(
     assert done_data["citations_count"] >= 2
 
 
+# ─── QNT-226: retrieved-sources SSE wiring ──────────────────────────────────
+
+
+def test_retrieved_sources_event_emitted_on_targeted_news(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QNT-226 AC2: when the graph surfaces semantic-search hits (narrative-only
+    targeted-news path: focused=None), the SSE stream emits a ``retrieved_sources``
+    event carrying the provenance rows, and no focused/thesis card is shown."""
+    sources = [
+        {
+            "headline": "NVDA strikes Micron HBM4 supply deal",
+            "source": "Reuters",
+            "date": "2026-06-01",
+            "url": "https://ex.com/a",
+        }
+    ]
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
+        graph = MagicMock()
+        graph.invoke.return_value = {
+            "ticker": "NVDA",
+            "intent": "news",
+            "plan": ["company", "news"],
+            "reports": {"company": "stub", "news": "stub"},
+            "errors": {},
+            "thesis": None,
+            "quick_fact": None,
+            "comparison": None,
+            "conversational": None,
+            "focused": None,
+            "narrative": "NVDA inked an HBM4 supply deal with Micron.",
+            "retrieved_sources": sources,
+            "confidence": 1.0,
+            "intent_path": ["classify", "plan", "gather", "synthesize", "narrate"],
+        }
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    r = client.post(
+        "/api/v1/agent/chat",
+        json={"ticker": "NVDA", "message": "any news on NVDA and the Micron deal?"},
+    )
+    frames = _parse_sse(r.text)
+    events = [name for name, _ in frames]
+
+    assert "retrieved_sources" in events
+    assert "focused" not in events
+    assert "thesis" not in events
+    rs_data = next(data for name, data in frames if name == "retrieved_sources")
+    assert rs_data == {"sources": sources}
+
+
+def test_retrieved_sources_suppressed_when_gather_skipped(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QNT-226 AC2 guard: a followup turn reuses checkpointer-hydrated state and
+    skips gather. Even if ``retrieved_sources`` lingers in that state, the SSE
+    endpoint must NOT re-emit the prior turn's sources (gated on ``gather`` in
+    intent_path)."""
+    stale_sources = [
+        {"headline": "stale", "source": "Reuters", "date": "2026-05-01", "url": "https://ex.com/z"}
+    ]
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
+        graph = MagicMock()
+        graph.invoke.return_value = {
+            "ticker": "NVDA",
+            "intent": "followup",
+            "plan": [],
+            "reports": {"news": "stub"},
+            "errors": {},
+            "thesis": _stub_thesis(),
+            "quick_fact": None,
+            "focused": None,
+            "narrative": "Following up on the prior read.",
+            "retrieved_sources": stale_sources,
+            "confidence": 1.0,
+            # followup short-circuits past plan + gather.
+            "intent_path": ["classify", "synthesize", "narrate"],
+        }
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    r = client.post(
+        "/api/v1/agent/chat",
+        json={"ticker": "NVDA", "message": "why?", "thread_id": "t-1"},
+    )
+    frames = _parse_sse(r.text)
+    events = [name for name, _ in frames]
+    assert "retrieved_sources" not in events
+
+
 # ─── QNT-220 follow-up: exploration-scan SSE wiring ─────────────────────────
 
 
