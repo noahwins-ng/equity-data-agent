@@ -12,6 +12,7 @@ function surface(overrides: Partial<AnswerSurface> = {}): AnswerSurface {
     thesis: null,
     quickFact: null,
     comparison: null,
+    comparisonLean: null,
     conversational: null,
     focused: null,
     exploration: null,
@@ -44,6 +45,15 @@ test("broad-news shape (focused card present) is an answer surface", () => {
   // Minimal focused payload — only presence matters to the surface check.
   const focused = { focus: "news" } as unknown as AnswerSurface["focused"];
   assert.equal(hasAnswerSurface(surface({ focused })), true);
+});
+
+test("lean N-way comparison card present is an answer surface", () => {
+  // QNT-224: the 3-4 ticker lean metrics table lands on its own slot; a run
+  // carrying only it (degraded narrate) must still count as a real answer.
+  const comparisonLean = {
+    rows: [{ ticker: "AAPL", pe: "28.4", rsi: "65.2", net_margin: "24.1%", price: "$182.50" }],
+  } as unknown as AnswerSurface["comparisonLean"];
+  assert.equal(hasAnswerSurface(surface({ comparisonLean })), true);
 });
 
 test("empty run (no card, no narrative, no sources) is NOT an answer surface", () => {

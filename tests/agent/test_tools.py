@@ -18,6 +18,7 @@ from agent import tools as tools_module
 from agent.tools import (
     default_report_tools,
     get_company_report_compact,
+    get_comparison_metrics,
     get_fundamental_report,
     get_news_report,
     get_summary_report,
@@ -397,3 +398,35 @@ def test_default_report_tools_compose_with_build_graph(
         assert body.endswith(f"/api/v1/reports/{kind}/NVDA")
     assert result["thesis"] is expected_thesis
     assert result["confidence"] == 1.0
+
+
+# ─── QNT-224: get_comparison_metrics ──────────────────────────────────────
+
+
+def test_get_comparison_metrics_returns_body_and_csv_param(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Happy path: hits the comparison-metrics endpoint with a comma-joined
+    ``tickers`` param and returns the raw JSON body verbatim."""
+    rec = _install_recorder(monkeypatch, lambda _u, _p: _json_ok({"rows": [{"ticker": "AAPL"}]}))
+    # _json_ok serializes; compare structurally instead of byte-for-byte.
+    out = get_comparison_metrics(["aapl", "MSFT", "googl"])
+    assert json.loads(out) == {"rows": [{"ticker": "AAPL"}]}
+    url, params = rec.calls[0]
+    assert url.endswith("/api/v1/reports/comparison-metrics")
+    assert params == {"tickers": "AAPL,MSFT,GOOGL"}
+
+
+def test_get_comparison_metrics_needs_two_tickers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fewer than two tickers short-circuits to [error] without an HTTP call."""
+    rec = _install_recorder(monkeypatch, lambda _u, _p: pytest.fail("httpx should not be called"))
+    out = get_comparison_metrics(["AAPL"])
+    assert out.startswith("[error]")
+    assert rec.calls == []
+
+
+def test_get_comparison_metrics_maps_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 4xx/5xx from the endpoint surfaces as the [error] contract."""
+    _install_recorder(monkeypatch, lambda _u, _p: httpx.Response(400, text="bad"))
+    out = get_comparison_metrics(["AAPL", "MSFT", "GOOGL"])
+    assert out.startswith("[error]")

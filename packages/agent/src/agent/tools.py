@@ -209,6 +209,33 @@ def search_news(ticker: str, query: str) -> str:
     return json.dumps(payload, indent=2)
 
 
+def get_comparison_metrics(tickers: list[str]) -> str:
+    """QNT-224: lean N-way comparison metrics, returned as pretty JSON.
+
+    Hits ``GET /api/v1/reports/comparison-metrics?tickers=AAPL,MSFT,GOOGL`` and
+    returns the raw JSON ``{"rows": [...]}`` text. The agent's synthesize node
+    parses it into a ``LeanComparisonAnswer`` and the gather node stashes this
+    text as the grounding substrate (so any number narrate speaks is grounded).
+
+    Returns ``"[error] ..."`` on any failure so the lean synthesize branch can
+    redirect rather than crash — mirrors the ``[error]`` contract the other
+    report tools use.
+    """
+    cleaned = [t.strip().upper() for t in tickers if t and t.strip()]
+    if len(cleaned) < 2:
+        return _format_error("comparison-metrics", "need at least two tickers")
+    url = f"{_base_url()}/api/v1/reports/comparison-metrics"
+    params = {"tickers": ",".join(cleaned)}
+    try:
+        response = httpx.get(url, params=params, timeout=_TIMEOUT_SEC)
+    except Exception as exc:  # noqa: BLE001 — never let a tool exception crash the graph
+        logger.warning("get_comparison_metrics: request failed tickers=%s: %s", cleaned, exc)
+        return _format_error("comparison-metrics", str(exc))
+    if response.status_code >= 400:
+        return _format_error("comparison-metrics", f"http {response.status_code}")
+    return response.text
+
+
 def default_report_tools() -> dict[str, Callable[[str], str]]:
     """REPORT_TOOLS-shaped tool map for ``agent.graph.build_graph``.
 
@@ -235,6 +262,7 @@ __all__ = [
     "default_report_tools",
     "get_company_report",
     "get_company_report_compact",
+    "get_comparison_metrics",
     "get_fundamental_report",
     "get_news_report",
     "get_summary_report",

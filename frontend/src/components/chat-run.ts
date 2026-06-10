@@ -6,6 +6,7 @@ import type {
   ConversationalPayload,
   ExplorationAnswerPayload,
   FocusedAnalysisPayload,
+  LeanComparisonPayload,
   QuickFactPayload,
   RetrievedSource,
   ThesisPayload,
@@ -17,6 +18,7 @@ export type AnswerSurface = {
   thesis: ThesisPayload | null;
   quickFact: QuickFactPayload | null;
   comparison: ComparisonPayload | null;
+  comparisonLean: LeanComparisonPayload | null;
   conversational: ConversationalPayload | null;
   focused: FocusedAnalysisPayload | null;
   exploration: ExplorationAnswerPayload | null;
@@ -36,6 +38,7 @@ export function hasAnswerSurface(run: AnswerSurface): boolean {
       run.thesis ||
         run.quickFact ||
         run.comparison ||
+        run.comparisonLean ||
         run.conversational ||
         run.focused ||
         run.exploration ||

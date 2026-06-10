@@ -114,7 +114,7 @@ from collections.abc import AsyncIterator, Callable
 from datetime import UTC
 from typing import Any
 
-from agent.comparison import ComparisonAnswer
+from agent.comparison import ComparisonAnswer, LeanComparisonAnswer
 from agent.conversational import ConversationalAnswer, domain_redirect
 from agent.eval_scores import push_to_trace_id as push_eval_scores
 from agent.exploration import ExplorationAnswer
@@ -128,7 +128,12 @@ from agent.llm import (
 )
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
-from agent.tools import default_report_tools, get_company_report_compact, search_news
+from agent.tools import (
+    default_report_tools,
+    get_company_report_compact,
+    get_comparison_metrics,
+    search_news,
+)
 from agent.tracing import langfuse, make_callback_handler, propagate_attributes
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
@@ -289,6 +294,24 @@ def _count_comparison_citations(comparison: ComparisonAnswer | None) -> int:
             texts.extend(aspect.supports)
             texts.extend(aspect.challenges)
     return sum(len(_CITATION_PATTERN.findall(text or "")) for text in texts)
+
+
+def _count_lean_comparison_citations(comparison_lean: LeanComparisonAnswer | None) -> int:
+    """Citations for the lean N-way comparison (QNT-224).
+
+    The lean shape carries no prose / ``(source: ...)`` parens — every metric
+    cell IS a verbatim cited value (copied straight from the API, ADR-003). So
+    the count is the number of populated cells across all rows; an ``N/M`` cell
+    has no underlying value and does not count.
+    """
+    if comparison_lean is None:
+        return 0
+    count = 0
+    for row in comparison_lean.rows:
+        for cell in (row.pe, row.rsi, row.net_margin, row.price):
+            if cell and not cell.startswith("N/M"):
+                count += 1
+    return count
 
 
 def _count_focused_citations(focused: FocusedAnalysis | None) -> int:
@@ -729,6 +752,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
             checkpointer=checkpointer,  # type: ignore[arg-type]
             compact_company_tool=compact_company,
             search_news_tool=search_news_tool,
+            comparison_metrics_tool=get_comparison_metrics,
         )
 
         # QNT-181: tag every Langfuse trace with a per-request session_id
@@ -933,6 +957,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
         thesis = state.get("thesis") if isinstance(state, dict) else None
         quick_fact = state.get("quick_fact") if isinstance(state, dict) else None
         comparison = state.get("comparison") if isinstance(state, dict) else None
+        comparison_lean = state.get("comparison_lean") if isinstance(state, dict) else None
         conversational = state.get("conversational") if isinstance(state, dict) else None
         focused = state.get("focused") if isinstance(state, dict) else None
         exploration = state.get("exploration") if isinstance(state, dict) else None
@@ -1018,6 +1043,12 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                 yield _sse("prose_chunk", {"delta": chunk + " "})
                 await asyncio.sleep(0)
             yield _sse("comparison", comparison.model_dump())
+        elif intent == "comparison" and isinstance(comparison_lean, LeanComparisonAnswer):
+            # QNT-224: lean 3-4 way metrics table. No differences field — the
+            # qualitative contrast streams as the narrate node's narrative
+            # bubble (narrative_chunk), so here we only emit the structured
+            # metrics rows the panel renders as a table.
+            yield _sse("comparison_lean", comparison_lean.model_dump())
         elif intent in {"quick_fact", "followup"} and isinstance(quick_fact, QuickFactAnswer):
             # QNT-209: followup reuses the QuickFactAnswer schema (the panel
             # already renders it). The intent event still carries "followup"
@@ -1078,9 +1109,14 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
             yield _sse("retrieved_sources", {"sources": retrieved_sources})
 
         if intent == "comparison":
-            citations_count = _count_comparison_citations(
-                comparison if isinstance(comparison, ComparisonAnswer) else None
-            )
+            # QNT-224: rich (2-ticker) vs lean (3-4 ticker) carry citations
+            # differently — paren-scan the aspect prose vs count metric cells.
+            if isinstance(comparison, ComparisonAnswer):
+                citations_count = _count_comparison_citations(comparison)
+            else:
+                citations_count = _count_lean_comparison_citations(
+                    comparison_lean if isinstance(comparison_lean, LeanComparisonAnswer) else None
+                )
         elif intent in {"quick_fact", "followup"}:
             citations_count = _count_quick_fact_citations(
                 quick_fact if isinstance(quick_fact, QuickFactAnswer) else None
