@@ -29,6 +29,17 @@ Numbers we deliberately ignore:
     * Section/list scaffolding emitted by the model — Markdown-heading
       numerals (``## 1.``, ``1.``, ``2)``) — see ``_strip_scaffold``.
     * Citation tags ``(source: …)`` are letters, not digits.
+    * Time-window labels the model expands from the report's compact period
+      forms — ``5-year low`` (report writes ``5y``), ``52-week high``,
+      ``200-day`` — see ``_strip_period_idiom``. The number is an English
+      window label, not a claim. Stripped symmetrically from thesis and
+      reports, so we are blind to a *fabricated* window ("10-year low" when
+      the report said ``5y``); we accept that false-negative for the same
+      reason as the sign-magnitude blind spot — a misquoted window is not
+      arithmetic, and the per-section structure surfaces gross errors at a
+      higher level. (Real TSLA trace ``b7c2187``, 2026-06-09: the report's
+      ``near 5y low`` became ``near the 5-year low`` in the answer; the bare
+      ``5`` was counted as unsupported and dropped grounding 1.0 → 0.91.)
 
 False-positive risk:
     Single-digit integers like ``5`` or ``7`` that the model uses as a
@@ -70,6 +81,16 @@ _NUMBER_RE = re.compile(
 # Matches "## 1.", "## 1)", "1.", "1)", at start-of-line or after whitespace.
 _SCAFFOLD_RE = re.compile(r"(?m)^(\s*#+\s*\d+[.)]|\s*\d+[.)])(?=\s)")
 
+# Time-window idioms ("5-year low", "52-week high", "200-day average"). The
+# number is part of an English window label, not a numeric claim — see the
+# module docstring's "Numbers we deliberately ignore" note. The unit list is
+# intentionally closed to period words so genuine hyphenated multiples like
+# "20-times earnings" still count.
+_PERIOD_IDIOM_RE = re.compile(
+    r"(?<![\w.])\d+(?:\.\d+)?[-\s](?:year|yr|day|week|wk|month|mo|quarter|qtr)s?\b",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class HallucinationResult:
@@ -99,6 +120,15 @@ def _strip_scaffold(text: str) -> str:
     return _SCAFFOLD_RE.sub("", text)
 
 
+def _strip_period_idiom(text: str) -> str:
+    """Remove time-window labels ("5-year", "52-week") before extraction.
+
+    Replaces with a space so the surrounding text never merges into a new
+    token. See the module docstring for the symmetric-strip blind spot.
+    """
+    return _PERIOD_IDIOM_RE.sub(" ", text)
+
+
 def _canonicalise(token: str) -> str:
     """Normalise a numeric token to its value form.
 
@@ -125,7 +155,7 @@ def extract_numbers(text: str) -> frozenset[str]:
     print it. Idempotent under canonicalisation: ``extract_numbers(text) ==
     extract_numbers(canonicalise_string(text))``.
     """
-    stripped = _strip_scaffold(text)
+    stripped = _strip_period_idiom(_strip_scaffold(text))
     return frozenset(_canonicalise(m) for m in _NUMBER_RE.findall(stripped))
 
 
