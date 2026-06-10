@@ -40,6 +40,7 @@ import {
   type HealthResponse,
   type Intent,
   type IntentEvent,
+  type LeanComparisonPayload,
   type NarrativeChunkEvent,
   type ProseChunkEvent,
   type QuickFactPayload,
@@ -83,6 +84,7 @@ type ChatRun = {
   thesis: ThesisPayload | null;
   quickFact: QuickFactPayload | null;
   comparison: ComparisonPayload | null;
+  comparisonLean: LeanComparisonPayload | null;
   conversational: ConversationalPayload | null;
   focused: FocusedAnalysisPayload | null;
   exploration: ExplorationAnswerPayload | null;
@@ -637,6 +639,74 @@ function ComparisonCard({
   );
 }
 
+// ─── Lean N-way comparison card (QNT-224) ─────────────────────────────────
+//
+// The rich ComparisonCard above renders two fat aspect columns — that does not
+// fit 3-4 tickers in the ~290-450px chat rail. The lean shape is a compact
+// metrics table instead: tickers as columns, metrics as rows. N is capped at 4
+// so the table is at most 5 columns (label + 4 tickers); overflow-x-auto saves
+// the narrow md breakpoint and any long value. Every cell is a pre-formatted
+// string copied verbatim from the API (ADR-003) — the panel computes nothing.
+
+const LEAN_METRIC_ROWS: { key: keyof LeanComparisonPayload["rows"][number]; label: string }[] = [
+  { key: "pe", label: "P/E" },
+  { key: "rsi", label: "RSI" },
+  { key: "net_margin", label: "Net margin" },
+  { key: "price", label: "Price" },
+];
+
+function LeanComparisonCard({
+  comparison,
+  stats,
+}: {
+  comparison: LeanComparisonPayload;
+  stats: DoneEvent | null;
+}) {
+  const { rows } = comparison;
+  const tickerHeader = rows.map((r) => r.ticker).join(" vs ");
+  return (
+    <section className="rounded border border-zinc-800 bg-zinc-900/40">
+      <header className="flex items-baseline justify-between gap-2 border-b border-zinc-800 px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider text-zinc-400">
+        <span>Comparison · {tickerHeader || "session"}</span>
+        {stats && (
+          <span className="text-zinc-500">
+            {stats.tools_count} sources · {stats.citations_count} cited
+          </span>
+        )}
+      </header>
+
+      <div className="overflow-x-auto p-3">
+        <table className="w-full border-collapse font-mono text-[11px] tabular-nums">
+          <thead>
+            <tr className="text-zinc-300">
+              <th className="px-2 py-1 text-left font-normal text-[10px] uppercase tracking-wider text-zinc-500">
+                Metric
+              </th>
+              {rows.map((r) => (
+                <th key={r.ticker} className="px-2 py-1 text-right font-semibold">
+                  {r.ticker}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {LEAN_METRIC_ROWS.map(({ key, label }) => (
+              <tr key={key} className="border-t border-zinc-800/60">
+                <td className="px-2 py-1 text-left text-zinc-400">{label}</td>
+                {rows.map((r) => (
+                  <td key={r.ticker} className="px-2 py-1 text-right text-zinc-200">
+                    {r[key]}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 // ─── Conversational redirect card (QNT-156) ───────────────────────────────
 //
 // Used both for greetings/off-domain asks AND as the deterministic fallback
@@ -1009,6 +1079,7 @@ function RunBlock({
     run.thesis !== null ||
     run.quickFact !== null ||
     run.comparison !== null ||
+    run.comparisonLean !== null ||
     run.conversational !== null ||
     run.focused !== null;
   const showStandaloneProse = !hasCard && proseText;
@@ -1070,6 +1141,9 @@ function RunBlock({
       {/* QNT-156: comparison card — renders when intent=comparison */}
       {run.comparison && (
         <ComparisonCard comparison={run.comparison} stats={run.stats} />
+      )}
+      {run.comparisonLean && (
+        <LeanComparisonCard comparison={run.comparisonLean} stats={run.stats} />
       )}
 
       {/* QNT-149: quick-fact card — renders when intent=quick_fact */}
@@ -1319,6 +1393,7 @@ export function ChatPanel() {
           thesis: null,
           quickFact: null,
           comparison: null,
+          comparisonLean: null,
           conversational: null,
           focused: null,
           exploration: null,
@@ -1349,6 +1424,7 @@ export function ChatPanel() {
         thesis: null,
         quickFact: null,
         comparison: null,
+        comparisonLean: null,
         conversational: null,
         focused: null,
         exploration: null,
@@ -1420,6 +1496,9 @@ export function ChatPanel() {
           } else if (event === "comparison") {
             const ev = data as ComparisonPayload;
             updateRun(id, (r) => ({ ...r, comparison: ev }));
+          } else if (event === "comparison_lean") {
+            const ev = data as LeanComparisonPayload;
+            updateRun(id, (r) => ({ ...r, comparisonLean: ev }));
           } else if (event === "conversational") {
             const ev = data as ConversationalPayload;
             updateRun(id, (r) => ({ ...r, conversational: ev }));

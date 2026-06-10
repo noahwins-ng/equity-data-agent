@@ -46,7 +46,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from shared.tickers import TICKERS
 
-from agent.comparison import ComparisonAnswer
+from agent.comparison import ComparisonAnswer, LeanComparisonAnswer, LeanComparisonRow
 from agent.conversational import ConversationalAnswer, domain_redirect
 from agent.evals.hallucination import HallucinationResult
 from agent.evals.hallucination import check as check_grounding
@@ -88,7 +88,16 @@ ToolFn = Callable[[str], str]
 # fit the single-arg ``ToolFn`` plan-surface dispatch, so it travels as its own
 # typed callable rather than as a ``REPORT_TOOLS`` entry.
 SearchToolFn = Callable[[str, str], str]
+# QNT-224: lean comparison-metrics fetch takes the full ticker list (2-4) in one
+# call and returns the JSON metrics payload; like search_news it travels outside
+# the single-arg ``ToolFn`` plan-surface map.
+ComparisonMetricsToolFn = Callable[[list[str]], str]
 ReportToolName = Literal["company", "technical", "fundamental", "news"]
+
+# QNT-224: N-way comparison band. 2 tickers keep the rich four-aspect bundle
+# (unchanged); 3-4 take the lean metrics-table path; 5+ redirect.
+_MIN_COMPARISON_TICKERS = 2
+_MAX_COMPARISON_TICKERS = 4
 
 
 class ThesisPlan(BaseModel):
@@ -364,6 +373,7 @@ class AgentState(TypedDict):
     thesis: NotRequired[Thesis | None]
     quick_fact: NotRequired[QuickFactAnswer | None]
     comparison: NotRequired[ComparisonAnswer | None]
+    comparison_lean: NotRequired[LeanComparisonAnswer | None]
     conversational: NotRequired[ConversationalAnswer | None]
     focused: NotRequired[FocusedAnalysis | None]
     exploration: NotRequired[ExplorationAnswer | None]
@@ -840,6 +850,40 @@ def _coerce_comparison(response: object) -> ComparisonAnswer | None:
     return None
 
 
+def _build_lean_comparison(
+    metrics_json: str | None, tickers: list[str]
+) -> LeanComparisonAnswer | None:
+    """QNT-224: parse the lean comparison-metrics JSON into a structured answer.
+
+    ``metrics_json`` is the ``{"rows": [...]}`` text gather stashed from the API
+    (already in requested-ticker order). Returns None on a missing / malformed /
+    empty payload so synthesize can redirect. No arithmetic, no LLM — each row
+    is a pre-formatted metrics row copied straight from the API (ADR-003).
+    """
+    if not metrics_json:
+        return None
+    try:
+        payload = json.loads(metrics_json)
+    except (ValueError, TypeError):
+        logger.warning("lean comparison: metrics JSON not parseable")
+        return None
+    raw_rows = payload.get("rows") if isinstance(payload, dict) else None
+    if not isinstance(raw_rows, list) or not raw_rows:
+        return None
+    rows: list[LeanComparisonRow] = []
+    for raw in raw_rows:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            rows.append(LeanComparisonRow.model_validate(raw))
+        except ValidationError:
+            logger.warning("lean comparison: row failed validation: %r", raw)
+            return None
+    if len(rows) < _MIN_COMPARISON_TICKERS:
+        return None
+    return LeanComparisonAnswer(rows=rows)
+
+
 def _coerce_conversational(response: object) -> ConversationalAnswer | None:
     """Normalise whatever ``llm.invoke`` hands back into a ``ConversationalAnswer``."""
     if isinstance(response, ConversationalAnswer):
@@ -927,20 +971,30 @@ def _detect_ambiguity(
 
 
 def _resolve_comparison_tickers(primary: str, question: str) -> list[str]:
-    """Return up to 2 tickers to compare, in user-named order.
+    """Return up to 4 tickers to compare, in user-named order (QNT-224).
 
     Ticker symbols mentioned in ``question`` come first (in the order the
-    user wrote them); ``primary`` (the URL-derived ticker the chat panel
-    sends) is appended when missing so a question like "compare to AAPL"
-    fired from /ticker/NVDA still works. The list is capped at 2 — three or
-    more named tickers fall out of scope per the QNT-156 ticket and trigger
-    a conversational redirect.
+    user wrote them). ``primary`` (the URL-derived ticker the chat panel
+    sends) is appended ONLY to reach the two-ticker minimum -- so a question
+    like "compare to AAPL" fired from /ticker/NVDA still works -- and never to
+    inflate a request the user already filled. Without the ``< _MIN`` guard,
+    a 2-named compare from /ticker/NVDA ("compare AAPL and MSFT") would gain a
+    third (NVDA) and silently flip from the rich 2-ticker card to a lean 3-way
+    that includes a ticker the user never named. The list is capped at
+    ``_MAX_COMPARISON_TICKERS`` (4): 2 takes the rich four-aspect bundle,
+    3-4 the lean metrics table. Five or more named tickers are handled
+    upstream (plan_node) as a conversational redirect, so they never reach
+    this cap.
     """
     chosen: list[str] = list(extract_tickers(question))
     primary_upper = primary.upper()
-    if primary_upper in TICKERS and primary_upper not in chosen:
+    if (
+        primary_upper in TICKERS
+        and primary_upper not in chosen
+        and len(chosen) < _MIN_COMPARISON_TICKERS
+    ):
         chosen.append(primary_upper)
-    return chosen[:2]
+    return chosen[:_MAX_COMPARISON_TICKERS]
 
 
 def _followup_is_metric_ask(question: str) -> bool:
@@ -1022,6 +1076,14 @@ def _assistant_surface(state: AgentState, narrative: str | None) -> str | None:
             part for part in (prefix or str(differences), "Structured payload: comparison") if part
         ).strip()
 
+    comparison_lean = state.get("comparison_lean")
+    if comparison_lean is not None:
+        # QNT-224: the lean shape has no differences field — the spoken
+        # contrast is the narrative. Carry it (or a payload marker) so a
+        # followup turn has a transcript anchor.
+        ref = "Structured payload: comparison_lean"
+        return "\n".join(part for part in (prefix, ref) if part).strip()
+
     thesis = state.get("thesis")
     if thesis is not None:
         verdict = getattr(thesis, "verdict", "thesis")
@@ -1089,6 +1151,7 @@ def build_graph(
     checkpointer: BaseCheckpointSaver | None = None,
     compact_company_tool: ToolFn | None = None,
     search_news_tool: SearchToolFn | None = None,
+    comparison_metrics_tool: ComparisonMetricsToolFn | None = None,
 ) -> CompiledStateGraph:
     """Compile the classify -> plan -> gather -> synthesize graph (QNT-149, QNT-159).
 
@@ -1125,6 +1188,12 @@ def build_graph(
     ``_NEWS_SEARCH_INTENTS`` (news / quick_fact / thesis). Generic news asks
     leave the flag False and keep the canned digest. None ⇒ canned-digest-only
     (CLI / eval / tests).
+
+    QNT-224: ``comparison_metrics_tool`` is an optional ``(list[str]) -> str``
+    callable hitting the lean comparison-metrics endpoint. Fired only on a 3-4
+    ticker comparison; the rich two-ticker path never touches it. None ⇒ a 3-4
+    way compare degrades to a conversational redirect (CLI / eval / non-wired
+    tests); the rich two-ticker path is unaffected.
     """
 
     def _effective_tools(intent: Intent) -> dict[str, ToolFn]:
@@ -1255,13 +1324,27 @@ def build_graph(
         # conversational redirect with the right hint).
         comparison_tickers: list[str] = []
         if intent == "comparison":
-            comparison_tickers = _resolve_comparison_tickers(ticker, question)
-            if len(comparison_tickers) < 2:
+            # QNT-224: 5+ named tickers exceed the lean cap -> redirect. Gate
+            # here (not synthesize) so gather never fetches metrics for a set
+            # we will refuse. Leaving comparison_tickers empty routes through
+            # the existing <2 guard; synthesize re-reads the named count to
+            # pick the "too many" vs "couldn't find two" message.
+            named = extract_tickers(question)
+            if len(named) > _MAX_COMPARISON_TICKERS:
                 logger.info(
-                    "plan %s: comparison needs 2 tickers, found %s — synthesize will redirect",
+                    "plan %s: comparison named %d tickers (>%d) — synthesize will redirect",
                     ticker,
-                    comparison_tickers,
+                    len(named),
+                    _MAX_COMPARISON_TICKERS,
                 )
+            else:
+                comparison_tickers = _resolve_comparison_tickers(ticker, question)
+                if len(comparison_tickers) < _MIN_COMPARISON_TICKERS:
+                    logger.info(
+                        "plan %s: comparison needs 2 tickers, found %s — synthesize will redirect",
+                        ticker,
+                        comparison_tickers,
+                    )
 
         # Thesis uses a structured-output planner so focused questions avoid
         # irrelevant report calls while still carrying a rationale narrate can
@@ -1363,7 +1446,7 @@ def build_graph(
 
         if intent == "comparison":
             comparison_tickers = state.get("comparison_tickers", [])
-            if len(comparison_tickers) < 2:
+            if len(comparison_tickers) < _MIN_COMPARISON_TICKERS:
                 # Fall through with empty bundle — synthesize will redirect.
                 logger.info(
                     "gather %s: comparison needs 2 tickers, got %s",
@@ -1371,6 +1454,34 @@ def build_graph(
                     comparison_tickers,
                 )
                 return {"reports": {}, "errors": {}, "reports_by_ticker": {}}
+
+            # QNT-224: 3-4 tickers take the lean metrics path — ONE fetch of a
+            # compact metrics row per ticker, not a full bundle each. The JSON
+            # text is stashed into ``reports`` so _runtime_report_texts (and
+            # thus the narrate grounding check) sees the numbers the lean card
+            # and narration quote. reports_by_ticker stays empty (no rich
+            # bundle), so synthesize routes to the lean branch.
+            if len(comparison_tickers) > _MIN_COMPARISON_TICKERS:
+                if comparison_metrics_tool is None:
+                    logger.info(
+                        "gather %s: 3-4 way comparison but no metrics tool wired — redirect",
+                        ticker,
+                    )
+                    return {"reports": {}, "errors": {}, "reports_by_ticker": {}}
+                metrics_json = comparison_metrics_tool(comparison_tickers)
+                if _is_tool_error(metrics_json):
+                    logger.warning("gather %s: comparison-metrics failed: %s", ticker, metrics_json)
+                    return {
+                        "reports": {},
+                        "errors": {"comparison_metrics": metrics_json},
+                        "reports_by_ticker": {},
+                    }
+                logger.info("gather %s: lean comparison metrics for %s", ticker, comparison_tickers)
+                return {
+                    "reports": {"comparison_metrics": metrics_json},
+                    "errors": {},
+                    "reports_by_ticker": {},
+                }
 
             reports_by_ticker: dict[str, dict[str, str]] = {}
             errors: dict[str, str] = {}
@@ -1540,6 +1651,7 @@ def build_graph(
                 "thesis": None,
                 "quick_fact": None,
                 "comparison": None,
+                "comparison_lean": None,
                 "conversational": None,
                 "focused": None,
                 "exploration": None,
@@ -1670,10 +1782,39 @@ def build_graph(
         if intent == "comparison":
             comparison_tickers = state.get("comparison_tickers", [])
             reports_by_ticker = state.get("reports_by_ticker", {})
-            if len(comparison_tickers) < 2:
+            if len(comparison_tickers) < _MIN_COMPARISON_TICKERS:
+                # QNT-224: distinguish "too many" (5+, plan emptied the list)
+                # from "couldn't find two". Re-read the named count so the
+                # redirect tells the user the actual constraint.
+                if len(extract_tickers(question)) > _MAX_COMPARISON_TICKERS:
+                    return _fallback(
+                        "I can compare up to four tickers at a time — "
+                        "pick the four you care about most."
+                    )
                 return _fallback(
                     "I can compare two tickers I cover, but I couldn't find two in your question."
                 )
+
+            # QNT-224: 3-4 tickers take the lean metrics path. The table is
+            # pure pre-computed data (math in SQL, formatted in the API), so
+            # per ADR-003 there is NO LLM synthesis call — we parse the metrics
+            # JSON gather stashed and build the answer deterministically. The
+            # narrate node speaks the qualitative contrast over to_markdown().
+            if len(comparison_tickers) > _MIN_COMPARISON_TICKERS:
+                metrics_json = (state.get("reports") or {}).get("comparison_metrics")
+                lean = _build_lean_comparison(metrics_json, comparison_tickers)
+                if lean is None:
+                    return _fallback("I couldn't pull comparison metrics right now.")
+                payload = _empty_payload()
+                payload["comparison_lean"] = lean
+                logger.info(
+                    "synthesize %s: confidence=%s comparison_lean=%s",
+                    ticker,
+                    confidence,
+                    [r.ticker for r in lean.rows],
+                )
+                return payload
+
             # Need at least one report for each ticker — comparing an empty
             # column to anything is just a half thesis.
             if not all(reports_by_ticker.get(t) for t in comparison_tickers):
@@ -1979,6 +2120,7 @@ def build_graph(
             state.get("thesis")
             or state.get("quick_fact")
             or state.get("comparison")
+            or state.get("comparison_lean")
             or state.get("focused")
             or state.get("exploration")
             or state.get("conversational")

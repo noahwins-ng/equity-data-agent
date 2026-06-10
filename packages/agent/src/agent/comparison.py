@@ -136,4 +136,63 @@ class ComparisonAnswer(BaseModel):
         return "\n".join(parts).strip()
 
 
-__all__ = ["ComparisonAnswer", "ComparisonSection", "ComparisonSource"]
+# ─── QNT-224: lean N-way comparison shape (3-4 tickers) ───────────────────
+#
+# Distinct from the rich two-ticker ComparisonAnswer above: a 3-4 way compare
+# is about a few specific dimensions across names, not a full four-aspect
+# thesis per name (that is a token explosion past two tickers). The lean shape
+# is a compact metrics row per ticker, computed in SQL and formatted in the
+# API (api.comparison_metrics) — the agent renders it verbatim and the narrate
+# node speaks the qualitative contrast. No LLM synthesis call, no arithmetic
+# here: every cell is a pre-formatted string copied straight from the API.
+
+
+class LeanComparisonRow(BaseModel):
+    """One ticker's compact metrics row in a lean N-way comparison.
+
+    Field set mirrors api.comparison_metrics.ComparisonMetricRow. Values are
+    display-ready strings (e.g. ``'28.4'``, ``'$182.50'``, ``'N/M (...)'``) —
+    the agent never re-derives or re-formats them.
+    """
+
+    ticker: str = Field(description="Ticker symbol this row describes.")
+    pe: str = Field(description="Latest quarterly P/E, pre-formatted.")
+    rsi: str = Field(description="Latest daily RSI-14, pre-formatted.")
+    net_margin: str = Field(description="Latest quarterly net margin, pre-formatted.")
+    price: str = Field(description="Latest daily close, pre-formatted.")
+
+
+class LeanComparisonAnswer(BaseModel):
+    """Lean 3-4 way comparison: a metrics table, one row per ticker.
+
+    Built deterministically from the API metrics payload (no LLM call). The
+    narrate node reads :meth:`to_markdown` to speak the qualitative contrast,
+    and the chat panel renders the rows as a compact metrics table.
+    """
+
+    rows: list[LeanComparisonRow] = Field(
+        description="One metrics row per ticker, in the order the user named them.",
+    )
+
+    def to_markdown(self) -> str:
+        """Render the metrics rows as a markdown table.
+
+        narrate consumes this as its substrate, so every number the spoken
+        paragraph might quote is present here (and, via the gather stash, in
+        the runtime grounding report set).
+        """
+        header = "| Ticker | P/E | RSI | Net margin | Price |"
+        sep = "| --- | --- | --- | --- | --- |"
+        body = [
+            f"| {r.ticker} | {r.pe} | {r.rsi} | {r.net_margin} | {r.price} |" for r in self.rows
+        ]
+        return "\n".join(["# COMPARISON METRICS", "", header, sep, *body, "", DISCLAIMER]).strip()
+
+
+__all__ = [
+    "ComparisonAnswer",
+    "ComparisonSection",
+    "ComparisonSource",
+    "LeanComparisonAnswer",
+    "LeanComparisonRow",
+]

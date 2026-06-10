@@ -346,6 +346,23 @@ export type ComparisonPayload = {
   differences: string;
 };
 
+// QNT-224: lean N-way comparison (3-4 tickers). Distinct from the rich
+// two-ticker ComparisonPayload above — a compact metrics row per ticker
+// (pre-formatted strings; math in SQL, formatted in the API) rendered as a
+// table. Delivered on its own ``comparison_lean`` event; the qualitative
+// contrast arrives as the narrate bubble, so there is no differences field.
+export type LeanComparisonRow = {
+  ticker: string;
+  pe: string;
+  rsi: string;
+  net_margin: string;
+  price: string;
+};
+
+export type LeanComparisonPayload = {
+  rows: LeanComparisonRow[];
+};
+
 // QNT-156: conversational response shape — short prose answer + an
 // optional list of 3 example questions. Used both for greetings/off-domain
 // asks AND as the deterministic fallback when any other intent fails to

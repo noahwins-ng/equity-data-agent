@@ -988,6 +988,73 @@ def test_comparison_intent_emits_comparison_event_not_thesis(
     assert done_data["citations_count"] >= 2
 
 
+def test_lean_comparison_emits_comparison_lean_event_and_counts_cells(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QNT-224: a 3-4 way compare returns ``comparison_lean``; the SSE emits a
+    ``comparison_lean`` event (rows, no rich ``comparison``) and the done
+    citations_count is the number of populated (non-N/M) metric cells."""
+    from agent.comparison import LeanComparisonAnswer, LeanComparisonRow
+
+    lean = LeanComparisonAnswer(
+        rows=[
+            LeanComparisonRow(
+                ticker="AAPL", pe="28.4", rsi="65.2", net_margin="24.1%", price="$182.50"
+            ),
+            LeanComparisonRow(
+                ticker="MSFT", pe="34.1", rsi="58.0", net_margin="36.8%", price="$410.12"
+            ),
+            # One N/M cell -> does not count toward citations.
+            LeanComparisonRow(
+                ticker="GOOGL",
+                pe="N/M (near-zero earnings)",
+                rsi="47.3",
+                net_margin="28.0%",
+                price="$151.00",
+            ),
+        ]
+    )
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:  # noqa: ARG001
+        graph = MagicMock()
+        graph.invoke.return_value = {
+            "ticker": "AAPL",
+            "intent": "comparison",
+            "plan": [],
+            "reports": {"comparison_metrics": '{"rows": []}'},
+            "reports_by_ticker": {},
+            "intent_path": ["classify", "plan", "gather", "synthesize", "narrate"],
+            "errors": {},
+            "thesis": None,
+            "quick_fact": None,
+            "comparison": None,
+            "comparison_lean": lean,
+            "conversational": None,
+            "confidence": 1.0,
+        }
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    r = client.post(
+        "/api/v1/agent/chat",
+        json={"ticker": "AAPL", "message": "Compare AAPL, MSFT and GOOGL."},
+    )
+    frames = _parse_sse(r.text)
+    events = [name for name, _ in frames]
+
+    assert "comparison_lean" in events
+    assert "comparison" not in events
+    lean_data = next(data for name, data in frames if name == "comparison_lean")
+    assert [row["ticker"] for row in lean_data["rows"]] == ["AAPL", "MSFT", "GOOGL"]
+
+    done_data = frames[-1][1]
+    assert done_data["intent"] == "comparison"
+    # 12 cells total, one N/M GOOGL P/E excluded -> 11 cited.
+    assert done_data["citations_count"] == 11
+
+
 def test_conversational_intent_emits_conversational_event(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
