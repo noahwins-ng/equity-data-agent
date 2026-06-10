@@ -33,6 +33,8 @@ from shared.tickers import TICKERS
 
 from api.clickhouse import get_client
 from api.formatters import format_currency, format_pct, format_ratio
+from api.templates.fundamental import compute_valuation_label
+from api.templates.technical import compute_trend_label
 
 # Cap mirrors the agent's N-way cap (graph._resolve_comparison_tickers). The
 # endpoint is lenient about extra symbols but never builds more than this.
@@ -48,6 +50,20 @@ class ComparisonMetricRow(BaseModel):
     rsi: str = Field(description="Latest daily RSI-14, e.g. '65.2'.")
     net_margin: str = Field(description="Latest quarterly net margin, e.g. '24.1%'.")
     price: str = Field(description="Latest daily close, e.g. '$182.50'.")
+    # QNT-224 follow-up: the interpretive verdicts the fundamental + technical
+    # reports already compute, surfaced verbatim so the lean table reads like an
+    # overview, not just raw metrics. None when the report would suppress the
+    # label (insufficient context / N/M).
+    valuation_label: str | None = Field(
+        default=None, description="Premium / Inline / Discounted, from the fundamental report."
+    )
+    trend_daily: str | None = Field(
+        default=None, description="Daily Uptrend / Sideways / Downtrend, from the technical report."
+    )
+    trend_weekly: str | None = Field(
+        default=None,
+        description="Weekly Uptrend / Sideways / Downtrend, from the technical report.",
+    )
 
 
 class ComparisonMetricsResponse(BaseModel):
@@ -137,6 +153,9 @@ def build_comparison_metrics(tickers: list[str]) -> ComparisonMetricsResponse:
                 rsi=format_ratio(rsi_by_ticker.get(ticker), precision=1),
                 net_margin=format_pct(fund.get("margin"), precision=1),
                 price=format_currency(price_by_ticker.get(ticker)),
+                valuation_label=compute_valuation_label(ticker),
+                trend_daily=compute_trend_label(ticker, "daily"),
+                trend_weekly=compute_trend_label(ticker, "weekly"),
             )
         )
     return ComparisonMetricsResponse(rows=rows)
