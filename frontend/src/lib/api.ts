@@ -357,6 +357,10 @@ export type LeanComparisonRow = {
   rsi: string;
   net_margin: string;
   price: string;
+  // QNT-224 follow-up: interpretive verdicts from the fundamental + technical
+  // reports, rendered as colored pills. null when the report suppressed it.
+  valuation_label: AspectLabel | null;
+  trend_label: AspectLabel | null;
 };
 
 export type LeanComparisonPayload = {

@@ -77,6 +77,16 @@ def _install(monkeypatch: pytest.MonkeyPatch, fake: _TableFake) -> None:
     monkeypatch.setattr(cm_module, "get_client", lambda: fake)
 
 
+@pytest.fixture(autouse=True)
+def _stub_labels(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QNT-224 follow-up: the valuation/trend labels reuse the report DB-fetch
+    path (their own ``get_client``), so stub them off by default to keep the
+    metrics-assembly tests focused on the three argMax queries. One dedicated
+    test overrides these to assert the labels propagate into the row."""
+    monkeypatch.setattr(cm_module, "compute_valuation_label", lambda _t: None)
+    monkeypatch.setattr(cm_module, "compute_trend_label", lambda _t: None)
+
+
 def test_three_way_returns_formatted_rows_in_order(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -107,6 +117,8 @@ def test_three_way_returns_formatted_rows_in_order(
         "rsi": "65.2",
         "net_margin": "24.1%",
         "price": "$182.50",
+        "valuation_label": None,
+        "trend_label": None,
     }
     assert rows[1]["price"] == "$410.12"
     assert rows[2]["net_margin"] == "28.0%"
@@ -183,3 +195,39 @@ def test_fewer_than_two_valid_tickers_is_400(
     resp = client.get("/api/v1/reports/comparison-metrics?tickers=AAPL,NOPE")
     assert resp.status_code == 400
     assert fake.queries == []
+
+
+def test_valuation_and_trend_labels_propagate_into_rows(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # QNT-224 follow-up: the labels the fundamental + technical reports compute
+    # ride into the row verbatim; None (suppressed/N-M) is preserved as null.
+    fake = _TableFake(
+        {
+            "fundamental_summary": _fundamentals(
+                [("AAPL", 28.4, 24.1), ("MSFT", 34.1, 36.8), ("GOOGL", 24.7, 28.0)]
+            ),
+            "technical_indicators_daily": _rsi([("AAPL", 65.0), ("MSFT", 58.0), ("GOOGL", 47.0)]),
+            "ohlcv_raw": _price([("AAPL", 182.5), ("MSFT", 410.0), ("GOOGL", 151.0)]),
+        }
+    )
+    _install(monkeypatch, fake)
+    monkeypatch.setattr(
+        cm_module,
+        "compute_valuation_label",
+        lambda t: {"AAPL": "Premium", "MSFT": "Inline"}.get(t),  # GOOGL -> None (suppressed)
+    )
+    monkeypatch.setattr(
+        cm_module,
+        "compute_trend_label",
+        lambda t: {"AAPL": "Uptrend", "MSFT": "Sideways", "GOOGL": "Downtrend"}.get(t),
+    )
+
+    resp = client.get("/api/v1/reports/comparison-metrics?tickers=AAPL,MSFT,GOOGL")
+    assert resp.status_code == 200
+    rows = {r["ticker"]: r for r in resp.json()["rows"]}
+    assert rows["AAPL"]["valuation_label"] == "Premium"
+    assert rows["AAPL"]["trend_label"] == "Uptrend"
+    assert rows["MSFT"]["valuation_label"] == "Inline"
+    assert rows["GOOGL"]["valuation_label"] is None  # suppressed -> null, not a string
+    assert rows["GOOGL"]["trend_label"] == "Downtrend"

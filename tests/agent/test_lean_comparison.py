@@ -45,6 +45,9 @@ def _fake_metrics_tool(rows: dict[str, dict[str, str]] | None = None):
     requested ticker. ``rows`` overrides specific tickers' cells."""
     rows = rows or {}
 
+    labels = ["Premium", "Inline", "Discounted", "Inline"]
+    trends = ["Uptrend", "Sideways", "Downtrend", "Sideways"]
+
     def tool(tickers: list[str]) -> str:
         out = []
         for i, t in enumerate(tickers):
@@ -54,6 +57,8 @@ def _fake_metrics_tool(rows: dict[str, dict[str, str]] | None = None):
                 "rsi": f"6{i}.2",
                 "net_margin": f"2{i}.1%",
                 "price": f"${100 + i}.50",
+                "valuation_label": labels[i % len(labels)],
+                "trend_label": trends[i % len(trends)],
             }
             default.update(rows.get(t, {}))
             out.append(default)
@@ -90,6 +95,12 @@ def test_three_ticker_comparison_produces_lean_answer(
     lean = result["comparison_lean"]
     assert isinstance(lean, LeanComparisonAnswer)
     assert [r.ticker for r in lean.rows] == ["AAPL", "MSFT", "GOOGL"]
+    # QNT-224 follow-up: the report-derived labels ride through verbatim and
+    # land in to_markdown so narrate (and the grounding substrate) see them.
+    assert lean.rows[0].valuation_label == "Premium"
+    assert lean.rows[0].trend_label == "Uptrend"
+    md = lean.to_markdown()
+    assert "Premium" in md and "Uptrend" in md
     # The rich two-ticker payload is NOT produced on this path.
     assert result["comparison"] is None
     # The synthesize LLM (structured output) was never called for the lean path.

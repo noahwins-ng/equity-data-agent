@@ -506,6 +506,39 @@ def _render_period_section(
     ]
 
 
+def compute_valuation_label(ticker: str) -> str | None:
+    """QNT-224 follow-up: the Premium / Inline / Discounted verdict the
+    fundamental report prints on its QUARTERLY P/E line, computed standalone
+    for the lean N-way comparison.
+
+    Reuses the exact same path the report uses -- ``_fetch_rows`` (quarterly
+    subset) for the P/E own-history, sector peers + ``_fetch_peer_medians`` for
+    the peer median, then ``_multiple_label`` -- so the lean table's label
+    agrees with the fundamental report and the rich comparison card verbatim
+    (no second source of truth). Returns None when context is insufficient
+    (unknown ticker, no quarterly rows, or the label is suppressed because the
+    own-history and peer signals disagree).
+    """
+    if ticker not in TICKERS:
+        return None
+    quarterly = [r for r in _fetch_rows(ticker) if r.get("period_type") == "quarterly"]
+    if not quarterly:
+        return None
+    pe_hist = [
+        r["pe_ratio"]
+        for r in quarterly
+        if r["pe_ratio"] is not None and math.isfinite(r["pe_ratio"])
+    ]
+    sector = TICKER_METADATA.get(ticker, {}).get("sector")
+    peers = [
+        t for t in TICKERS if t != ticker and TICKER_METADATA.get(t, {}).get("sector") == sector
+    ]
+    peer_median_pe = (
+        _fetch_peer_medians(peers).get("pe_ratio") if len(peers) >= _MIN_PEERS_FOR_MEDIAN else None
+    )
+    return _multiple_label(quarterly[0]["pe_ratio"], pe_hist, peer_median_pe)
+
+
 def build_fundamental_report(ticker: str) -> str:
     """Build a quarterly + annual + TTM fundamental report for ``ticker``."""
     if ticker not in TICKERS:

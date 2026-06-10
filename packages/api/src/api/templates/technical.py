@@ -276,6 +276,35 @@ def _render_section(label: str, rows: list[dict[str, Any]]) -> list[str]:
     ]
 
 
+def compute_trend_label(ticker: str) -> str | None:
+    """QNT-224 follow-up: the Uptrend / Sideways / Downtrend word the technical
+    report derives for its DAILY timeframe, computed standalone for the lean
+    N-way comparison.
+
+    Reuses the report's exact path -- ``_fetch_rows`` (latest two daily bars)
+    + ``_trend_label`` -- then strips the parenthetical derivation, so the lean
+    table's trend label agrees with the daily technical report verbatim.
+    Returns None when the ticker is unknown or there is not enough history
+    (no daily rows, or ``_trend_label`` returned its N/M string).
+    """
+    if ticker not in TICKERS:
+        return None
+    rows = _fetch_rows(
+        ticker, "equity_derived.technical_indicators_daily", "equity_raw.ohlcv_raw", "date"
+    )
+    if not rows:
+        return None
+    prior = rows[1] if len(rows) > 1 else None
+    label = _trend_label(
+        float(rows[0]["close"]),
+        float(prior["close"]) if prior else None,
+        rows[0]["sma_20"],
+        rows[0]["sma_50"],
+    )
+    word = label.split(" ", 1)[0]
+    return word if word in ("Uptrend", "Sideways", "Downtrend") else None
+
+
 def build_technical_report(ticker: str) -> str:
     """Build a daily + weekly + monthly technical report for ``ticker``.
 
