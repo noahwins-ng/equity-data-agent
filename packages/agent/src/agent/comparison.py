@@ -164,7 +164,12 @@ class LeanComparisonRow(BaseModel):
     # fundamental + technical reports (Premium/Inline/Discounted,
     # Uptrend/Sideways/Downtrend). None when the report suppressed the label.
     valuation_label: str | None = Field(default=None, description="Premium / Inline / Discounted.")
-    trend_label: str | None = Field(default=None, description="Uptrend / Sideways / Downtrend.")
+    trend_daily: str | None = Field(
+        default=None, description="Daily Uptrend / Sideways / Downtrend."
+    )
+    trend_weekly: str | None = Field(
+        default=None, description="Weekly Uptrend / Sideways / Downtrend."
+    )
 
 
 class LeanComparisonAnswer(BaseModel):
@@ -186,11 +191,14 @@ class LeanComparisonAnswer(BaseModel):
         paragraph might quote is present here (and, via the gather stash, in
         the runtime grounding report set).
         """
-        header = "| Ticker | P/E | RSI | Net margin | Price | Valuation | Trend |"
-        sep = "| --- | --- | --- | --- | --- | --- | --- |"
+        header = (
+            "| Ticker | P/E | RSI | Net margin | Price | Valuation | "
+            "Trend (daily) | Trend (weekly) |"
+        )
+        sep = "| --- | --- | --- | --- | --- | --- | --- | --- |"
         body = [
             f"| {r.ticker} | {r.pe} | {r.rsi} | {r.net_margin} | {r.price} | "
-            f"{r.valuation_label or 'N/M'} | {r.trend_label or 'N/M'} |"
+            f"{r.valuation_label or 'N/M'} | {r.trend_daily or 'N/M'} | {r.trend_weekly or 'N/M'} |"
             for r in self.rows
         ]
         return "\n".join(["# COMPARISON METRICS", "", header, sep, *body, "", DISCLAIMER]).strip()

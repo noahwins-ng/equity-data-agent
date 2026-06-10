@@ -359,8 +359,10 @@ export type LeanComparisonRow = {
   price: string;
   // QNT-224 follow-up: interpretive verdicts from the fundamental + technical
   // reports, rendered as colored pills. null when the report suppressed it.
+  // Trend is split by timeframe (daily = short-term, weekly = medium-term).
   valuation_label: AspectLabel | null;
-  trend_label: AspectLabel | null;
+  trend_daily: AspectLabel | null;
+  trend_weekly: AspectLabel | null;
 };
 
 export type LeanComparisonPayload = {

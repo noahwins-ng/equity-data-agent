@@ -57,8 +57,12 @@ class ComparisonMetricRow(BaseModel):
     valuation_label: str | None = Field(
         default=None, description="Premium / Inline / Discounted, from the fundamental report."
     )
-    trend_label: str | None = Field(
-        default=None, description="Uptrend / Sideways / Downtrend, from the technical report."
+    trend_daily: str | None = Field(
+        default=None, description="Daily Uptrend / Sideways / Downtrend, from the technical report."
+    )
+    trend_weekly: str | None = Field(
+        default=None,
+        description="Weekly Uptrend / Sideways / Downtrend, from the technical report.",
     )
 
 
@@ -150,7 +154,8 @@ def build_comparison_metrics(tickers: list[str]) -> ComparisonMetricsResponse:
                 net_margin=format_pct(fund.get("margin"), precision=1),
                 price=format_currency(price_by_ticker.get(ticker)),
                 valuation_label=compute_valuation_label(ticker),
-                trend_label=compute_trend_label(ticker),
+                trend_daily=compute_trend_label(ticker, "daily"),
+                trend_weekly=compute_trend_label(ticker, "weekly"),
             )
         )
     return ComparisonMetricsResponse(rows=rows)

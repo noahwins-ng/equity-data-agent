@@ -276,22 +276,32 @@ def _render_section(label: str, rows: list[dict[str, Any]]) -> list[str]:
     ]
 
 
-def compute_trend_label(ticker: str) -> str | None:
-    """QNT-224 follow-up: the Uptrend / Sideways / Downtrend word the technical
-    report derives for its DAILY timeframe, computed standalone for the lean
-    N-way comparison.
+# QNT-224 follow-up: timeframe -> (indicators_table, ohlcv_table, date_col),
+# read off the report's own _TIMEFRAMES so the lean trend agrees with the
+# report section of the same scope verbatim.
+_TREND_TIMEFRAMES: dict[str, tuple[str, str, str]] = {
+    label.lower(): (ind, ohlcv, date_col) for label, ind, ohlcv, date_col in _TIMEFRAMES
+}
 
-    Reuses the report's exact path -- ``_fetch_rows`` (latest two daily bars)
-    + ``_trend_label`` -- then strips the parenthetical derivation, so the lean
-    table's trend label agrees with the daily technical report verbatim.
-    Returns None when the ticker is unknown or there is not enough history
-    (no daily rows, or ``_trend_label`` returned its N/M string).
+
+def compute_trend_label(ticker: str, timeframe: str = "daily") -> str | None:
+    """QNT-224 follow-up: the Uptrend / Sideways / Downtrend word the technical
+    report derives for ``timeframe`` (``"daily"`` or ``"weekly"``), computed
+    standalone for the lean N-way comparison.
+
+    Reuses the report's exact path -- ``_fetch_rows`` (latest two bars of the
+    timeframe) + ``_trend_label`` -- then strips the parenthetical derivation,
+    so the lean table's trend agrees with the technical report's section of the
+    same scope verbatim. Returns None when the ticker/timeframe is unknown or
+    there is not enough history (no rows, or ``_trend_label`` returned N/M).
     """
     if ticker not in TICKERS:
         return None
-    rows = _fetch_rows(
-        ticker, "equity_derived.technical_indicators_daily", "equity_raw.ohlcv_raw", "date"
-    )
+    tables = _TREND_TIMEFRAMES.get(timeframe)
+    if tables is None:
+        return None
+    ind_table, ohlcv_table, date_col = tables
+    rows = _fetch_rows(ticker, ind_table, ohlcv_table, date_col)
     if not rows:
         return None
     prior = rows[1] if len(rows) > 1 else None

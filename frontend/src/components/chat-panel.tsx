@@ -658,9 +658,13 @@ const LEAN_METRIC_ROWS: { key: "pe" | "rsi" | "net_margin" | "price"; label: str
 // QNT-224 follow-up: the interpretive verdicts (from the fundamental + technical
 // reports) render as colored pills below the raw metrics, reusing the rich
 // card's ASPECT_LABEL_PILL palette. null -> a muted dash.
-const LEAN_LABEL_ROWS: { key: "valuation_label" | "trend_label"; label: string }[] = [
+const LEAN_LABEL_ROWS: {
+  key: "valuation_label" | "trend_daily" | "trend_weekly";
+  label: string;
+}[] = [
   { key: "valuation_label", label: "Valuation" },
-  { key: "trend_label", label: "Trend" },
+  { key: "trend_daily", label: "Trend (D)" },
+  { key: "trend_weekly", label: "Trend (W)" },
 ];
 
 function LeanComparisonCard({
