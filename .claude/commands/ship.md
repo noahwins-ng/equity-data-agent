@@ -141,20 +141,44 @@ If any prod execution AC fail: keep Linear → **In Review**, report what failed
 
 ### Step 7b: Post Shipped Comment on Linear Issue
 
-Post a comment on the Linear issue summarizing the ship:
+Post a comment on the Linear issue. Same contract as the sanity-check comment: **auditable at a glance** (per-AC, literal evidence) AND **carries what you learned** (findings). This is the permanent ship record — paste receipts, don't paraphrase them.
+
 ```
-**Shipped** — PR #<number> merged, deployed, verified
+## Shipped
 
-✓ Lint  ✓ Format  ✓ Types  ✓ Tests  ✓ AC
+PR: <url>
+Merge commit: <sha>
+Deploy run: <actions run url>
 
-**Dev execution AC verified:**
-- <each dev execution AC with evidence summary>
+**Findings:**
+<Only include if the work deviated from the ticket. One bullet each for:
+ a corrected assumption (with the evidence that corrected it), a latent bug found,
+ a decision made and why, or a scope shortcut taken.
+ If nothing deviated, write: "None — implementation matched the ticket as written.">
 
-**Prod execution AC verified:**
-- <each prod execution AC result>
+## Acceptance Criteria
+- [x] AC1 — <text>. [code AC — pinned by <test::name>]
+- [x] AC2 — <text>. [dev execution AC]
+  Command: <exact command>
+  Output:  <literal output>
+- [x] AC3 — <text>. [prod execution AC — verified post-deploy]
+  Command: <exact command, e.g. make check-prod / ssh hetzner ...>
+  Output:  <literal output proving the prod claim>
+
+## Verification
+- `uv run ruff check .` → <result>
+- `uv run ruff format --check .` → <result>
+- `uv run pyright` → <result>
+- `uv run pytest` → <result>
+- PR CI: <checks that passed>
+- Deploy: SHA verify (<merge sha>), Dagster graph (<assets/checks/schedules>), API health
+- Independent prod check: `make check-prod` → <result>
 ```
 
-This creates a permanent audit trail on the issue. Every shipped issue should have at least one comment showing what was verified.
+Rules for the comment:
+- **Every execution AC (dev AND prod) gets a literal `Command:` + `Output:` receipt.** Prod AC that were ⏳ PENDING at sanity-check are now resolved here with their post-deploy evidence. Code AC names the test/file that pins it.
+- **Carry the Findings forward** — if the sanity-check comment flagged a corrected assumption or decision, restate it here so the ship record stands alone. If nothing deviated, say so explicitly.
+- This creates a permanent audit trail. Every shipped issue must have a comment whose claims a reader can re-verify without rerunning the work.
 
 ### Step 8: Report
 Query the active cycle for the highest-priority open issue (not Done) to populate "Next up". If no active cycle exists, omit the "Next up" line.

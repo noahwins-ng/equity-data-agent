@@ -77,15 +77,39 @@ Verdict: READY TO SHIP / NEEDS FIXES
 ### Step 4: If READY TO SHIP
 Move the Linear issue status to **In Review**.
 
-Post a comment on the Linear issue:
+Post a comment on the Linear issue. The comment is a permanent audit artifact, so it must be **auditable at a glance** (per-AC, with literal evidence) AND **carry what you learned** (findings that changed your understanding). Do not summarise the receipts away — paste them.
+
 ```
 **Sanity check passed** — ready for review
 
-✓ Lint  ✓ Format  ✓ Types  ✓ Tests (X passed)  ✓ AC (dev)
+✓ Lint  ✓ Format  ✓ Types  ✓ Tests (X passed, Y skipped)  ✓ AC (code/dev)
+
+**Findings:**
+<Only include this block if the work deviated from the ticket. One bullet each for:
+ a corrected assumption ("the ticket said X is safe; verified empirically it is not — <evidence>"),
+ a latent bug discovered, a decision you made and why, or a scope shortcut you took.
+ If the implementation matched the ticket with nothing to flag, write a single line: "None — implementation matched the ticket as written.">
+
+**Code quality evidence:**
+* `uv run ruff check .` → <result>
+* `uv run ruff format --check .` → <result>
+* `uv run pyright` → <result>
+* `uv run pytest` → <result>
+
+**Acceptance Criteria:**
+- [X] AC1 — <text>. [code AC — verified in <file:line> / pinned by <test::name>]
+- [X] AC2 — <text>. [dev execution AC]
+  Command: <exact command you ran>
+  Output:  <literal output — the value/line that proves it, not a paraphrase>
+- [ ] AC3 — <text>. [prod execution AC — ⏳ PENDING, verify post-deploy]
 
 Prod execution AC pending post-deploy:
 - <list each ⏳ PENDING item, or "none" if all AC were code/dev>
 ```
+
+Rules for the comment:
+- **Every dev execution AC gets a literal `Command:` + `Output:` receipt** — the same evidence you produced in Step 2/3. Code inspection AC names the file/line or test that pins it. Never collapse an execution AC to a bare ✓.
+- **The Findings block is not optional decoration** — it is where a corrected ticket assumption, a discovered bug, or a judgement call lives. A comment that only says "passed" is a weaker record than one that says what changed. If genuinely nothing deviated, state that explicitly rather than omitting the block.
 
 ### Step 5: If NEEDS FIXES
 List the specific issues found and offer to fix them before shipping.
