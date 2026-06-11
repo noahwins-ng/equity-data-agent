@@ -755,6 +755,54 @@ def test_classify_node_routes_to_quick_fact_for_rsi_question(
     assert result["confidence"] == 1.0
 
 
+def test_question_named_ticker_rebases_quick_fact_run(
+    stub_llm: _StructuredLLM,
+) -> None:
+    """A single question-named ticker beats the URL-context ticker."""
+    stub_llm.invoke.return_value = AIMessage(content="fundamental")
+    quick = QuickFactAnswer(
+        answer="AAPL trades at 31x earnings (source: fundamental).",
+        cited_value="31",
+        source="fundamental",
+    )
+    stub_llm.structured_invoke.return_value = quick
+    fundamental = MagicMock(return_value="## fundamental\nAAPL P/E 31\n")
+    graph = build_graph({"fundamental": fundamental})
+
+    result = graph.invoke({"ticker": "NVDA", "question": "What's AAPL's P/E?"})
+
+    assert result["ticker"] == "AAPL"
+    assert result["analysis_ticker"] == "AAPL"
+    fundamental.assert_called_once_with("AAPL")
+    assert result["intent"] == "quick_fact"
+    assert isinstance(result["quick_fact"], QuickFactAnswer)
+
+
+def test_question_named_ticker_rebases_thesis_run(
+    stub_llm: _StructuredLLM,
+) -> None:
+    company = MagicMock(return_value="## company\nAAPL business\n")
+    technical = MagicMock(return_value="## technical\nAAPL RSI 55\n")
+    fundamental = MagicMock(return_value="## fundamental\nAAPL P/E 31\n")
+    news = MagicMock(return_value="## news\nAAPL headline\n")
+    graph = build_graph(
+        {
+            "company": company,
+            "technical": technical,
+            "fundamental": fundamental,
+            "news": news,
+        }
+    )
+
+    result = graph.invoke({"ticker": "NVDA", "question": "Give me an AAPL thesis."})
+
+    assert result["ticker"] == "AAPL"
+    assert result["analysis_ticker"] == "AAPL"
+    for tool in (company, technical, fundamental, news):
+        tool.assert_called_once_with("AAPL")
+    assert isinstance(result["thesis"], Thesis)
+
+
 def test_quick_fact_failure_surfaces_as_none_quick_fact(
     stub_llm: _StructuredLLM,
 ) -> None:
@@ -1216,6 +1264,38 @@ def test_focused_intent_narrows_plan_to_company_and_matching_report(
         assert result["thesis"] is None
         assert result["quick_fact"] is None
         assert result["comparison"] is None
+
+
+def test_question_named_ticker_rebases_focused_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent.focused import FocusedAnalysis
+
+    llm = _StructuredLLM()
+    llm._structured_runnable.invoke = MagicMock(
+        return_value=FocusedAnalysis(
+            focus="technical",
+            summary="AAPL technical summary",
+            key_points=[],
+            cited_values=[],
+        )
+    )
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+    from agent import intent as intent_module
+
+    monkeypatch.setattr(intent_module, "get_llm", lambda *_a, **_kw: llm)
+
+    company = MagicMock(return_value="## company\nAAPL business\n")
+    technical = MagicMock(return_value="## technical\nAAPL RSI 55\n")
+    graph = build_graph({"company": company, "technical": technical})
+
+    result = graph.invoke({"ticker": "NVDA", "question": "technical analysis of AAPL"})
+
+    assert result["ticker"] == "AAPL"
+    assert result["analysis_ticker"] == "AAPL"
+    company.assert_called_once_with("AAPL")
+    technical.assert_called_once_with("AAPL")
+    assert isinstance(result["focused"], FocusedAnalysis)
 
 
 def test_focused_intent_falls_back_to_redirect_when_reports_empty(

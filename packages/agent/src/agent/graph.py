@@ -48,6 +48,7 @@ from shared.tickers import TICKERS
 
 from agent.comparison import ComparisonAnswer, LeanComparisonAnswer, LeanComparisonRow
 from agent.conversational import ConversationalAnswer, domain_redirect
+from agent.disclaimer import DISCLAIMER
 from agent.evals.hallucination import HallucinationResult
 from agent.evals.hallucination import check as check_grounding
 from agent.exploration import ExplorationAnswer
@@ -361,6 +362,7 @@ class AgentState(TypedDict):
     """
 
     ticker: str
+    analysis_ticker: NotRequired[str]
     question: NotRequired[str]
     intent: NotRequired[Intent]
     classifier_source: NotRequired[ClassifierSource]
@@ -1038,6 +1040,35 @@ def _append_user_message(
     )
 
 
+def _resolve_single_ticker_context(
+    *,
+    current_ticker: str,
+    question: str,
+    intent: Intent,
+    prior_ticker: str | None,
+) -> str:
+    """Return the ticker single-name analytical paths should use.
+
+    A question-named ticker beats the URL-context ticker for single-ticker
+    intents. Comparison keeps its separate resolver because two-or-more names
+    have distinct semantics there. Bare followups inherit the last analytical
+    ticker stored in the checkpoint so a rebased turn stays coherent.
+    """
+    current = current_ticker.upper()
+    named = extract_tickers(question)
+    if intent != "comparison" and len(named) == 1:
+        return named[0]
+    prior = (prior_ticker or "").upper()
+    if intent == "followup" and not named and prior in TICKERS:
+        return prior
+    return current
+
+
+def _strip_disclaimer(markdown: str) -> str:
+    """Remove the rendered footer before narrate treats markdown as substrate."""
+    return markdown.replace(DISCLAIMER, "").strip()
+
+
 def _assistant_surface(state: AgentState, narrative: str | None) -> str | None:
     """Compact assistant transcript entry for the completed turn."""
     if narrative:
@@ -1257,6 +1288,19 @@ def build_graph(
                 ambiguity_kind,
                 intent,
             )
+        effective_ticker = _resolve_single_ticker_context(
+            current_ticker=ticker,
+            question=question,
+            intent=intent,
+            prior_ticker=state.get("analysis_ticker"),
+        )
+        if effective_ticker != ticker.upper():
+            logger.info(
+                "classify %s: rebased run to question/context ticker %s (intent=%s)",
+                ticker,
+                effective_ticker,
+                intent,
+            )
         # QNT-159: surface the routing decision BEFORE plan/gather/synthesize
         # run. The SSE wrapper provides an emitter that posts to its asyncio
         # queue so the chat panel sees ``intent`` as soon as it's known
@@ -1270,6 +1314,8 @@ def build_graph(
             except Exception as exc:  # noqa: BLE001 — never let SSE plumbing crash the graph
                 logger.warning("classify %s: event_emitter failed: %s (continuing)", ticker, exc)
         return {
+            "ticker": effective_ticker,
+            "analysis_ticker": effective_ticker,
             "intent": intent,
             "classifier_source": classifier_source,
             "ambiguity_kind": ambiguity_kind,
@@ -2129,7 +2175,7 @@ def build_graph(
         to_md: Any = getattr(payload_obj, "to_markdown", None)
         if callable(to_md):
             try:
-                payload_markdown = str(to_md())
+                payload_markdown = _strip_disclaimer(str(to_md()))
             except Exception:  # noqa: BLE001 — never let formatting kill narrate
                 payload_markdown = ""
 
@@ -2143,7 +2189,7 @@ def build_graph(
             prior_to_md: Any = getattr(prior_thesis, "to_markdown", None)
             if callable(prior_to_md):
                 try:
-                    prior_thesis_markdown = str(prior_to_md())
+                    prior_thesis_markdown = _strip_disclaimer(str(prior_to_md()))
                 except Exception:  # noqa: BLE001
                     prior_thesis_markdown = None
 

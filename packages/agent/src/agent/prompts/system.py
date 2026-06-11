@@ -1034,7 +1034,11 @@ qualitative -- introduce no new number, cite nothing here. You may use up to \
 # Intents whose narration concludes with an analytical view, so the probe
 # close earns its place. quick_fact (terse lookup) and conversational are
 # excluded; clarify turns are excluded via the is_clarify flag below.
-_PROBE_CLOSE_INTENTS = frozenset({"thesis", "focused", "comparison", "followup"})
+# Exploration intentionally stays out: that shape owns broad discovery, not a
+# forced forward-calendar close.
+_PROBE_CLOSE_INTENTS = frozenset(
+    {"thesis", "comparison", "followup", "fundamental", "technical", "news"}
+)
 
 
 def build_narrate_prompt(

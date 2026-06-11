@@ -482,13 +482,16 @@ def test_clarify_prompt_offers_url_context_ticker() -> None:
     assert "do NOT silently answer" in rendered  # but not auto-confirm (QNT-212)
 
 
-def test_narrate_prompt_non_clarify_keeps_probe_close() -> None:
-    """A normal thesis narration still gets the forward-looking probe close and
-    none of the clarify framing."""
+@pytest.mark.parametrize(
+    "intent",
+    ["thesis", "comparison", "followup", "fundamental", "technical", "news"],
+)
+def test_narrate_prompt_non_clarify_keeps_probe_close(intent: str) -> None:
+    """Substantive narrations get the forward-looking probe close."""
     from agent.prompts.system import build_narrate_prompt
 
     msgs = build_narrate_prompt(
-        intent="thesis",
+        intent=intent,
         ticker="NVDA",
         question="thesis on NVDA",
         payload_markdown="Setup ... Verdict: Overweight",
@@ -497,3 +500,18 @@ def test_narrate_prompt_non_clarify_keeps_probe_close() -> None:
     rendered = "\n".join(str(getattr(m, "content", m)) for m in msgs)
     assert "Close with one concrete forward-looking" in rendered
     assert "must not end in a question mark" not in rendered
+
+
+def test_narrate_prompt_exploration_excludes_probe_close() -> None:
+    """Exploration owns broad discovery and intentionally skips the forced close."""
+    from agent.prompts.system import build_narrate_prompt
+
+    msgs = build_narrate_prompt(
+        intent="exploration",
+        ticker="NVDA",
+        question="what's interesting about NVDA?",
+        payload_markdown="Interesting setup.",
+        is_clarify=False,
+    )
+    rendered = "\n".join(str(getattr(m, "content", m)) for m in msgs)
+    assert "Close with one concrete forward-looking" not in rendered
