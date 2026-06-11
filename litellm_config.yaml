@@ -6,11 +6,18 @@
 # client (agent) does not need to know them.
 #
 # QNT-128/QNT-129: default stays Llama-3.3-70B (Groq free-tier TPD 100K) with
-# Llama-4-Scout-17B as auto-fallback (TPD 500K). QNT-215 adds
-# Cerebras-hosted gpt-oss-120b as a second emergency fallback for eval/dev days
-# where both Llama buckets are exhausted, with Groq-hosted gpt-oss-120b as the
-# last same-provider fallback. This is capacity insurance, not a quality
-# promotion; Scout remains the preferred fallback.
+# Llama-4-Scout-17B as auto-fallback (TPD 500K), then Groq-hosted gpt-oss-120b
+# as a last-resort same-provider fallback for eval/dev days where both Llama
+# buckets are exhausted. This is capacity insurance, not a quality promotion;
+# Scout remains the preferred fallback.
+#
+# QNT-227: the Cerebras gpt-oss-120b fallback (added QNT-215) was REMOVED. A
+# controlled run (ADR-021 follow-up) showed Cerebras cannot serve the 9-12k-token
+# synthesize request within the 60s client timeout (0/4 trials; client retries
+# stacked to ~181s before erroring -- the exact unbounded tail ADR-021 set out
+# to kill). litellm fallbacks are recursive, so the array-bounded ThesisPlan
+# schema also reached Cerebras and was rejected. It served no call it could be
+# reached for, so it was pure tail-latency risk and is gone from every chain.
 #
 # Why Scout over Qwen: the QNT-129 free-tier bench
 # (docs/model-bench-2026-04.md) ran 16-record golden sweeps on every
@@ -63,20 +70,14 @@ model_list:
       model: groq/meta-llama/llama-4-scout-17b-16e-instruct
       api_key: os.environ/GROQ_API_KEY
 
-  - model_name: equity-agent/fallback-cerebras-gptoss120b
-    # QNT-215: second fallback behind Scout for capacity only. Cerebras gives
-    # provider-level quota diversity when Groq TPD is exhausted.
-    litellm_params:
-      model: cerebras/gpt-oss-120b
-      api_key: os.environ/CEREBRAS_API_KEY
-      reasoning_effort: low
-      extra_headers:
-        User-Agent: equity-data-agent-litellm/1.0
-
   - model_name: equity-agent/fallback-groq-gptoss120b
-    # QNT-215: final same-provider fallback behind Cerebras. The QNT-129
-    # bench found gpt-oss-120b safe on hard contracts but too defensive for
-    # primary thesis quality, so keep it behind the stronger Llama fallback.
+    # QNT-215: final same-provider fallback behind Scout (QNT-227 removed the
+    # Cerebras hop that used to sit in front of it). The QNT-129 bench found
+    # gpt-oss-120b safe on hard contracts but too defensive for primary thesis
+    # quality, so keep it behind the stronger Llama fallback. Note: its 8000-TPM
+    # per-request ceiling means it cannot serve a 9-12k synthesize either (it
+    # fast-fails with a 413 rather than hanging); it still serves the small
+    # plan/classify calls fine.
     litellm_params:
       model: groq/openai/gpt-oss-120b
       api_key: os.environ/GROQ_API_KEY
@@ -181,14 +182,14 @@ litellm_settings:
   drop_params: true
   # Auto-failover on 429 (rate limit) — when Llama-3.3-70B exhausts its
   # 100K TPD, requests transparently switch to Llama-4-Scout (500K TPD),
-  # then Cerebras-hosted gpt-oss-120b if Scout is also exhausted. The
-  # Groq-hosted gpt-oss alias stays last as a same-provider fallback.
+  # then Groq-hosted gpt-oss-120b as the last same-provider fallback.
+  # (QNT-227 dropped the Cerebras hop that used to sit between them: it
+  # could not serve synthesize within the client timeout — see top-of-file.)
   # `equity-agent/gemini` and the bench aliases stay direct so opting in is
   # always an explicit choice.
   fallbacks:
     - equity-agent/default:
         - equity-agent/fallback-llama4scout
-        - equity-agent/fallback-cerebras-gptoss120b
         - equity-agent/fallback-groq-gptoss120b
     # QNT-220 (#7): small tier falls back to the 70b default on Groq TPD
     # exhaustion -- classify/plan stay functional, just lose the cost win.
@@ -196,7 +197,4 @@ litellm_settings:
         - equity-agent/default
         - equity-agent/fallback-llama4scout
     - equity-agent/fallback-llama4scout:
-        - equity-agent/fallback-cerebras-gptoss120b
-        - equity-agent/fallback-groq-gptoss120b
-    - equity-agent/fallback-cerebras-gptoss120b:
         - equity-agent/fallback-groq-gptoss120b

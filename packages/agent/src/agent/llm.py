@@ -64,7 +64,6 @@ SMALL_NODE_ALIAS = "equity-agent/small"
 _RESOLVED_MODEL_BY_ALIAS: dict[str, str] = {
     "equity-agent/default": "groq/llama-3.3-70b-versatile",
     "equity-agent/fallback-llama4scout": "groq/meta-llama/llama-4-scout-17b-16e-instruct",
-    "equity-agent/fallback-cerebras-gptoss120b": "cerebras/gpt-oss-120b",
     "equity-agent/fallback-groq-gptoss120b": "groq/openai/gpt-oss-120b",
     "equity-agent/gemini": "gemini/gemini-2.5-flash",
     "equity-agent/small": "groq/openai/gpt-oss-20b",

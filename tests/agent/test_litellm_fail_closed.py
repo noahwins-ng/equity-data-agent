@@ -131,9 +131,13 @@ def test_chat_default_fallback_chain_is_free_tier_only() -> None:
     assert not failures, "\n".join(failures)
 
 
-def test_chat_default_has_cerebras_before_groq_gptoss_fallback() -> None:
-    """The chat path should use Cerebras gpt-oss before Groq gpt-oss so a
-    Groq TPD outage still has provider-level quota diversity."""
+def test_chat_default_falls_back_scout_then_groq_gptoss() -> None:
+    """The chat path falls back Scout -> Groq gpt-oss. QNT-227 removed the
+    Cerebras hop: a controlled run showed Cerebras cannot serve the 9-12k
+    synthesize request within the client timeout (it stacked client retries to
+    ~181s), and because litellm fallbacks are recursive the array-bounded
+    ThesisPlan schema reached and was rejected by Cerebras. It is no longer
+    reachable from any chat chain."""
     config = _load_config()
     fallbacks_cfg = config.get("litellm_settings", {}).get("fallbacks", [])
     fallback_map = {
@@ -144,30 +148,33 @@ def test_chat_default_has_cerebras_before_groq_gptoss_fallback() -> None:
 
     assert fallback_map["equity-agent/default"] == [
         "equity-agent/fallback-llama4scout",
-        "equity-agent/fallback-cerebras-gptoss120b",
         "equity-agent/fallback-groq-gptoss120b",
     ]
     assert fallback_map["equity-agent/fallback-llama4scout"] == [
-        "equity-agent/fallback-cerebras-gptoss120b",
         "equity-agent/fallback-groq-gptoss120b",
     ]
-    assert fallback_map["equity-agent/fallback-cerebras-gptoss120b"] == [
-        "equity-agent/fallback-groq-gptoss120b"
-    ]
+    # Cerebras must not appear as a chain target anywhere.
+    for alias, fallback_aliases in fallback_map.items():
+        assert "equity-agent/fallback-cerebras-gptoss120b" not in fallback_aliases, alias
 
 
 def test_no_chat_alias_references_paid_provider_directly() -> None:
     """Belt-and-braces: every alias that COULD be reached from the chat
-    path (default, gemini, and any alias they fall back to) must route
-    to a free-tier provider. The bench-* aliases are explicitly excluded
-    — they're invoked only by the QNT-129 bench harness, never by the
-    chat path."""
+    path (default, small, gemini, and any alias they fall back to) must
+    route to a free-tier provider. The bench-* aliases are explicitly
+    excluded — they're invoked only by the QNT-129 bench harness, never by
+    the chat path.
+
+    `equity-agent/small` is a live chat-path alias (classify/plan run on it
+    every turn) and litellm fallbacks are recursive (QNT-227 verified
+    empirically), so its full closure — small → default → default's own
+    chain — must be audited too, not just default/gemini."""
     config = _load_config()
     models = _models_by_alias(config)
     fallbacks_cfg = config.get("litellm_settings", {}).get("fallbacks", [])
 
     # Build the reachable set: chat aliases + their fallbacks (transitive).
-    reachable = {"equity-agent/default", "equity-agent/gemini"}
+    reachable = {"equity-agent/default", "equity-agent/small", "equity-agent/gemini"}
     for _ in range(4):  # depth bound — chains in this repo are <= 3 hops
         new_reachable = set(reachable)
         for fb_entry in fallbacks_cfg:
