@@ -54,6 +54,7 @@ class _StubLLM:
         self.invoke = MagicMock(return_value=AIMessage(content="technical, fundamental, news"))
         self.stream_chunks = stream_chunks or ["On balance ", "the read here is cautious."]
         self.stream_raises = stream_raises
+        self.stream_prompts: list[Any] = []
         thesis = make_thesis()
         quick_fact = _stub_quick_fact()
 
@@ -76,6 +77,8 @@ class _StubLLM:
     def stream(self, *_args: Any, **_kwargs: Any) -> Any:
         if self.stream_raises:
             raise RuntimeError("simulated stream failure")
+        if _args:
+            self.stream_prompts.append(_args[0])
         return iter(AIMessage(content=c) for c in self.stream_chunks)
 
 
@@ -236,6 +239,25 @@ def test_followup_metric_ask_keeps_quick_fact(
     chunk_events = [e for e in events if e[0] == "narrative_chunk"]
     assert chunk_events, "expected narrative_chunk events on metric-ask followup"
     assert second.get("narrative")
+
+
+def test_narrate_prompt_strips_structured_payload_disclaimer(
+    stub_llm: _StubLLM,
+) -> None:
+    """The card markdown keeps its footer, but narrate should not read it."""
+    from agent.disclaimer import DISCLAIMER
+
+    graph = build_graph(_default_tools())
+
+    result = graph.invoke({"ticker": "NVDA", "question": "Give me an NVDA thesis."})
+
+    assert DISCLAIMER in result["thesis"].to_markdown()
+    rendered_prompt = "\n".join(
+        str(getattr(message, "content", message))
+        for prompt in stub_llm.stream_prompts
+        for message in prompt
+    )
+    assert DISCLAIMER not in rendered_prompt
 
 
 def test_conversational_intent_skips_narrate(

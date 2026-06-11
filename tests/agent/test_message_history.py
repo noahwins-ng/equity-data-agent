@@ -135,6 +135,40 @@ def test_retail_followup_routes_to_followup_not_conversational(
     assert sum(tool.call_count for tool in tools.values()) == 0
 
 
+def test_rebased_turn_sets_followup_ticker_context(
+    monkeypatch: Any,
+) -> None:
+    """A bare followup after a rebased turn follows the rebased ticker."""
+    stub = _StubLLM()
+    monkeypatch.setattr(graph_module, "get_llm", lambda *a, **kw: stub)
+    monkeypatch.setattr("agent.intent.get_llm", lambda *a, **kw: stub)
+    tools = _tools()
+    graph = build_graph(
+        tools,
+        checkpointer=SqliteSaver(sqlite3.connect(":memory:", check_same_thread=False)),
+    )
+    config: RunnableConfig = {"configurable": {"thread_id": "rebase-followup:NVDA"}}
+
+    first = graph.invoke({"ticker": "NVDA", "question": "Give me an NVDA thesis."}, config=config)
+    assert first["ticker"] == "NVDA"
+    assert first["analysis_ticker"] == "NVDA"
+
+    for tool in tools.values():
+        tool.reset_mock()
+    second = graph.invoke({"ticker": "NVDA", "question": "What's AAPL's P/E?"}, config=config)
+    assert second["ticker"] == "AAPL"
+    assert second["analysis_ticker"] == "AAPL"
+    assert {call.args[0] for tool in tools.values() for call in tool.call_args_list} == {"AAPL"}
+
+    for tool in tools.values():
+        tool.reset_mock()
+    third = graph.invoke({"ticker": "NVDA", "question": "why?"}, config=config)
+    assert third["intent"] == "followup"
+    assert third["ticker"] == "AAPL"
+    assert third["analysis_ticker"] == "AAPL"
+    assert sum(tool.call_count for tool in tools.values()) == 0
+
+
 def test_history_prompt_prefix_is_byte_stable() -> None:
     history: list[ConversationMessage] = [
         {"role": "user", "content": "Give me an AAPL thesis."},
