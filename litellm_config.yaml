@@ -43,6 +43,16 @@ model_list:
     litellm_params:
       model: groq/llama-3.3-70b-versatile
       api_key: os.environ/GROQ_API_KEY
+      # QNT-223 (#12) / ADR-021: bound the throttled tail. The 14-day baseline
+      # had synthesize max 117.5s — a throttled Groq call that ChatOpenAI
+      # (max_retries=2 x 60s LLM_REQUEST_TIMEOUT) retried to ~120s instead of
+      # rerouting. This per-model timeout makes the proxy abort a throttled
+      # llama-3.3-70b call at 45s and fall through to fallback-llama4scout
+      # (benched 16/16) within the SAME client call, bounding worst-case turn
+      # wall-clock to ~48s (< the 60s client timeout, so no client retry).
+      # 45s sits well above normal synthesize/narrate (~5-20s) so only genuine
+      # throttle trips it. Bench/eval aliases set no timeout and are unaffected.
+      timeout: 45
 
   - model_name: equity-agent/fallback-llama4scout
     # QNT-129: replaces the previous `equity-agent/fallback-qwen3`. Same
