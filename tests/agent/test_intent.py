@@ -232,6 +232,13 @@ def test_heuristic_does_not_classify_three_tickers_as_comparison() -> None:
         "hey",
         "Hi!",
         "Hello?",
+        # Common greeting variants / misspellings — a mistyped hello used to
+        # fall through to the LLM and get bounced as off-domain.
+        "halo",
+        "hallow",
+        "hiya",
+        "hello there",
+        "sup",
         "What can you do?",
         "what do you do",
         "How does this work?",
