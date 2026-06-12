@@ -1917,15 +1917,16 @@ def test_intent_and_model_tags_pushed_to_trace(
     )
 
 
-def test_model_tag_skipped_when_alias_unmapped(
+def test_model_tag_marks_unverified_when_alias_unmapped(
     client: TestClient,
     stub_graph: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """If the active alias resolves to ``unknown`` (someone added a
-    litellm_config entry without updating the resolved-model map), the
-    model tag is skipped. Intent tag still fires so trace filtering by
-    shape continues to work."""
+    """QNT-230 #14: if the active alias resolves to ``unknown`` (someone added a
+    litellm_config entry without updating the resolved-model map) and nothing
+    was captured from the LiteLLM response, the trace carries the explicit
+    ``model:unverified-alias`` marker rather than silently dropping the tag --
+    so a Langfuse ``model:`` filter stops lying about coverage."""
     fake_lf = _install_fake_langfuse(monkeypatch)
     from agent.llm import set_model_override
 
@@ -1935,10 +1936,64 @@ def test_model_tag_skipped_when_alias_unmapped(
         assert r.status_code == 200
         fake_lf._create_trace_tags_via_ingestion.assert_called_once_with(
             trace_id="test-trace-id",
-            tags=["intent:thesis"],
+            tags=["intent:thesis", "model:unverified-alias"],
         )
     finally:
         set_model_override(None)
+
+
+def test_fallback_served_model_tagged_on_trace(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-230 #14: when LiteLLM serves a fallback model during the run, the
+    trace carries the actually-served model plus a ``model_fallback:fired``
+    marker -- not the (now-lying) static alias. The served model is captured
+    via the request-scoped ServedModelTracker the SSE handler installs."""
+    fake_lf = _install_fake_langfuse(monkeypatch)
+
+    def _fake_build(_tools: dict[str, Any], **_kwargs: Any) -> Any:
+        graph = MagicMock()
+
+        def invoke(state: dict[str, Any], **_kw: Any) -> dict[str, Any]:
+            # Simulate a fallback fire: LiteLLM's header reports a fallback that
+            # landed on Cerebras.
+            from agent.llm import _SERVED_MODEL_TRACKER
+
+            served = _SERVED_MODEL_TRACKER.get()
+            if served is not None:
+                served.record(
+                    "equity-agent/default",
+                    fallback_fired=True,
+                    served_model="meta-llama/llama-4-scout-17b-16e-instruct",
+                )
+            return {
+                "ticker": state["ticker"],
+                "intent": "thesis",
+                "plan": [],
+                "reports": {},
+                "errors": {},
+                "thesis": None,
+                "quick_fact": None,
+                "confidence": 0.5,
+            }
+
+        graph.invoke.side_effect = invoke
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
+    assert r.status_code == 200
+    fake_lf._create_trace_tags_via_ingestion.assert_called_once_with(
+        trace_id="test-trace-id",
+        tags=[
+            "intent:thesis",
+            "model:meta-llama/llama-4-scout-17b-16e-instruct",
+            "model_fallback:fired",
+        ],
+    )
 
 
 def test_intent_tag_skipped_when_intent_missing(

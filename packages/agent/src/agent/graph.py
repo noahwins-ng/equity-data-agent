@@ -131,54 +131,18 @@ class ThesisPlan(BaseModel):
 
 
 def _prompt_version() -> str:
-    """Stable 10-char hash of all system prompts + tool registry.
+    """Stable 10-char hash of all agent prompts + tool registry (QNT-187, QNT-230).
 
-    Mirrors the implementation in agent.evals.golden_set but lives here to
-    avoid a circular import (golden_set imports build_graph). Computed once
-    at module load and cached in _PROMPT_VERSION.
+    Delegates to :func:`agent.prompt_version.compute_prompt_version`, the single
+    source of truth shared with ``agent.evals.golden_set`` -- the two used to
+    keep hand-synced copies (circular-import workaround) and had silently
+    drifted. Passing the local plan-prompt builders folds the classify + plan
+    prompts into the version (QNT-230 #11). Called once at module load, after
+    the builders below are defined, and cached in ``_PROMPT_VERSION``.
     """
-    from hashlib import sha256
+    from agent.prompt_version import compute_prompt_version
 
-    from agent.prompts import (
-        CLARIFY_SYSTEM_PROMPT,
-        COMPARISON_SYSTEM_PROMPT,
-        CONVERSATIONAL_SYSTEM_PROMPT,
-        EXPLORATION_SYSTEM_PROMPT,
-        FOCUSED_SYSTEM_PROMPT,
-        FOLLOWUP_SYSTEM_PROMPT,
-        QUICK_FACT_SYSTEM_PROMPT,
-        SYSTEM_PROMPT,
-        WARM_CONVERSATIONAL_SYSTEM_PROMPT,
-    )
-
-    payload = (
-        SYSTEM_PROMPT
-        + "\n"
-        + QUICK_FACT_SYSTEM_PROMPT
-        + "\n"
-        + COMPARISON_SYSTEM_PROMPT
-        + "\n"
-        + CONVERSATIONAL_SYSTEM_PROMPT
-        + "\n"
-        + WARM_CONVERSATIONAL_SYSTEM_PROMPT
-        + "\n"
-        + FOCUSED_SYSTEM_PROMPT
-        + "\n"
-        + EXPLORATION_SYSTEM_PROMPT
-        + "\n"
-        + FOLLOWUP_SYSTEM_PROMPT
-        + "\n"
-        + CLARIFY_SYSTEM_PROMPT
-        + "\n"
-        + ",".join(sorted(REPORT_TOOLS))
-    )
-    return sha256(payload.encode("utf-8")).hexdigest()[:10]
-
-
-# Computed once at module load — deterministic over a process lifetime.
-# Propagated to every LLM call's config metadata so Langfuse traces are
-# filterable by prompt version (QNT-187).
-_PROMPT_VERSION: str = _prompt_version()
+    return compute_prompt_version(_build_plan_prompt, _build_thesis_plan_prompt)
 
 
 def _linked_invoke(
@@ -489,6 +453,13 @@ def _build_thesis_plan_prompt(ticker: str, question: str, available: list[str]) 
         "are needed. For a narrow lens, example voice: Your question is about "
         "valuation, so I'll use fundamentals and the company profile."
     )
+
+
+# Computed once at module load — deterministic over a process lifetime.
+# Propagated to every LLM call's config metadata so Langfuse traces are
+# filterable by prompt version (QNT-187). Defined here, after the plan-prompt
+# builders, because ``_prompt_version`` now folds them into the hash (QNT-230).
+_PROMPT_VERSION: str = _prompt_version()
 
 
 def _is_exploratory_question(question: str) -> bool:

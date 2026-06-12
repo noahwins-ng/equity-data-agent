@@ -121,9 +121,13 @@ from agent.exploration import ExplorationAnswer
 from agent.focused import FocusedAnalysis
 from agent.graph import OPTIONAL_TOOLS, build_graph
 from agent.llm import (
+    ServedModelTracker,
     TokenUsageTracker,
     current_model_info,
+    reset_served_model_tracker,
     reset_token_tracker,
+    resolve_trace_model_tag,
+    set_served_model_tracker,
     set_token_tracker,
 )
 from agent.quick_fact import QuickFactAnswer
@@ -701,6 +705,12 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
     # tracker bound to the request task and the next request inherits it.
     tracker = TokenUsageTracker()
     tracker_token = set_token_tracker(tracker)
+    # QNT-230 #14: capture the model LiteLLM actually serves so a fallback fire
+    # (e.g. default -> fallback-llama4scout on Groq TPD exhaustion) tags the
+    # trace with the real model instead of the static-map alias. Same
+    # contextvar-through-to_thread propagation as the token tracker.
+    served_tracker = ServedModelTracker()
+    served_tracker_token = set_served_model_tracker(served_tracker)
     runner_task: asyncio.Task[Any] | None = None
     final_state_holder: dict[str, Any] = {}
     timed_out = False
@@ -859,9 +869,19 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                     # axes ("conversational redirects on llama-3.3-70b" is
                     # two tag chips).
                     tags = [f"intent:{intent}"]
-                    resolved = model_info.get("resolved_model")
-                    if resolved and resolved != "unknown":
-                        tags.append(f"model:{resolved}")
+                    # QNT-230 #14: prefer the model LiteLLM actually served this
+                    # run over the static alias map, so a fallback fire tags the
+                    # real model. Falls back to the static resolution when no
+                    # fallback fired, keeping existing model: filters valid.
+                    model_tag_value, fallback_fired = resolve_trace_model_tag(
+                        alias=model_info.get("alias", ""),
+                        static_resolved=model_info.get("resolved_model", "unknown"),
+                        served_info=served_tracker.info(),
+                    )
+                    if model_tag_value and model_tag_value != "unknown":
+                        tags.append(f"model:{model_tag_value}")
+                    if fallback_fired:
+                        tags.append("model_fallback:fired")
                     classifier_source = state_obj.get("classifier_source")
                     if isinstance(classifier_source, str) and classifier_source:
                         tags.append(f"classifier_source:{classifier_source}")
@@ -1211,6 +1231,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                 )
         finally:
             reset_token_tracker(tracker_token)
+            reset_served_model_tracker(served_tracker_token)
 
 
 @router.post("/chat")

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from agent.evals.judge import JudgeScore, score
+from agent.evals.judge import _RUBRIC_PROMPT, JudgeScore, score
 
 
 def _make_llm(return_value: JudgeScore | None) -> MagicMock:
@@ -73,6 +73,53 @@ class TestScoreFunction:
         mock_llm.with_structured_output.return_value = mock_structured
         result = score("q", "gen", "ref", llm=mock_llm)
         assert result is None
+
+
+class TestFaithfulnessAxisAgainstReference:
+    """QNT-230 #9: the faithfulness axis is scored against the REFERENCE, not
+    against reports the judge never sees. Rubric + schema must agree on that."""
+
+    def test_assembled_prompt_scores_faithfulness_against_reference(self) -> None:
+        mock_llm = _make_llm(
+            JudgeScore(faithfulness=8, structure=8, correctness=8, analyst_logic=8)
+        )
+        score("Is NVDA a buy?", "generated", "reference", llm=mock_llm)
+        prompt = mock_llm.with_structured_output.return_value.invoke.call_args.args[0]
+        # The faithfulness instruction must point at the REFERENCE, not the
+        # unavailable source reports.
+        assert "consistent with the" in prompt
+        assert "REFERENCE thesis" in prompt
+        # The old, unanswerable phrasing must be gone.
+        assert "appear verbatim in the reports the agent received" not in prompt
+
+    def test_schema_description_matches_reference_framing(self) -> None:
+        desc = JudgeScore.model_fields["faithfulness"].description or ""
+        assert "REFERENCE" in desc
+        assert "verbatim in the reports" not in desc
+
+    def test_rubric_constant_drops_reports_claim(self) -> None:
+        assert "reports the agent received" not in _RUBRIC_PROMPT
+
+
+class TestPinnedJudge:
+    """QNT-230 #10: score() builds its judge via the pinned get_judge_llm()."""
+
+    def test_score_uses_pinned_judge_factory(self, monkeypatch) -> None:
+        import agent.evals.judge as judge_mod
+
+        calls: list[bool] = []
+
+        def _fake_factory():
+            calls.append(True)
+            return _make_llm(
+                JudgeScore(faithfulness=5, structure=5, correctness=5, analyst_logic=5)
+            )
+
+        monkeypatch.setattr(judge_mod, "get_judge_llm", _fake_factory)
+        # llm=None forces score() to construct one via the factory.
+        result = score("q", "gen", "ref", llm=None)
+        assert calls == [True]
+        assert result is not None
 
 
 class TestAnalystLogicAxis:
