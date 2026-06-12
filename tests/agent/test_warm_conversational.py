@@ -18,6 +18,7 @@ import sqlite3
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
 from agent import graph as graph_module
 from agent.conversational import ConversationalAnswer
 from agent.graph import build_graph
@@ -102,6 +103,21 @@ def test_bare_greeting_on_warm_thread_uses_neutral_prompt() -> None:
     assert "do not reference the prior ticker" in system.lower()
     prefix_text = "\n".join(str(m.content) for m in prompt[:-1])
     assert "META" not in prefix_text
+
+
+@pytest.mark.parametrize("greeting", ["halo", "hallow", "Hiya!", "sup", "hello there"])
+def test_misspelled_greeting_on_warm_thread_uses_neutral_prompt(greeting: str) -> None:
+    """Regression: a mistyped/variant hello on a warm thread is a greeting, not
+    an off-domain ask. Previously these fell through the recognized-greeting set
+    and the warm prompt bounced them as 'I don't know that'; now they get the
+    neutral greeting prompt like a correctly-spelled 'hi'."""
+    history: list[ConversationMessage] = [
+        {"role": "user", "content": "Should I be cautious about NVDA here?"},
+        {"role": "assistant", "content": "The read on NVDA stays cautious."},
+    ]
+    system = _system_text(build_conversational_prompt(greeting, history=history))
+    assert system == NEUTRAL_GREETING_SYSTEM_PROMPT
+    assert "continuing an in-progress equity-research conversation" not in system
 
 
 def test_warm_prompt_keeps_digit_free_guardrail() -> None:

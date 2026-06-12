@@ -686,14 +686,50 @@ Do not produce a thesis. Do not invent metrics. Do not write digits.
 )
 
 
-_SIMPLE_GREETING_INPUTS: frozenset[str] = frozenset(
-    {"hi", "hello", "hey", "yo", "good morning", "good afternoon", "good evening"}
+# Bare-greeting inputs (plus common variants / misspellings) treated as a
+# social hello rather than a substantive question. The canonical set, shared
+# with the classifier heuristic (agent.intent) so a greeting routes to
+# conversational deterministically AND, on a warm thread, gets the neutral
+# greeting prompt instead of inheriting prior market stance. Matched on the
+# WHOLE stripped message only, so a real question that happens to mention one
+# of these words ("what's the Halo brand worth?") is unaffected. Variants are
+# included because a mistyped hello ("halo", "hallow") was reaching the warm
+# conversational prompt, which then bounced it as off-domain ("I don't know
+# that") while a correctly-spelled "hi" got a friendly reply.
+SIMPLE_GREETING_INPUTS: frozenset[str] = frozenset(
+    {
+        "hi",
+        "hii",
+        "hiya",
+        "hey",
+        "heya",
+        "hey there",
+        "hi there",
+        "hello",
+        "hello there",
+        "helo",
+        "hullo",
+        "hallo",
+        "halo",
+        "hallow",
+        "hellow",
+        "yo",
+        "howdy",
+        "sup",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "gm",
+    }
 )
+
+# Back-compat private alias (kept so existing references don't churn).
+_SIMPLE_GREETING_INPUTS = SIMPLE_GREETING_INPUTS
 
 
 def _is_simple_greeting(question: str) -> bool:
     """Return True for a bare greeting that should not inherit analysis context."""
-    return question.lower().strip(" \t\n\r.,!?;:") in _SIMPLE_GREETING_INPUTS
+    return question.lower().strip(" \t\n\r.,!?;:") in SIMPLE_GREETING_INPUTS
 
 
 def build_conversational_prompt(
@@ -1292,6 +1328,7 @@ __all__ = [
     "NARRATE_SYSTEM_PROMPT",
     "QUICK_FACT_SYSTEM_PROMPT",
     "REPORT_TOOLS",
+    "SIMPLE_GREETING_INPUTS",
     "SYSTEM_PROMPT",
     "THESIS_ASPECTS",
     "WARM_CONVERSATIONAL_SYSTEM_PROMPT",

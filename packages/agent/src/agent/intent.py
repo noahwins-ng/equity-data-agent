@@ -53,7 +53,12 @@ from pydantic import BaseModel, Field
 from shared.tickers import TICKERS
 
 from agent.llm import SMALL_NODE_ALIAS, get_llm
-from agent.prompts import ConversationMessage
+from agent.prompts import SIMPLE_GREETING_INPUTS, ConversationMessage
+
+# Bare greetings (canonical set, incl. common typos) plus "help" -- a one-word
+# capability ask that, like a greeting, should short-circuit to conversational
+# without burning the LLM classifier or any tools.
+_GREETING_OR_HELP: frozenset[str] = SIMPLE_GREETING_INPUTS | {"help"}
 
 logger = logging.getLogger(__name__)
 
@@ -479,9 +484,8 @@ def _is_targeted_news(question: str) -> bool:
     event/entity/topic ("latest news on NVDA with SK Hynix") uses RAG.
     """
     text = question.lower()
-    return (
-        _matches_any(text, _TARGETED_NEWS_TOKENS) is not None
-        or _has_specific_news_qualifier(question)
+    return _matches_any(text, _TARGETED_NEWS_TOKENS) is not None or _has_specific_news_qualifier(
+        question
     )
 
 
@@ -584,10 +588,10 @@ def _heuristic_intent(question: str, *, has_prior_turn: bool = False) -> Intent 
     # equality check or a small-leading-tokens check catches them without
     # false-firing on a longer question that happens to start with "hi".
     stripped = text.rstrip("?!.,")
-    if stripped in {"hi", "hello", "hey", "yo", "help"}:
+    if stripped in _GREETING_OR_HELP:
         return "conversational"
     conv_token = _matches_any(text, _CONVERSATIONAL_TOKENS)
-    if conv_token is not None and conv_token not in {"hi", "hello", "hey", "yo", "help"}:
+    if conv_token is not None and conv_token not in _GREETING_OR_HELP:
         # Multi-word phrases (e.g. "what can you do", "weather") are strong
         # enough to fire on their own — they almost never appear inside a
         # legitimate equities question. Safety net: if the question also
