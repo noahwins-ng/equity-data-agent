@@ -74,6 +74,11 @@ export type ComposingSurface = {
   narrative: string;
 };
 
+export type CardProseSurface = {
+  status: "streaming" | "done" | "errored";
+  narrative: string;
+};
+
 export function isComposing(run: ComposingSurface): boolean {
   if (run.status !== "streaming") return false;
   if (run.intent === null) return false;
@@ -112,18 +117,18 @@ export function composingLabel(intent: Intent | null): string {
 
 // ─── QNT-229 #6: one prose surface per turn ────────────────────────────────
 //
-// When the narrate bubble streamed (narrative non-empty) it becomes THE prose
-// surface for the turn, so the card's own prose field is hidden to stop the
-// two surfaces restating the same sentence:
+// Card prose is hidden while a narrating run is still streaming. That prevents
+// the early card from briefly showing fallback prose and then retracting it as
+// soon as the narrative bubble starts. After the run finishes, empty narrative
+// means narrate degraded, so the card prose renders as the fallback:
 //   thesis      -> verdict_rationale
 //   focused     -> summary
 //   exploration -> headline
 //   comparison  -> differences (rich 2-ticker shape only)
-// When narrate degraded (empty narrative — best-effort by contract) the card
-// prose renders as the fallback so the turn still reads. quick_fact is excluded
-// (its trim is QNT-232); comparison_lean + conversational carry no demotable
-// prose. The structured data (labels, verdict pill, bullets, chips, table) is
-// never touched — only the one overlapping prose field.
-export function showCardProse(narrative: string): boolean {
-  return narrative.trim().length === 0;
+// quick_fact is excluded (its trim is QNT-232); comparison_lean +
+// conversational carry no demotable prose. The structured data (labels,
+// verdict pill, bullets, chips, table) is never touched — only the one
+// overlapping prose field.
+export function showCardProse(run: CardProseSurface): boolean {
+  return run.status !== "streaming" && run.narrative.trim().length === 0;
 }

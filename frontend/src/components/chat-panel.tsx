@@ -1232,10 +1232,13 @@ function RunBlock({
       toolRows: run.toolRows,
       narrative: run.narrative,
     });
-  // QNT-229 #6: when the narrative bubble streamed it is the prose surface, so
-  // the card's own prose field is demoted. Renders as the fallback when narrate
-  // degraded (empty narrative).
-  const cardProse = showCardProse(run.narrative);
+  // QNT-229 follow-up: demotable card prose stays hidden while streaming so the
+  // early card does not show fallback text and then retract it when narration
+  // starts. Once done, it renders only if narrate degraded.
+  const cardProse = showCardProse({
+    status: run.status,
+    narrative: run.narrative,
+  });
 
   return (
     <article className="space-y-2 border-b border-zinc-800 px-3 py-3">

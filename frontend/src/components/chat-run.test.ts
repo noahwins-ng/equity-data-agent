@@ -7,6 +7,7 @@ import type { Intent, RetrievedSource } from "@/lib/api";
 
 import {
   type AnswerSurface,
+  type CardProseSurface,
   type ComposingSurface,
   composingLabel,
   hasAnswerSurface,
@@ -157,20 +158,38 @@ test("composingLabel covers every Intent value", () => {
 // ─── QNT-229 #6: one prose surface per turn (AC3) ─────────────────────────
 //
 // showCardProse drives whether each card renders its own prose field. The
-// decision is uniform across the four narrate-streaming shapes (thesis /
-// focused / exploration / comparison-rich): when the narrative bubble streamed
-// the card prose is hidden; when narrate degraded (empty narrative) it renders
-// as the fallback. Per-shape coverage is via the wiring in chat-panel.tsx —
-// every card receives this same predicate as its `showProse` prop.
+// decision is uniform across the four narrate-streaming shapes. While the run
+// streams, card prose stays hidden even before the first narrative token, so an
+// early card never shows text that later disappears. When the run is done and
+// narrate degraded (empty narrative), prose renders as the fallback.
+
+function cardProse(overrides: Partial<CardProseSurface> = {}): CardProseSurface {
+  return {
+    status: "streaming",
+    narrative: "",
+    ...overrides,
+  };
+}
+
+test("card prose hidden during early-card streaming gap", () => {
+  assert.equal(showCardProse(cardProse()), false);
+});
 
 test("card prose hidden when the narrative bubble is present", () => {
-  assert.equal(showCardProse("On balance the read is constructive."), false);
+  assert.equal(
+    showCardProse(cardProse({ narrative: "On balance the read is constructive." })),
+    false,
+  );
 });
 
 test("card prose renders as fallback when narrate degraded (empty narrative)", () => {
-  assert.equal(showCardProse(""), true);
+  assert.equal(showCardProse(cardProse({ status: "done" })), true);
 });
 
-test("whitespace-only narrative is treated as empty (prose renders)", () => {
-  assert.equal(showCardProse("   \n  "), true);
+test("whitespace-only done narrative is treated as empty (prose renders)", () => {
+  assert.equal(showCardProse(cardProse({ status: "done", narrative: "   \n  " })), true);
+});
+
+test("card prose stays hidden after done when narrative exists", () => {
+  assert.equal(showCardProse(cardProse({ status: "done", narrative: "Narrated." })), false);
 });
