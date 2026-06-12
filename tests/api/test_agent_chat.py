@@ -183,8 +183,12 @@ def test_happy_path_emits_canonical_sequence(
     news_result = next(tr for tr in tool_results if tr["name"] == "news")
     assert news_result["summary"] == "3 headlines"
 
-    # prose_chunk → thesis → done arrive after the tool events.
-    assert "prose_chunk" in events
+    # QNT-229 #5: thesis is a narrate-streaming shape, so the post-graph
+    # prose_chunk replay is retired -- the card lands directly and the
+    # narrative bubble (narrative_chunk) is the prose surface. The stub graph
+    # fires neither prose_chunk nor narrative_chunk; the thesis card still
+    # arrives (post-graph idempotent net) and done is last.
+    assert "prose_chunk" not in events
     assert "thesis" in events
     assert events[-1] == "done"
 
@@ -337,31 +341,41 @@ def test_thesis_event_payload_matches_pydantic_dump(
     assert thesis_data == expected
 
 
-def test_prose_chunks_split_setup_into_clauses(
+def test_prose_chunks_split_answer_into_clauses(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The setup paragraph is chunked at sentence boundaries so the panel can
-    render it progressively. Two-sentence setup → two prose_chunk events."""
-    thesis = _stub_thesis(company_summary="First clause. Second clause.")
+    """The prose answer is chunked at sentence boundaries so the panel can
+    render it progressively. Two-sentence answer → two prose_chunk events.
 
-    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
+    QNT-229 #5: prose_chunk is now retired for the narrate-streaming card
+    shapes (thesis / quick_fact / comparison / focused / exploration) — their
+    narrative bubble is the prose surface. The conversational path SKIPS narrate
+    (its answer is already prose), so prose_chunk stays its streaming surface;
+    this test exercises that kept path."""
+    conversational = ConversationalAnswer(
+        answer="First clause. Second clause.",
+        suggestions=["What's NVDA's RSI right now?"],
+    )
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:  # noqa: ARG001
         graph = MagicMock()
         graph.invoke.return_value = {
             "ticker": "NVDA",
-            "intent": "thesis",
+            "intent": "conversational",
             "plan": [],
-            "reports": {"technical": "stub"},  # non-empty so prose path runs
+            "reports": {},
             "errors": {},
-            "thesis": thesis,
+            "thesis": None,
             "quick_fact": None,
-            "confidence": 0.5,
+            "conversational": conversational,
+            "confidence": 0.0,
         }
         return graph
 
     monkeypatch.setattr(chat_module, "build_graph", _fake_build)
     monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
 
-    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": ""})
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "what can you do?"})
     frames = _parse_sse(r.text)
     chunks = [data["delta"] for name, data in frames if name == "prose_chunk"]
     assert len(chunks) == 2

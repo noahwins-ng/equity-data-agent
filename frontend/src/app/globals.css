@@ -34,3 +34,48 @@ body {
 *::-webkit-scrollbar-thumb:hover {
   background: rgb(82 82 91);
 }
+
+/* QNT-229 #2a: "composing" pixel spinner — a lit pixel chases around the
+ * perimeter of a 4x4 pixel grid (pixel-art take on a circling-box loader).
+ * Each perimeter cell runs this comet pulse with a staggered negative delay so
+ * a bright head with a fading tail travels clockwise. Inner cells stay dim. */
+@keyframes pixel-chase {
+  0% {
+    opacity: 1;
+  }
+  18% {
+    opacity: 0.3;
+  }
+  40%,
+  100% {
+    opacity: 0.1;
+  }
+}
+/* Duration MUST match PIXEL_SPIN_MS in chat-panel.tsx (the JS staggers the
+ * per-cell negative delays across exactly one cycle). */
+.pixel-chase {
+  animation: pixel-chase 1s linear infinite;
+}
+/* Inner 2x2 "core" — breathes slowly so the centre isn't a hollow gap while the
+ * head orbits the perimeter. */
+@keyframes pixel-core {
+  0%,
+  100% {
+    opacity: 0.18;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+.pixel-core {
+  animation: pixel-core 1.6s ease-in-out infinite;
+}
+/* Accessibility: honour reduced-motion — hold every pixel at a static mid tone
+ * instead of chasing / breathing. */
+@media (prefers-reduced-motion: reduce) {
+  .pixel-chase,
+  .pixel-core {
+    animation: none;
+    opacity: 0.5;
+  }
+}
