@@ -231,39 +231,18 @@ def _git_sha() -> str:
 
 
 def _prompt_version() -> str:
-    """Stable hash of the system prompts + report-tool registry.
+    """Stable hash of every agent prompt + report-tool registry (QNT-187, QNT-230).
 
-    Hashing every system prompt (thesis + quick-fact + comparison +
-    conversational + focused, QNT-176) plus the tool-name registry keeps a
-    tool-name rename or a prompt edit on any path visible in history.csv
-    as a different ``prompt_version`` — so a regression showing "judge
-    8 → 5 the day prompt_version changed" reads obviously in the diff.
+    Delegates to the shared :func:`agent.prompt_version.compute_prompt_version`
+    so this harness and ``agent.graph`` produce the SAME version for the same
+    prompts. Previously these were hand-synced copies that had drifted (this
+    one hashed only five system prompts to graph's nine), so the same
+    ``prompt_version`` column meant different things depending on the writer.
     """
-    from hashlib import sha256
+    from agent.graph import _build_plan_prompt, _build_thesis_plan_prompt
+    from agent.prompt_version import compute_prompt_version
 
-    from agent.prompts import (
-        COMPARISON_SYSTEM_PROMPT,
-        CONVERSATIONAL_SYSTEM_PROMPT,
-        FOCUSED_SYSTEM_PROMPT,
-        QUICK_FACT_SYSTEM_PROMPT,
-        REPORT_TOOLS,
-        SYSTEM_PROMPT,
-    )
-
-    payload = (
-        SYSTEM_PROMPT
-        + "\n"
-        + QUICK_FACT_SYSTEM_PROMPT
-        + "\n"
-        + COMPARISON_SYSTEM_PROMPT
-        + "\n"
-        + CONVERSATIONAL_SYSTEM_PROMPT
-        + "\n"
-        + FOCUSED_SYSTEM_PROMPT
-        + "\n"
-        + ",".join(sorted(REPORT_TOOLS))
-    )
-    return sha256(payload.encode("utf-8")).hexdigest()[:10]
+    return compute_prompt_version(_build_plan_prompt, _build_thesis_plan_prompt)
 
 
 def run_record(record: GoldenRecord, *, llm_for_judge: Any | None = None) -> EvalOutcome:

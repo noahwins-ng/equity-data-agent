@@ -41,7 +41,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from agent.llm import get_llm
+from agent.llm import get_judge_llm
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +53,14 @@ class JudgeScore(BaseModel):
         ge=0,
         le=10,
         description=(
-            "How well the thesis avoids fabricated or unsupported numbers. "
-            "10 = every number in the thesis appears verbatim in the reports; "
-            "0 = multiple fabricated figures."
+            "Numeric consistency with the REFERENCE thesis: do the figures in "
+            "the generated thesis agree with the reference, with no "
+            "contradictory or invented values relative to it? 10 = every "
+            "shared figure matches the reference; 0 = multiple figures "
+            "contradict it. (QNT-230 #9: redefined against the reference -- "
+            "grounding against the agent's source reports is covered separately "
+            "by the deterministic hallucination check, which the judge does not "
+            "see.)"
         ),
     )
     structure: int = Field(
@@ -126,9 +131,12 @@ GENERATED thesis:
 
 Score each axis from 0 to 10:
 
-faithfulness — Does every number in the GENERATED thesis appear verbatim in \
-the reports the agent received? (10 = zero fabricated figures; 0 = many \
-fabricated figures)
+faithfulness — Are the numbers in the GENERATED thesis consistent with the \
+figures in the REFERENCE thesis, with no contradictory or invented values \
+relative to it? Judge only against the REFERENCE shown above -- the agent's \
+source reports are checked separately by a deterministic grounding check and \
+are not shown to you. (10 = figures agree with the reference; 0 = multiple \
+contradictions)
 
 structure — Does the GENERATED thesis carry the four QNT-208 aspect blocks \
 (Company, Fundamental, Technical, News) each with summary + supports + \
@@ -165,9 +173,11 @@ def score(
     """Return a per-axis ``JudgeScore``, or ``None`` on LLM error.
 
     ``llm`` is injectable for tests; production passes ``None`` and we
-    construct one via ``get_llm(temperature=0.0)`` for reproducibility.
+    construct one via ``get_judge_llm()`` -- a fixed alias that bypasses the
+    QNT-129 bench override, so a cross-model sweep does not make each candidate
+    judge its own output (QNT-230 #10).
     """
-    base_llm = llm if llm is not None else get_llm(temperature=0.0)
+    base_llm = llm if llm is not None else get_judge_llm()
     judge_llm = base_llm.with_structured_output(JudgeScore)
     prompt = _RUBRIC_PROMPT.format(
         question=question.strip() or "(general thesis)",

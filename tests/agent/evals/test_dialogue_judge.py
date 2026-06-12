@@ -123,3 +123,17 @@ def test_dedicated_judge_alias_rejects_self_judging() -> None:
 def test_dialogue_judge_uses_cerebras_gptoss120b_alias() -> None:
     assert JUDGE_MODEL_ALIAS == "equity-agent/bench-cerebras-gptoss120b"
     assert JUDGE_RESOLVED_MODEL == "cerebras/gpt-oss-120b"
+
+
+def test_dialogue_judge_unaffected_by_model_override(monkeypatch) -> None:
+    """QNT-230 #10: build_judge_llm constructs the alias directly, so the QNT-129
+    bench override re-routes the agent-under-test but never the dialogue judge."""
+    from agent.llm import set_model_override
+    from shared import config as cfg
+
+    monkeypatch.setattr(cfg.settings, "EQUITY_AGENT_PROVIDER", "groq")
+    set_model_override("equity-agent/bench-qwen3-32b")
+    try:
+        assert build_judge_llm().model_name == JUDGE_MODEL_ALIAS
+    finally:
+        set_model_override(None)

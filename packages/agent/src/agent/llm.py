@@ -22,6 +22,7 @@ from __future__ import annotations
 import contextvars
 import logging
 import threading
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from langchain_core.callbacks import BaseCallbackHandler
@@ -77,6 +78,17 @@ _RESOLVED_MODEL_BY_ALIAS: dict[str, str] = {
     "equity-agent/bench-gemini31flashlite": "gemini/gemini-3.1-flash-lite-preview",
     "equity-agent/bench-llama3-70b": "groq/llama-3.3-70b-versatile",
 }
+
+# QNT-230 (#10): the LLM-as-judge must stay on a FIXED model while the
+# agent-under-test swaps. ``set_model_override`` (the QNT-129 bench sweep)
+# re-routes plan / synthesize so a candidate model is benchmarked end to end --
+# but if it ALSO re-routed the judge, each candidate would score its own output
+# (Qwen judging Qwen, llama judging llama), and self-preference bias is well
+# documented in LLM-as-judge setups. :func:`get_judge_llm` resolves this alias
+# directly, independent of the override, so the judge is constant across a
+# sweep. Same model the dialogue judge already pins
+# (``dialogue_judge.JUDGE_MODEL_ALIAS``).
+JUDGE_ALIAS = "equity-agent/bench-cerebras-gptoss120b"
 
 # QNT-129 bench harness override. When set, every ``get_llm()`` call returns a
 # ChatOpenAI pointed at this alias instead of the provider lookup. Set via
@@ -227,6 +239,224 @@ class _UsageCallback(BaseCallbackHandler):
         self._tracker.add(total)
 
 
+# ─── Served-model tracking (QNT-230 #14) ────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ServedModelInfo:
+    """What a LiteLLM response told us about how a call was actually served.
+
+    ``fallback_fired`` comes from the ``x-litellm-attempted-fallbacks`` header
+    (the authoritative signal). ``served_model`` is ``response.model``: LiteLLM
+    echoes the requested ALIAS there on a clean call (useless), but on a
+    fallback it echoes the REAL served model (e.g.
+    ``meta-llama/llama-4-scout-17b-16e-instruct``) -- so it's only trusted when
+    ``fallback_fired`` is True.
+    """
+
+    fallback_fired: bool
+    served_model: str = ""
+
+
+class ServedModelTracker:
+    """Records, per requested alias, whether LiteLLM served via a fallback.
+
+    The static :data:`_RESOLVED_MODEL_BY_ALIAS` map answers "what does this
+    alias point at" but NOT "did this call fall back". QNT-182 established that
+    LiteLLM echoes the requested ALIAS in ``response.model`` (so the response
+    *body* cannot reveal a fallback), but the response *headers* carry the
+    authoritative ``x-litellm-attempted-fallbacks`` counter. When
+    ``equity-agent/default`` falls over on Groq TPD exhaustion (QNT-227:
+    fallbacks are transitive), this tracker captures that per-alias so the SSE
+    handler can mark the trace instead of attributing the run to the primary
+    model that never served it.
+    """
+
+    __slots__ = ("_lock", "_info")
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._info: dict[str, ServedModelInfo] = {}
+
+    def record(self, requested_alias: str, *, fallback_fired: bool, served_model: str) -> None:
+        if not requested_alias:
+            return
+        with self._lock:
+            prev = self._info.get(requested_alias)
+            # Sticky: once any call on this alias fell back, the run did. Keep
+            # the served model from whichever call actually fell back.
+            fired = fallback_fired or (prev.fallback_fired if prev else False)
+            if fallback_fired and served_model:
+                model = served_model
+            else:
+                model = prev.served_model if prev else ""
+            self._info[requested_alias] = ServedModelInfo(fired, model)
+
+    def info(self) -> dict[str, ServedModelInfo]:
+        with self._lock:
+            return dict(self._info)
+
+
+_SERVED_MODEL_TRACKER: contextvars.ContextVar[ServedModelTracker | None] = contextvars.ContextVar(
+    "agent_served_model_tracker", default=None
+)
+
+
+def set_served_model_tracker(
+    tracker: ServedModelTracker | None,
+) -> contextvars.Token[ServedModelTracker | None]:
+    """Install ``tracker`` for the current async context. Returns the reset token."""
+    return _SERVED_MODEL_TRACKER.set(tracker)
+
+
+def reset_served_model_tracker(token: contextvars.Token[ServedModelTracker | None]) -> None:
+    """Restore the previous context-local value. Pair with ``set_served_model_tracker``."""
+    _SERVED_MODEL_TRACKER.reset(token)
+
+
+def _response_headers(response: Any) -> dict[str, Any]:
+    """Pull the LiteLLM response headers out of a LangChain LLM response.
+
+    With ``include_response_headers=True`` the headers land in
+    ``llm_output["headers"]`` (``.invoke()`` paths) or in a generation
+    message's ``response_metadata["headers"]``. Streamed chunks don't carry
+    them -- the structured ``synthesize`` call (the one that falls back on TPD)
+    does, which is what matters. Returns ``{}`` when absent.
+    """
+    out = getattr(response, "llm_output", None) or {}
+    headers = out.get("headers")
+    if isinstance(headers, dict):
+        return headers
+    for gen_list in getattr(response, "generations", None) or []:
+        for gen in gen_list:
+            message = getattr(gen, "message", None)
+            meta = getattr(message, "response_metadata", None) or {}
+            headers = meta.get("headers")
+            if isinstance(headers, dict):
+                return headers
+    return {}
+
+
+def _model_name_from_response(response: Any) -> str:
+    """``response.model`` as LangChain surfaces it (``model_name``).
+
+    The alias on a clean call, the real served model on a fallback. Empty when
+    absent (e.g. a streamed chunk).
+    """
+    out = getattr(response, "llm_output", None) or {}
+    model = out.get("model_name") or out.get("model")
+    if model:
+        return str(model)
+    for gen_list in getattr(response, "generations", None) or []:
+        for gen in gen_list:
+            message = getattr(gen, "message", None)
+            meta = getattr(message, "response_metadata", None) or {}
+            model = meta.get("model_name") or meta.get("model")
+            if model:
+                return str(model)
+    return ""
+
+
+def _fallback_info_from_response(response: Any) -> ServedModelInfo | None:
+    """Parse the x-litellm fallback signal + served model out of a response.
+
+    Returns ``None`` when the headers don't carry the counter (so the caller
+    records nothing and the run keeps the static resolution).
+    """
+    headers = _response_headers(response)
+    raw = headers.get("x-litellm-attempted-fallbacks")
+    if raw is None:
+        return None
+    try:
+        fired = int(raw) > 0
+    except (TypeError, ValueError):
+        fired = False
+    return ServedModelInfo(fallback_fired=fired, served_model=_model_name_from_response(response))
+
+
+class _ServedModelCallback(BaseCallbackHandler):
+    """LangChain callback that records the fallback signal for one alias's calls.
+
+    One instance is bound per ``get_llm()`` call, so it knows the requested
+    alias; ``on_llm_end`` reads the x-litellm-* headers LiteLLM returned and
+    stores the result on the request-scoped :class:`ServedModelTracker`.
+    """
+
+    def __init__(self, tracker: ServedModelTracker, requested_alias: str) -> None:
+        super().__init__()
+        self._tracker = tracker
+        self._alias = requested_alias
+
+    def on_llm_end(  # type: ignore[override]
+        self,
+        response: Any,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        **kwargs: Any,
+    ) -> None:
+        del run_id, parent_run_id, kwargs
+        try:
+            info = _fallback_info_from_response(response)
+        except Exception as exc:  # noqa: BLE001 — telemetry must never crash the request
+            logger.warning("served-model extraction failed: %s", exc)
+            return
+        if info is not None:
+            self._tracker.record(
+                self._alias,
+                fallback_fired=info.fallback_fired,
+                served_model=info.served_model,
+            )
+
+
+def resolve_trace_model_tag(
+    *,
+    alias: str,
+    static_resolved: str,
+    served_info: dict[str, ServedModelInfo],
+) -> tuple[str, bool]:
+    """Return ``(model_tag_value, fallback_fired)`` for the trace ``model:`` tag.
+
+    No fallback (the common case): the static alias resolution is correct, so
+    existing Langfuse ``model:`` filters keep matching. On a genuine fallback
+    (``x-litellm-attempted-fallbacks > 0``) the static map no longer describes
+    the run, so we surface the model LiteLLM actually served (``response.model``
+    carries the real model name on a fallback), or the explicit
+    ``unverified-fallback`` marker if we couldn't read it -- either way the
+    filter stops attributing the run to the primary model (QNT-230 #14). Falls
+    back to ``unverified-alias`` when even the static map is blind.
+    """
+    info = served_info.get(alias)
+    if info is not None and info.fallback_fired:
+        return (info.served_model or "unverified-fallback"), True
+    if static_resolved and static_resolved != "unknown":
+        return static_resolved, False
+    return "unverified-alias", False
+
+
+def get_judge_llm(temperature: float = 0.0) -> ChatOpenAI:
+    """Return a ChatOpenAI pinned to :data:`JUDGE_ALIAS` for LLM-as-judge scoring.
+
+    Deliberately bypasses both ``_MODEL_OVERRIDE`` and ``_TEMPERATURE_OVERRIDE``:
+    the judge must NOT move when a bench sweep re-routes the agent-under-test
+    (QNT-230 #10), and it stays at temperature 0.0 for reproducible scores
+    regardless of the dialogue-eval determinism override. No token tracker is
+    attached -- judge calls run in the eval harness, outside the per-request
+    budget context.
+    """
+    return ChatOpenAI(
+        model=JUDGE_ALIAS,
+        base_url=settings.LITELLM_BASE_URL,
+        api_key="litellm-proxy",  # pyright: ignore[reportArgumentType]  # proxy ignores; real keys server-side
+        temperature=temperature,
+        timeout=settings.LLM_REQUEST_TIMEOUT,
+        # Mirror dialogue_judge.build_judge_llm: a transient judge-provider 429
+        # must retry rather than drop the row to a (contaminating) None score in
+        # history.csv (QNT-218 rationale, same pinned alias).
+        max_retries=3,
+    )
+
+
 def get_llm(temperature: float = 0.2, model_alias: str | None = None) -> ChatOpenAI:
     """Return a ChatOpenAI bound to a LiteLLM alias.
 
@@ -258,6 +488,9 @@ def get_llm(temperature: float = 0.2, model_alias: str | None = None) -> ChatOpe
     tracker = _TOKEN_TRACKER.get()
     if tracker is not None:
         callbacks.append(_UsageCallback(tracker))
+    served_tracker = _SERVED_MODEL_TRACKER.get()
+    if served_tracker is not None:
+        callbacks.append(_ServedModelCallback(served_tracker, alias))
 
     effective_temperature = (
         _TEMPERATURE_OVERRIDE if _TEMPERATURE_OVERRIDE is not None else temperature
@@ -277,17 +510,29 @@ def get_llm(temperature: float = 0.2, model_alias: str | None = None) -> ChatOpe
         # completion tokens for all 96 narrate calls in the 14-day baseline.
         # No-op for non-streamed .invoke() calls.
         stream_usage=True,
+        # QNT-230 #14: surface LiteLLM's x-litellm-* headers in response_metadata
+        # so _ServedModelCallback can read the authoritative
+        # x-litellm-attempted-fallbacks counter. response.model only ever echoes
+        # the requested alias (QNT-182), so the body can't reveal a fallback.
+        include_response_headers=True,
         callbacks=callbacks or None,
     )
 
 
 __all__ = [
+    "JUDGE_ALIAS",
     "SMALL_NODE_ALIAS",
+    "ServedModelInfo",
+    "ServedModelTracker",
     "TokenUsageTracker",
     "current_model_info",
+    "get_judge_llm",
     "get_llm",
+    "reset_served_model_tracker",
     "reset_token_tracker",
+    "resolve_trace_model_tag",
     "set_model_override",
+    "set_served_model_tracker",
     "set_temperature_override",
     "set_token_tracker",
 ]
