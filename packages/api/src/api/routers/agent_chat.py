@@ -23,9 +23,11 @@ Event contract
                     fallback-redirect, and the budget/rate-limit redirect.
                     These have no ``narrative_chunk`` surface, so prose_chunk is
                     their only pre-card streaming text. The narrate-streaming
-                    card shapes (thesis / quick_fact / comparison / focused /
-                    exploration) no longer replay prose_chunk -- the narrative
-                    bubble is their prose surface and the card lands directly.
+                    card shapes (thesis / comparison / focused / exploration) no
+                    longer replay prose_chunk -- the narrative bubble is their
+                    prose surface and the card lands directly. QNT-232 #3:
+                    quick_fact also skips narrate now, but it emits no prose_chunk
+                    either -- its early-emitted card answer IS the surface.
 
 ``narrative_chunk`` — ``{delta}`` token-level deltas from the QNT-211 narrate
                     node. Streamed AS the graph runs, so the frontend renders a
@@ -34,9 +36,11 @@ Event contract
                     emitted at the END of synthesize_node -- i.e. BEFORE narrate
                     streams -- so the card renders while the bubble is still
                     streaming above it. Absent when the intent is
-                    ``conversational`` (that path's answer is already prose) or
-                    when the narrate LLM call failed (the structured card still
-                    renders; bubble degrades).
+                    ``conversational`` (that path's answer is already prose),
+                    when the intent is ``quick_fact`` (QNT-232 #3: its card
+                    answer is already analyst-voice prose, so narrate is skipped),
+                    or when the narrate LLM call failed (the structured card
+                    still renders; bubble degrades).
 
 The structured card events below (``thesis`` / ``quick_fact`` / ``comparison`` /
 ``comparison_lean`` / ``focused`` / ``exploration``) are emitted TWICE by
@@ -54,6 +58,8 @@ emitter failure + stubbed test graphs that bypass synthesize). The panel's
                     dumped to JSON (QNT-149). Emitted only when
                     intent == "quick_fact"; the panel renders a compact
                     answer + cited value chip and skips the thesis card.
+                    QNT-232 #3: narrate is skipped for this shape, so the card
+                    answer is the lone prose surface (no narrative bubble above).
 
 ``comparison``    — full :class:`~agent.comparison.ComparisonAnswer` model
                     dumped to JSON (QNT-156). Emitted only when
@@ -1092,7 +1098,9 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
             # so Langfuse/UI can tell the two apart; the rendered card is
             # the same compact answer + cited value chip.
             # QNT-229 #2b/#5: card emitted early from synthesize_node; this is
-            # the idempotent net. narrate is the prose surface, so no prose_chunk.
+            # the idempotent net. QNT-232 #3: quick_fact skips narrate, so the
+            # card answer is the surface -- no narrative bubble, no prose_chunk.
+            # (followup reuses this branch and DOES narrate; intent tells apart.)
             yield _sse("quick_fact", quick_fact.model_dump())
         elif intent in {"fundamental", "technical", "news"} and isinstance(
             focused, FocusedAnalysis

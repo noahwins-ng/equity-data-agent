@@ -308,6 +308,32 @@ def test_narrate_prompt_strips_structured_payload_disclaimer(
     assert DISCLAIMER not in rendered_prompt
 
 
+def test_quick_fact_intent_skips_narrate(stub_llm: _StubLLM) -> None:
+    """QNT-232 #3 (AC2): a quick_fact turn makes exactly ONE default-alias LLM
+    call -- synthesize -- and skips narrate. The QuickFactAnswer card carries
+    the answer + cited value; no narrative bubble streams above it."""
+    events, emit = _make_emitter()
+    graph = build_graph(
+        {"technical": MagicMock(return_value="## technical\nRSI 78\n")}, event_emitter=emit
+    )
+
+    result = graph.invoke({"ticker": "NVDA", "question": "What's NVDA's RSI right now?"})
+
+    assert result["intent"] == "quick_fact"
+    # Surviving surface: the structured card carries the answer + cited value.
+    qf = result.get("quick_fact")
+    assert isinstance(qf, QuickFactAnswer)
+    assert qf.answer
+    assert qf.cited_value == "78"
+    # narrate skipped: no narrative bubble streamed and the stub's .stream()
+    # (the only default-alias call narrate would make) was never invoked.
+    assert result.get("narrative") is None
+    assert not any(event == "narrative_chunk" for event, _ in events)
+    assert stub_llm.stream_prompts == []
+    # The card still emitted (early, from synthesize) as the lone surface.
+    assert any(event == "quick_fact" for event, _ in events)
+
+
 def test_conversational_intent_skips_narrate(
     stub_llm: _StubLLM,  # noqa: ARG001
 ) -> None:
