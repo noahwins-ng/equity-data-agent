@@ -475,9 +475,8 @@ def test_with_source_llm_include_raw_dict(monkeypatch: pytest.MonkeyPatch) -> No
 # ─── QNT-222 follow-up: needs_news_search signal ─────────────────────────────
 
 
-def test_needs_news_search_uses_llm_flag_on_llm_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """On the LLM path the model's own needs_news_search judgment is returned --
-    independent of intent (a targeted ask can be quick_fact)."""
+def test_needs_news_search_deterministic_on_llm_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The LLM picks shape, but RAG routing is deterministic."""
     _patch_llm_pipeline(monkeypatch, IntentDecision(intent="quick_fact", needs_news_search=True))
     from agent.intent import classify_intent_with_source
 
@@ -488,13 +487,29 @@ def test_needs_news_search_uses_llm_flag_on_llm_path(monkeypatch: pytest.MonkeyP
     assert needs_news_search is True
 
 
-def test_needs_news_search_llm_flag_false_is_respected(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A generic news ask the LLM marks False does not trip the keyword net."""
-    _patch_llm_pipeline(monkeypatch, IntentDecision(intent="news", needs_news_search=False))
+def test_needs_news_search_ignores_llm_true_for_generic_news(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Generic news overview must stay non-RAG even if the LLM flag drifts."""
+    _patch_llm_pipeline(monkeypatch, IntentDecision(intent="news", needs_news_search=True))
     from agent.intent import classify_intent_with_source
 
     _intent, _source, needs_news_search = classify_intent_with_source("what's the news on AAPL?")
     assert needs_news_search is False
+
+
+def test_needs_news_search_targeted_keyword_overrides_llm_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Specific-topic news phrasing should RAG even if the LLM flag misses it."""
+    _patch_llm_pipeline(monkeypatch, IntentDecision(intent="news", needs_news_search=False))
+    from agent.intent import classify_intent_with_source
+
+    intent, source, needs_news_search = classify_intent_with_source(
+        "any news on NVDA collaboration with Nokia?"
+    )
+    assert (intent, source) == ("news", "llm")
+    assert needs_news_search is True
 
 
 def test_needs_news_search_keyword_fallback_on_heuristic_path() -> None:
@@ -514,8 +529,13 @@ def test_is_targeted_news_distinguishes_targeted_from_generic() -> None:
     assert _is_targeted_news("what did the CEO say about the buyback?") is True
     assert _is_targeted_news("any recall news on TSLA?") is True
     assert _is_targeted_news("what's the latest on the Micron partnership?") is True
+    assert _is_targeted_news("any news on NVDA collaboration with Nokia?") is True
+    assert _is_targeted_news("what the latest news NVDA with SK Hynix?") is True
+    assert _is_targeted_news("headlines on META about antitrust?") is True
     # Generic news asks name no specific event/entity.
     assert _is_targeted_news("what's the news on AAPL?") is False
+    assert _is_targeted_news("what's the latest news on NVDA?") is False
+    assert _is_targeted_news("what's the latest on NVDA?") is False
     assert _is_targeted_news("headlines on META") is False
     # Whole-word matching: "sue" must not fire on "issue", "sec" not on "second".
     assert _is_targeted_news("what are the issues this second?") is False
