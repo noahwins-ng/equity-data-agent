@@ -24,6 +24,7 @@ from agent.graph import build_graph
 from agent.intent import IntentDecision
 from agent.prompts import (
     ANALYST_VOICE_ADR,
+    NEUTRAL_GREETING_SYSTEM_PROMPT,
     ConversationMessage,
     build_conversational_prompt,
 )
@@ -84,6 +85,23 @@ def test_warm_thread_suppresses_cold_capability_prompt() -> None:
 
     prefix_text = "\n".join(str(m.content) for m in prompt[:-1])
     assert "NVDA" in prefix_text, "prior NVDA context must be threaded into the prefix"
+
+
+def test_bare_greeting_on_warm_thread_uses_neutral_prompt() -> None:
+    """A plain 'hi' after analysis is a greeting, not agreement with the read."""
+    history: list[ConversationMessage] = [
+        {"role": "user", "content": "Should I be cautious about META here?"},
+        {"role": "assistant", "content": "The read on META stays cautious."},
+    ]
+    prompt = build_conversational_prompt("hi", history=history)
+
+    system = _system_text(prompt)
+    assert system == NEUTRAL_GREETING_SYSTEM_PROMPT
+    assert _COLD_CARD_MARKER not in system
+    assert "continuing an in-progress equity-research conversation" not in system
+    assert "do not reference the prior ticker" in system.lower()
+    prefix_text = "\n".join(str(m.content) for m in prompt[:-1])
+    assert "META" not in prefix_text
 
 
 def test_warm_prompt_keeps_digit_free_guardrail() -> None:
@@ -214,3 +232,33 @@ def test_warm_ack_after_nvda_thesis_uses_warm_prompt_no_tools(
     assert _COLD_CARD_MARKER not in system
     prefix_text = "\n".join(str(m.content) for m in last_prompt[:-1])
     assert "NVDA" in prefix_text
+
+
+def test_bare_hi_after_nvda_thesis_uses_neutral_prompt_no_tools(
+    monkeypatch: Any,
+) -> None:
+    """Regression for warm-thread 'hi' being interpreted as agreement."""
+    stub = _SequenceStubLLM()
+    monkeypatch.setattr(graph_module, "get_llm", lambda *a, **kw: stub)
+    monkeypatch.setattr("agent.intent.get_llm", lambda *a, **kw: stub)
+
+    tools = _tools()
+    graph = build_graph(
+        tools,
+        checkpointer=SqliteSaver(sqlite3.connect(":memory:", check_same_thread=False)),
+    )
+    config: RunnableConfig = {"configurable": {"thread_id": "warm-hi:NVDA"}}
+
+    graph.invoke({"ticker": "NVDA", "question": "Give me an NVDA thesis."}, config=config)
+    for tool in tools.values():
+        tool.reset_mock()
+
+    second = graph.invoke({"ticker": "NVDA", "question": "hi"}, config=config)
+
+    assert second["intent"] == "conversational"
+    assert isinstance(second["conversational"], ConversationalAnswer)
+    assert sum(tool.call_count for tool in tools.values()) == 0
+
+    assert stub.conversational_prompts, "conversational synthesize must have fired"
+    last_prompt = stub.conversational_prompts[-1]
+    assert _system_text(last_prompt) == NEUTRAL_GREETING_SYSTEM_PROMPT
