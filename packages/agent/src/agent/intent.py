@@ -120,7 +120,8 @@ class IntentDecision(BaseModel):
             "event, development, or entity -- e.g. litigation or a lawsuit, a "
             "regulatory probe / antitrust action, what an executive (CEO/CFO) "
             "said, a buyback or dividend change, a recall, a partnership / deal "
-            "/ acquisition, a product launch, or a specific guidance change. "
+            "/ collaboration / acquisition, a product launch, or a specific "
+            "guidance change. "
             "This is independent of the 'intent' field above: a targeted news "
             "ask can be phrased as a quick_fact ('what did the CEO say about "
             "the buyback?') or a thesis ('is NVDA a buy given the lawsuit?') -- "
@@ -368,13 +369,10 @@ _EXPLORATION_GESTURE_TOKENS: tuple[str, ...] = (
 )
 
 
-# QNT-222 follow-up: keyword fallback for the semantic-news-search signal. The
-# PRIMARY signal is the LLM classifier's ``needs_news_search`` flag (set in the
-# same structured-output call, judged semantically). This token list is only the
-# cheap fallback for the two paths where no LLM judgment is available: the
-# heuristic short-circuit and the LLM-failure bias-to-thesis path. Whole-word
-# matched via ``_matches_any`` ("sue" never fires on "issue", "sec" not on
-# "second"). A targeted news ask names a specific event/entity.
+# QNT-222 follow-up + QNT-229 follow-up: deterministic semantic-news-search
+# routing. Generic news asks use the canned overview; specific-event/topic asks
+# use RAG. The classifier still carries a ``needs_news_search`` field for model
+# guidance/back-compat, but code owns the product boundary.
 _TARGETED_NEWS_TOKENS: tuple[str, ...] = (
     "litigation",
     "lawsuit",
@@ -398,6 +396,10 @@ _TARGETED_NEWS_TOKENS: tuple[str, ...] = (
     "acquisition",
     "acquire",
     "acquires",
+    "collaboration",
+    "collaborate",
+    "collaborates",
+    "collaborating",
     "partnership",
     "partner",
     "deal",
@@ -410,17 +412,77 @@ _TARGETED_NEWS_TOKENS: tuple[str, ...] = (
     "catalysts",
 )
 
+_NEWS_QUERY_TOKENS: tuple[str, ...] = (
+    "news",
+    "headline",
+    "headlines",
+    "latest",
+    "development",
+    "developments",
+    "update",
+    "updates",
+)
+
+_TARGETED_NEWS_QUALIFIERS: tuple[str, ...] = (
+    "with",
+    "about",
+    "regarding",
+    "related to",
+    "around",
+    "concerning",
+    "involving",
+)
+
+_GENERIC_QUALIFIER_WORDS: frozenset[str] = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "company",
+        "stock",
+        "shares",
+    }
+)
+
+
+def _has_specific_news_qualifier(question: str) -> bool:
+    """Return True for broad-news phrasing narrowed by an entity/topic.
+
+    Examples:
+    * "latest news on NVDA" -> False (overview)
+    * "latest news on NVDA with SK Hynix" -> True (RAG)
+    * "headlines on META about antitrust" -> True (RAG)
+    """
+    text = question.lower()
+    if _matches_any(text, _NEWS_QUERY_TOKENS) is None:
+        return False
+    ticker_words = {ticker.lower() for ticker in TICKERS}
+    for qualifier in _TARGETED_NEWS_QUALIFIERS:
+        pattern = rf"(?<![A-Za-z0-9]){re.escape(qualifier)}\s+([^?.,;:!]+)"
+        for match in re.finditer(pattern, text):
+            words = re.findall(r"[a-z0-9]+", match.group(1))
+            specific_words = [
+                word
+                for word in words
+                if word not in ticker_words and word not in _GENERIC_QUALIFIER_WORDS
+            ]
+            if specific_words:
+                return True
+    return False
+
 
 def _is_targeted_news(question: str) -> bool:
-    """QNT-222: keyword fallback for "is this a targeted news ask?".
+    """Return True when a question should use semantic news search.
 
-    True when the question names a specific event/entity worth a semantic news
-    search (litigation, CEO, buyback, lawsuit, recall, partnership, ...). Used
-    only when the LLM classifier did not run (heuristic short-circuit) or failed
-    -- on the LLM path the model's ``needs_news_search`` judgment is trusted
-    instead. Whole-word matched so "sue" doesn't fire on "issue".
+    This is deterministic product routing, not model reasoning. A generic news
+    overview ("latest news on NVDA") stays on the canned digest. A specific
+    event/entity/topic ("latest news on NVDA with SK Hynix") uses RAG.
     """
-    return _matches_any(question.lower(), _TARGETED_NEWS_TOKENS) is not None
+    text = question.lower()
+    return (
+        _matches_any(text, _TARGETED_NEWS_TOKENS) is not None
+        or _has_specific_news_qualifier(question)
+    )
 
 
 def underspecified_gesture(question: str) -> Literal["view", "compare"] | None:
@@ -645,8 +707,10 @@ though the answer happens to lean on fundamentals.
 Separately, set the boolean 'needs_news_search' True when the question asks \
 about a SPECIFIC named news event, development, or entity -- litigation / a \
 lawsuit, a regulatory probe or antitrust action, what an executive said, a \
-buyback or dividend change, a recall, a partnership / deal / acquisition, a \
-product launch, or a specific guidance change. This is independent of the \
+buyback or dividend change, a recall, a partnership / deal / collaboration / \
+acquisition, a product launch, or a specific guidance change. This includes \
+generic-news phrasing that names a specific topic or entity, such as "any news \
+on NVDA collaboration with Nokia". This is independent of the \
 intent label: "what did the CEO say about the buyback?" is intent=quick_fact \
 but needs_news_search=True; "is NVDA a buy given the lawsuit?" is intent=thesis \
 but needs_news_search=True. Set it False for a generic news ask ("what's the \
@@ -676,12 +740,10 @@ def classify_intent_with_source(
     - ``"fallback"`` — LLM call failed/timed out or returned unexpected shape;
       biased to ``"thesis"`` as the safe default
 
-    QNT-222 follow-up: ``needs_news_search`` says whether to fire the semantic
-    news search (search_news / RAG), independent of the intent label. On the
-    ``"llm"`` path it is the model's own ``needs_news_search`` judgment (a
-    targeted-event ask can be any intent shape). On the ``"heuristic"`` and
-    ``"fallback"`` paths no LLM judgment is available, so it falls back to the
-    ``_is_targeted_news`` keyword signal.
+    QNT-222 follow-up: ``needs_news_search`` says whether to fire semantic news
+    search (search_news / RAG), independent of the intent label. The retrieval
+    decision is deterministic via ``_is_targeted_news`` so broad overview asks
+    and specific-topic asks do not drift with model judgment.
 
     QNT-181: ``config`` carries the LangGraph CallbackHandler so the
     LLM-fallback path's generation observation nests under the parent trace.
@@ -721,13 +783,14 @@ def classify_intent_with_source(
         if isinstance(parsed, IntentDecision):
             decision = parsed
     if decision is not None:
+        needs_news_search = _is_targeted_news(question)
         logger.info(
             "classify intent=%s needs_news_search=%s via=llm question=%r",
             decision.intent,
-            decision.needs_news_search,
+            needs_news_search,
             question[:80],
         )
-        return decision.intent, "llm", decision.needs_news_search
+        return decision.intent, "llm", needs_news_search
     logger.warning("classify llm returned unexpected shape, defaulting to thesis")
     return "thesis", "fallback", _is_targeted_news(question)
 
