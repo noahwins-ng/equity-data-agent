@@ -131,6 +131,54 @@ def test_narrate_assembles_text_and_emits_chunks_in_order(stub_llm: _StubLLM) ->
     assert chunks == ["I'd lean ", "Overweight ", "on this one."]
 
 
+def test_synthesize_emits_card_before_narrate(stub_llm: _StubLLM) -> None:
+    """QNT-229 AC2: synthesize_node emits the structured card via the emitter
+    the instant it is ready -- BEFORE narrate streams the analyst-voice bubble.
+    The early card event must precede the first narrative_chunk, and its payload
+    must equal the model_dump of the same card landed in state."""
+    stub_llm.stream_chunks = ["I'd lean ", "Overweight."]
+    events, emit = _make_emitter()
+    graph = build_graph(_default_tools(), event_emitter=emit)
+    result = graph.invoke({"ticker": "TSLA", "question": "is TSLA overvalued?"})
+
+    names = [event for event, _ in events]
+    assert "thesis" in names, f"expected an early thesis card event, got {names}"
+    assert "narrative_chunk" in names, f"expected narrate to stream, got {names}"
+    first_card = names.index("thesis")
+    first_narrate = names.index("narrative_chunk")
+    assert first_card < first_narrate, (
+        f"early card (idx {first_card}) must arrive before narrate (idx {first_narrate}): {names}"
+    )
+    # The emitted payload is the model dump of the same thesis carried in state.
+    card_payload = next(data for event, data in events if event == "thesis")
+    assert isinstance(result.get("thesis"), Thesis)
+    assert card_payload == result["thesis"].model_dump()
+
+
+def test_synthesize_does_not_emit_card_for_conversational(
+    stub_llm: _StubLLM,  # noqa: ARG001
+) -> None:
+    """QNT-229 AC2: conversational / fallback-redirect shapes carry no card
+    slot, so synthesize emits no early card event for them (their prose still
+    streams via prose_chunk on the API side)."""
+    events, emit = _make_emitter()
+    graph = build_graph(_default_tools(), event_emitter=emit)
+    result = graph.invoke({"ticker": "TSLA", "question": "hi"})
+
+    assert result["intent"] == "conversational"
+    card_shapes = {
+        "thesis",
+        "quick_fact",
+        "comparison",
+        "comparison_lean",
+        "focused",
+        "exploration",
+    }
+    assert not any(event in card_shapes for event, _ in events), (
+        f"conversational must emit no early card event, got {[e for e, _ in events]}"
+    )
+
+
 def test_narrate_grounding_miss_is_advisory_after_chunks(
     stub_llm: _StubLLM,
     monkeypatch: pytest.MonkeyPatch,

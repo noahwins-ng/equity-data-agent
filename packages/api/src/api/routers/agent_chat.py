@@ -18,19 +18,33 @@ Event contract
                     so the row can render without further parsing.
 
 ``prose_chunk``   — ``{delta}`` markdown deltas for the agent prose surface.
-                    For now the prose is the structured thesis's company-aspect
-                    summary chunked by clause; a future revision can splice
-                    explicit narrative output from the synthesize node.
+                    QNT-229 #5: emitted ONLY for the paths that skip the narrate
+                    node -- ``conversational`` intent, the synthesize
+                    fallback-redirect, and the budget/rate-limit redirect.
+                    These have no ``narrative_chunk`` surface, so prose_chunk is
+                    their only pre-card streaming text. The narrate-streaming
+                    card shapes (thesis / quick_fact / comparison / focused /
+                    exploration) no longer replay prose_chunk -- the narrative
+                    bubble is their prose surface and the card lands directly.
 
 ``narrative_chunk`` — ``{delta}`` token-level deltas from the QNT-211 narrate
-                    node. Streamed AS the graph runs (between the structured
-                    payload composing and the post-graph ``thesis``/``quick_fact``/
-                    etc. event firing), so the frontend renders a 1-4 sentence
-                    analyst-voice prose bubble ABOVE the structured card while
-                    the card itself is still being assembled. Absent when the
-                    intent is ``conversational`` (that path's answer is already
-                    prose) or when the narrate LLM call failed (the structured
-                    card still renders; bubble degrades).
+                    node. Streamed AS the graph runs, so the frontend renders a
+                    1-4 sentence analyst-voice prose bubble ABOVE the structured
+                    card. QNT-229 #2b: the structured card event (below) is now
+                    emitted at the END of synthesize_node -- i.e. BEFORE narrate
+                    streams -- so the card renders while the bubble is still
+                    streaming above it. Absent when the intent is
+                    ``conversational`` (that path's answer is already prose) or
+                    when the narrate LLM call failed (the structured card still
+                    renders; bubble degrades).
+
+The structured card events below (``thesis`` / ``quick_fact`` / ``comparison`` /
+``comparison_lean`` / ``focused`` / ``exploration``) are emitted TWICE by
+contract (QNT-229 #2b): once early, from ``synthesize_node`` via the
+event_emitter the instant the payload is ready (before narrate streams), and
+again post-graph from this module as an idempotent safety net (covers a silent
+emitter failure + stubbed test graphs that bypass synthesize). The panel's
+``updateRun`` is idempotent -- the duplicate frame overwrites the same payload.
 
 ``thesis``        — full :class:`~agent.thesis.Thesis` model dumped to JSON.
                     Renders the Setup / Bull / Bear / Verdict card. Emitted
@@ -96,8 +110,10 @@ The graph itself is synchronous (Python LangGraph, sync ``invoke``). To stream
 incrementally we wrap each tool with an instrumented adapter that posts
 events to an :class:`asyncio.Queue` from a worker thread, run the graph in
 ``asyncio.to_thread``, and yield queued events to the SSE client as they
-arrive. After the graph completes, the post-run events (``prose_chunk``,
-``thesis``, ``done``) are emitted from the main coroutine.
+arrive (this is how the early card + narrative_chunk events reach the client
+mid-run). After the graph completes, the post-run events (the idempotent card
+re-emit, any ``prose_chunk`` for redirect paths, ``done``) are emitted from the
+main coroutine.
 """
 
 from __future__ import annotations
@@ -631,8 +647,11 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
     """Yield SSE frames for one chat request.
 
     Validation failures yield a single ``error`` event followed by ``done``;
-    success yields the canonical ``tool_call`` → ``tool_result`` → ``prose_chunk``
-    → ``thesis`` → ``done`` sequence.
+    a typical narrate-shape success yields ``intent`` → ``tool_call`` →
+    ``tool_result`` → the structured card (e.g. ``thesis``, emitted early from
+    synthesize) → ``narrative_chunk`` stream → ``done``. The prose-reply paths
+    (conversational / redirect) substitute a ``prose_chunk`` stream for the
+    card+narrate pair. See the module docstring for the full event contract.
 
     QNT-161: ``client_ip`` drives the per-IP daily token budget. Both the
     per-IP and global TPD breakers are checked BEFORE the graph runs; on
@@ -1057,11 +1076,9 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                 await asyncio.sleep(0)
             yield _sse("conversational", conversational.model_dump())
         elif intent == "comparison" and isinstance(comparison, ComparisonAnswer):
-            # Stream the differences paragraph as prose so the panel has
-            # something to show before the full card lands.
-            for chunk in _split_prose(comparison.differences):
-                yield _sse("prose_chunk", {"delta": chunk + " "})
-                await asyncio.sleep(0)
+            # QNT-229 #2b/#5: card emitted early from synthesize_node; this
+            # post-graph yield is the idempotent safety net. narrate streams
+            # the qualitative contrast as the prose surface, so no prose_chunk.
             yield _sse("comparison", comparison.model_dump())
         elif intent == "comparison" and isinstance(comparison_lean, LeanComparisonAnswer):
             # QNT-224: lean 3-4 way metrics table. No differences field — the
@@ -1074,40 +1091,28 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
             # already renders it). The intent event still carries "followup"
             # so Langfuse/UI can tell the two apart; the rendered card is
             # the same compact answer + cited value chip.
-            for chunk in _split_prose(quick_fact.answer):
-                yield _sse("prose_chunk", {"delta": chunk + " "})
-                await asyncio.sleep(0)
+            # QNT-229 #2b/#5: card emitted early from synthesize_node; this is
+            # the idempotent net. narrate is the prose surface, so no prose_chunk.
             yield _sse("quick_fact", quick_fact.model_dump())
         elif intent in {"fundamental", "technical", "news"} and isinstance(
             focused, FocusedAnalysis
         ):
-            # QNT-176: focused-analysis card. Stream the summary as prose
-            # so the panel has something to render before the full payload
-            # lands, then emit the structured event.
-            for chunk in _split_prose(focused.summary):
-                yield _sse("prose_chunk", {"delta": chunk + " "})
-                await asyncio.sleep(0)
+            # QNT-176: focused-analysis card.
+            # QNT-229 #2b/#5: card emitted early from synthesize_node; this is
+            # the idempotent net. narrate owns the prose surface -> no prose_chunk.
             yield _sse("focused", focused.model_dump())
         elif intent == "exploration" and isinstance(exploration, ExplorationAnswer):
-            # QNT-220 follow-up: exploration-scan card. Stream the headline as
-            # prose so the panel has something before the full payload lands,
-            # then emit the structured event.
-            for chunk in _split_prose(exploration.headline):
-                yield _sse("prose_chunk", {"delta": chunk + " "})
-                await asyncio.sleep(0)
+            # QNT-220 follow-up: exploration-scan card.
+            # QNT-229 #2b/#5: card emitted early from synthesize_node; this is
+            # the idempotent net. narrate owns the prose surface -> no prose_chunk.
             yield _sse("exploration", exploration.model_dump())
         elif intent == "thesis" and isinstance(thesis, Thesis):
             # QNT-211: gate on intent so the followup narrative-only path
             # (intent=followup, quick_fact=None, thesis hydrated from the
             # prior turn) doesn't re-emit a thesis event from the cached
             # state. The bubble alone is the response.
-            # Stream prose. The structured-output runnable returns the entire
-            # thesis at once, so we re-chunk the company-aspect summary as
-            # the opening paragraph the panel renders progressively. A future
-            # revision could thread an LLM token stream into this slot.
-            for chunk in _split_prose(thesis.company.summary):
-                yield _sse("prose_chunk", {"delta": chunk + " "})
-                await asyncio.sleep(0)  # cooperative yield so the body flushes
+            # QNT-229 #2b/#5: card emitted early from synthesize_node; this is
+            # the idempotent net. narrate owns the prose surface -> no prose_chunk.
             yield _sse("thesis", thesis.model_dump())
         elif isinstance(conversational, ConversationalAnswer):
             # Fallback redirect from a non-conversational intent that failed

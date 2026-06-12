@@ -51,7 +51,7 @@ import {
   type ToolResultEvent,
   type Verdict,
 } from "@/lib/api";
-import { hasAnswerSurface } from "./chat-run";
+import { composingLabel, hasAnswerSurface, isComposing, showCardProse } from "./chat-run";
 import { parseSseStream } from "@/lib/sse";
 
 // ─── Local message-tape model ─────────────────────────────────────────────
@@ -396,6 +396,82 @@ function NarrativeBubble({ text }: { text: string }) {
   );
 }
 
+// ─── QNT-229 #2a: synthesize composing indicator ──────────────────────────
+//
+// Fills the dead-air window between the last tool returning and the analyst
+// voice arriving (the synthesize + narrate-startup gap — post-QNT-220 mean
+// ~4.5s). Sits in the SAME slot as the narrative bubble (top, above the card),
+// so when narration starts it is simply replaced by NarrativeBubble in place —
+// the early card (QNT-229 #2b) renders BELOW and never gets shoved by a bubble
+// appearing above it. A 4x4 pixel-spinner precedes the intent-named label
+// ("composing thesis…").
+
+// NxN pixel grid: a lit pixel chases clockwise around the perimeter (a fine
+// pixel-ring loader). The exact centre pixel breathes as a nucleus; the rest of
+// the interior is an empty spacer so the ring reads cleanly. PIXEL_SPIN_MS MUST
+// equal the .pixel-chase CSS animation-duration so the negative-delay stagger
+// spans exactly one loop (otherwise the comet has a seam).
+const PIXEL_GRID = 3;
+const PIXEL_SPIN_MS = 1000;
+
+// Perimeter cell indices (row-major) clockwise from the top-left corner.
+function ringPerimeter(n: number): number[] {
+  const cells: number[] = [];
+  for (let c = 0; c < n; c++) cells.push(c); // top row, L→R
+  for (let r = 1; r < n; r++) cells.push(r * n + (n - 1)); // right col, T→B
+  for (let c = n - 2; c >= 0; c--) cells.push((n - 1) * n + c); // bottom row, R→L
+  for (let r = n - 2; r >= 1; r--) cells.push(r * n); // left col, B→T
+  return cells;
+}
+const PIXEL_PERIMETER = ringPerimeter(PIXEL_GRID);
+const PIXEL_CENTER = Math.floor(PIXEL_GRID / 2) * PIXEL_GRID + Math.floor(PIXEL_GRID / 2);
+
+function PixelSpinner() {
+  const order = new Array<number>(PIXEL_GRID * PIXEL_GRID).fill(-1);
+  PIXEL_PERIMETER.forEach((cellIdx, i) => {
+    order[cellIdx] = i;
+  });
+  return (
+    <span aria-hidden className="grid shrink-0 grid-cols-3 gap-0.5">
+      {order.map((ord, idx) => {
+        if (ord !== -1) {
+          return (
+            <span
+              key={idx}
+              className="pixel-chase h-1.5 w-1.5 rounded-[1px] bg-emerald-400"
+              style={{
+                // Negative stagger keyed to (len - ord) so the bright head
+                // travels FORWARD along the perimeter (clockwise).
+                animationDelay: `-${((PIXEL_PERIMETER.length - ord) / PIXEL_PERIMETER.length) * PIXEL_SPIN_MS}ms`,
+              }}
+            />
+          );
+        }
+        if (idx === PIXEL_CENTER) {
+          // Single breathing nucleus at the centre of the ring.
+          return <span key={idx} className="pixel-core h-1.5 w-1.5 rounded-[1px] bg-emerald-500" />;
+        }
+        return <span key={idx} className="h-1.5 w-1.5" />; // interior spacer (none at 3x3)
+      })}
+    </span>
+  );
+}
+
+function ComposingBubble({ intent }: { intent: Intent | null }) {
+  return (
+    <div
+      aria-label="Composing answer"
+      aria-busy="true"
+      className="flex items-center gap-2 rounded border border-zinc-800 bg-zinc-900/40 px-3 py-2"
+    >
+      <PixelSpinner />
+      <span className="font-mono text-[11px] uppercase tracking-wider text-zinc-400">
+        {composingLabel(intent)}
+      </span>
+    </div>
+  );
+}
+
 // ─── QNT-208: four-aspect thesis card ─────────────────────────────────────
 
 // Verdict pill palette. Overweight = emerald (constructive), Neutral = zinc
@@ -479,10 +555,14 @@ function ThesisCard({
   ticker,
   thesis,
   stats,
+  // QNT-229 #6: render verdict_rationale only when the narrative bubble is
+  // absent (narrate degraded). Otherwise the bubble is the prose surface.
+  showProse = true,
 }: {
   ticker: string | null;
   thesis: ThesisPayload;
   stats: DoneEvent | null;
+  showProse?: boolean;
 }) {
   const confidencePct = stats
     ? Math.max(0, Math.min(100, Math.round(stats.confidence * 100)))
@@ -515,7 +595,7 @@ function ThesisCard({
               {thesis.verdict}
             </span>
           </div>
-          <ProseBlock text={thesis.verdict_rationale} />
+          {showProse && <ProseBlock text={thesis.verdict_rationale} />}
           {confidencePct !== null && (
             <div className="mt-2">
               <div className="mb-0.5 flex justify-between font-mono text-[10px] uppercase tracking-wider text-zinc-500">
@@ -594,9 +674,13 @@ function QuickFactCard({
 function ComparisonCard({
   comparison,
   stats,
+  // QNT-229 #6: render the differences paragraph only when the narrative
+  // bubble is absent (narrate degraded) — otherwise the bubble speaks it.
+  showProse = true,
 }: {
   comparison: ComparisonPayload;
   stats: DoneEvent | null;
+  showProse?: boolean;
 }) {
   const tickerHeader = comparison.sections.map((s) => s.ticker).join(" vs ");
   return (
@@ -628,12 +712,14 @@ function ComparisonCard({
           ))}
         </div>
 
-        <div className="rounded border border-zinc-800 bg-zinc-950/60 p-2">
-          <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
-            Differences
+        {showProse && (
+          <div className="rounded border border-zinc-800 bg-zinc-950/60 p-2">
+            <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+              Differences
+            </div>
+            <ProseBlock text={comparison.differences} />
           </div>
-          <ProseBlock text={comparison.differences} />
-        </div>
+        )}
       </div>
     </section>
   );
@@ -826,10 +912,15 @@ function FocusedAnalysisCard({
   ticker,
   focused,
   stats,
+  // QNT-229 #6: render the top-level summary only when the narrative bubble is
+  // absent (narrate degraded). Key points, catalysts, cited values are
+  // structured data and always render.
+  showProse = true,
 }: {
   ticker: string | null;
   focused: FocusedAnalysisPayload;
   stats: DoneEvent | null;
+  showProse?: boolean;
 }) {
   const pill = focusPill(focused.focus);
   return (
@@ -863,7 +954,7 @@ function FocusedAnalysisCard({
             </span>
           </div>
         )}
-        <ProseBlock text={focused.summary} />
+        {showProse && <ProseBlock text={focused.summary} />}
 
         {focused.focus === "news" && focused.existing_development && (
           <div>
@@ -968,10 +1059,14 @@ function ExplorationCard({
   ticker,
   exploration,
   stats,
+  // QNT-229 #6: render the headline only when the narrative bubble is absent
+  // (narrate degraded). Observations + cited values always render.
+  showProse = true,
 }: {
   ticker: string | null;
   exploration: ExplorationAnswerPayload;
   stats: DoneEvent | null;
+  showProse?: boolean;
 }) {
   return (
     <section className="rounded border border-zinc-800 bg-zinc-900/40">
@@ -990,7 +1085,7 @@ function ExplorationCard({
       </header>
 
       <div className="space-y-3 p-3">
-        <ProseBlock text={exploration.headline} />
+        {showProse && <ProseBlock text={exploration.headline} />}
 
         {exploration.observations.length > 0 && (
           <div>
@@ -1117,22 +1212,30 @@ function RunBlock({
     run.comparison !== null ||
     run.comparisonLean !== null ||
     run.conversational !== null ||
-    run.focused !== null;
+    run.focused !== null ||
+    run.exploration !== null;
   const showStandaloneProse = !hasCard && proseText;
-
-  // Streaming label — match the user's chosen layout so the spinner names
-  // the right shape.
-  const streamingLabel: Record<Intent, string> = {
-    thesis: "thesis…",
-    quick_fact: "quick fact…",
-    comparison: "comparison…",
-    conversational: "reply…",
-    fundamental: "fundamental analysis…",
-    technical: "technical analysis…",
-    news: "news read…",
-    followup: "follow-up…",
-    exploration: "scanning…",
-  };
+  // QNT-229 #2a: composing indicator in the voice slot below the card.
+  // `isComposing` is the timing predicate (intent known, tools done or a
+  // no-tool short-circuit, nothing streamed, still live); it fires for every
+  // intent. The two extra gates hide it the instant any content begins:
+  // `!proseText` for the prose-reply paths (conversational / redirect stream
+  // via prose_chunk) and `run.conversational === null` for the redirect/clarify
+  // card. It also naturally ends when narration starts (narrative non-empty
+  // fails isComposing) — so the spinner transitions in place to the bubble.
+  const composing =
+    !proseText &&
+    run.conversational === null &&
+    isComposing({
+      status: run.status,
+      intent: run.intent,
+      toolRows: run.toolRows,
+      narrative: run.narrative,
+    });
+  // QNT-229 #6: when the narrative bubble streamed it is the prose surface, so
+  // the card's own prose field is demoted. Renders as the fallback when narrate
+  // degraded (empty narrative).
+  const cardProse = showCardProse(run.narrative);
 
   return (
     <article className="space-y-2 border-b border-zinc-800 px-3 py-3">
@@ -1168,15 +1271,9 @@ function RunBlock({
       {/* Streamed prose (only when no card has arrived yet) */}
       {showStandaloneProse && <ProseBlock text={proseText} />}
 
-      {/* QNT-211: streaming analyst-voice bubble above the structured card.
-        Renders as soon as the first narrative_chunk arrives; for the
-        followup narrative-only path this is the ONLY surface (no card
-        renders since quickFact stays null). */}
-      {run.narrative && <NarrativeBubble text={run.narrative} />}
-
       {/* QNT-156: comparison card — renders when intent=comparison */}
       {run.comparison && (
-        <ComparisonCard comparison={run.comparison} stats={run.stats} />
+        <ComparisonCard comparison={run.comparison} stats={run.stats} showProse={cardProse} />
       )}
       {run.comparisonLean && (
         <LeanComparisonCard comparison={run.comparisonLean} stats={run.stats} />
@@ -1194,6 +1291,7 @@ function RunBlock({
           ticker={run.ticker}
           focused={run.focused}
           stats={run.stats}
+          showProse={cardProse}
         />
       )}
 
@@ -1204,12 +1302,18 @@ function RunBlock({
           ticker={run.ticker}
           exploration={run.exploration}
           stats={run.stats}
+          showProse={cardProse}
         />
       )}
 
       {/* Structured thesis (only when intent=thesis) */}
       {run.thesis && (
-        <ThesisCard ticker={run.ticker} thesis={run.thesis} stats={run.stats} />
+        <ThesisCard
+          ticker={run.ticker}
+          thesis={run.thesis}
+          stats={run.stats}
+          showProse={cardProse}
+        />
       )}
 
       {/* QNT-156: conversational redirect — also serves as the
@@ -1222,6 +1326,20 @@ function RunBlock({
           onSuggestion={onSuggestion}
         />
       )}
+
+      {/* Analyst-voice slot — BELOW the structured card. The card anchors on
+        top the instant it lands (QNT-229 #2b early emit); everything else grows
+        DOWNWARD beneath it, so the card is never shoved by content appearing
+        above it. QNT-229 #2a: this slot holds the composing pixel-spinner during
+        the synthesize window, then becomes the streaming narrative bubble
+        (QNT-211) once narration starts — the same slot, so the spinner→voice
+        transition is in place. For the followup narrative-only path (no card)
+        the bubble is the only surface. */}
+      {run.narrative ? (
+        <NarrativeBubble text={run.narrative} />
+      ) : composing ? (
+        <ComposingBubble intent={run.intent} />
+      ) : null}
 
       {/* QNT-226: provenance for the semantic news search. On a targeted news
         ask the focused-news card is dropped, so this clickable list is the
@@ -1250,22 +1368,23 @@ function RunBlock({
           </p>
         )}
 
-      {/* Status footer */}
-      <div className="flex items-baseline justify-end gap-2 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
-        {isStreaming ? (
-          <span className="text-emerald-400">
-            streaming {streamingLabel[run.intent ?? "thesis"]}
-          </span>
-        ) : run.status === "errored" ? (
-          <span className="text-red-400">errored</span>
-        ) : run.stats ? (
-          <span>
-            {run.stats.tools_count} tools · {run.stats.citations_count} citations · done
-          </span>
-        ) : (
-          <span>done</span>
-        )}
-      </div>
+      {/* Terminal status footer. QNT-229: no "streaming…" line while the run is
+        live — activity is already shown by the tool rows (gather), the composing
+        box (synthesize), and the streaming bubble/prose (narration). The footer
+        appears only on completion to carry the run summary / errored state. */}
+      {!isStreaming && (
+        <div className="flex items-baseline justify-end gap-2 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+          {run.status === "errored" ? (
+            <span className="text-red-400">errored</span>
+          ) : run.stats ? (
+            <span>
+              {run.stats.tools_count} tools · {run.stats.citations_count} citations · done
+            </span>
+          ) : (
+            <span>done</span>
+          )}
+        </div>
+      )}
     </article>
   );
 }

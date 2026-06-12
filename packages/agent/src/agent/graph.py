@@ -1652,7 +1652,7 @@ def build_graph(
             "confidence": _confidence_from_reports(reports, plan),
         }
 
-    def synthesize_node(state: AgentState, config: RunnableConfig) -> dict[str, object]:
+    def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, object]:
         ticker = state["ticker"]
         question = state.get("question", "")
         reports = state.get("reports", {})
@@ -2060,6 +2060,44 @@ def build_graph(
         payload["thesis"] = thesis
         logger.info("synthesize %s: confidence=%s thesis=ok", ticker, confidence)
         return payload
+
+    def synthesize_node(state: AgentState, config: RunnableConfig) -> dict[str, object]:
+        """QNT-229 #2b: run synthesis, then emit the structured card through the
+        ``event_emitter`` the moment it is ready -- BEFORE narrate streams the
+        analyst-voice bubble above it.
+
+        Moves the card forward by roughly one narrate duration: the SSE wrapper
+        relays the emitted event verbatim, so the panel renders the card while
+        the narrative is still streaming. The post-graph emission in
+        agent_chat.py stays as the idempotent safety net (the panel's
+        ``updateRun`` overwrites with the same payload). Conversational and
+        fallback-redirect shapes carry no card slot, so nothing is emitted
+        early for them -- their prose still streams via ``prose_chunk``.
+        """
+        result = _synthesize_payload(state, config)
+        if event_emitter is not None and isinstance(result, dict):
+            # State key == SSE event name for every card shape; conversational
+            # is intentionally excluded (no card, streams as prose_chunk).
+            for slot in (
+                "thesis",
+                "quick_fact",
+                "comparison",
+                "comparison_lean",
+                "focused",
+                "exploration",
+            ):
+                payload = result.get(slot)
+                if isinstance(payload, BaseModel):
+                    try:
+                        event_emitter(slot, payload.model_dump())
+                    except Exception as exc:  # noqa: BLE001 — never let SSE plumbing crash synthesize
+                        logger.warning(
+                            "synthesize %s: card emit (%s) failed: %s (continuing)",
+                            state.get("ticker", "?"),
+                            slot,
+                            exc,
+                        )
+        return result
 
     def narrate_node(state: AgentState, config: RunnableConfig) -> dict[str, object]:
         """QNT-211: stream a 1-4 sentence analyst-voice paragraph that wraps
