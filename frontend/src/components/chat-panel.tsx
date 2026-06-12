@@ -1223,9 +1223,16 @@ function RunBlock({
   // via prose_chunk) and `run.conversational === null` for the redirect/clarify
   // card. It also naturally ends when narration starts (narrative non-empty
   // fails isComposing) — so the spinner transitions in place to the bubble.
+  // QNT-232 #3: quick_fact skips narrate, so no bubble follows its card. Once
+  // the card lands the voice slot has nothing more to fill, so suppress the
+  // composing shimmer to avoid a flash between card arrival and the run ending.
+  // Scoped to the quick_fact intent — followup reuses the QuickFactCard but
+  // still narrates, so it keeps composing until its narrative starts.
+  const quickFactCardLanded = run.intent === "quick_fact" && run.quickFact !== null;
   const composing =
     !proseText &&
     run.conversational === null &&
+    !quickFactCardLanded &&
     isComposing({
       status: run.status,
       intent: run.intent,

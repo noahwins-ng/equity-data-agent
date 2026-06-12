@@ -224,6 +224,94 @@ def test_graph_prompt_prefix_is_append_only_across_thread_turns(
     assert "company" in str(thesis_prompts[2][-1].content)
 
 
+def test_history_budget_is_intent_aware() -> None:
+    """QNT-232 #13: fresh analytical intents trim to the small budget; only
+    continuations (followup / conversational / clarify) keep the full limit."""
+    from agent.graph import (
+        _FRESH_ANALYTICAL_HISTORY_TURNS,
+        _history_budget,
+    )
+    from agent.prompts import HISTORY_TURN_LIMIT
+
+    for fresh in (
+        "thesis",
+        "quick_fact",
+        "fundamental",
+        "technical",
+        "news",
+        "comparison",
+        "exploration",
+    ):
+        assert _history_budget(fresh) == _FRESH_ANALYTICAL_HISTORY_TURNS
+    for deep in ("followup", "conversational", "clarify"):
+        assert _history_budget(deep) == HISTORY_TURN_LIMIT
+
+
+def _seeded_history(n_turns: int) -> list[ConversationMessage]:
+    """n_turns of user/assistant pairs, each tagged with a unique token."""
+    msgs: list[ConversationMessage] = []
+    for i in range(n_turns):
+        msgs.append({"role": "user", "content": f"TURN{i} question"})
+        msgs.append({"role": "assistant", "content": f"TURN{i} answer\nStructured payload: thesis"})
+    return msgs
+
+
+def test_fresh_intent_trims_assembled_prompt_history(monkeypatch: Any) -> None:
+    """QNT-232 #13 (AC3): with a deep transcript seeded, a fresh thesis turn's
+    assembled synthesize prompt carries only the trimmed budget of history,
+    while a followup turn keeps the full depth."""
+    from agent.prompts import HISTORY_TURN_LIMIT
+
+    fresh_budget_msgs = 3 * 2  # _FRESH_ANALYTICAL_HISTORY_TURNS turns
+
+    # --- fresh thesis: heuristic-forced, deep seeded history ---
+    stub = _StubLLM()
+    monkeypatch.setattr(graph_module, "get_llm", lambda *a, **kw: stub)
+    monkeypatch.setattr("agent.intent.get_llm", lambda *a, **kw: stub)
+    monkeypatch.setattr(
+        graph_module, "classify_intent_with_source", lambda _q, **_: ("thesis", "heuristic", False)
+    )
+    graph = build_graph(_tools())
+    graph.invoke(
+        {
+            "ticker": "AAPL",
+            "question": "Give me an AAPL thesis.",
+            "messages": _seeded_history(8),
+        }
+    )
+    thesis_prompt = stub.structured_prompts[Thesis][-1]
+    # Prompt = [system, *history, current_user]; history sits in the middle.
+    thesis_history = thesis_prompt[1:-1]
+    assert len(thesis_history) <= fresh_budget_msgs, (
+        f"fresh thesis must trim history to <= {fresh_budget_msgs} messages, "
+        f"got {len(thesis_history)}"
+    )
+
+    # --- continuation followup: keeps the deep budget ---
+    stub2 = _StubLLM()
+    monkeypatch.setattr(graph_module, "get_llm", lambda *a, **kw: stub2)
+    monkeypatch.setattr("agent.intent.get_llm", lambda *a, **kw: stub2)
+    monkeypatch.setattr(
+        graph_module, "classify_intent_with_source", lambda _q, **_: ("followup", "heuristic", True)
+    )
+    graph2 = build_graph(_tools())
+    graph2.invoke(
+        {
+            "ticker": "AAPL",
+            "question": "what's the P/E?",  # metric ask -> build_followup_prompt
+            "messages": _seeded_history(8),
+            "reports": {"fundamental": "## fundamental\nP/E 31\n"},
+            "thesis": make_thesis(),
+        }
+    )
+    followup_prompt = stub2.structured_prompts[QuickFactAnswer][-1]
+    followup_history = followup_prompt[1:-1]
+    assert len(followup_history) > fresh_budget_msgs, (
+        "followup must keep more than the fresh budget of history"
+    )
+    assert len(followup_history) <= HISTORY_TURN_LIMIT * 2
+
+
 def test_narrate_prompt_includes_history_and_cache_boundary() -> None:
     history: list[ConversationMessage] = [{"role": "assistant", "content": "PRIOR_TURN_TOKEN"}]
     prompt = build_narrate_prompt(

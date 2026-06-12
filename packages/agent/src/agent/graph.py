@@ -62,6 +62,7 @@ from agent.intent import (
 )
 from agent.llm import SMALL_NODE_ALIAS, get_llm
 from agent.prompts import (
+    HISTORY_TURN_LIMIT,
     REPORT_TOOLS,
     ConversationMessage,
     build_clarify_prompt,
@@ -983,12 +984,39 @@ def _followup_is_metric_ask(question: str) -> bool:
     return _matches_any(question.lower(), _QUICK_FACT_TOKENS) is not None
 
 
+# QNT-232 #13: per-intent history budget. v4's post-ship analysis (QNT-216)
+# named conversation-history injection the primary driver of synthesize
+# input-token growth (+1,132 tokens/thesis turn). HISTORY_TURN_LIMIT applies
+# identically to every intent, but a fresh analytical ask (thesis / quick_fact /
+# focused / comparison / exploration) stands on the reports it just gathered and
+# rarely needs ten prior turns; only continuations (followup / conversational /
+# clarify) genuinely lean on depth. Fresh asks get the trimmed budget; the
+# continuation intents keep the full HISTORY_TURN_LIMIT.
+_FRESH_ANALYTICAL_HISTORY_TURNS = 3
+_DEEP_HISTORY_INTENTS: frozenset[str] = frozenset({"followup", "conversational", "clarify"})
+
+
+def _history_budget(intent: str) -> int:
+    """Max prior turns to inject into a node's prompt prefix for ``intent``."""
+    if intent in _DEEP_HISTORY_INTENTS:
+        return HISTORY_TURN_LIMIT
+    return _FRESH_ANALYTICAL_HISTORY_TURNS
+
+
 def _history_before_current(
     messages: list[ConversationMessage] | None,
     question: str,
+    *,
+    max_turns: int = HISTORY_TURN_LIMIT,
 ) -> list[ConversationMessage]:
-    """Return prior transcript, excluding the current user turn if appended."""
-    history = trim_message_history(messages)
+    """Return prior transcript, excluding the current user turn if appended.
+
+    ``max_turns`` bounds how many prior user/assistant turns reach the prompt
+    prefix; callers pass an intent-aware value via :func:`_history_budget`
+    (QNT-232 #13). The routing-only callsite keeps the full default so prior-turn
+    detection stays accurate.
+    """
+    history = trim_message_history(messages, max_turns=max_turns)
     if (
         history
         and history[-1].get("role") == "user"
@@ -1659,6 +1687,10 @@ def build_graph(
         plan = state.get("plan", [])
         intent = state.get("intent", "thesis")
         confidence = _confidence_from_reports(reports, plan)
+        # QNT-232 #13: intent-aware history budget for every prompt this node
+        # assembles (fresh analytical asks trim to a few turns; continuations
+        # keep the full HISTORY_TURN_LIMIT).
+        history_budget = _history_budget(str(intent))
 
         # Helper: build the all-None payload skeleton so each branch only has
         # to set its own slot. Keeps consumers free to switch on intent
@@ -1721,7 +1753,9 @@ def build_graph(
                 question,
                 reports,
                 prior_thesis,
-                history=_history_before_current(state.get("messages"), question),
+                history=_history_before_current(
+                    state.get("messages"), question, max_turns=history_budget
+                ),
             )
             structured_llm = (
                 get_llm()
@@ -1766,7 +1800,9 @@ def build_graph(
             # thread (no history) keeps the cold capability response.
             prompt = build_conversational_prompt(
                 question,
-                history=_history_before_current(state.get("messages"), question),
+                history=_history_before_current(
+                    state.get("messages"), question, max_turns=history_budget
+                ),
             )
             structured_llm = (
                 get_llm()
@@ -1841,7 +1877,9 @@ def build_graph(
                 comparison_tickers,
                 question,
                 reports_by_ticker,
-                history=_history_before_current(state.get("messages"), question),
+                history=_history_before_current(
+                    state.get("messages"), question, max_turns=history_budget
+                ),
             )
             structured_llm = (
                 get_llm()
@@ -1884,7 +1922,9 @@ def build_graph(
                 ticker,
                 question,
                 reports,
-                history=_history_before_current(state.get("messages"), question),
+                history=_history_before_current(
+                    state.get("messages"), question, max_turns=history_budget
+                ),
             )
             structured_llm = (
                 get_llm()
@@ -1944,7 +1984,9 @@ def build_graph(
                 ticker,
                 question,
                 reports,
-                history=_history_before_current(state.get("messages"), question),
+                history=_history_before_current(
+                    state.get("messages"), question, max_turns=history_budget
+                ),
             )
             structured_llm = (
                 get_llm()
@@ -1989,7 +2031,9 @@ def build_graph(
                 ticker,
                 question,
                 reports,
-                history=_history_before_current(state.get("messages"), question),
+                history=_history_before_current(
+                    state.get("messages"), question, max_turns=history_budget
+                ),
             )
             structured_llm = (
                 get_llm()
@@ -2028,7 +2072,9 @@ def build_graph(
             ticker,
             question,
             reports,
-            history=_history_before_current(state.get("messages"), question),
+            history=_history_before_current(
+                state.get("messages"), question, max_turns=history_budget
+            ),
         )
         # ``with_structured_output(Thesis)`` forces the LLM into the four-section
         # schema. Errors from a misbehaving provider (Gemini occasionally
@@ -2109,13 +2155,17 @@ def build_graph(
         terminate normally — the structured card still renders.
 
         Conversational intent skips this node: that path's answer is already
-        prose, so re-narrating would just echo it. Followup narrative-only
-        path (synthesize set ``quick_fact=None``) routes through here and
-        produces the only spoken response the user sees.
+        prose, so re-narrating would just echo it. QNT-232 #3: quick_fact skips
+        it too -- its card answer is already analyst-voice prose, so the second
+        70b call only paraphrased the card. Followup narrative-only path
+        (synthesize set ``quick_fact=None``) routes through here and produces the
+        only spoken response the user sees.
         """
         intent = state.get("intent", "thesis")
         ticker = state["ticker"]
         question = state.get("question", "")
+        # QNT-232 #13: same intent-aware history budget the synthesize node uses.
+        history_budget = _history_budget(str(intent))
 
         # Conversational already speaks in the right voice -- nothing to
         # narrate over. Same applies to ANY synthesize fallback-redirect
@@ -2166,6 +2216,23 @@ def build_graph(
             return {
                 "narrative": lead_in,
                 "messages": _append_assistant_message(state, lead_in),
+            }
+
+        # QNT-232 #3 (option a): quick_fact skips narrate. The QuickFactAnswer
+        # card is already a one-or-two-sentence analyst-voice answer + cited
+        # value, so a second 70b call would only paraphrase the card it sits
+        # above (the v5 voice/card review measured near-total overlap; quick_fact
+        # has no probe close). Dropping it makes a quick_fact turn exactly one
+        # default-alias LLM call (synthesize) -- mirrors the conversational gate
+        # above. Gated on the card actually landing: a quick_fact whose
+        # synthesize failed sets ``conversational`` (caught by the gate above) or
+        # leaves quick_fact None, in which case there is no surface to skip for.
+        # The followup path reuses QuickFactAnswer but keeps intent="followup",
+        # so it is unaffected and still narrates.
+        if intent == "quick_fact" and state.get("quick_fact") is not None:
+            return {
+                "narrative": None,
+                "messages": _append_assistant_message(state, None),
             }
 
         # Pick the structured payload to summarise. Exactly one of these is
@@ -2231,7 +2298,9 @@ def build_graph(
             payload_markdown=payload_markdown,
             prior_thesis_markdown=prior_thesis_markdown,
             plan_rationale=state.get("plan_rationale"),
-            history=_history_before_current(state.get("messages"), question),
+            history=_history_before_current(
+                state.get("messages"), question, max_turns=history_budget
+            ),
             is_clarify=is_clarify,
         )
 

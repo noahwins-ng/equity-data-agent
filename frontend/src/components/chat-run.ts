@@ -125,7 +125,8 @@ export function composingLabel(intent: Intent | null): string {
 //   focused     -> summary
 //   exploration -> headline
 //   comparison  -> differences (rich 2-ticker shape only)
-// quick_fact is excluded (its trim is QNT-232); comparison_lean +
+// quick_fact is excluded: QNT-232 #3 skips narrate for it, so its card answer
+// is always the lone prose surface (never demoted). comparison_lean +
 // conversational carry no demotable prose. The structured data (labels,
 // verdict pill, bullets, chips, table) is never touched — only the one
 // overlapping prose field.
