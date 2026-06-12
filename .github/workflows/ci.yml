@@ -101,6 +101,10 @@ jobs:
         with:
           # gitleaks-action needs full history to scan the diff between PR
           # base and head. Fetch-depth 0 = unshallowed clone.
+          # Explicitly checkout the PR head ref so delayed jobs still contain
+          # the commit range gitleaks-action scans, even if the branch was
+          # squash-merged and deleted before this job starts.
+          ref: refs/pull/${{ github.event.pull_request.number }}/head
           fetch-depth: 0
 
       - name: gitleaks (secret scan on PR diff)
