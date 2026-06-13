@@ -359,18 +359,16 @@ _COMPARE_GESTURE_TOKENS: tuple[str, ...] = (
 # Bare exploratory asks ("what's interesting?") that name no ticker. Treated as
 # a "view" gesture so a tickerless scan routes to clarify ("interesting about
 # which ticker?") instead of falling through to the generic conversational
-# capability card. Mirrors graph.py ``_EXPLORATION_TRIGGERS`` (the canonical
-# exploration-route set); kept as a local copy because ``agent.graph`` imports
-# from this module, so importing it back would be circular. When a ticker IS
-# named the no-ticker guard in ``_detect_ambiguity`` skips this and the
-# exploration route fires normally.
-_EXPLORATION_GESTURE_TOKENS: tuple[str, ...] = (
+# capability card. This tuple is also the graph's canonical broad-exploration
+# route trigger set.
+_EXPLORATION_TRIGGERS: tuple[str, ...] = (
     "what's interesting",
-    "whats interesting",
     "what is interesting",
-    "anything interesting",
+    "whats interesting",
     "what stands out",
     "what should i watch",
+    "anything interesting",
+    "interesting about",
 )
 
 
@@ -504,9 +502,14 @@ def underspecified_gesture(question: str) -> Literal["view", "compare"] | None:
         return "compare"
     if _matches_any(text, _VIEW_GESTURE_TOKENS) is not None:
         return "view"
-    if _matches_any(text, _EXPLORATION_GESTURE_TOKENS) is not None:
+    if _matches_any(text, _EXPLORATION_TRIGGERS) is not None:
         return "view"
     return None
+
+
+def has_comparison_phrase(question: str) -> bool:
+    """Return True when ``question`` uses comparison-shaped wording."""
+    return _matches_any(question.lower(), _COMPARISON_TOKENS) is not None
 
 
 # Short questions are more likely quick-fact. Tuned conservatively: a 12-word
@@ -829,4 +832,6 @@ __all__ = [
     "classify_intent",
     "classify_intent_with_source",
     "extract_tickers",
+    "has_comparison_phrase",
+    "underspecified_gesture",
 ]

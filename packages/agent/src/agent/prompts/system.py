@@ -39,6 +39,7 @@ the eval is the empirical check.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -447,7 +448,8 @@ COMPARISON_SYSTEM_PROMPT = (
     ANALYST_VOICE_BLOCK
     + """You are an investment research analyst writing a \
 side-by-side comparison of two US public equities. The user named two \
-tickers and wants a contrast -- what the same aspects look like for each.
+tickers, or supplied one ticker plus page/thread context, and wants a \
+contrast -- what the same aspects look like for each.
 
 # Hard rules
 1. Never perform arithmetic. Every number you write must appear verbatim \
@@ -470,8 +472,8 @@ no peer comparables that aren't in the reports.
 Populate the structured fields directly. Your response is parsed against a \
 schema, so no free-form preamble.
 
-* sections: One entry per ticker (exactly two), in the order the user \
-named them. Each section has:
+* sections: One entry per ticker (exactly two), in the task order. Each \
+section has:
   * ticker: the symbol (e.g. "NVDA").
   * company: AspectView with summary + supports + challenges. label is null.
   * fundamental: AspectView. label is one of Premium / Inline / Discounted, \
@@ -484,7 +486,9 @@ the two sections. Use words, not new numbers. Phrase contrasts as "trades \
 at a richer multiple", "shows weaker momentum", "carries more news risk" -- \
 NOT "is 2x more expensive" or "RSI is 12 points higher". The paragraph \
 must NOT introduce any number that isn't already in the per-ticker aspect \
-blocks. Regime labels in either section trump raw ordering: a higher RSI \
+blocks. If the task says one ticker came from page/thread context, include \
+one short disclosure sentence naming that context ticker. Regime labels in \
+either section trump raw ordering: a higher RSI \
 is not "stronger momentum" once it sits in the overbought zone; a lower \
 P/E in a Premium bucket on both names is "less rich", not "cheaper".
 
@@ -531,8 +535,24 @@ def build_comparison_prompt(
 
     body = "\n\n".join(blocks)
     task_question = question or f"Compare {' and '.join(tickers)} side-by-side."
+    question_text = question.upper()
+    named_in_question = [
+        ticker
+        for ticker in tickers
+        if re.search(rf"(?<![A-Z]){re.escape(ticker)}(?![A-Z])", question_text)
+    ]
+    context_note = ""
+    if question and len(named_in_question) < len(tickers):
+        context_tickers = [ticker for ticker in tickers if ticker not in named_in_question]
+        if context_tickers:
+            context_note = (
+                "\nContext: "
+                f"{', '.join(context_tickers)} came from the current page or thread context; "
+                "disclose that briefly in differences.\n"
+            )
     user_msg = (
-        f"# Task\nCompare {' vs '.join(tickers)}.\nQuestion: {task_question}\n\n# Reports\n{body}\n"
+        f"# Task\nCompare {' vs '.join(tickers)}.\nQuestion: {task_question}\n"
+        f"{context_note}\n# Reports\n{body}\n"
     )
     return [
         *_stable_prefix(COMPARISON_SYSTEM_PROMPT, history),

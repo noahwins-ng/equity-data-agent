@@ -54,10 +54,12 @@ from agent.evals.hallucination import check as check_grounding
 from agent.exploration import ExplorationAnswer
 from agent.focused import FocusedAnalysis
 from agent.intent import (
+    _EXPLORATION_TRIGGERS,
     ClassifierSource,
     Intent,
     classify_intent_with_source,
     extract_tickers,
+    has_comparison_phrase,
     underspecified_gesture,
 )
 from agent.llm import SMALL_NODE_ALIAS, get_llm
@@ -226,14 +228,6 @@ _FOCUSED_REPORT: dict[Intent, str] = {
 _NEWS_SEARCH_INTENTS: frozenset[Intent] = frozenset({"news", "quick_fact", "thesis"})
 
 _MAX_TOOL_ATTEMPTS = 2  # first try + one retry
-_EXPLORATION_TRIGGERS: tuple[str, ...] = (
-    "what's interesting",
-    "what is interesting",
-    "what stands out",
-    "what should i watch",
-    "anything interesting",
-    "interesting about",
-)
 _EXPLORATION_EXCLUSIONS: tuple[str, ...] = (
     # These are named lens or warm-follow-up requests. Let the existing
     # focused/followup paths handle them so exploration only owns broad scans.
@@ -484,6 +478,22 @@ def _has_named_exploration_lens(question: str) -> bool:
     """Return True when an exploratory phrase also names a specific lens."""
     lowered = question.lower()
     return any(term in lowered for term in _EXPLORATION_NAMED_LENS_TERMS)
+
+
+def _should_route_exploration(
+    intent: Intent,
+    question: str,
+    *,
+    has_prior_turn: bool,
+) -> bool:
+    """Return True when classify should commit to the exploration shape."""
+    if intent in _SHORT_CIRCUIT_INTENTS or intent in {"quick_fact", "comparison"}:
+        return False
+    return (
+        _is_exploratory_question(question)
+        and not _has_named_exploration_lens(question)
+        and _has_exploration_anchor(question, has_prior_turn=has_prior_turn)
+    )
 
 
 def _minimum_exploration_tools(question: str, available: list[str]) -> int:
@@ -896,17 +906,18 @@ def _detect_ambiguity(
     question: str,
     *,
     has_prior_turn: bool,
+    has_context_ticker: bool = False,
+    context_ticker: str | None = None,
 ) -> AmbiguityKind | None:
     """Return the kind of ambiguity in ``question`` for ``intent``, or None.
 
     QNT-212: heuristic-only check fired by classify_node right after the
     intent resolves. The three triggers map directly to the AC1 scenarios:
 
-    * comparison + fewer than 2 tickers named in the question ⇒
-      ``needs_second_ticker`` — the user gestured at a compare but only
-      named one symbol. State.ticker is intentionally NOT counted; if the
-      user wanted to compare with the URL-context ticker they would have
-      typed "compare to AAPL", not "compare them".
+    * comparison + no named ticker ⇒ ``needs_second_ticker``. One named
+      ticker is enough when a URL-context ticker or prior turn can supply
+      the other side, e.g. /ticker/NVDA + "compare to AAPL". This reverses
+      the earlier QNT-212 pin by product decision in QNT-233.
     * thesis / focused / quick_fact + no ticker named + no prior turn ⇒
       ``needs_ticker``. Today this would route to a thesis built around
       whatever placeholder state.ticker the request carries and fabricate
@@ -935,7 +946,17 @@ def _detect_ambiguity(
             return "needs_second_ticker"
         if gesture == "view":
             return "needs_ticker"
-    if intent == "comparison" and len(question_tickers) < 2:
+    if intent == "comparison" and not question_tickers:
+        return "needs_second_ticker"
+    context_upper = (context_ticker or "").upper()
+    context_adds_second_ticker = (
+        has_context_ticker and context_upper in TICKERS and (context_upper not in question_tickers)
+    )
+    if (
+        intent == "comparison"
+        and len(question_tickers) < _MIN_COMPARISON_TICKERS
+        and not (context_adds_second_ticker or has_prior_turn)
+    ):
         return "needs_second_ticker"
     if intent in _TICKER_REQUIRING_INTENTS and not question_tickers and not has_prior_turn:
         return "needs_ticker"
@@ -1024,6 +1045,12 @@ def _history_before_current(
     ):
         return history[:-1]
     return history
+
+
+def _prior_turn_context(state: AgentState, question: str) -> tuple[list[ConversationMessage], bool]:
+    """Return transcript context plus the canonical prior-turn boolean."""
+    history = _history_before_current(state.get("messages"), question)
+    return history, bool(history or state.get("reports") or state.get("thesis"))
 
 
 def _append_user_message(
@@ -1245,7 +1272,6 @@ def build_graph(
         # parent agent-chat trace.
         ticker = state["ticker"]
         question = state.get("question", "")
-        history = trim_message_history(state.get("messages"))
         # ``classify_intent`` already biases to "thesis" on internal LLM
         # failures, but a failure in the surrounding observability stack
         # would propagate and kill the run — same shape as plan_node /
@@ -1255,7 +1281,7 @@ def build_graph(
         # QNT-216: prior turn can be detected from the transcript first, with
         # the old QNT-209 reports/thesis hydration kept as backwards-compatible
         # signal for checkpoints created before ``messages`` existed.
-        has_prior_turn = bool(history or state.get("reports") or state.get("thesis"))
+        history, has_prior_turn = _prior_turn_context(state, question)
         try:
             intent, classifier_source, needs_news_search = classify_intent_with_source(
                 question,
@@ -1268,6 +1294,16 @@ def build_graph(
             intent = "thesis"
             classifier_source = "fallback"
             needs_news_search = False
+        question_tickers = extract_tickers(question)
+        if (
+            has_comparison_phrase(question)
+            and len(question_tickers) == 1
+            and ticker.upper() in TICKERS
+            and ticker.upper() not in question_tickers
+        ):
+            intent = "comparison"
+        if _should_route_exploration(intent, question, has_prior_turn=has_prior_turn):
+            intent = "exploration"
         logger.info(
             "classify %s: intent=%s source=%s needs_news_search=%s",
             ticker,
@@ -1279,7 +1315,13 @@ def build_graph(
         # the conditional edge below: a non-None ambiguity_kind routes to
         # clarify; None falls through to the existing plan/synthesize path
         # (or the new conversational/followup short-circuits).
-        ambiguity_kind = _detect_ambiguity(intent, question, has_prior_turn=has_prior_turn)
+        ambiguity_kind = _detect_ambiguity(
+            intent,
+            question,
+            has_prior_turn=has_prior_turn,
+            has_context_ticker=ticker.upper() in TICKERS,
+            context_ticker=ticker,
+        )
         if ambiguity_kind is not None:
             logger.info(
                 "classify %s: ambiguity_kind=%s (intent=%s)",
@@ -1630,20 +1672,6 @@ def build_graph(
                 "reports_by_ticker": {},
                 "supervisor_iterations": 0,
             }
-
-        # QNT-220 follow-up: announce the exploration intent NOW, before the
-        # slow gather/synthesize/narrate phases. classify_node already emitted
-        # the classifier's raw label (e.g. "thesis"); without this the SSE
-        # streaming label would read "streaming thesis..." for the whole turn
-        # and only correct to the exploration card post-graph. Reaching this
-        # node means the route is committed to exploration, so re-emit here.
-        if event_emitter is not None:
-            try:
-                event_emitter("intent", {"intent": "exploration"})
-            except Exception as exc:  # noqa: BLE001 — never let SSE plumbing crash the graph
-                logger.warning(
-                    "explore_supervisor %s: event_emitter failed: %s (continuing)", ticker, exc
-                )
 
         # QNT-220 (#4): deterministic broad-exploration policy -- 0 LLM calls.
         # The old QNT-215 loop asked the LLM for one tool at a time but never
@@ -2447,19 +2475,13 @@ def build_graph(
         intent = state.get("intent", "thesis")
         if intent in _SHORT_CIRCUIT_INTENTS:
             return "synthesize"
+        if intent == "exploration":
+            return "explore_supervisor"
         if intent in {"quick_fact", "comparison"}:
             return "plan"
         question = state.get("question", "")
-        prior_history = _history_before_current(state.get("messages"), question)
-        has_prior_turn = bool(prior_history or state.get("reports") or state.get("thesis"))
-        if (
-            _is_exploratory_question(question)
-            and not _has_named_exploration_lens(question)
-            and _has_exploration_anchor(
-                question,
-                has_prior_turn=has_prior_turn,
-            )
-        ):
+        _, has_prior_turn = _prior_turn_context(state, question)
+        if _should_route_exploration(intent, question, has_prior_turn=has_prior_turn):
             return "explore_supervisor"
         return "plan"
 

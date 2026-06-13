@@ -1332,6 +1332,62 @@ async def test_run_timeout_emits_agent_timeout_error(
     assert frames[-1][0] == "done"
 
 
+def test_run_timeout_emits_partial_note_after_tool_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-233: timeout preserves gathered evidence before the error frame."""
+    from shared.config import settings
+
+    monkeypatch.setattr(settings, "CHAT_RUN_TIMEOUT", 1.0)
+    invoke_unblock = threading.Event()
+
+    def _slow_after_tools(state: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        for fn in state.get("_unused", {}).values():
+            fn(state["ticker"])
+        invoke_unblock.wait(timeout=3)
+        return {
+            "ticker": state["ticker"],
+            "intent": "thesis",
+            "plan": ["technical"],
+            "reports": {},
+            "errors": {},
+            "thesis": None,
+            "confidence": 0.0,
+        }
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
+        graph = MagicMock()
+
+        def invoke(state: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+            state["_unused"] = tools
+            return _slow_after_tools(state, **kwargs)
+
+        graph.invoke.side_effect = invoke
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(
+        chat_module,
+        "default_report_tools",
+        lambda: {"technical": lambda t: f"## technical {t}\nRSI line\n"},
+    )
+
+    with TestClient(main_module.app) as c:
+        try:
+            r = c.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
+        finally:
+            invoke_unblock.set()
+
+    frames = _parse_sse(r.text)
+    events = [name for name, _ in frames]
+    assert "tool_result" in events
+    prose_index = events.index("prose_chunk")
+    error_index = events.index("error")
+    assert prose_index < error_index
+    assert "technical" in frames[prose_index][1]["delta"]
+    assert frames[error_index][1]["code"] == "agent-timeout"
+
+
 def test_streaming_race_async_worker_drains_cleanly(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1591,22 +1647,29 @@ def test_exploration_intent_emits_exploration_event_not_thesis(
         cited_values=[ExplorationValue(label="RSI", value="71", source="technical")],
     )
 
-    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
+    def _fake_build(tools: dict[str, Any], **kwargs: Any) -> Any:
         graph = MagicMock()
-        graph.invoke.return_value = {
-            "ticker": "NVDA",
-            "intent": "exploration",
-            "plan": ["news", "technical"],
-            "reports": {"news": "stub", "technical": "stub"},
-            "errors": {},
-            "thesis": None,
-            "quick_fact": None,
-            "comparison": None,
-            "conversational": None,
-            "focused": None,
-            "exploration": exploration,
-            "confidence": 1.0,
-        }
+        event_emitter = kwargs.get("event_emitter")
+
+        def invoke(_state: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+            if event_emitter is not None:
+                event_emitter("intent", {"intent": "exploration"})
+            return {
+                "ticker": "NVDA",
+                "intent": "exploration",
+                "plan": ["news", "technical"],
+                "reports": {"news": "stub", "technical": "stub"},
+                "errors": {},
+                "thesis": None,
+                "quick_fact": None,
+                "comparison": None,
+                "conversational": None,
+                "focused": None,
+                "exploration": exploration,
+                "confidence": 1.0,
+            }
+
+        graph.invoke.side_effect = invoke
         return graph
 
     monkeypatch.setattr(chat_module, "build_graph", _fake_build)
@@ -1622,6 +1685,8 @@ def test_exploration_intent_emits_exploration_event_not_thesis(
     assert "exploration" in events
     assert "thesis" not in events
     assert "focused" not in events
+    intent_events = [data for name, data in frames if name == "intent"]
+    assert intent_events == [{"intent": "exploration"}]
     exploration_data = next(data for name, data in frames if name == "exploration")
     assert exploration_data == exploration.model_dump()
 
