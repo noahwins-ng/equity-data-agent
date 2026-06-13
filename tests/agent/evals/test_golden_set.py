@@ -18,11 +18,14 @@ from unittest.mock import MagicMock
 import pytest
 from agent.evals import golden_set
 from agent.evals.golden_set import (
+    CONTAMINATION_LATENCY_MS,
     HISTORY_FIELDS,
     EvalOutcome,
     GoldenRecord,
     append_history,
     is_failing,
+    provider_pressure_warning,
+    run_all,
     run_record,
     summarise,
 )
@@ -451,3 +454,138 @@ class TestGate:
         # would otherwise let any([]) silently pass. Surface zero-records as
         # a hard failure so a broken golden file can't masquerade as clean.
         assert is_failing([])
+
+
+def _outcome(
+    *,
+    rid: str = "rec",
+    hallucination_ok: bool = True,
+    tool_call_ok: bool = True,
+    provider_error: bool = False,
+    reason: str = "clean",
+    elapsed_ms: int = 1000,
+) -> EvalOutcome:
+    return EvalOutcome(
+        record=_record(rid),
+        thesis="",
+        actual_tools=(),
+        hallucination_ok=hallucination_ok,
+        hallucination_reason=reason,
+        tool_call_ok=tool_call_ok,
+        tool_call_reason=reason,
+        judge_score=None,
+        cosine=0.0,
+        elapsed_ms=elapsed_ms,
+        provider_error=provider_error,
+    )
+
+
+class TestProviderPressure:
+    """QNT-234: provider-pressure failures must be distinguished from regressions."""
+
+    def test_provider_pressure_graph_error_is_flagged_not_a_contract_failure(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        stub_judge: MagicMock,  # noqa: ARG002
+    ) -> None:
+        # A Groq timeout surfacing out of graph.invoke must be tagged
+        # provider_error, with a "provider:" reason -- not the old generic
+        # "graph error" that read like a code regression.
+        class APITimeoutError(Exception):
+            pass
+
+        def boom(_tools: object, **_kwargs: object) -> object:
+            raise APITimeoutError("Request timed out.")
+
+        monkeypatch.setattr(golden_set, "build_graph", boom)
+        monkeypatch.setattr(golden_set, "default_report_tools", lambda: {})
+        outcome = run_record(_record())
+        assert outcome.provider_error
+        assert "provider" in outcome.hallucination_reason
+        assert "APITimeoutError" in outcome.hallucination_reason
+
+    def test_real_graph_error_stays_a_contract_failure(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        stub_judge: MagicMock,  # noqa: ARG002
+    ) -> None:
+        # A genuine bug (not provider pressure) keeps the old behaviour: not a
+        # provider_error, still a hard failure with the "graph error" reason.
+        def boom(_tools: object, **_kwargs: object) -> object:
+            raise RuntimeError("graph broken")
+
+        monkeypatch.setattr(golden_set, "build_graph", boom)
+        monkeypatch.setattr(golden_set, "default_report_tools", lambda: {})
+        outcome = run_record(_record())
+        assert not outcome.provider_error
+        assert "graph error" in outcome.hallucination_reason
+
+    def test_is_failing_ignores_provider_error_rows(self) -> None:
+        # The AC3 scenario: a provider-pressure failure ALONGSIDE a passing real
+        # record must not gate the exit code -- the routing fix isn't blocked by
+        # free-tier capacity when real records still measured clean.
+        clean = _outcome(rid="clean")
+        provider = _outcome(
+            rid="prov",
+            hallucination_ok=False,
+            tool_call_ok=False,
+            provider_error=True,
+            reason="provider: RateLimitError",
+        )
+        assert not is_failing([clean, provider])
+        # ... but a real contract failure alongside it still gates.
+        regression = _outcome(rid="bad", hallucination_ok=False, reason="unsupported: 99")
+        assert is_failing([clean, provider, regression])
+
+    def test_is_failing_gates_when_every_record_is_provider_error(self) -> None:
+        # A full Groq outage measures zero usable rows -- that's "evaluated
+        # nothing", not a clean pass. Gate it like the empty-outcomes case so a
+        # total outage can't masquerade as green CI.
+        provider_a = _outcome(rid="a", provider_error=True, reason="provider: RateLimitError")
+        provider_b = _outcome(rid="b", provider_error=True, reason="provider: timeout")
+        assert is_failing([provider_a, provider_b])
+
+    def test_warning_fires_on_provider_error(self) -> None:
+        warning = provider_pressure_warning([_outcome(provider_error=True)])
+        assert warning is not None
+        assert "PROVIDER-PRESSURE" in warning
+        assert "1 provider error" in warning
+
+    def test_warning_fires_on_slow_record(self) -> None:
+        warning = provider_pressure_warning([_outcome(elapsed_ms=CONTAMINATION_LATENCY_MS + 1)])
+        assert warning is not None
+        assert "timeout-ceiling floor" in warning
+
+    def test_no_warning_on_clean_run(self) -> None:
+        assert provider_pressure_warning([_outcome(elapsed_ms=2000)]) is None
+
+    def test_summarise_leads_with_banner_and_counts_provider_failures(self) -> None:
+        text = summarise([_outcome(provider_error=True, reason="provider: RateLimitError")])
+        assert text.startswith("PROVIDER-PRESSURE")
+        assert "provider_failures: 1/1" in text
+        assert "[P" in text  # per-record marker, not [hT]
+
+    def test_run_all_excludes_provider_rows_from_history(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # Two records: one clean, one provider error. Only the clean one lands
+        # in history.csv so the committed quality trend isn't polluted.
+        clean = _outcome(rid="clean")
+        provider = _outcome(rid="prov", provider_error=True, reason="provider: timeout")
+        outcomes = iter([clean, provider])
+        monkeypatch.setattr(golden_set, "run_record", lambda _rec, **_kw: next(outcomes))
+        monkeypatch.setattr(
+            golden_set,
+            "load_goldens",
+            lambda: [_record("clean"), _record("prov")],
+        )
+        history = tmp_path / "history.csv"
+        _, returned = run_all(history_path=history)
+        # Both outcomes are returned to the caller (summary/gate see them)...
+        assert len(returned) == 2
+        # ...but only the measured (non-provider) row is committed to history.
+        rows = list(csv.DictReader(history.open()))
+        assert len(rows) == 1
+        assert rows[0]["question_id"] == "clean"
+        # The clean row passed, so the mixed run does not gate on the provider row.
+        assert not is_failing(returned)
