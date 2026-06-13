@@ -110,6 +110,84 @@ sweeps (which would drain the Groq budget).
   whose median fixture latency clears `CONTAMINATION_LATENCY_MS` (≈throttling)
   or that dropped any judge call, so a contaminated aggregate is never trusted.
 
+### (e) RAG news-search eval — `news_search_eval.py` + `goldens/news_search.yaml`
+
+Coverage for the QNT-222/225/226 semantic-news-search arc (RAG over the Qdrant
+`equity_news` collection), which shipped with eval coverage only for the
+*plumbing* (mocked-LLM unit tests for flag propagation, hit folding, provenance
+parsing). This axis measures the two things those tests can't: whether the
+search *fires* on the right asks, and whether retrieval returns *relevant*
+headlines. The stakes are higher than a normal coverage gap — on the
+targeted-news path the focused news card is dropped (QNT-226 narrative-only
+shape), so a wrong firing decision or a retrieval miss degrades the entire
+answer with no regression tripwire.
+
+The fixture set (`goldens/news_search.yaml`) is 13 positive targeted-event asks
+(litigation / CEO statement / buyback / recall / antitrust / partnership /
+acquisition / layoffs / probe / merger phrasings, one per covered ticker) plus
+6 negatives (generic "what's the news on X?", "how's sentiment?", price, thesis,
+and an off-domain ask) that must NOT fire the search.
+
+**Flag layer (hard gate on one direction).** `classify_intent_with_source(question)`
+is run live; its `needs_news_search` must equal the fixture's
+`expected_news_search`. The **only gated direction is a false positive** — a
+generic ask wrongly firing RAG drops the focused card (QNT-226), so it's the
+dangerous failure. Positive misses are reported as known-misses, not gated.
+
+> **The flag is deterministic.** `classify_intent_with_source` returns
+> `_is_targeted_news(question)` regardless of the heuristic/LLM path — QNT-229
+> moved the firing boundary into code; the LLM's
+> `IntentDecision.needs_news_search` field is guidance/back-compat only. So
+> "flag accuracy" is a **keyword-routing contract**, not a model-judgment
+> measurement, and it does not drift with the model. The live run still calls
+> the real public entrypoint (the LLM fires for the *intent label* on
+> heuristic-abstain cases), so it's a genuine live-classifier run and would
+> catch a regression if the flag were ever re-coupled to the LLM. The offline
+> half of this contract is pinned in
+> `tests/agent/evals/test_news_search_yaml.py` (runs in the default unit sweep).
+
+**Retrieval layer (report-only).** `search_news(ticker, question)` is run live
+against Qdrant; a hit "matches" when any of the fixture's `expected_terms` is a
+case-insensitive substring of the hit's headline or body.
+
+> **Rolling-window assertion strategy (the ticket's main design question).** The
+> 7-day news window rolls, so a frozen-headline assertion would go stale daily.
+> We assert **structural relevance** — a term match against the live corpus —
+> never a specific headline string. Retrieval is **reported, not gated**: a miss
+> can mean a genuine recall gap OR simply that no such story is in this week's
+> corpus (e.g. a litigation fixture returning only partnership headlines because
+> that's what's in the window). Improving recall is a follow-up informed by these
+> measurements (out of scope here, per the ticket).
+
+**Clean-window publishing rule.** Like the other live evals, baseline numbers
+are only published from a verified clean rate-limit window (Groq TPD for the
+classifier calls, Qdrant quota for search). `contamination_warning()` flags a
+run whose per-fixture flag latency clears one full `LLM_REQUEST_TIMEOUT` ceiling
+(the Groq-throttle signature); when it fires, re-run before trusting the numbers.
+
+Standalone, like the dialogue eval — needs the tunnel + live Qdrant + LiteLLM,
+so it is **not** collected by pytest and does not run in the default unit sweep.
+Exit codes: `0` = no false positives; `1` = a negative wrongly fired (or zero
+fixtures); `2` = could not run a measurement (dev stack unreachable, or an
+invalid `--only` id / fixture file) -- skipped gracefully, never read as a
+false-positive failure.
+
+QNT-231 baseline (sha `0e46407`, 2026-06-14, clean window):
+
+| Layer | Result |
+|---|---:|
+| Flag accuracy | 19/19 (100%) |
+| Negatives abstained | 6/6 |
+| False positives | 0 |
+| Positive misses | 0 |
+| Retrieval hit-rate | 8/13 (62%) |
+
+Retrieval misses at baseline (nvda-litigation, nvda-settlement, tsla-recall,
+unh-investigation, v-merger) are rolling-window artefacts, not code bugs — the
+corpus that week carried no matching legal/recall/merger story for those tickers
+(tsla-recall returned 1 hit, unh-investigation 3; NVDA was dominated by the SK
+partnership story). They are the input to a future recall-improvement ticket.
+
 ## Running locally
 
 Requires the API (`make dev-api`) and LiteLLM (`make dev-litellm`) running, plus an SSH tunnel to ClickHouse (`make tunnel`).
@@ -127,6 +205,11 @@ uv run python -m agent.evals --history-path /tmp/eval-history.csv
 # Dialogue-quality evals; opt into Langfuse score emission for manual dev runs
 uv run python -m agent.evals.dialogue_eval --history-path /tmp/dialogue-history.csv
 uv run python -m agent.evals.dialogue_eval --emit-langfuse-scores
+
+# RAG news-search eval (flag firing + retrieval relevance); needs live Qdrant
+uv run python -m agent.evals.news_search_eval
+uv run python -m agent.evals.news_search_eval --only nvda-litigation
+uv run python -m agent.evals.news_search_eval --flag-only   # skip live Qdrant
 ```
 
 Exit codes:
