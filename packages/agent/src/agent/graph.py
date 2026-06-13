@@ -47,7 +47,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from shared.tickers import TICKERS
 
 from agent.comparison import ComparisonAnswer, LeanComparisonAnswer, LeanComparisonRow
-from agent.conversational import ConversationalAnswer, domain_redirect
+from agent.conversational import ConversationalAnswer, coerce_suggestions, domain_redirect
 from agent.disclaimer import DISCLAIMER
 from agent.evals.hallucination import HallucinationResult
 from agent.evals.hallucination import check as check_grounding
@@ -877,6 +877,32 @@ def _coerce_conversational(response: object) -> ConversationalAnswer | None:
         if isinstance(parsed, ConversationalAnswer):
             return parsed
     return None
+
+
+# QNT-244: map each clarify ambiguity kind to the suggestion-bank hint used
+# when the LLM's suggestions are rejected. needs_second_ticker wants concrete
+# covered pairs; the others take a balanced mix (needs_prior_turn typically
+# carries no suggestions at all, which coerce_suggestions leaves empty).
+_CLARIFY_SUGGESTION_HINT: dict[str, str | None] = {
+    "needs_second_ticker": "comparison",
+    "needs_ticker": None,
+    "needs_prior_turn": None,
+}
+
+
+def _with_coerced_suggestions(
+    answer: ConversationalAnswer, *, hint: str | None
+) -> ConversationalAnswer:
+    """Return ``answer`` with its suggestions normalised to the QNT-244 contract.
+
+    Keeps the LLM-generated prose untouched; only the clickable suggestions are
+    validated/replaced. Returns the same object when nothing changed so the
+    common (already-valid) path avoids a needless copy.
+    """
+    coerced = coerce_suggestions(answer.suggestions, hint=hint)
+    if coerced == answer.suggestions:
+        return answer
+    return answer.model_copy(update={"suggestions": coerced})
 
 
 def _coerce_focused(response: object) -> FocusedAnalysis | None:
@@ -1855,6 +1881,12 @@ def build_graph(
                 # Deterministic redirect when the LLM itself fails — the
                 # whole point of this path is the user always gets prose.
                 return _fallback("I had trouble answering that.")
+            # QNT-244: the prose answer is LLM-generated, but the clickable
+            # suggestions must be concrete answerable prompts. Replace generic
+            # placeholder lists ("trend for a specific stock?") with
+            # deterministic in-scope picks so a clicked starter never routes to
+            # clarify.
+            conversational = _with_coerced_suggestions(conversational, hint=None)
             payload = _empty_payload()
             payload["conversational"] = conversational
             logger.info("synthesize %s: confidence=%s conversational=ok", ticker, confidence)
@@ -2457,6 +2489,12 @@ def build_graph(
                 ambiguity_kind,
             )
             return {"conversational": fallback}
+        # QNT-244: keep clarify suggestions concrete and in-scope. The
+        # needs_second_ticker branch biases to comparison pairs; needs_ticker
+        # to a balanced mix; needs_prior_turn legitimately carries none.
+        conversational = _with_coerced_suggestions(
+            conversational, hint=_CLARIFY_SUGGESTION_HINT.get(str(ambiguity_kind))
+        )
         logger.info("clarify %s: ambiguity_kind=%s clarify=ok", ticker, ambiguity_kind)
         return {"conversational": conversational}
 
