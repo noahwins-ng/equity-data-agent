@@ -25,6 +25,7 @@ from agent.prompts import (
     COMPARISON_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     THESIS_ASPECTS,
+    build_comparison_prompt,
     build_synthesis_prompt,
 )
 from agent.prompts.system import _sanitize_report_body
@@ -466,6 +467,19 @@ def test_comparison_prompt_regime_mirror_present() -> None:
     assert "Regime labels in either section trump raw ordering" in text
     # Forbidden phrasing the rule explicitly bans.
     assert "stronger momentum" in text
+
+
+def test_comparison_prompt_discloses_context_ticker_when_question_names_one() -> None:
+    """QNT-233 option (a): page/thread ticker should be disclosed, not hidden."""
+    messages = build_comparison_prompt(
+        ["AAPL", "NVDA"],
+        "compare to AAPL",
+        {"AAPL": {"company": "Apple report"}, "NVDA": {"company": "Nvidia report"}},
+    )
+
+    user_text = messages[-1].content
+    assert isinstance(user_text, str)
+    assert "NVDA came from the current page or thread context" in user_text
 
 
 def test_system_prompt_prior_session_delta_rule_present() -> None:

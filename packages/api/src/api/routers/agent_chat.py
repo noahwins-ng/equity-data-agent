@@ -926,6 +926,20 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
 
         runner_task = asyncio.create_task(asyncio.to_thread(_runner))
         run_deadline = loop.time() + settings.CHAT_RUN_TIMEOUT
+        partial_tool_results: list[str] = []
+        answer_surface_events = {
+            "thesis",
+            "quick_fact",
+            "comparison",
+            "comparison_lean",
+            "focused",
+            "exploration",
+            "conversational",
+            "narrative_chunk",
+            "prose_chunk",
+        }
+        answer_surface_streamed = False
+        intent_event_streamed = False
 
         # QNT-150: wrap the entire drain + post-graph phase in try/finally so a
         # client disconnect (FastAPI raises GeneratorExit into this coroutine)
@@ -949,6 +963,15 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                 event, data = await asyncio.wait_for(queue.get(), timeout=min(0.1, remaining))
             except TimeoutError:
                 continue
+            if event == "intent":
+                intent_event_streamed = True
+            if event == "tool_result" and isinstance(data, dict):
+                name = data.get("name")
+                ok = data.get("ok")
+                if ok is True and isinstance(name, str) and name not in partial_tool_results:
+                    partial_tool_results.append(name)
+            elif event in answer_surface_events:
+                answer_surface_streamed = True
             yield _sse(event, data)
 
         if timed_out:
@@ -972,6 +995,21 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                 )
             except TimeoutError as exc:
                 sentry_capture_exception(exc)
+            if partial_tool_results and not answer_surface_streamed:
+                labels = [_tool_label(name).lower() for name in partial_tool_results]
+                if len(labels) == 1:
+                    read_list = labels[0]
+                else:
+                    read_list = f"{', '.join(labels[:-1])}, and {labels[-1]}"
+                yield _sse(
+                    "prose_chunk",
+                    {
+                        "delta": (
+                            "I timed out before finishing the answer, but I did "
+                            f"finish {read_list}. "
+                        )
+                    },
+                )
             yield _sse(
                 "error",
                 {"detail": _ERROR_DETAIL_AGENT_TIMEOUT, "code": "agent-timeout"},
@@ -1041,7 +1079,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
         # is idempotent — duplicate frames overwrite ``run.intent`` with the
         # same value, so the cost of leaving this safety net in is one extra
         # SSE frame per real request.
-        if isinstance(state, dict) and "intent" in state:
+        if isinstance(state, dict) and "intent" in state and not intent_event_streamed:
             yield _sse("intent", {"intent": intent})
 
         # Surface required-tool failures the graph recorded so the panel can

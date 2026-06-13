@@ -131,20 +131,26 @@ def test_detect_ambiguity_comparison_two_tickers_passes() -> None:
     assert _detect_ambiguity("comparison", "compare NVDA vs AAPL", has_prior_turn=False) is None
 
 
-def test_detect_ambiguity_comparison_does_not_count_state_ticker() -> None:
-    """Pinning test: the URL-context ticker (state.ticker, passed via the
-    API request) is intentionally NOT counted toward the comparison ticker
-    requirement. A user on /ticker/NVDA who types "compare to AAPL" still
-    gets routed to clarify -- the design wants an explicit second-ticker
-    naming in the QUESTION, not URL-derived. Pinning this invariant so a
-    future "fix" doesn't silently swallow the edge case.
+def test_detect_ambiguity_comparison_one_ticker_uses_context_ticker() -> None:
+    """QNT-233 option (a): URL context can supply the other comparison side.
 
-    ``_detect_ambiguity`` only takes the question string -- state.ticker
-    never enters its signature -- so this test guards the contract by
-    construction.
+    This intentionally reverses the old QNT-212 pin. A user on /ticker/NVDA
+    typing "compare to AAPL" should get NVDA-vs-AAPL, not a clarify card.
     """
-    # Only AAPL named in the question. State.ticker (would be NVDA in a
-    # real run) is not exposed to the helper.
+    assert (
+        _detect_ambiguity(
+            "comparison",
+            "compare to AAPL",
+            has_prior_turn=False,
+            has_context_ticker=True,
+            context_ticker="NVDA",
+        )
+        is None
+    )
+
+
+def test_detect_ambiguity_comparison_one_ticker_without_context_clarifies() -> None:
+    """One named ticker still clarifies when no URL/prior context can anchor it."""
     assert (
         _detect_ambiguity("comparison", "compare to AAPL", has_prior_turn=False)
         == "needs_second_ticker"
@@ -319,12 +325,10 @@ def test_clarify_narrates_even_when_classified_conversational(
     assert result.get("narrative")
 
 
-def test_clarify_routes_comparison_one_ticker(
+def test_comparison_one_ticker_with_url_context_routes_to_comparison(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A comparison ask with only one named ticker routes to clarify, not
-    to a half-finished comparison. The heuristic requires 2 tickers to fire
-    the comparison branch, so we drive the intent via the LLM stub."""
+    """QNT-233 option (a): /ticker/AAPL + "compare with NVDA" runs as comparison."""
     from agent.intent import IntentDecision
 
     stub = _StubLLM()
@@ -339,14 +343,32 @@ def test_clarify_routes_comparison_one_ticker(
 
     tools = _default_tools()
     graph = build_graph(tools)
-    # "compare to NVDA" -- heuristic defers (only one ticker), LLM returns
-    # comparison, ambiguity detector sees question_tickers=['NVDA'] (one) and
-    # fires needs_second_ticker.
     result = graph.invoke({"ticker": "AAPL", "question": "compare with NVDA please"})
 
-    assert result["ambiguity_kind"] == "needs_second_ticker"
-    assert result["intent_path"] == ["classify", "clarify", "narrate"]
-    assert sum(t.call_count for t in tools.values()) == 0
+    assert result["ambiguity_kind"] is None
+    assert result["intent_path"] == ["classify", "plan", "gather", "synthesize", "narrate"]
+    assert tools["company"].call_count == 2
+
+
+def test_comparison_phrase_one_ticker_uses_url_context_without_llm_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for dev AC: /ticker/NVDA + "compare with AAPL" compares directly."""
+    stub = _StubLLM()
+    monkeypatch.setattr(
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("conversational", "heuristic", False),
+    )
+    monkeypatch.setattr(graph_module, "get_llm", lambda *a, **kw: stub)
+
+    tools = _default_tools()
+    result = build_graph(tools).invoke({"ticker": "NVDA", "question": "compare with AAPL"})
+
+    assert result["intent"] == "comparison"
+    assert result["ambiguity_kind"] is None
+    assert result["comparison_tickers"] == ["AAPL", "NVDA"]
+    assert result["intent_path"] == ["classify", "plan", "gather", "synthesize", "narrate"]
 
 
 def test_clarify_routes_followup_without_prior_turn(
