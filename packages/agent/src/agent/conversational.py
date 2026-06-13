@@ -32,6 +32,7 @@ import re
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
+from shared.tickers import TICKERS
 
 from agent.disclaimer import DISCLAIMER
 
@@ -117,7 +118,12 @@ _SUGGESTION_BANK: tuple[tuple[str, str], ...] = (
     ("thesis", "Give me a balanced thesis on V right now."),
     ("comparison", "Compare NVDA vs AAPL on valuation."),
     ("comparison", "How does META stack up against GOOGL?"),
+    ("comparison", "Compare AMZN vs MSFT on growth."),
 )
+
+# QNT-156/QNT-244: the suggestion card shows either 0 entries (a bare greeting
+# that needs no redirect) or exactly this many. A partial list is never shown.
+_SUGGESTION_COUNT = 3
 
 
 def _pick_suggestions(hint: str | None, tickers: Iterable[str]) -> list[str]:
@@ -127,16 +133,105 @@ def _pick_suggestions(hint: str | None, tickers: Iterable[str]) -> list[str]:
     or None for a balanced mix. ``tickers`` is the full ticker registry —
     accepted for forward-compat; the bank questions already reference real
     tickers, so the param is currently informational only.
+
+    When a hint is given, the picks are drawn from that label first (so a
+    ``comparison`` hint yields concrete covered pairs, per QNT-244 AC4), padding
+    from other labels only if the hinted label has fewer than three entries.
     """
     del tickers  # reserved for future per-question ticker substitution
     if hint:
         primary = [q for label, q in _SUGGESTION_BANK if label == hint]
         if primary:
-            # Pad with two from other categories so the user sees variety.
-            others = [q for label, q in _SUGGESTION_BANK if label != hint]
-            return [primary[0], *others[:2]]
-    # No hint — pick the first three labelled categories for breadth.
-    return [_SUGGESTION_BANK[0][1], _SUGGESTION_BANK[2][1], _SUGGESTION_BANK[6][1]]
+            picks = primary[:_SUGGESTION_COUNT]
+            if len(picks) < _SUGGESTION_COUNT:
+                # Pad with other categories so the user always sees three.
+                others = [q for label, q in _SUGGESTION_BANK if label != hint]
+                picks = [*picks, *others[: _SUGGESTION_COUNT - len(picks)]]
+            return picks
+    # No hint — one suggestion each from three distinct shapes for breadth.
+    # Filter by label (not hardcoded indices) so reordering or inserting bank
+    # entries can't silently change which shapes the balanced mix draws from.
+    return [
+        next(q for label, q in _SUGGESTION_BANK if label == want)
+        for want in ("technical", "fundamental", "thesis")
+    ]
+
+
+# ─── QNT-244: clickable-suggestion guardrail ───────────────────────────────
+
+
+# A displayed suggestion must be an answerable prompt: it names a covered
+# ticker by symbol and avoids out-of-scope placeholders. The LLM-generated
+# ``ConversationalAnswer.suggestions`` were previously accepted verbatim, so a
+# cold "what can you do?" could ship "trend for a specific stock?" — which then
+# routes straight to clarify on click because no ticker was named.
+#
+# Tickers are matched case-sensitively against the uppercase symbol so the
+# single-letter "V" can't false-match a stray lowercase "v" inside prose.
+_COVERED_TICKER_RE = re.compile(r"\b(" + "|".join(TICKERS) + r")\b")
+
+# Placeholder / unsupported-scope phrases that make a suggestion unanswerable.
+# Matched case-insensitively. "market" is allowed only as "market cap" (a real
+# fundamental metric); every other use ("the market", "broader market") is the
+# out-of-scope sense the issue rejects.
+_OUT_OF_SCOPE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bspecific stock\b"),
+    re.compile(r"\b(?:a|an|some|any|the)\s+company\b"),
+    re.compile(r"\bcompanies\b"),
+    re.compile(r"\bpeers?\b"),
+    re.compile(r"\bsectors?\b"),
+    re.compile(r"\bmarket\b(?!\s+cap)"),
+    re.compile(r"\bmacro(?:economic)?\b"),
+    re.compile(r"\betfs?\b"),
+    re.compile(r"\bbenchmarks?\b"),
+    re.compile(r"\b(?:crypto|cryptocurrency|bitcoin|ethereum)\b"),
+    re.compile(r"\boptions?\b"),
+    re.compile(r"\bportfolio\b"),
+    re.compile(r"\ballocat\w*\b"),
+    re.compile(r"\bprice targets?\b"),
+    re.compile(r"\b(?:financial|investment) advice\b"),
+)
+
+
+def is_answerable_suggestion(text: str) -> bool:
+    """Return True if ``text`` is a concrete, in-scope, clickable suggestion.
+
+    Answerable means: names at least one covered ticker by symbol and contains
+    no out-of-scope placeholder (``specific stock``, ``a company``, ``peers``,
+    ``sector``, ``market``, macro, ETFs, crypto, options, portfolio, price
+    targets, advice). Comparison prompts naming two covered tickers pass by the
+    same rule. Used to gate LLM-generated suggestions before they reach the
+    chat card (QNT-244).
+    """
+    if not text or not text.strip():
+        return False
+    lowered = text.lower()
+    if any(pattern.search(lowered) for pattern in _OUT_OF_SCOPE_PATTERNS):
+        return False
+    return bool(_COVERED_TICKER_RE.search(text))
+
+
+def coerce_suggestions(
+    suggestions: Iterable[str],
+    *,
+    hint: str | None = None,
+) -> list[str]:
+    """Normalise LLM-proposed suggestions to the displayed contract (QNT-244).
+
+    The card shows either zero suggestions (a bare greeting that needs no
+    redirect) or exactly three answerable ones. An empty input stays empty.
+    A non-empty input passes through unchanged when it already carries three or
+    more answerable prompts (first three kept); otherwise — invalid or
+    incomplete — it is replaced wholesale with deterministic in-scope picks from
+    the centralized bank, biased by ``hint``.
+    """
+    items = [s.strip() for s in suggestions if s and s.strip()]
+    if not items:
+        return []
+    valid = [s for s in items if is_answerable_suggestion(s)]
+    if len(valid) >= _SUGGESTION_COUNT:
+        return valid[:_SUGGESTION_COUNT]
+    return _pick_suggestions(hint, TICKERS)
 
 
 def domain_redirect(
@@ -178,4 +273,9 @@ def domain_redirect(
     )
 
 
-__all__ = ["ConversationalAnswer", "domain_redirect"]
+__all__ = [
+    "ConversationalAnswer",
+    "coerce_suggestions",
+    "domain_redirect",
+    "is_answerable_suggestion",
+]
