@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from shared.config import settings
 from shared.tickers import TICKERS
 
 from agent.comparison import ComparisonAnswer
@@ -43,6 +44,7 @@ from agent.conversational import ConversationalAnswer
 from agent.evals.hallucination import check as check_hallucination
 from agent.evals.judge import JudgeScore
 from agent.evals.judge import score as judge_score_fn
+from agent.evals.provider_errors import is_provider_pressure_error, provider_error_label
 from agent.evals.similarity import cosine
 from agent.evals.tool_calls import check as check_tool_calls
 from agent.evals.tool_calls import wrap_with_recorder
@@ -57,6 +59,17 @@ logger = logging.getLogger(__name__)
 
 GOLDENS_PATH = Path(__file__).parent / "goldens" / "questions.yaml"
 HISTORY_PATH = Path(__file__).parent / "history.csv"
+
+# QNT-234: a single structured record never approaches the per-call LLM timeout
+# in a clean window -- gather is local HTTP and each LLM call returns in a few
+# seconds. A record whose wall time clears one full ``LLM_REQUEST_TIMEOUT`` means
+# at least one call ran to its timeout ceiling: the signature of provider
+# throttling (QNT-233 saw comparison records ~186s == 3x the 60s ceiling), not a
+# slow prompt. Derive the floor from the timeout so the two stay in lockstep.
+# NB: this tracks LLM_REQUEST_TIMEOUT (default 60s). If that is bumped (e.g. for
+# a slower model) the floor rises with it -- recalibrate against a fresh clean-run
+# baseline if a contaminated run stops being flagged.
+CONTAMINATION_LATENCY_MS = int(settings.LLM_REQUEST_TIMEOUT * 1000)
 
 HISTORY_FIELDS = (
     "run_id",
@@ -152,6 +165,11 @@ class EvalOutcome:
     judge_score: JudgeScore | None
     cosine: float
     elapsed_ms: int
+    # QNT-234: True when graph.invoke raised a provider-pressure error (Groq
+    # quota / TPM-TPD / request timeout / upstream 5xx) rather than producing a
+    # real contract result. Such rows are excluded from the exit gate and from
+    # history.csv -- they measure free-tier capacity, not the agent code.
+    provider_error: bool = False
 
 
 def load_goldens(path: Path = GOLDENS_PATH) -> list[GoldenRecord]:
@@ -266,17 +284,24 @@ def run_record(record: GoldenRecord, *, llm_for_judge: Any | None = None) -> Eva
         state = graph.invoke({"ticker": record.ticker, "question": record.question})
     except Exception as exc:  # noqa: BLE001 — surface as failed row, keep loop alive
         logger.exception("eval %s: build_graph or graph.invoke raised", record.id)
+        # QNT-234: distinguish a provider-capacity blow-up (Groq quota / timeout /
+        # 5xx) from a genuine app/routing/code regression. The former is flagged
+        # but must not gate the suite or pollute history.csv (see is_failing,
+        # run_all); the latter keeps the old "graph error: <Type>" reason.
+        provider = is_provider_pressure_error(exc)
+        reason = provider_error_label(exc) if provider else f"graph error: {type(exc).__name__}"
         return EvalOutcome(
             record=record,
             thesis="",
             actual_tools=tuple(recorder),
             hallucination_ok=False,
-            hallucination_reason=f"graph error: {type(exc).__name__}",
+            hallucination_reason=reason,
             tool_call_ok=False,
-            tool_call_reason=f"graph error: {type(exc).__name__}",
+            tool_call_reason=reason,
             judge_score=None,
             cosine=0.0,
             elapsed_ms=int((time.perf_counter() - started) * 1000),
+            provider_error=provider,
         )
     elapsed_ms = int((time.perf_counter() - started) * 1000)
 
@@ -490,7 +515,14 @@ def run_all(
     if run_id_suffix:
         rid = f"{rid}-{run_id_suffix}"
     outcomes = [run_record(rec, llm_for_judge=llm_for_judge) for rec in records]
-    append_history(outcomes, run_id=rid, history_path=history_path)
+    # QNT-234: provider-pressure failures (Groq quota / timeout) are
+    # infrastructure, not code-quality measurements -- appending their 0/0 rows
+    # would corrupt the committed history.csv trend (git log -p evals/history.csv)
+    # by reading as regressions below this commit. Keep them out of history; they
+    # still surface in the stdout summary (provider_pressure_warning) and in the
+    # returned outcomes the caller inspects.
+    measured = [o for o in outcomes if not o.provider_error]
+    append_history(measured, run_id=rid, history_path=history_path)
     return rid, outcomes
 
 
@@ -501,6 +533,7 @@ def summarise(outcomes: list[EvalOutcome]) -> str:
         return "no records evaluated"
     halluc_ok = sum(1 for o in outcomes if o.hallucination_ok)
     tools_ok = sum(1 for o in outcomes if o.tool_call_ok)
+    provider_failures = sum(1 for o in outcomes if o.provider_error)
     judged = [o.judge_score for o in outcomes if o.judge_score is not None]
     avg_cosine = round(sum(o.cosine for o in outcomes) / total, 3)
 
@@ -518,9 +551,16 @@ def summarise(outcomes: list[EvalOutcome]) -> str:
     else:
         judge_summary = "n/a"
 
-    lines = [
+    lines: list[str] = []
+    # QNT-234: lead with the contamination banner so a provider-throttled run is
+    # never read top-down as a code regression.
+    warning = provider_pressure_warning(outcomes)
+    if warning is not None:
+        lines += [warning, ""]
+    lines += [
         f"records: {total}  hallucination_ok: {halluc_ok}/{total}  "
         f"tool_call_ok: {tools_ok}/{total}  "
+        f"provider_failures: {provider_failures}/{total}  "
         f"avg_judge: {judge_summary}  "
         f"avg_cosine: {avg_cosine}",
         "",
@@ -536,13 +576,66 @@ def summarise(outcomes: list[EvalOutcome]) -> str:
             )
         else:
             judge_tag = " judge=n/a"
-        marks = ("H" if o.hallucination_ok else "h") + ("T" if o.tool_call_ok else "t") + judge_tag
+        # QNT-234: a provider failure is not a contract result -- mark it [P] so
+        # it reads distinctly from a hallucination ([h]) or tool-call ([t]) miss.
+        if o.provider_error:
+            marks = "P" + judge_tag
+        else:
+            marks = (
+                ("H" if o.hallucination_ok else "h") + ("T" if o.tool_call_ok else "t") + judge_tag
+            )
         lines.append(
             f"  [{marks}] {o.record.id:24s} {o.record.ticker:5s} "
             f"cos={o.cosine:.2f} elapsed={o.elapsed_ms}ms — "
             f"{o.hallucination_reason} | {o.tool_call_reason}"
         )
     return "\n".join(lines)
+
+
+def provider_pressure_warning(outcomes: list[EvalOutcome]) -> str | None:
+    """Flag a run contaminated by Groq quota / throttle / timeout pressure (QNT-234).
+
+    Returns a warning string when the run's failures or latency point at provider
+    capacity rather than the agent code, else None. Two signals:
+
+    * ``provider_error`` rows -- ``graph.invoke`` raised a rate-limit / timeout /
+      5xx the classifier recognised. Excluded from history.csv and the exit gate.
+    * latency-contaminated rows -- a record whose wall time cleared one full
+      :data:`CONTAMINATION_LATENCY_MS` (an LLM call ran to its ceiling). Synthesis
+      catches its own timeout and degrades to a redirect, so the contract may
+      still pass while the judge score is throttle-depressed; flag it so a
+      contaminated aggregate is not mistaken for a quality regression.
+
+    Mirrors :func:`agent.evals.dialogue_eval.contamination_warning`: when this
+    fires, re-run on a clean rate-limit window before trusting the numbers
+    (QNT-218 rationale).
+    """
+    if not outcomes:
+        return None
+    provider_errors = [o for o in outcomes if o.provider_error]
+    slow = [
+        o for o in outcomes if not o.provider_error and o.elapsed_ms >= CONTAMINATION_LATENCY_MS
+    ]
+    if not provider_errors and not slow:
+        return None
+    parts = [
+        "PROVIDER-PRESSURE CONTAMINATION -- do not read these failures as code "
+        f"regressions. {len(provider_errors)} provider error(s) "
+        "(quota/timeout/5xx, excluded from history.csv and the exit gate); "
+        f"{len(slow)} record(s) over the {CONTAMINATION_LATENCY_MS}ms "
+        "timeout-ceiling floor (likely throttle-degraded scores)."
+    ]
+    if provider_errors:
+        parts.append(
+            "  provider errors: "
+            + ", ".join(f"{o.record.id}({o.hallucination_reason})" for o in provider_errors)
+        )
+    if slow:
+        parts.append(
+            "  slow records: " + ", ".join(f"{o.record.id}={o.elapsed_ms}ms" for o in slow)
+        )
+    parts.append("Re-run on a clean rate-limit window before trusting the aggregate.")
+    return "\n".join(parts)
 
 
 def is_failing(outcomes: list[EvalOutcome]) -> bool:
@@ -557,10 +650,27 @@ def is_failing(outcomes: list[EvalOutcome]) -> bool:
     that strips every record would otherwise let ``any([])`` quietly pass
     the suite. Surface "evaluated zero records" as a failure so a broken
     golden file can't masquerade as a clean run.
+
+    QNT-234: provider-pressure failures (Groq quota / timeout / 5xx) are NOT
+    code regressions and must not gate the exit code, or a QNT-233-style routing
+    fix gets blocked by free-tier capacity instead of by its own correctness --
+    EXCEPT when every record is a provider failure (a full outage), which leaves
+    zero usable measurements and so gates like the empty-outcomes case. They
+    surface via :func:`provider_pressure_warning` regardless.
     """
     if not outcomes:
         return True
-    return any(not o.hallucination_ok or not o.tool_call_ok for o in outcomes)
+    measured = [o for o in outcomes if not o.provider_error]
+    if not measured:
+        # QNT-234: every record died on provider pressure -- we measured zero
+        # usable rows, so this is "evaluated nothing" (a full Groq outage), not a
+        # clean pass. Gate it like the empty-outcomes case rather than exit 0;
+        # provider_pressure_warning explains why in the summary. This does NOT
+        # conflict with the AC3 intent: that protects a MIXED run where real
+        # records still passed -- there, ``measured`` is non-empty and provider
+        # rows are simply excluded below.
+        return True
+    return any(not o.hallucination_ok or not o.tool_call_ok for o in measured)
 
 
 def fail_threshold_from_env() -> float | None:
@@ -587,6 +697,7 @@ def fail_threshold_from_env() -> float | None:
 
 
 __all__ = [
+    "CONTAMINATION_LATENCY_MS",
     "EvalOutcome",
     "GoldenRecord",
     "GOLDENS_PATH",
@@ -596,6 +707,7 @@ __all__ = [
     "fail_threshold_from_env",
     "is_failing",
     "load_goldens",
+    "provider_pressure_warning",
     "run_all",
     "run_record",
     "summarise",
