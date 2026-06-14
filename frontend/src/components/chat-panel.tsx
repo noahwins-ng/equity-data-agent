@@ -308,18 +308,32 @@ function EmptyState({
     );
   }
   const suggestions = emptyStateSuggestions(ticker);
+  // Anchor at the top of the scroll area rather than vertically centering
+  // (audit #21): a centered cluster left large dead space above AND below the
+  // four buttons. Top-aligned with a short capability blurb, the suggestions
+  // read as the opening of a conversation that grows downward.
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 px-6">
-      <p className="text-center text-sm text-zinc-300">
-        What would you like to know about {ticker}?
-      </p>
-      <ul className="w-full max-w-sm space-y-1">
-        {suggestions.map((s) => (
-          <li key={s}>
-            <SuggestionButton text={s} onClick={() => onSuggestion(s)} />
-          </li>
-        ))}
-      </ul>
+    <div className="flex h-full flex-col gap-4 px-4 py-6">
+      <div className="space-y-1">
+        <p className="text-sm font-medium text-zinc-200">Research {ticker}</p>
+        <p className="text-xs leading-relaxed text-zinc-500">
+          Ask the analyst for a balanced thesis, a focused read on fundamentals
+          or technicals, or the latest news. Every answer cites the underlying
+          reports.
+        </p>
+      </div>
+      <div className="space-y-1.5">
+        <p className="font-mono text-[10px] uppercase tracking-wider text-zinc-600">
+          Try asking
+        </p>
+        <ul className="space-y-1">
+          {suggestions.map((s) => (
+            <li key={s}>
+              <SuggestionButton text={s} onClick={() => onSuggestion(s)} />
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }

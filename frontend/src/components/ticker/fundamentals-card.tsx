@@ -172,7 +172,7 @@ export function FundamentalsCard({
           Fundamentals unavailable. <span className="text-zinc-500">{error}</span>
         </p>
       ) : loading ? (
-        <p className="text-sm text-zinc-500">Loading…</p>
+        <FundamentalsSkeleton />
       ) : !display ? (
         <p className="text-sm text-zinc-500">No fundamentals data.</p>
       ) : (
@@ -247,6 +247,29 @@ export function FundamentalsCard({
       )}
       </div>
     </section>
+  );
+}
+
+// Loading skeleton (QNT-250): the "as of" line plus eleven metric rows,
+// mirroring the loaded `dl` geometry (same `grid-cols-[1fr_auto]` track, same
+// `py-1`, same divide-y) so the placeholder fills the loaded layout and swaps
+// in without shift. Scoped inside the card's fixed-height scroll area, so it
+// never moves surrounding layout (no CLS).
+const FUNDAMENTALS_SKELETON_ROWS = 11;
+
+function FundamentalsSkeleton() {
+  return (
+    <div aria-hidden>
+      <div className="mb-2 h-3 w-32 animate-pulse rounded bg-zinc-800" />
+      <dl className="divide-y divide-zinc-800/60">
+        {Array.from({ length: FUNDAMENTALS_SKELETON_ROWS }).map((_, i) => (
+          <div key={i} className="grid grid-cols-[1fr_auto] items-center gap-x-3 py-1">
+            <div className="h-3.5 w-28 animate-pulse rounded bg-zinc-800" />
+            <div className="h-3.5 w-16 animate-pulse rounded bg-zinc-800" />
+          </div>
+        ))}
+      </dl>
+    </div>
   );
 }
 

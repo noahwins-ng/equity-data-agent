@@ -273,6 +273,9 @@ export function PriceChart({ ticker }: { ticker: string }) {
     [isCurrent, loaded.indicators],
   );
   const loadError = isCurrent ? loaded.error : null;
+  // OHLCV in flight (initial mount or a ticker/interval swap whose data hasn't
+  // arrived). Drives the shimmer placeholder over the chart canvas (QNT-250).
+  const loading = !isCurrent;
 
   // SPY overlay is fetched lazily when toggled on. Cache is keyed by interval
   // so toggling D/W/M while SPY is on triggers a refetch but a SPY off→on
@@ -341,16 +344,29 @@ export function PriceChart({ ticker }: { ticker: string }) {
           Chart unavailable. <span className="text-zinc-500">{loadError}</span>
         </p>
       ) : (
-        <ChartCanvas
-          candles={candles}
-          volume={volume}
-          indicators={indicatorRows}
-          overlays={overlays}
-          spyLine={spyLine}
-          logScale={logScale}
-          range={range}
-          onCrosshairMove={onCrosshairMove}
-        />
+        // The canvas stays mounted while OHLCV is in flight (avoids re-init on
+        // every ticker swap); the shimmer overlays it so the empty chart frame
+        // never flashes. inset-0 over the canvas reserves the same h-[300px]/
+        // h-[400px] box, so the overlay adds no layout shift (QNT-250).
+        <div className="relative">
+          <ChartCanvas
+            candles={candles}
+            volume={volume}
+            indicators={indicatorRows}
+            overlays={overlays}
+            spyLine={spyLine}
+            logScale={logScale}
+            range={range}
+            onCrosshairMove={onCrosshairMove}
+          />
+          {loading && (
+            <div
+              aria-hidden
+              data-testid="chart-skeleton"
+              className="absolute inset-0 animate-pulse rounded bg-zinc-900/80"
+            />
+          )}
+        </div>
       )}
     </section>
   );

@@ -78,4 +78,9 @@ body {
     animation: none;
     opacity: 0.5;
   }
+  /* QNT-250: hold loading skeletons (Tailwind animate-pulse) at a static tone
+   * instead of pulsing — same reduced-motion contract as the spinner above. */
+  .animate-pulse {
+    animation: none;
+  }
 }
