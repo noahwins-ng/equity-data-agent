@@ -65,7 +65,7 @@ function MoverColumn({ title, rows }: { title: string; rows: SummaryRow[] }) {
           <li key={row.ticker}>
             <Link
               href={`/ticker/${row.ticker}`}
-              className="flex items-baseline justify-between gap-3 px-3 py-2 transition hover:bg-zinc-900 focus:bg-zinc-900 focus:outline-none"
+              className="flex items-baseline justify-between gap-3 px-3 py-2 transition hover:bg-zinc-900 focus-visible:bg-zinc-900 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-emerald-500/60"
             >
               <span className="font-mono text-sm font-semibold text-zinc-100">
                 {row.ticker}

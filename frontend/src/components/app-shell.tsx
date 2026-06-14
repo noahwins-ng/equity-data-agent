@@ -179,7 +179,13 @@ export function AppShell({ children, watchlist }: Props) {
           />
         )}
 
-        <main className="min-h-0 overflow-y-auto xl:col-start-2">{children}</main>
+        <main
+          id="main"
+          tabIndex={-1}
+          className="min-h-0 overflow-y-auto outline-none xl:col-start-2"
+        >
+          {children}
+        </main>
 
         <div className="hidden md:flex md:min-h-0 md:flex-col xl:col-start-3">
           <ChatPanel />

@@ -21,6 +21,13 @@ body {
   height: 100%;
 }
 
+/* QNT-251: the app is fully dark. Declaring the document color-scheme makes
+ * native form controls, the scrollbar gutter, and other UA-rendered chrome
+ * paint with dark defaults instead of the light fallback. */
+html {
+  color-scheme: dark;
+}
+
 /* Dark scrollbar theme — keeps the watchlist / news / route pane scroll
  * tracks visually inside the zinc palette instead of the OS default light
  * grey, which broke the dark theme on Chrome/Edge and stood out as a bright
