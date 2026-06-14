@@ -19,6 +19,7 @@
 import { usePathname } from "next/navigation";
 import {
   type FormEvent,
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -51,7 +52,13 @@ import {
   type ToolResultEvent,
   type Verdict,
 } from "@/lib/api";
-import { composingLabel, hasAnswerSurface, isComposing, showCardProse } from "./chat-run";
+import {
+  announceableAnswer,
+  composingLabel,
+  hasAnswerSurface,
+  isComposing,
+  showCardProse,
+} from "./chat-run";
 import { parseSseStream } from "@/lib/sse";
 
 // ─── Local message-tape model ─────────────────────────────────────────────
@@ -1201,8 +1208,14 @@ function RetrievedSources({ sources }: { sources: RetrievedSource[] }) {
 }
 
 // ─── Run renderer (one user prompt → one streamed answer) ────────────────
-
-function RunBlock({
+//
+// QNT-247: memoized so a streamed token only reconciles the ONE streaming run.
+// `updateRun` replaces just the updated run in the runs array (every other run
+// keeps its object identity), and `onSuggestion` is the stable `startRun`
+// useCallback — so React.memo's shallow prop compare lets all prior runs in the
+// tape (up to MAX_RUNS) skip re-render while narrative_chunk / prose_chunk
+// deltas stream into the live run.
+const RunBlock = memo(function RunBlock({
   run,
   onSuggestion,
 }: {
@@ -1411,6 +1424,23 @@ function RunBlock({
       )}
     </article>
   );
+});
+
+// ─── QNT-247: debounced screen-reader announcement ────────────────────────
+//
+// Trailing debounce: as the answer text changes on every token, the timer keeps
+// resetting; the settled value is committed only once the stream goes quiet for
+// ANNOUNCE_DEBOUNCE_MS (or completes). That collapses the token storm into a
+// single polite announcement instead of one utterance per token.
+const ANNOUNCE_DEBOUNCE_MS = 600;
+
+function useDebounced<T>(value: T, delayMs: number): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+  return settled;
 }
 
 // ─── Health-provenance source list (composer placeholder) ────────────────
@@ -1736,6 +1766,18 @@ export function ChatPanel() {
 
   const isStreaming = runs.some((r) => r.status === "streaming");
 
+  // QNT-247: announce the streamed answer of the most recent run to screen
+  // readers through a debounced aria-live=polite region (frontend audit #2).
+  // Only the latest run can be streaming; announcing its settled answer covers
+  // both the live stream and the final text once `done` lands. The region is
+  // visually hidden (sr-only) and polite, so it never moves focus — the error
+  // rail keeps its own assertive role=alert path inside RunBlock.
+  const latestRun = runs.length > 0 ? runs[runs.length - 1] : null;
+  const liveAnswer = useDebounced(
+    latestRun ? announceableAnswer(latestRun) : "",
+    ANNOUNCE_DEBOUNCE_MS,
+  );
+
   return (
     <aside
       aria-label="Agent chat"
@@ -1767,13 +1809,14 @@ export function ChatPanel() {
           <EmptyState ticker={ticker} onSuggestion={prefillComposer} />
         ) : (
           runs.map((run) => (
-            <RunBlock
-              key={run.id}
-              run={run}
-              onSuggestion={(q) => startRun(q)}
-            />
+            <RunBlock key={run.id} run={run} onSuggestion={startRun} />
           ))
         )}
+      </div>
+
+      {/* QNT-247: visually-hidden live region carrying the streamed answer. */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {liveAnswer}
       </div>
 
       <Composer
