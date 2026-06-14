@@ -191,7 +191,7 @@ export function TechnicalsCard({ ticker }: { ticker: string }) {
           Indicators unavailable. <span className="text-zinc-500">{error}</span>
         </p>
       ) : loading ? (
-        <p className="text-sm text-zinc-500">Loading…</p>
+        <TechnicalsSkeleton />
       ) : !latest ? (
         <p className="text-sm text-zinc-500">No data.</p>
       ) : (
@@ -236,6 +236,34 @@ export function TechnicalsCard({ ticker }: { ticker: string }) {
       )}
       </div>
     </section>
+  );
+}
+
+// Loading skeleton (QNT-250): nine rows mirroring the `dl` geometry above —
+// same divide-y, same `grid-cols-[1fr_auto]` track, same `py-1`, so the
+// placeholder occupies the loaded layout and swaps in without shift. The card
+// itself lives in a fixed-height grid cell with its own scroll area, so this
+// never moves surrounding layout (no CLS).
+const SKELETON_ROWS = 9;
+
+function TechnicalsSkeleton() {
+  return (
+    <dl className="divide-y divide-zinc-800/60" aria-hidden>
+      {Array.from({ length: SKELETON_ROWS }).map((_, i) => (
+        <div
+          key={i}
+          className="grid grid-cols-[1fr_auto] items-center gap-x-3 py-1 2xl:grid-cols-[1fr_auto_auto]"
+        >
+          <div className="h-3.5 w-24 animate-pulse rounded bg-zinc-800" />
+          <div className="h-3.5 w-12 animate-pulse rounded bg-zinc-800" />
+          {/* Third track mirrors the loaded Row's 2xl-only decoration chip
+              column so the skeleton width matches at 2xl breakpoints. */}
+          <div className="hidden 2xl:block">
+            <div className="h-3.5 w-14 animate-pulse rounded bg-zinc-800" />
+          </div>
+        </div>
+      ))}
+    </dl>
   );
 }
 
