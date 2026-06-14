@@ -179,6 +179,13 @@ def test_happy_path_emits_canonical_sequence(
         assert tr["summary"]
         assert tr["ok"] is True
 
+    # QNT-252: each tool_result echoes its tool_call's started_at so the panel
+    # can bind the pair exactly (not by name alone). Match on the (name,
+    # started_at) pair so the check still holds if two calls ever share a name.
+    call_keys = {(tc["name"], tc["started_at"]) for tc in tool_calls}
+    for tr in tool_results:
+        assert (tr["name"], tr["started_at"]) in call_keys
+
     # News summary uses the headline-bullet count, not raw line count.
     news_result = next(tr for tr in tool_results if tr["name"] == "news")
     assert news_result["summary"] == "3 headlines"

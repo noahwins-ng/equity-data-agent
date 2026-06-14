@@ -54,6 +54,7 @@ import {
 } from "@/lib/api";
 import {
   announceableAnswer,
+  bindToolResult,
   composingLabel,
   hasAnswerSurface,
   isComposing,
@@ -1682,9 +1683,8 @@ export function ChatPanel() {
             const ev = data as ToolResultEvent;
             updateRun(id, (r) => ({
               ...r,
-              toolRows: r.toolRows.map((row) =>
-                row.name === ev.name && !row.result ? { ...row, result: ev } : row,
-              ),
+              // QNT-252: bind by started_at, not first-unmatched-by-name.
+              toolRows: bindToolResult(r.toolRows, ev),
             }));
           } else if (event === "prose_chunk") {
             const ev = data as ProseChunkEvent;

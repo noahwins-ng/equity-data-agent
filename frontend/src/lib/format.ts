@@ -90,29 +90,29 @@ export function formatAsOfDate(iso: string | null | undefined): string {
 }
 
 /**
- * News card date label: `Today · Apr 30`, `Yesterday · Apr 29`, `2d ago · Apr 28`,
- * or just `Apr 22` once we're past the 7-day relative window.
+ * News card date label: the absolute date only, e.g. `Apr 28`.
+ *
+ * QNT-252: this used to prepend a relative bucket (`Today` / `Yesterday` /
+ * `2d ago`) computed against `new Date()`. NewsCard is a server component
+ * baked into the statically built ticker page (`dynamic = "force-static"`,
+ * refreshed only by the Vercel deploy hook), so that `new Date()` was frozen
+ * at BUILD time — an article built as "Today" still read "Today" days later.
+ *
+ * View-time correctness is the requirement. We drop the relative bucket in the
+ * SSG path rather than hydrate a client-side clock: the news list is otherwise
+ * a pure server component, and within the 7-day window an absolute `Apr 28`
+ * carries the same information without dragging a hydration boundary (and its
+ * flash + JS) into the card for a cosmetic prefix.
  */
-export function formatNewsDate(iso: string | null | undefined, now: Date = new Date()): string {
+export function formatNewsDate(iso: string | null | undefined): string {
   if (!iso) return DASH;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return DASH;
-  const absolute = d.toLocaleDateString("en-US", {
+  return d.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
     timeZone: "UTC",
   });
-  // Compare in UTC so the relative bucket lines up with the absolute label
-  // (which is also UTC-formatted). Mixing local and UTC here was the
-  // "Yesterday · Apr 29" / "2d ago · Apr 29" inconsistency.
-  const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  const thatUtc = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-  const dayMs = 24 * 60 * 60 * 1000;
-  const diffDays = Math.round((todayUtc - thatUtc) / dayMs);
-  if (diffDays === 0) return `Today · ${absolute}`;
-  if (diffDays === 1) return `Yesterday · ${absolute}`;
-  if (diffDays < 7) return `${diffDays}d ago · ${absolute}`;
-  return absolute;
 }
 
 export function changeColorClass(v: number | null | undefined): string {

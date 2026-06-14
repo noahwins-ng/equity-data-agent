@@ -267,6 +267,10 @@ export type ToolResultEvent = {
   latency_ms: number;
   summary: string;
   ok: boolean;
+  // QNT-252: server clock (seconds) captured at the matching tool_call. Echoed
+  // back on the result so the panel can bind it to the exact call row even when
+  // two concurrent calls to the same tool are in flight (see bindToolResult).
+  started_at: number;
 };
 
 export type ProseChunkEvent = {
