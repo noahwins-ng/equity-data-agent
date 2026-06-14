@@ -44,6 +44,22 @@ export class ApiError extends Error {
   }
 }
 
+const inFlightJson = new Map<string, Promise<unknown>>();
+
+function inFlightKey(path: string, options: ApiFetchOptions): string | null {
+  if (typeof window === "undefined") return null;
+  if (options.body !== undefined) return null;
+  if (options.signal !== undefined) return null;
+  const method = options.method?.toUpperCase() ?? "GET";
+  if (method !== "GET") return null;
+  return JSON.stringify({
+    path,
+    cache: options.cache ?? "force-cache",
+    credentials: options.credentials,
+    headers: options.headers,
+  });
+}
+
 /**
  * Fetch JSON from the API with explicit cache semantics.
  * Throws ApiError on non-2xx responses.
@@ -52,12 +68,24 @@ export async function apiFetch<T>(
   path: string,
   options: ApiFetchOptions = {},
 ): Promise<T> {
-  const response = await apiFetchRaw(path, options);
-  if (!response.ok) {
-    const body = await response.text().catch(() => "<no body>");
-    throw new ApiError(response.status, path, body);
+  const key = inFlightKey(path, options);
+  if (key) {
+    const existing = inFlightJson.get(key);
+    if (existing) return existing as Promise<T>;
   }
-  return response.json() as Promise<T>;
+
+  const request = apiFetchRaw(path, options).then(async (response) => {
+    if (!response.ok) {
+      const body = await response.text().catch(() => "<no body>");
+      throw new ApiError(response.status, path, body);
+    }
+    return response.json() as Promise<T>;
+  });
+
+  if (!key) return request;
+
+  inFlightJson.set(key, request);
+  return request.finally(() => inFlightJson.delete(key));
 }
 
 /**
