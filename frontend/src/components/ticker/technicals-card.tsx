@@ -162,7 +162,7 @@ export function TechnicalsCard({ ticker }: { ticker: string }) {
         <div
           role="tablist"
           aria-label="Aggregation"
-          className="flex gap-0.5 text-[10px] 2xl:gap-1"
+          className="flex gap-0.5 text-[10px] wide:gap-1"
         >
           {TIMEFRAMES.map((t) => (
             <button
@@ -178,8 +178,8 @@ export function TechnicalsCard({ ticker }: { ticker: string }) {
                   : "rounded border border-transparent px-1.5 py-0.5 uppercase text-zinc-400 hover:bg-zinc-900"
               }
             >
-              <span className="2xl:hidden">{t.short}</span>
-              <span className="hidden 2xl:inline">{t.label}</span>
+              <span className="wide:hidden">{t.short}</span>
+              <span className="hidden wide:inline">{t.label}</span>
             </button>
           ))}
         </div>
@@ -252,13 +252,13 @@ function TechnicalsSkeleton() {
       {Array.from({ length: SKELETON_ROWS }).map((_, i) => (
         <div
           key={i}
-          className="grid grid-cols-[1fr_auto] items-center gap-x-3 py-1 2xl:grid-cols-[1fr_auto_auto]"
+          className="grid grid-cols-[1fr_auto] items-center gap-x-3 py-1 wide:grid-cols-[1fr_auto_auto]"
         >
           <div className="h-3.5 w-24 animate-pulse rounded bg-zinc-800" />
           <div className="h-3.5 w-12 animate-pulse rounded bg-zinc-800" />
-          {/* Third track mirrors the loaded Row's 2xl-only decoration chip
-              column so the skeleton width matches at 2xl breakpoints. */}
-          <div className="hidden 2xl:block">
+          {/* Third track mirrors the loaded Row's wide-only decoration chip
+              column so the skeleton width matches at wide breakpoints. */}
+          <div className="hidden wide:block">
             <div className="h-3.5 w-14 animate-pulse rounded bg-zinc-800" />
           </div>
         </div>
@@ -299,11 +299,11 @@ function Row({
   // earlier `minmax(0, 1fr)` allowed a 0-width column at narrow viewports
   // and made the label unreadable on a 14" MacBook.
   //
-  // Below 2xl: 2-column layout (label + value, chip dropped). At 2xl+:
-  // 3-column with the chip restored. Below 2xl the chip column would be
+  // Below wide: 2-column layout (label + value, chip dropped). At wide+:
+  // 3-column with the chip restored. Below wide the chip column would be
   // empty + leave a 12px gap, so we drop it from the template entirely.
   return (
-    <div className="grid grid-cols-[1fr_auto] items-center gap-x-3 py-1 2xl:grid-cols-[1fr_auto_auto]">
+    <div className="grid grid-cols-[1fr_auto] items-center gap-x-3 py-1 wide:grid-cols-[1fr_auto_auto]">
       <dt className="whitespace-nowrap text-[11px] uppercase tracking-wider text-zinc-400">
         {label}
       </dt>
@@ -313,13 +313,13 @@ function Row({
           <span className={`ml-1.5 text-[11px] ${extraColor ?? "text-zinc-500"}`}>{extra}</span>
         ) : null}
       </dd>
-      {/* Decoration chip is hidden below 2xl. The chip (POSITIVE / STRONG /
-          NEUTRAL / EXTENDED) is supplementary signaling — at 14" MacBook
-          width the column-3 pill overflows the card's right edge, leaving
-          a clipped half-pill that's worse than no pill. The numeric value
-          + extra still convey the signal; user gets the full chip back at
-          2xl+ where there's room. */}
-      <div className="hidden min-w-0 2xl:block">
+      {/* Decoration chip is hidden below wide. The chip (POSITIVE / STRONG /
+          NEUTRAL / EXTENDED) is supplementary signaling — below ~1760px the
+          column-3 pill overflows the card's right edge (the technicals card is
+          only ~264px at 1536px), leaving a clipped half-pill that's worse than
+          no pill. The numeric value + extra still convey the signal; user gets
+          the full chip back at wide+ where there's genuinely room. */}
+      <div className="hidden min-w-0 wide:block">
         <Tag tag={tag ?? null} />
       </div>
     </div>
