@@ -5,6 +5,17 @@
   --font-mono: var(--font-geist-mono);
 }
 
+/* QNT-248: single source of truth for the "dense card layout" breakpoint.
+ * The middle-pane cards (technicals / fundamentals) gate their dense tier —
+ * the technicals decoration-chip column + the long tab labels (D->Daily,
+ * Q->Quarterly) — on `wide:`. Tailwind's default `2xl` (1536px) turned the
+ * dense tier on while the card column was still only ~264px, clipping the
+ * "NEGATIVE" chip and the YoY/(TTM) suffixes. The column isn't genuinely wide
+ * enough until ~1760px (real 24"/27" monitors), so dense gates live here. */
+@theme {
+  --breakpoint-wide: 110rem; /* 1760px */
+}
+
 html,
 body {
   height: 100%;

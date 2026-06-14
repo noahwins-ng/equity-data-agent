@@ -143,7 +143,7 @@ export function FundamentalsCard({
         <div
           role="tablist"
           aria-label="Period"
-          className="flex gap-0.5 text-[10px] 2xl:gap-1"
+          className="flex gap-0.5 text-[10px] wide:gap-1"
         >
           {PERIOD_TABS.map((p) => (
             <button
@@ -159,8 +159,8 @@ export function FundamentalsCard({
                   : "rounded border border-transparent px-1.5 py-0.5 uppercase text-zinc-400 hover:bg-zinc-900"
               }
             >
-              <span className="2xl:hidden">{p.short}</span>
-              <span className="hidden 2xl:inline">{p.label}</span>
+              <span className="wide:hidden">{p.short}</span>
+              <span className="hidden wide:inline">{p.label}</span>
             </button>
           ))}
         </div>
@@ -226,7 +226,7 @@ export function FundamentalsCard({
               //   "<value> <pct> yield (TTM)"
               // The (TTM) marker rides on `extraLabel` so it sits AFTER
               // the "yield" word, not between % and yield. `extraLabel`
-              // hides below 2xl (same responsive behavior as the rest of
+              // hides below `wide` (same responsive behavior as the rest of
               // the card) — the percentage value alone is still shown.
               return (
                 <Row
@@ -351,22 +351,36 @@ function Row({
   // `1fr` (= `minmax(auto, 1fr)`) keeps the label column at min-content
   // width as a floor, so labels like "EBITDA MARGIN" don't ellipsis-clip
   // at narrow viewports.
+  //
+  // QNT-248 (#18): the value cell may wrap instead of nowrap-clipping. In the
+  // narrow xl column (~1280px the card is only ~220px wide) a `whitespace-
+  // nowrap` value like "215.94B +65.4%" or "65.3% (TTM)" overflowed the card's
+  // right edge and clipped mid-token. Allowing a wrap drops the delta / suffix
+  // to a second right-aligned line rather than clipping it; at widths with room
+  // it never wraps. Only the value cell wraps — the label `dt` stays nowrap.
   return (
     <div className="grid grid-cols-[1fr_auto] items-center gap-x-3 py-1">
       <dt className="whitespace-nowrap text-[11px] uppercase tracking-wider text-zinc-400">
         {label}
       </dt>
-      <dd className="whitespace-nowrap text-right font-mono text-sm tabular-nums text-zinc-50">
-        {value}
+      {/* Flex row so the numeric value and its delta-pill are independent
+          wrap units. The old inline layout separated them with an `ml-1.5`
+          margin — which is not a line-break opportunity, so "18.0%+16 bps"
+          read as one unbreakable run and clipped the card edge in the narrow
+          xl column. `flex-wrap` + `justify-end` drops the delta to a second
+          right-aligned line when the column is too tight; `gap-x-1.5` (6px)
+          reproduces the old margin spacing when both fit on one line. */}
+      <dd className="flex min-w-0 flex-wrap items-baseline justify-end gap-x-1.5 text-right font-mono text-sm tabular-nums text-zinc-50">
+        <span>{value}</span>
         {extra && extra !== "—" ? (
-          <span className={`ml-1.5 text-[11px] ${extraColor ?? "text-zinc-500"}`}>
+          <span className={`text-[11px] ${extraColor ?? "text-zinc-500"}`}>
             {extra}
-            {/* `YoY` / `yield` suffix hides below 2xl so the row doesn't
-                overflow the card on a 14" MacBook. The numeric delta is
-                self-describing enough at narrow widths; the label
-                returns at 2xl+ where the column has room. */}
+            {/* `YoY` / `yield` suffix hides below `wide` so the row doesn't
+                overflow the card on narrower xl widths. The numeric delta is
+                self-describing enough; the label returns at wide+ where the
+                column has genuine room. */}
             {extraLabel ? (
-              <span className="ml-1 hidden text-zinc-500 2xl:inline">{extraLabel}</span>
+              <span className="ml-1 hidden text-zinc-500 wide:inline">{extraLabel}</span>
             ) : null}
           </span>
         ) : null}
