@@ -33,7 +33,12 @@ import {
 } from "lightweight-charts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { apiFetch, type IndicatorRow, type OhlcvRow, type Timeframe } from "@/lib/api";
+import {
+  apiFetch,
+  type IndicatorRow,
+  type OhlcvRow,
+  type Timeframe,
+} from "@/lib/api";
 
 import {
   atrLegendText,
@@ -239,13 +244,21 @@ export function PriceChart({ ticker }: { ticker: string }) {
       apiFetch<OhlcvRow[]>(`/api/v1/ohlcv/${ticker}?timeframe=${barInterval}`, {
         cache: "no-store",
       }),
-      apiFetch<IndicatorRow[]>(`/api/v1/indicators/${ticker}?timeframe=${barInterval}`, {
-        cache: "no-store",
-      }),
+      apiFetch<IndicatorRow[]>(
+        `/api/v1/indicators/${ticker}?timeframe=${barInterval}`,
+        {
+          cache: "no-store",
+        },
+      ),
     ])
       .then(([o, ind]) => {
         if (!cancelled) {
-          setLoaded({ key: requestKey, ohlcv: o, indicators: ind, error: null });
+          setLoaded({
+            key: requestKey,
+            ohlcv: o,
+            indicators: ind,
+            error: null,
+          });
         }
       })
       .catch((err: unknown) => {
@@ -328,19 +341,20 @@ export function PriceChart({ ticker }: { ticker: string }) {
         barInterval={barInterval}
         onBarIntervalChange={setBarInterval}
         overlays={overlays}
-        onToggleOverlay={(id) => setOverlays((prev) => ({ ...prev, [id]: !prev[id] }))}
+        onToggleOverlay={(id) =>
+          setOverlays((prev) => ({ ...prev, [id]: !prev[id] }))
+        }
         showSpy={showSpy}
         onToggleSpy={() => setShowSpy((s) => !s)}
         logScale={logScale}
         onToggleLog={() => setLogScale((l) => !l)}
       />
-      <OhlcReadout
-        candles={candles}
-        volume={volume}
-        hovered={hovered}
-      />
+      <OhlcReadout candles={candles} volume={volume} hovered={hovered} />
       {loadError ? (
-        <p className="my-12 text-center text-sm text-red-400" data-testid="chart-error">
+        <p
+          className="my-12 text-center text-sm text-red-400"
+          data-testid="chart-error"
+        >
           Chart unavailable. <span className="text-zinc-500">{loadError}</span>
         </p>
       ) : (
@@ -400,11 +414,6 @@ function ChartToolbar({
     { id: "weekly", label: "W" },
     { id: "monthly", label: "M" },
   ];
-  // <md: expand every toolbar button to a >=44px tap target (WCAG 2.5.5) by
-  // centring its label in a min 44x44 box. md+ resets min-h/min-w to 0 so the
-  // desktop padding alone drives the dense look (QNT-249).
-  const touch =
-    "inline-flex items-center justify-center min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0";
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 pb-2 text-[11px] uppercase tracking-wider">
       {/* flex-wrap so the bar-interval group drops to its own row instead of
@@ -420,15 +429,19 @@ function ChartToolbar({
               onClick={() => onRangeChange(r.id)}
               className={
                 range === r.id
-                  ? `${touch} rounded border border-zinc-600 bg-zinc-800 px-2 py-0.5 text-zinc-100`
-                  : `${touch} rounded border border-transparent px-2 py-0.5 text-zinc-400 hover:bg-zinc-900`
+                  ? "rounded border border-zinc-600 bg-zinc-800 px-2 py-0.5 text-zinc-100"
+                  : "rounded border border-transparent px-2 py-0.5 text-zinc-400 hover:bg-zinc-900"
               }
             >
               {r.label}
             </button>
           ))}
         </div>
-        <div role="tablist" aria-label="Bar interval" className="flex gap-1 border-l border-zinc-800 pl-3">
+        <div
+          role="tablist"
+          aria-label="Bar interval"
+          className="flex gap-1 border-l border-zinc-800 pl-3"
+        >
           {INTERVALS.map((iv) => (
             <button
               key={iv.id}
@@ -438,8 +451,8 @@ function ChartToolbar({
               onClick={() => onBarIntervalChange(iv.id)}
               className={
                 barInterval === iv.id
-                  ? `${touch} rounded border border-zinc-600 bg-zinc-800 px-2 py-0.5 text-zinc-100`
-                  : `${touch} rounded border border-transparent px-2 py-0.5 text-zinc-400 hover:bg-zinc-900`
+                  ? "rounded border border-zinc-600 bg-zinc-800 px-2 py-0.5 text-zinc-100"
+                  : "rounded border border-transparent px-2 py-0.5 text-zinc-400 hover:bg-zinc-900"
               }
             >
               {iv.label}
@@ -457,10 +470,14 @@ function ChartToolbar({
             title={OVERLAY_LABELS[id]}
             className={
               overlays[id]
-                ? `${touch} rounded border px-1.5 py-0.5 text-zinc-100`
-                : `${touch} rounded border border-zinc-700 px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-900`
+                ? "rounded border px-1.5 py-0.5 text-zinc-100"
+                : "rounded border border-zinc-700 px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-900"
             }
-            style={overlays[id] ? { borderColor: OVERLAY_TONE[id], color: OVERLAY_TONE[id] } : undefined}
+            style={
+              overlays[id]
+                ? { borderColor: OVERLAY_TONE[id], color: OVERLAY_TONE[id] }
+                : undefined
+            }
           >
             {id}
           </button>
@@ -471,8 +488,8 @@ function ChartToolbar({
           onClick={onToggleSpy}
           className={
             showSpy
-              ? `${touch} rounded border border-sky-400 bg-sky-500/10 px-1.5 py-0.5 text-sky-300`
-              : `${touch} rounded border border-zinc-700 px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-900`
+              ? "rounded border border-sky-400 bg-sky-500/10 px-1.5 py-0.5 text-sky-300"
+              : "rounded border border-zinc-700 px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-900"
           }
         >
           SPY
@@ -483,8 +500,8 @@ function ChartToolbar({
           onClick={onToggleLog}
           className={
             logScale
-              ? `${touch} rounded border border-zinc-500 bg-zinc-800 px-1.5 py-0.5 text-zinc-100`
-              : `${touch} rounded border border-zinc-700 px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-900`
+              ? "rounded border border-zinc-500 bg-zinc-800 px-1.5 py-0.5 text-zinc-100"
+              : "rounded border border-zinc-700 px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-900"
           }
         >
           {logScale ? "Log" : "Linear"}
@@ -534,7 +551,9 @@ function ChartCanvas({
   // effect rewrites this ref whenever data or overlay state changes; the
   // crosshair handler installed at mount time reads through it so it always
   // sees the latest data without needing to re-subscribe.
-  const updateLegendsRef = useRef<((time: UTCTimestamp | null) => void) | null>(null);
+  const updateLegendsRef = useRef<((time: UTCTimestamp | null) => void) | null>(
+    null,
+  );
 
   // Mount chart once.
   useEffect(() => {
@@ -683,7 +702,14 @@ function ChartCanvas({
     // Every series key that lives in a sub-pane. MACD has TWO lines (line +
     // signal) sharing the same pane; both keys must be tracked so the
     // teardown pass clears them before rebuild.
-    const SUB_PANE_KEYS = new Set(["RSI", "ATR", "OBV", "MACD", "MACD_SIGNAL", "MACD_HIST"]);
+    const SUB_PANE_KEYS = new Set([
+      "RSI",
+      "ATR",
+      "OBV",
+      "MACD",
+      "MACD_SIGNAL",
+      "MACD_HIST",
+    ]);
 
     // Remove same-pane series that are no longer desired (skip sub-pane
     // entries — they're handled by the rebuild step below).
@@ -903,7 +929,10 @@ function ChartCanvas({
       return;
     }
 
-    if (container.style.position === "" || container.style.position === "static") {
+    if (
+      container.style.position === "" ||
+      container.style.position === "static"
+    ) {
       container.style.position = "relative";
     }
 
@@ -1088,12 +1117,15 @@ function OhlcReadout({
   const tone = upDay ? "text-emerald-400" : "text-red-400";
   const change = candle.close - candle.open;
   const changePct = candle.open === 0 ? null : (change / candle.open) * 100;
-  const dateLabel = new Date((targetTime as number) * 1000).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    timeZone: "UTC",
-  });
+  const dateLabel = new Date((targetTime as number) * 1000).toLocaleDateString(
+    "en-US",
+    {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      timeZone: "UTC",
+    },
+  );
 
   return (
     <div
@@ -1117,7 +1149,9 @@ function OhlcReadout({
       <span className={tone}>
         {change >= 0 ? "+" : ""}
         {change.toFixed(2)}
-        {changePct !== null ? ` (${change >= 0 ? "+" : ""}${changePct.toFixed(2)}%)` : ""}
+        {changePct !== null
+          ? ` (${change >= 0 ? "+" : ""}${changePct.toFixed(2)}%)`
+          : ""}
       </span>
       {vol ? (
         <span>
