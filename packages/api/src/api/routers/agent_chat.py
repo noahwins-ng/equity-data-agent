@@ -194,12 +194,14 @@ class ChatRequest(BaseModel):
 
     ticker: str = Field(min_length=1, max_length=8)
     message: str = Field(default="", max_length=_MESSAGE_MAX_LEN)
-    # QNT-209: opaque session identifier supplied by the frontend (one per
-    # ticker per ChatPanel mount; lifetime = component state, lost on
-    # refresh). When present the backend persists the run via SqliteSaver
-    # so a follow-up question on the same thread_id can reuse the prior
-    # turn's reports. When absent (curl, tests, non-frontend callers) the
-    # request runs against an ephemeral compile with no checkpointer.
+    # QNT-209/245: opaque conversation identifier supplied by the frontend
+    # (one per ChatPanel mount, ticker-agnostic; lifetime = component state,
+    # lost on refresh). The answered subject ticker is a per-turn property
+    # (QNT-228 rebase), so one thread spans turns about different tickers.
+    # When present the backend persists the run via SqliteSaver so a follow-up
+    # on the same thread_id can reuse the prior turn's reports. When absent
+    # (curl, tests, non-frontend callers) the request runs against an
+    # ephemeral compile with no checkpointer.
     thread_id: str | None = Field(default=None, max_length=128)
 
     @field_validator("message")
@@ -666,9 +668,10 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
     uses for off-domain questions. The agent never reaches a paid provider
     in either branch — see ADR-017.
 
-    QNT-209: ``request.thread_id`` is the per-(session, ticker) memory key
-    the frontend supplies. None = ephemeral (curl, tests, no-frontend) → no
-    checkpointer at compile, no sidecar touch, nothing persists.
+    QNT-209/245: ``request.thread_id`` is the per-conversation memory key the
+    frontend supplies (one per ChatPanel mount, ticker-agnostic — the subject
+    ticker is per-turn, QNT-228). None = ephemeral (curl, tests, no-frontend)
+    → no checkpointer at compile, no sidecar touch, nothing persists.
     """
     thread_id = request.thread_id
     use_memory = thread_id is not None

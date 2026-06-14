@@ -1498,14 +1498,17 @@ export function ChatPanel() {
   // first render — prefillComposer increments the counter, never resets it.
   const [composerInput, setComposerInput] = useState("");
   const [composerFocusKey, setComposerFocusKey] = useState(0);
-  // QNT-209: per-ticker thread map. One thread_id per ticker per ChatPanel
-  // mount; lifetime = this React component state (NOT localStorage, NOT
-  // sessionStorage — both survive refresh and would break the desired
-  // "refresh = restart" UX). Switching tickers within the same session
-  // gives each ticker its own continuity; switching back to a prior ticker
-  // reuses its original thread_id so a followup question still has the
-  // earlier turn to reason over.
-  const [threadIds, setThreadIds] = useState<Record<string, string>>({});
+  // QNT-245: one thread_id per ChatPanel mount, ticker-agnostic. A thread is a
+  // CONVERSATION, not a ticker page. The answered subject is a per-turn
+  // property (QNT-228 message-wins rebase + analysis_ticker), so a single
+  // thread spans turns about different tickers without fragmenting on
+  // navigation. ChatPanel is mounted in app/layout.tsx and does NOT remount on
+  // route change, so this id naturally carries across cross-ticker navigation
+  // and resets only on refresh/remount. Held in a ref (not state): it is never
+  // rendered, only sent to the API, so a ref avoids needless re-renders and
+  // dependency-array churn. NOT localStorage/sessionStorage by explicit choice
+  // — both survive refresh and would break the desired "refresh = restart" UX.
+  const threadIdRef = useRef<string | null>(null);
 
   // Clear the composer when the active ticker changes. Prefilled suggestions
   // ("Technical analysis of TSLA") embed the ticker by name, so leaving the
@@ -1606,15 +1609,11 @@ export function ChatPanel() {
       const controller = new AbortController();
       abortRef.current = controller;
 
-      // QNT-209: lazily mint a thread_id for this ticker if we haven't yet,
-      // otherwise reuse the existing one. Stored via setThreadIds so a
-      // navigation away and back lands on the same id (intentional: the
-      // user expects continuity within one session).
-      const existingThreadId = threadIds[ticker];
-      const threadId = existingThreadId ?? crypto.randomUUID();
-      if (!existingThreadId) {
-        setThreadIds((prev) => ({ ...prev, [ticker]: threadId }));
-      }
+      // QNT-245: lazily mint the per-mount thread_id on first send, then reuse
+      // it for every subsequent turn this mount — regardless of which ticker
+      // page is active. One conversation, ticker-agnostic.
+      threadIdRef.current ??= crypto.randomUUID();
+      const threadId = threadIdRef.current;
 
       consumeChatStream(
         {
@@ -1707,7 +1706,7 @@ export function ChatPanel() {
         }));
       });
     },
-    [ticker, updateRun, threadIds],
+    [ticker, updateRun],
   );
 
   // Cancel any in-flight stream when the panel unmounts.

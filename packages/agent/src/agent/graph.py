@@ -1105,6 +1105,19 @@ def _resolve_single_ticker_context(
     intents. Comparison keeps its separate resolver because two-or-more names
     have distinct semantics there. Bare followups inherit the last analytical
     ticker stored in the checkpoint so a rebased turn stays coherent.
+
+    QNT-245 boundary (older-turn re-gather): a bare followup inherits ONLY the
+    MOST-RECENT analysis_ticker. Within one ticker-agnostic conversation thread,
+    a followup that gestures at an EARLIER turn's ticker ("go back to NVDA"
+    after the subject moved to AMZN) names NVDA, so it routes as a fresh NVDA
+    ask and RE-GATHERS — it does not reuse NVDA's prior reports. ``reports`` /
+    ``reports_by_ticker`` / ``thesis`` are last-write-wins in the checkpoint
+    (gather overwrites them on each non-followup turn; only the followup branch
+    in plan_node deliberately preserves them), so the older ticker's reports are
+    gone once a newer single-ticker turn lands.
+    This is accepted by design: we re-gather rather than maintain a per-ticker
+    report cache. Cross-ticker continuity is provided by the shared thread +
+    transcript, not by cached per-ticker reports.
     """
     current = current_ticker.upper()
     named = extract_tickers(question)
