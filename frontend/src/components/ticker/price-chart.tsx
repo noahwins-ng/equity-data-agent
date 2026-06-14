@@ -416,9 +416,11 @@ function ChartToolbar({
   ];
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 pb-2 text-[11px] uppercase tracking-wider">
-      {/* flex-wrap so the bar-interval group drops to its own row instead of
-          pushing "M" off the right edge at ~390px (QNT-249). */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      {/* flex-wrap so the bar-interval group can drop to its own row instead
+          of pushing "M" off the right edge at the narrowest phones; the tight
+          mobile gap + the px-1.5 buttons below keep dates + D/W/M on one row at
+          393-430px so the chips get their own row, not D/W/M alone (QNT-249). */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 md:gap-x-3">
         <div role="tablist" aria-label="Date range" className="flex gap-1">
           {DATE_RANGES.map((r) => (
             <button
@@ -429,8 +431,8 @@ function ChartToolbar({
               onClick={() => onRangeChange(r.id)}
               className={
                 range === r.id
-                  ? "rounded border border-zinc-600 bg-zinc-800 px-2 py-0.5 text-zinc-100"
-                  : "rounded border border-transparent px-2 py-0.5 text-zinc-400 hover:bg-zinc-900"
+                  ? "rounded border border-zinc-600 bg-zinc-800 px-1.5 py-0.5 md:px-2 text-zinc-100"
+                  : "rounded border border-transparent px-1.5 py-0.5 md:px-2 text-zinc-400 hover:bg-zinc-900"
               }
             >
               {r.label}
@@ -440,7 +442,7 @@ function ChartToolbar({
         <div
           role="tablist"
           aria-label="Bar interval"
-          className="flex gap-1 border-l border-zinc-800 pl-3"
+          className="flex gap-1 border-l border-zinc-800 pl-2 md:pl-3"
         >
           {INTERVALS.map((iv) => (
             <button
@@ -451,8 +453,8 @@ function ChartToolbar({
               onClick={() => onBarIntervalChange(iv.id)}
               className={
                 barInterval === iv.id
-                  ? "rounded border border-zinc-600 bg-zinc-800 px-2 py-0.5 text-zinc-100"
-                  : "rounded border border-transparent px-2 py-0.5 text-zinc-400 hover:bg-zinc-900"
+                  ? "rounded border border-zinc-600 bg-zinc-800 px-1.5 py-0.5 md:px-2 text-zinc-100"
+                  : "rounded border border-transparent px-1.5 py-0.5 md:px-2 text-zinc-400 hover:bg-zinc-900"
               }
             >
               {iv.label}
