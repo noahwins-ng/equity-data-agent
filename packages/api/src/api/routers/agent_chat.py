@@ -12,10 +12,13 @@ Event contract
                     string the panel surfaces ("Reading price history") so the
                     UI never has to map function names itself.
 
-``tool_result``   — ``{name, label, latency_ms, summary}`` emitted when the
-                    tool returns. ``summary`` is a short real string derived
-                    from the report body (e.g. ``"38 lines"`` for technical)
-                    so the row can render without further parsing.
+``tool_result``   — ``{name, label, latency_ms, summary, ok, started_at}``
+                    emitted when the tool returns. ``summary`` is a short real
+                    string derived from the report body (e.g. ``"38 lines"``
+                    for technical) so the row can render without further
+                    parsing. ``started_at`` echoes the matching ``tool_call``
+                    clock so the panel binds the result to the exact call row
+                    (QNT-252).
 
 ``prose_chunk``   — ``{delta}`` markdown deltas for the agent prose surface.
                     QNT-229 #5: emitted ONLY for the paths that skip the narrate
@@ -444,6 +447,7 @@ def _instrument_tools(
                             "latency_ms": latency_ms,
                             "summary": f"[error] {type(exc).__name__}: {exc}"[:120],
                             "ok": False,
+                            "started_at": started_at,
                         },
                     )
                     raise
@@ -456,6 +460,7 @@ def _instrument_tools(
                         "latency_ms": latency_ms,
                         "summary": _summarise_report(name, result),
                         "ok": not result.startswith("[error]"),
+                        "started_at": started_at,
                     },
                 )
                 return result
@@ -511,6 +516,7 @@ def _instrument_search_news(
                 "latency_ms": latency_ms,
                 "summary": f"{hit_count} headlines" if hit_count else "no matches",
                 "ok": True,
+                "started_at": started_at,
             },
         )
         return result

@@ -160,3 +160,25 @@ export function announceableAnswer(run: AnnounceSurface): string {
   if (prose) return prose;
   return run.quickFact?.answer.trim() ?? "";
 }
+
+// ─── QNT-252: bind a tool_result to its tool_call by started_at ────────────
+//
+// The SSE stream emits a tool_call, then (once the tool returns) a tool_result.
+// The panel pairs them to hang latency/summary/ok off the right row. Binding by
+// `name` alone — "first unmatched row of that name" — mis-pairs when two
+// concurrent calls to the SAME tool are in flight: a result that completes
+// first would bind to whichever same-name row was unmatched first, not to the
+// call it belongs to. `started_at` (the server clock captured per tool_call and
+// echoed back on tool_result — QNT-252 backend) is a unique correlation key, so
+// we match on it for an exact bind. Name is kept in the predicate as a cheap
+// guard; started_at alone is already unambiguous.
+export function bindToolResult<
+  Result extends { name: string; started_at: number },
+  Row extends { name: string; started_at: number; result?: Result },
+>(rows: Row[], result: Result): Row[] {
+  return rows.map((row) =>
+    row.name === result.name && row.started_at === result.started_at
+      ? { ...row, result }
+      : row,
+  );
+}

@@ -11,6 +11,7 @@ import {
   type CardProseSurface,
   type ComposingSurface,
   announceableAnswer,
+  bindToolResult,
   composingLabel,
   hasAnswerSurface,
   isComposing,
@@ -250,4 +251,48 @@ test("announce: narrative outranks a quick_fact answer", () => {
 
 test("announce: empty run announces nothing", () => {
   assert.equal(announceableAnswer(announce()), "");
+});
+
+// ─── QNT-252: tool_result binds to its tool_call by started_at ─────────────
+//
+// Two concurrent calls to the SAME tool are the failure case for the old
+// first-unmatched-by-name bind: if the SECOND call's result completes first,
+// name-only binding would attach it to the first call's row. started_at is the
+// exact correlation key, so the result lands on the call it belongs to
+// regardless of completion order.
+
+type Row = {
+  name: string;
+  started_at: number;
+  result?: { name: string; started_at: number; summary: string };
+};
+
+test("tool_result binds to the call with the matching started_at", () => {
+  const rows: Row[] = [
+    { name: "technical", started_at: 100 },
+    { name: "technical", started_at: 200 },
+  ];
+  // Second call (started_at 200) completes first.
+  const afterSecond = bindToolResult(rows, {
+    name: "technical",
+    started_at: 200,
+    summary: "second",
+  });
+  assert.equal(afterSecond[0].result, undefined); // first call still open
+  assert.equal(afterSecond[1].result?.summary, "second"); // not bound to row[0]
+
+  // First call (started_at 100) completes second.
+  const afterBoth = bindToolResult(afterSecond, {
+    name: "technical",
+    started_at: 100,
+    summary: "first",
+  });
+  assert.equal(afterBoth[0].result?.summary, "first");
+  assert.equal(afterBoth[1].result?.summary, "second");
+});
+
+test("tool_result with no matching started_at binds nothing", () => {
+  const rows: Row[] = [{ name: "technical", started_at: 100 }];
+  const after = bindToolResult(rows, { name: "technical", started_at: 999, summary: "x" });
+  assert.equal(after[0].result, undefined);
 });
