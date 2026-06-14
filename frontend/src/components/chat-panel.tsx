@@ -1546,9 +1546,15 @@ export function ChatPanel() {
   // Auto-scroll to the latest run as events arrive.
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
+    // Honour prefers-reduced-motion: smooth-scroll is vestibular-trigger
+    // motion, so fall back to an instant jump when the user has asked for
+    // reduced motion (QNT-249 — the pixel-spinner already does this).
+    const prefersReducedMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
     scrollerRef.current?.scrollTo({
       top: scrollerRef.current.scrollHeight,
-      behavior: "smooth",
+      behavior: prefersReducedMotion ? "auto" : "smooth",
     });
   }, [runs]);
 

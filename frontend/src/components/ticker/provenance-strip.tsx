@@ -52,17 +52,20 @@ export function ProvenanceStrip() {
   return (
     <footer
       aria-label="Data provenance"
-      className="border-t border-zinc-800 bg-zinc-950 px-6 py-2 font-mono text-[10px] uppercase tracking-wider"
+      className="border-t border-zinc-800 bg-zinc-950 px-6 py-1 font-mono text-[10px] uppercase tracking-wider md:py-2"
     >
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
+      {/* <md: one compact line — prefix words hidden and gaps tightened so the
+          strip fits a ~390px column on a single row (QNT-249). Desktop keeps
+          the labelled two-column layout. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 md:gap-x-6">
         <span className="flex items-baseline gap-2">
-          <span className="text-zinc-500">Sources</span>
+          <span className="hidden text-zinc-500 md:inline">Sources</span>
           <span className="text-zinc-300">
             {sources.length > 0 ? sources.join(" · ") : "—"}
           </span>
         </span>
         <span className="flex items-baseline gap-2">
-          <span className="text-zinc-500">Jobs</span>
+          <span className="hidden text-zinc-500 md:inline">Jobs</span>
           <span className="text-zinc-300">{jobsLabel}</span>
         </span>
       </div>
