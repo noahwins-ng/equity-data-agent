@@ -23,7 +23,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from agent import graph as graph_module
-from agent.graph import build_graph
+from agent.graph import _resolve_single_ticker_context, build_graph
 from agent.intent import _heuristic_intent
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
@@ -234,6 +234,107 @@ def test_followup_thread_then_named_metric_routes_quick_fact(
     _ = stub_llm  # keep fixture referenced for clarity
     result = graph.invoke({"ticker": "TSLA", "question": "what's NVDA's RSI?"}, config=config)
     assert result["intent"] == "quick_fact"
+
+
+# ─── QNT-245: ticker-agnostic thread (cross-ticker navigation) ─────────────
+
+
+def test_explicit_ask_rebases_over_url_and_stored_ticker() -> None:
+    """AC4: a new explicit ask naming a ticker after navigation rebases to the
+    NAMED ticker, even though both the input URL ticker and the thread's stored
+    analysis_ticker differ from it.
+
+    With a single ticker-agnostic thread (QNT-245), the URL ticker, the stored
+    analysis_ticker, and the question-named ticker can all disagree on one turn.
+    The question-named ticker must win for single-name intents — this is the
+    QNT-228 message-wins rule, re-pinned here for the cross-ticker thread.
+    """
+    # URL=AMZN (just navigated), stored analysis_ticker=MSFT (earlier turn),
+    # question explicitly names NVDA. All three distinct; NVDA must win.
+    resolved = _resolve_single_ticker_context(
+        current_ticker="AMZN",
+        question="how is NVDA trending technically?",
+        intent="technical",
+        prior_ticker="MSFT",
+    )
+    assert resolved == "NVDA"
+
+
+def test_fresh_nonfollowup_uses_url_not_stored_ticker() -> None:
+    """A fresh (non-followup) ask that names NO ticker falls back to the URL
+    ticker, NOT the stale stored analysis_ticker.
+
+    Complements AC4: after navigating to /ticker/AMZN, a generic "give me a
+    thesis" must analyse AMZN (the page), not whatever the thread last discussed.
+    Only a bare *followup* inherits the stored subject.
+    """
+    resolved = _resolve_single_ticker_context(
+        current_ticker="AMZN",
+        question="give me a thesis",
+        intent="thesis",
+        prior_ticker="NVDA",
+    )
+    assert resolved == "AMZN"
+
+
+def test_bare_followup_inherits_stored_ticker_over_url() -> None:
+    """A bare followup inherits the stored analysis_ticker even when the URL
+    ticker differs — the unit-level mechanism behind AC5's checkpoint test."""
+    resolved = _resolve_single_ticker_context(
+        current_ticker="NVDA",
+        question="why?",
+        intent="followup",
+        prior_ticker="AMZN",
+    )
+    assert resolved == "AMZN"
+
+
+def test_single_thread_spans_two_tickers_then_followup_inherits(
+    stub_llm: _StubLLM,  # noqa: ARG001 — patches get_llm via fixture side-effect
+    saver: Any,
+) -> None:
+    """AC5 / AC3: one ticker-agnostic thread, sequential turns on two tickers,
+    bare followup inherits the most recent subject WITHOUT losing the checkpoint.
+
+    Mirrors the QNT-245 cross-ticker navigation flow on a single thread_id:
+      turn 1  /ticker/NVDA  "is NVDA overvalued?"   -> thesis,    analysis=NVDA
+      turn 2  /ticker/NVDA  "what's AMZN's RSI?"     -> quick_fact, analysis=AMZN
+      turn 3  /ticker/NVDA  "why?"                   -> followup,  inherits AMZN
+
+    Turn 3 is asked with URL ticker NVDA on purpose: the followup must inherit
+    AMZN from the checkpoint, not snap back to the page ticker, and must reuse
+    the hydrated reports (zero new tool calls).
+    """
+    tools = {
+        "technical": MagicMock(return_value="## technical\nRSI 50\n"),
+        "fundamental": MagicMock(return_value="## fundamental\nP/E 20\n"),
+        "company": MagicMock(return_value="## company\nDescription\n"),
+        "news": MagicMock(return_value="## news\n- headline\n"),
+    }
+    graph = build_graph(tools, checkpointer=saver)
+    config: RunnableConfig = {"configurable": {"thread_id": "conversation:xyz"}}
+
+    # Turn 1: thesis on the page ticker (NVDA).
+    t1 = graph.invoke({"ticker": "NVDA", "question": "is NVDA overvalued?"}, config=config)
+    assert t1["intent"] == "thesis"
+    assert t1["analysis_ticker"] == "NVDA"
+
+    # Turn 2: still on the NVDA page, but explicitly ask about AMZN. The
+    # question-named ticker rebases the analytical subject to AMZN.
+    t2 = graph.invoke({"ticker": "NVDA", "question": "what's AMZN's RSI?"}, config=config)
+    assert t2["intent"] == "quick_fact"
+    assert t2["analysis_ticker"] == "AMZN"
+
+    for t in tools.values():
+        t.reset_mock()
+
+    # Turn 3: bare followup, still URL=NVDA. Must inherit AMZN (most recent
+    # subject), reuse hydrated reports (zero tool calls), keep the checkpoint.
+    t3 = graph.invoke({"ticker": "NVDA", "question": "why?"}, config=config)
+    assert t3["intent"] == "followup"
+    assert t3["analysis_ticker"] == "AMZN"  # inherited, not snapped to NVDA
+    assert _tool_calls(tools) == 0  # checkpoint reused, not re-gathered
+    assert t3["reports"]  # hydrated reports survived the followup branch
 
 
 def test_thread_persists_across_saver_restart(
