@@ -400,9 +400,16 @@ function ChartToolbar({
     { id: "weekly", label: "W" },
     { id: "monthly", label: "M" },
   ];
+  // <md: expand every toolbar button to a >=44px tap target (WCAG 2.5.5) by
+  // centring its label in a min 44x44 box. md+ resets min-h/min-w to 0 so the
+  // desktop padding alone drives the dense look (QNT-249).
+  const touch =
+    "inline-flex items-center justify-center min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0";
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 pb-2 text-[11px] uppercase tracking-wider">
-      <div className="flex items-center gap-3">
+      {/* flex-wrap so the bar-interval group drops to its own row instead of
+          pushing "M" off the right edge at ~390px (QNT-249). */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <div role="tablist" aria-label="Date range" className="flex gap-1">
           {DATE_RANGES.map((r) => (
             <button
@@ -413,8 +420,8 @@ function ChartToolbar({
               onClick={() => onRangeChange(r.id)}
               className={
                 range === r.id
-                  ? "rounded border border-zinc-600 bg-zinc-800 px-2 py-0.5 text-zinc-100"
-                  : "rounded border border-transparent px-2 py-0.5 text-zinc-400 hover:bg-zinc-900"
+                  ? `${touch} rounded border border-zinc-600 bg-zinc-800 px-2 py-0.5 text-zinc-100`
+                  : `${touch} rounded border border-transparent px-2 py-0.5 text-zinc-400 hover:bg-zinc-900`
               }
             >
               {r.label}
@@ -431,8 +438,8 @@ function ChartToolbar({
               onClick={() => onBarIntervalChange(iv.id)}
               className={
                 barInterval === iv.id
-                  ? "rounded border border-zinc-600 bg-zinc-800 px-2 py-0.5 text-zinc-100"
-                  : "rounded border border-transparent px-2 py-0.5 text-zinc-400 hover:bg-zinc-900"
+                  ? `${touch} rounded border border-zinc-600 bg-zinc-800 px-2 py-0.5 text-zinc-100`
+                  : `${touch} rounded border border-transparent px-2 py-0.5 text-zinc-400 hover:bg-zinc-900`
               }
             >
               {iv.label}
@@ -450,8 +457,8 @@ function ChartToolbar({
             title={OVERLAY_LABELS[id]}
             className={
               overlays[id]
-                ? "rounded border px-1.5 py-0.5 text-zinc-100"
-                : "rounded border border-zinc-700 px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-900"
+                ? `${touch} rounded border px-1.5 py-0.5 text-zinc-100`
+                : `${touch} rounded border border-zinc-700 px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-900`
             }
             style={overlays[id] ? { borderColor: OVERLAY_TONE[id], color: OVERLAY_TONE[id] } : undefined}
           >
@@ -464,8 +471,8 @@ function ChartToolbar({
           onClick={onToggleSpy}
           className={
             showSpy
-              ? "rounded border border-sky-400 bg-sky-500/10 px-1.5 py-0.5 text-sky-300"
-              : "rounded border border-zinc-700 px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-900"
+              ? `${touch} rounded border border-sky-400 bg-sky-500/10 px-1.5 py-0.5 text-sky-300`
+              : `${touch} rounded border border-zinc-700 px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-900`
           }
         >
           SPY
@@ -476,8 +483,8 @@ function ChartToolbar({
           onClick={onToggleLog}
           className={
             logScale
-              ? "rounded border border-zinc-500 bg-zinc-800 px-1.5 py-0.5 text-zinc-100"
-              : "rounded border border-zinc-700 px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-900"
+              ? `${touch} rounded border border-zinc-500 bg-zinc-800 px-1.5 py-0.5 text-zinc-100`
+              : `${touch} rounded border border-zinc-700 px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-900`
           }
         >
           {logScale ? "Log" : "Linear"}
@@ -545,7 +552,9 @@ function ChartCanvas({
         horzLines: { color: "rgba(63, 63, 70, 0.3)" },
       },
       rightPriceScale: { borderColor: "#3f3f46" },
-      timeScale: { borderColor: "#3f3f46" },
+      // fixLeftEdge pins the first bar inside the pane so the leftmost time
+      // label (e.g. "May") is no longer clipped at the left edge (QNT-249).
+      timeScale: { borderColor: "#3f3f46", fixLeftEdge: true },
       autoSize: true,
       crosshair: { mode: 1 },
     });
