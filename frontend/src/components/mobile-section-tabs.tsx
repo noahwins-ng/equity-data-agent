@@ -54,10 +54,13 @@ export function MobileSectionTabs({ technicals, fundamentals, news }: Props) {
         </div>
       ) : (
         <>
-          <div className="flex shrink-0 border-b border-zinc-800">
+          <div role="tablist" aria-label="Section" className="flex shrink-0 border-b border-zinc-800">
             {SECTIONS.map(({ key, label }) => (
               <button
                 key={key}
+                type="button"
+                role="tab"
+                aria-selected={active === key}
                 onClick={() => setActive(key)}
                 className={`flex-1 py-2 font-mono text-xs uppercase tracking-wider transition
                   ${

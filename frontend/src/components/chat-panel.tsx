@@ -217,9 +217,9 @@ function Composer({
   const placeholder = useMemo(() => {
     const focus = ticker ? ticker : "the watchlist";
     if (sources.length === 0) {
-      return `Ask the analyst about ${focus}...`;
+      return `Ask the analyst about ${focus}…`;
     }
-    return `Ask the analyst about ${focus}... (cites ${sources.join(", ")})`;
+    return `Ask the analyst about ${focus}… (cites ${sources.join(", ")})`;
   }, [ticker, sources]);
 
   // Focus the textarea whenever the parent bumps focusKey. Skip the first
@@ -261,8 +261,9 @@ function Composer({
           onChange={(e) => onChange(e.target.value)}
           rows={2}
           placeholder={placeholder}
+          aria-label="Message the analyst"
           disabled={disabled}
-          className="min-h-[2.5rem] flex-1 resize-none rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-600 focus:outline-none disabled:opacity-60"
+          className="min-h-[2.5rem] flex-1 resize-none rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-100 placeholder:text-zinc-600 focus-visible:border-zinc-600 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500/60 disabled:opacity-60"
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
