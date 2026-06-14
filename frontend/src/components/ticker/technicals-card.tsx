@@ -152,7 +152,7 @@ export function TechnicalsCard({ ticker }: { ticker: string }) {
 
   return (
     <section
-      aria-label="Technical indicators"
+      aria-label="Technicals"
       className="flex min-h-0 flex-col rounded border border-zinc-800 bg-zinc-950"
     >
       <div className="flex shrink-0 items-baseline justify-between border-b border-zinc-800 px-4 py-3">
