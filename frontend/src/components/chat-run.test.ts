@@ -6,9 +6,11 @@ import assert from "node:assert/strict";
 import type { Intent, RetrievedSource } from "@/lib/api";
 
 import {
+  type AnnounceSurface,
   type AnswerSurface,
   type CardProseSurface,
   type ComposingSurface,
+  announceableAnswer,
   composingLabel,
   hasAnswerSurface,
   isComposing,
@@ -192,4 +194,60 @@ test("whitespace-only done narrative is treated as empty (prose renders)", () =>
 
 test("card prose stays hidden after done when narrative exists", () => {
   assert.equal(showCardProse(cardProse({ status: "done", narrative: "Narrated." })), false);
+});
+
+// ─── QNT-247: screen-reader announcement text ─────────────────────────────
+//
+// announceableAnswer feeds the debounced aria-live=polite region. It surfaces
+// the analyst voice (narrative) when present, else the standalone streamed
+// prose — the two token-streamed surfaces the a11y audit (#2) flagged as
+// silent. The debounce that throttles announcements lives in chat-panel.tsx
+// (timer-based, not unit-tested); this pure helper is the testable boundary.
+
+function announce(overrides: Partial<AnnounceSurface> = {}): AnnounceSurface {
+  return { narrative: "", proseChunks: [], quickFact: null, ...overrides };
+}
+
+test("announce: narrative is preferred over standalone prose", () => {
+  assert.equal(
+    announceableAnswer(announce({ narrative: "On balance, constructive.", proseChunks: ["raw"] })),
+    "On balance, constructive.",
+  );
+});
+
+test("announce: falls back to joined prose chunks when no narrative", () => {
+  assert.equal(
+    announceableAnswer(announce({ proseChunks: ["RSI ", "sits at ", "62."] })),
+    "RSI sits at 62.",
+  );
+});
+
+test("announce: whitespace-only narrative falls through to prose", () => {
+  assert.equal(
+    announceableAnswer(announce({ narrative: "   \n ", proseChunks: ["Prose answer."] })),
+    "Prose answer.",
+  );
+});
+
+test("announce: quick_fact answer is announced (narrate-skipped card)", () => {
+  // quick_fact skips narrate and streams no prose, so its card answer is the
+  // only prose surface — without this fallback a quick-fact run is silent to a
+  // screen reader (verified live: QuickFactCard rendered, live region empty).
+  assert.equal(
+    announceableAnswer(announce({ quickFact: { answer: "AAPL's RSI-14 is 44.0, neutral." } })),
+    "AAPL's RSI-14 is 44.0, neutral.",
+  );
+});
+
+test("announce: narrative outranks a quick_fact answer", () => {
+  assert.equal(
+    announceableAnswer(
+      announce({ narrative: "Voice answer.", quickFact: { answer: "card answer" } }),
+    ),
+    "Voice answer.",
+  );
+});
+
+test("announce: empty run announces nothing", () => {
+  assert.equal(announceableAnswer(announce()), "");
 });

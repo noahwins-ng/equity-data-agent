@@ -133,3 +133,30 @@ export function composingLabel(intent: Intent | null): string {
 export function showCardProse(run: CardProseSurface): boolean {
   return run.status !== "streaming" && run.narrative.trim().length === 0;
 }
+
+// ─── QNT-247: screen-reader announcement text ──────────────────────────────
+//
+// The analyst ANSWER is what a screen-reader user currently never hears — it
+// renders into a plain <article> with no live region (frontend audit #2). This
+// returns the text to feed a debounced aria-live=polite region. Precedence:
+//   1. narrative (analyst voice) — thesis / focused / exploration / comparison
+//   2. standalone streamed prose — conversational
+//   3. quick_fact answer — quick_fact skips narrate (QNT-232 #3) and streams no
+//      prose, so its card answer is the ONLY prose surface; without this clause
+//      a quick-fact run announces nothing (verified live: the QuickFactCard
+//      rendered the RSI answer while the live region stayed silent).
+// Pure-table shapes (comparison_lean) and degraded card-only runs carry no
+// flat prose answer; their structured DOM is reachable by normal SR navigation.
+export type AnnounceSurface = {
+  narrative: string;
+  proseChunks: string[];
+  quickFact: { answer: string } | null;
+};
+
+export function announceableAnswer(run: AnnounceSurface): string {
+  const narrative = run.narrative.trim();
+  if (narrative) return narrative;
+  const prose = run.proseChunks.join("").trim();
+  if (prose) return prose;
+  return run.quickFact?.answer.trim() ?? "";
+}
