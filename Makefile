@@ -230,14 +230,7 @@ security-scan: ## Run the QNT-160 scanner suite locally (mirror of CI security-*
 # ─── Database ─────────────────────────────────────────────────
 
 migrate: ## Run ClickHouse DDL migrations via HTTP interface
-	@for f in migrations/*.sql; do \
-		echo "Running $$f..."; \
-		curl -s --fail \
-			"http://$${CLICKHOUSE_HOST:-localhost}:$${CLICKHOUSE_PORT:-8123}/" \
-			--data-binary @"$$f" \
-			&& echo " OK" \
-			|| echo " FAILED"; \
-	done
+	uv run python scripts/migrate_clickhouse.py
 
 seed: ## Quick seed: 30 days of data for 3 tickers (fast dev setup)
 	uv run python -m dagster_pipelines.seed

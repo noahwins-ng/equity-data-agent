@@ -853,6 +853,83 @@ CX41 totals: 16 GiB RAM. Pre-QNT-103 mem_limit allocation was 13.06 GiB (clickho
 
 ---
 
+## ClickHouse `news_raw` recovery posture (QNT-238 / QNT-254)
+
+`equity_raw.news_raw` is the only irreplaceable warehouse table. OHLCV,
+fundamentals, derived indicators, and Qdrant vectors can be rebuilt from
+external sources or from `news_raw`; Finnhub news older than its backfill window
+cannot be recovered if the ClickHouse volume is lost.
+
+**Verified data location** (2026-06-15):
+
+```bash
+ssh hetzner 'cd /opt/equity-data-agent && docker compose --profile prod config --volumes'
+ssh hetzner 'docker inspect equity-data-agent_clickhouse_data --format "{{json .Mountpoint}}"'
+```
+
+Expected volume and mountpoint:
+
+```text
+clickhouse_data
+"/var/lib/docker/volumes/equity-data-agent_clickhouse_data/_data"
+```
+
+**Current status**:
+
+- No server-level backup/snapshot coverage is currently assumed.
+- QNT-238 documents the data location and restore verification query only.
+- QNT-254 tracks adding durable off-host backup coverage.
+- Accepted interim recovery: re-run the Finnhub backfill for roughly the most
+  recent year of news; older `news_raw` remains at risk until QNT-254 ships.
+
+**Future snapshot coverage check**:
+
+1. In the Hetzner Cloud Console, open the `equity-data-agent-prod` server.
+2. Confirm Backups or a scheduled Snapshot policy covers the server/volume that
+   contains `/var/lib/docker/volumes/equity-data-agent_clickhouse_data/_data`.
+3. Record the snapshot cadence, retention, and most recent successful snapshot
+   timestamp in the QNT-238 ticket before relying on snapshot coverage.
+
+CLI equivalent, when the workstation has `hcloud` and `HCLOUD_TOKEN`:
+
+```bash
+hcloud server describe equity-data-agent-prod
+hcloud snapshot list
+```
+
+**Future restore procedure from a server or volume snapshot**:
+
+1. Stop writes on the current host if it is still running:
+   ```bash
+   ssh hetzner 'cd /opt/equity-data-agent && docker compose --profile prod stop clickhouse dagster-daemon dagster-code-server api'
+   ```
+2. Restore the snapshot in the Hetzner Cloud Console to a replacement server or
+   replacement volume.
+3. Boot the restored host, then verify ClickHouse starts:
+   ```bash
+   ssh hetzner 'cd /opt/equity-data-agent && docker compose --profile prod up -d clickhouse'
+   ssh hetzner 'curl -sf http://localhost:8123/ping'
+   ```
+4. Verify `news_raw` row coverage before restarting the full stack:
+   ```bash
+   ssh hetzner 'docker exec equity-data-agent-clickhouse-1 clickhouse-client --query "
+     SELECT ticker, count() AS rows, min(published_at), max(published_at)
+     FROM equity_raw.news_raw FINAL
+     GROUP BY ticker
+     ORDER BY ticker
+   "'
+   ```
+5. Restart the remaining services:
+   ```bash
+   ssh hetzner 'cd /opt/equity-data-agent && docker compose --profile prod up -d'
+   ```
+
+Do not treat local exports on the same host as durable backups for this table.
+They are useful for operator mistakes, but they do not protect against server or
+volume loss.
+
+---
+
 ## Security notes
 
 ### Docker socket bind-mount on `dagster-daemon` (QNT-116)

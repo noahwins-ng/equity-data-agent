@@ -33,6 +33,8 @@ import pytest
 from clickhouse_connect.driver.client import Client
 from shared.config import settings
 
+from scripts.migrate_clickhouse import split_sql_statements
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MIGRATIONS_DIR = _REPO_ROOT / "migrations"
 
@@ -94,18 +96,14 @@ def _looks_like_prod(client: Client) -> tuple[str, int] | None:
 
 
 def _apply_migrations(client: Client) -> None:
-    """Run every ``migrations/*.sql`` file in lexical order, one statement each.
+    """Run every ``migrations/*.sql`` file in lexical order.
 
-    Mirrors what ``make migrate`` does over HTTP. Files are intentionally
-    one-statement each (the HTTP interface rejects multi-statement bodies —
-    see ``feedback_clickhouse_migrations``), so feeding each to
-    ``client.command`` is the same shape.
+    Mirrors the migration runner's statement splitting so integration tests
+    exercise the same multi-statement migration shape as ``make migrate``.
     """
     for sql_file in sorted(_MIGRATIONS_DIR.glob("*.sql")):
-        sql = sql_file.read_text().strip()
-        if not sql:
-            continue
-        client.command(sql)
+        for statement in split_sql_statements(sql_file.read_text()):
+            client.command(statement)
 
 
 def pytest_runtest_setup(item: pytest.Item) -> None:
