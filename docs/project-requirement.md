@@ -975,6 +975,11 @@ At the current 10-ticker scale:
 - Derived ClickHouse tables are rebuildable from raw tables.
 - Qdrant vectors are rebuildable from `news_raw`.
 
+Durability note: `equity_raw.news_raw` is the only raw table that is not fully
+re-fetchable beyond the Finnhub historical backfill window. Until QNT-254 adds
+off-host backup coverage, recovery accepts that roughly the most recent year can
+be backfilled and older news may be lost if the ClickHouse volume is lost.
+
 ### 16.4 Source Caveats
 
 The project uses free/low-cost data sources. It is a portfolio research tool,
