@@ -106,12 +106,48 @@ def _apply_migrations(client: Client) -> None:
             client.command(statement)
 
 
+def _integration_gate_action(*, reachable: bool, is_ci: bool) -> str | None:
+    """Decide how an integration test behaves when ClickHouse is unreachable.
+
+    Returns ``None`` to run the test, ``"skip"`` to skip it, or ``"fail"`` to
+    fail it loudly.
+
+    Locally a missing ``make tunnel`` is the normal case, so an unreachable CH
+    just skips. In CI the ``ci.yml`` ClickHouse service is supposed to be up;
+    if it silently isn't, skipping would let the whole real-engine suite pass
+    green with every SQL test deselected — the "aggregate green hides
+    invariants" trap, where the gate evaporates without turning the build red.
+    So CI fails loud instead, forcing a dead-service regression to surface.
+    """
+    if reachable:
+        return None
+    return "fail" if is_ci else "skip"
+
+
 def pytest_runtest_setup(item: pytest.Item) -> None:
-    """Auto-skip integration tests when ClickHouse is unreachable."""
+    """Gate integration tests on ClickHouse reachability.
+
+    Skip locally (no tunnel is expected), but fail loudly in CI so a dead
+    service can't turn the real-engine SQL gate into a silent no-op.
+    """
     if "integration" not in item.keywords:
         return
-    if not _ch_reachable():
+    # GitHub Actions sets CI=true at the runner level (not in the ci.yml step
+    # env block), so the integration step inherits it automatically — that is
+    # what flips the gate from skip to fail.
+    action = _integration_gate_action(
+        reachable=_ch_reachable(), is_ci=os.environ.get("CI") == "true"
+    )
+    if action == "skip":
         pytest.skip("ClickHouse not reachable — run 'make tunnel' to enable integration tests")
+    if action == "fail":
+        pytest.fail(
+            "ClickHouse unreachable while CI=true — the integration suite would "
+            "otherwise skip every real-engine SQL test and still pass green, "
+            "hiding a dead service. Failing loud. Check the ci.yml clickhouse "
+            "service health.",
+            pytrace=False,
+        )
 
 
 @pytest.fixture(scope="session")

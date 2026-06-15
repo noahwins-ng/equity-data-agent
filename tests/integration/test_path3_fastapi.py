@@ -289,6 +289,38 @@ def test_data_dashboard_summary_runs_multi_cte_query(ch_client: Client, client: 
             assert row["price"] is not None
 
 
+# ─── Comparison-metrics router (QNT-239 regression pin) ─────────────────────
+
+
+@pytest.mark.integration
+def test_comparison_metrics_runs_argmax_group_by(ch_client: Client, client: TestClient) -> None:
+    """``/api/v1/comparison-metrics`` runs three argMax/FINAL/GROUP BY fetches.
+
+    comparison_metrics.py aliases ``argMax(col, key) AS pe/margin/rsi/price`` to
+    dodge the QNT-148 alias-collision trap (``max(col) AS col`` binds an inner
+    filter to the aggregate → ILLEGAL_AGGREGATION). QNT-64 swept the other
+    CH-bound routers but this endpoint shipped later (QNT-224) with no
+    real-engine coverage — only a live ClickHouse parser proves the aliases
+    hold. A regression that aliased back to the input column would pass the
+    mock-only suite and break prod.
+    """
+    for ticker in ("AAPL", "MSFT"):
+        seed_ohlcv_from_fixture(ch_client, ticker)
+        _seed_indicators_only(ch_client, ticker)  # OHLCV already seeded above
+        seed_fundamental_summary(ch_client, ticker)
+    r = client.get("/api/v1/reports/comparison-metrics?tickers=AAPL,MSFT")
+    assert r.status_code == 200
+    rows = r.json()["rows"]
+    assert [row["ticker"] for row in rows] == ["AAPL", "MSFT"]
+    # Every cell came from a real fetch, not the ``N/M (…)`` no-data fallback —
+    # which proves all three argMax queries parsed and returned rows.
+    for row in rows:
+        assert row["price"].startswith("$")
+        assert row["net_margin"].endswith("%")
+        assert not row["pe"].startswith("N/M")
+        assert not row["rsi"].startswith("N/M")
+
+
 # ─── Tickers + Logos + Search routers (no CH dependency) ────────────────────
 
 
