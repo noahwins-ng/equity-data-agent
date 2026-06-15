@@ -832,7 +832,7 @@ def test_quote_returns_full_header_bundle(
                 ],
             ),
             _FakeResult(("pe_ratio",), [(32.5,)]),
-            _FakeResult(("market_cap",), [(3_900_000_000_000.0,)]),
+            _FakeResult(("implied_shares_outstanding",), [(24_840_764_331,)]),
         ]
     )
     monkeypatch.setattr(clickhouse_module, "get_client", lambda: fake)
@@ -853,11 +853,12 @@ def test_quote_returns_full_header_bundle(
         "day_low": 151.5,
         "volume": 22_000_000,
         "avg_volume_30d": 18_500_000.0,
-        "market_cap": 3_900_000_000_000.0,
+        # Live recompute: latest close (157.0) x shares outstanding.
+        "market_cap": 157.0 * 24_840_764_331,
         "pe_ratio_ttm": 32.5,
         "as_of": "2026-04-28",
     }
-    # Three queries: OHLCV bundle → P/E TTM → raw market cap.
+    # Three queries: OHLCV bundle → P/E TTM → shares outstanding.
     assert len(fake.calls) == 3
     assert "equity_raw.ohlcv_raw" in fake.calls[0][0]
     assert "period_type = 'ttm'" in fake.calls[1][0]
@@ -888,7 +889,7 @@ def test_quote_avg_volume_is_null_when_window_short(
                 ],
             ),
             _FakeResult(("pe_ratio",), []),
-            _FakeResult(("market_cap",), []),
+            _FakeResult(("implied_shares_outstanding",), []),
         ]
     )
     monkeypatch.setattr(clickhouse_module, "get_client", lambda: fake)

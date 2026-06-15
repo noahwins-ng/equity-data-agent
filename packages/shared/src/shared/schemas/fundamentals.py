@@ -21,5 +21,6 @@ class FundamentalsRow(BaseModel):
     total_debt: float
     cash_and_equivalents: float
     shares_outstanding: int
+    implied_shares_outstanding: int
     market_cap: float
     fetched_at: datetime | None = None
