@@ -79,6 +79,13 @@ def _extract_periods(
         # Info fields (point-in-time, same for all periods)
         row["ebitda"] = float(info.get("ebitda", 0) or 0)
         row["shares_outstanding"] = int(info.get("sharesOutstanding", 0) or 0)
+        # impliedSharesOutstanding counts ALL share classes (the figure yfinance
+        # uses for marketCap); sharesOutstanding is per-class and understates
+        # dual-class names like GOOGL by ~half. Fall back to the per-class count
+        # when yfinance omits the implied figure.
+        row["implied_shares_outstanding"] = (
+            int(info.get("impliedSharesOutstanding", 0) or 0) or row["shares_outstanding"]
+        )
         row["market_cap"] = float(info.get("marketCap", 0) or 0)
 
         rows.append(row)
@@ -190,6 +197,7 @@ def fundamentals(
 
     # Ensure correct types for ClickHouse
     df["shares_outstanding"] = df["shares_outstanding"].astype("int64")
+    df["implied_shares_outstanding"] = df["implied_shares_outstanding"].astype("int64")
 
     cols = [
         "ticker",
@@ -207,6 +215,7 @@ def fundamentals(
         "total_debt",
         "cash_and_equivalents",
         "shares_outstanding",
+        "implied_shares_outstanding",
         "market_cap",
         "fetched_at",
     ]

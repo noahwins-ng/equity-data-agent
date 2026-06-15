@@ -544,9 +544,11 @@ def get_quote(ticker: str) -> dict[str, Any]:
     """Return the design-v2 quote-header bundle for ``ticker``.
 
     One round-trip — the alternative is the frontend stitching ``/ohlcv``
-    (last bar + 30-bar avg volume) and ``/fundamentals`` (TTM P/E + raw
-    market cap) on every navigation. Computing it server-side keeps the
-    quote header on a single ``revalidate: 60`` cache key.
+    (last bar + 30-bar avg volume) and ``/fundamentals`` (TTM P/E + shares
+    outstanding) on every navigation. Computing it server-side keeps the
+    quote header on a single ``revalidate: 60`` cache key. ``market_cap`` is
+    derived live as latest close x shares outstanding, not the weekly
+    yfinance snapshot.
 
     Response shape:
 
@@ -599,11 +601,14 @@ def get_quote(ticker: str) -> dict[str, Any]:
         ORDER BY period_end DESC
         LIMIT 1
     """
-    market_cap_query = """
-        SELECT market_cap
+    # implied_shares_outstanding counts every share class (matches yfinance's
+    # marketCap basis); shares_outstanding is per-class and halves the cap for
+    # dual-class names like GOOGL.
+    shares_query = """
+        SELECT implied_shares_outstanding
         FROM equity_raw.fundamentals FINAL
         WHERE ticker = %(ticker)s
-          AND market_cap > 0
+          AND implied_shares_outstanding > 0
         ORDER BY period_end DESC, period_type ASC
         LIMIT 1
     """
@@ -617,8 +622,14 @@ def get_quote(ticker: str) -> dict[str, Any]:
     pe_rows = client.query(fundamentals_query, parameters={"ticker": ticker}).result_rows
     pe_ratio_ttm = float(pe_rows[0][0]) if pe_rows and pe_rows[0][0] is not None else None
 
-    cap_rows = client.query(market_cap_query, parameters={"ticker": ticker}).result_rows
-    market_cap = float(cap_rows[0][0]) if cap_rows and cap_rows[0][0] is not None else None
+    # Market cap is recomputed live (latest close x shares outstanding) rather
+    # than served from the weekly yfinance `marketCap` snapshot, which never
+    # tracks intra-week price. Shares move slowly, so the daily close is the
+    # term that keeps the cap fresh. Null if either input is missing.
+    share_rows = client.query(shares_query, parameters={"ticker": ticker}).result_rows
+    shares_outstanding = int(share_rows[0][0]) if share_rows and share_rows[0][0] else None
+    price = float(ohlcv_row["price"]) if ohlcv_row.get("price") is not None else None
+    market_cap = price * shares_outstanding if price is not None and shares_outstanding else None
 
     as_of = ohlcv_row.get("as_of")
     if isinstance(as_of, date):
@@ -637,7 +648,7 @@ def get_quote(ticker: str) -> dict[str, Any]:
         "name": meta.get("name", ticker),
         "sector": meta.get("sector"),
         "industry": meta.get("industry"),
-        "price": float(ohlcv_row["price"]) if ohlcv_row.get("price") is not None else None,
+        "price": price,
         "prev_close": (
             float(ohlcv_row["prev_close"]) if ohlcv_row.get("prev_close") is not None else None
         ),

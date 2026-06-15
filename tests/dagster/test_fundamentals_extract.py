@@ -96,3 +96,26 @@ def test_handles_empty_income_statement() -> None:
         pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), _INFO, "AAPL", "quarterly"
     )
     assert rows == []
+
+
+def test_implied_shares_prefers_all_class_count() -> None:
+    """Dual-class names (GOOGL): implied_shares_outstanding must use yfinance's
+    all-class impliedSharesOutstanding, not the per-class sharesOutstanding that
+    halves the market cap."""
+    income = _frame({"Total Revenue": [100.0]}, ["2025-12-31"])
+    info = {**_INFO, "sharesOutstanding": 5_863_336_837, "impliedSharesOutstanding": 12_194_935_223}
+
+    rows = _extract_periods(income, pd.DataFrame(), pd.DataFrame(), info, "GOOGL", "quarterly")
+
+    assert rows[0]["shares_outstanding"] == 5_863_336_837
+    assert rows[0]["implied_shares_outstanding"] == 12_194_935_223
+
+
+def test_implied_shares_falls_back_to_per_class_when_absent() -> None:
+    """Single-class names omit impliedSharesOutstanding — fall back so the count
+    is never zero."""
+    income = _frame({"Total Revenue": [100.0]}, ["2025-12-31"])
+    # _INFO has sharesOutstanding=100 and no impliedSharesOutstanding.
+    rows = _extract_periods(income, pd.DataFrame(), pd.DataFrame(), _INFO, "MSFT", "quarterly")
+
+    assert rows[0]["implied_shares_outstanding"] == 100
