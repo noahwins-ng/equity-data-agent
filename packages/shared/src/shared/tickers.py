@@ -280,6 +280,34 @@ TICKER_METADATA: dict[str, dict[str, str | list[str]]] = {
     "SPY": {"name": "S&P 500 ETF", "sector": "Benchmark", "industry": "S&P 500 ETF"},
 }
 
+# Keys every portfolio ticker's TICKER_METADATA entry must carry for the
+# company-knowledge tool. SPY/benchmark is exempt — it never reaches that
+# endpoint (gated on TICKERS) and keeps the original three-key form.
+_REQUIRED_METADATA_KEYS = frozenset(
+    {"name", "sector", "industry", "description", "key_competitors", "key_risks", "watch"}
+)
+
+
+def _validate_metadata_coverage(
+    tickers: list[str], metadata: dict[str, dict[str, str | list[str]]]
+) -> None:
+    """Raise AssertionError if any ticker lacks a full metadata entry.
+
+    Symmetric to the NEWS_RELEVANCE assert below: a ticker added to TICKERS
+    without a complete TICKER_METADATA entry should fail at import, not at
+    request time inside the company-knowledge tool.
+    """
+    for ticker in tickers:
+        missing = _REQUIRED_METADATA_KEYS - metadata.get(ticker, {}).keys()
+        assert not missing, (
+            f"TICKER_METADATA[{ticker!r}] missing required keys: {sorted(missing)}. "
+            "Every portfolio ticker needs a full editorial profile so the "
+            "company-knowledge tool resolves at import, not at request time."
+        )
+
+
+_validate_metadata_coverage(TICKERS, TICKER_METADATA)
+
 # Per-ticker keep/drop gate for news_raw ingest. Finnhub /company-news returns
 # articles tagged with the ticker in their `related` field, which includes
 # sector roundups and peer-comparison pieces where the ticker is a one-line
