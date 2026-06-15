@@ -853,7 +853,7 @@ CX41 totals: 16 GiB RAM. Pre-QNT-103 mem_limit allocation was 13.06 GiB (clickho
 
 ---
 
-## ClickHouse `news_raw` recovery posture (QNT-238 / QNT-254)
+## ClickHouse `news_raw` recovery posture (QNT-238)
 
 `equity_raw.news_raw` is the only irreplaceable warehouse table. OHLCV,
 fundamentals, derived indicators, and Qdrant vectors can be rebuilt from
@@ -878,9 +878,10 @@ clickhouse_data
 
 - No server-level backup/snapshot coverage is currently assumed.
 - QNT-238 documents the data location and restore verification query only.
-- QNT-254 tracks adding durable off-host backup coverage.
-- Accepted interim recovery: re-run the Finnhub backfill for roughly the most
-  recent year of news; older `news_raw` remains at risk until QNT-254 ships.
+- Accepted recovery: re-run the Finnhub backfill for roughly the most recent
+  year of news; older `news_raw` may be lost if the ClickHouse volume is lost.
+- Off-host backup coverage is intentionally out of scope at the current project
+  scale.
 
 **Future snapshot coverage check**:
 

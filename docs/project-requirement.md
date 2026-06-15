@@ -976,9 +976,10 @@ At the current 10-ticker scale:
 - Qdrant vectors are rebuildable from `news_raw`.
 
 Durability note: `equity_raw.news_raw` is the only raw table that is not fully
-re-fetchable beyond the Finnhub historical backfill window. Until QNT-254 adds
-off-host backup coverage, recovery accepts that roughly the most recent year can
-be backfilled and older news may be lost if the ClickHouse volume is lost.
+re-fetchable beyond the Finnhub historical backfill window. The accepted
+recovery posture is to backfill roughly the most recent year if the ClickHouse
+volume is lost; older news may be lost. Off-host backup coverage is intentionally
+out of scope at the current project scale.
 
 ### 16.4 Source Caveats
 
