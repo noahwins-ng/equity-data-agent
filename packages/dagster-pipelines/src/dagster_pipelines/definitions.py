@@ -23,6 +23,8 @@ from dagster_pipelines.schedules import (
     news_raw_schedule,
     ohlcv_daily_job,
     ohlcv_daily_schedule,
+    ohlcv_monthly_refresh_job,
+    ohlcv_monthly_refresh_schedule,
 )
 from dagster_pipelines.sensors import (
     fundamentals_downstream_job,
@@ -55,6 +57,7 @@ defs = Definitions(
     asset_checks=ALL_ASSET_CHECKS,
     jobs=[
         ohlcv_daily_job,
+        ohlcv_monthly_refresh_job,
         fundamentals_weekly_job,
         news_raw_job,
         ohlcv_downstream_job,
@@ -65,6 +68,7 @@ defs = Definitions(
     ],
     schedules=[
         ohlcv_daily_schedule,
+        ohlcv_monthly_refresh_schedule,
         fundamentals_weekly_schedule,
         news_raw_schedule,
         vercel_deploy_after_ohlcv,
