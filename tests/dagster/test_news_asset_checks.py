@@ -148,14 +148,14 @@ def test_news_raw_has_rows_fails_when_a_ticker_is_empty() -> None:
                         {"ticker": t, "row_count": 5}
                         for t in (
                             "AAPL",
+                            "AMD",
                             "AMZN",
                             "GOOGL",
-                            "JPM",
                             "META",
                             "MSFT",
+                            "MU",
                             "NVDA",
                             "TSLA",
-                            "UNH",
                         )
                     ]
                 ),
@@ -164,7 +164,7 @@ def test_news_raw_has_rows_fails_when_a_ticker_is_empty() -> None:
     )
     e = _run_check(news_raw_has_rows, asset=news_raw, resources={"clickhouse": ch})
     assert not e.passed
-    assert e.metadata["empty_tickers"].value == ["V"]
+    assert e.metadata["empty_tickers"].value == ["INTC"]
 
 
 def test_news_raw_has_rows_passes_when_all_tickers_populated() -> None:
@@ -177,15 +177,15 @@ def test_news_raw_has_rows_passes_when_all_tickers_populated() -> None:
                         {"ticker": t, "row_count": 5}
                         for t in (
                             "AAPL",
+                            "AMD",
                             "AMZN",
                             "GOOGL",
-                            "JPM",
+                            "INTC",
                             "META",
                             "MSFT",
+                            "MU",
                             "NVDA",
                             "TSLA",
-                            "UNH",
-                            "V",
                         )
                     ]
                 ),
@@ -232,14 +232,14 @@ def test_news_raw_recent_ingestion_reports_stale_tickers() -> None:
                         {"ticker": t, "hours_since_fetch": 2}
                         for t in (
                             "AAPL",
+                            "AMD",
                             "AMZN",
                             "GOOGL",
-                            "JPM",
+                            "INTC",
                             "META",
                             "MSFT",
+                            "MU",
                             "NVDA",
-                            "UNH",
-                            "V",
                         )
                     ]
                 ),

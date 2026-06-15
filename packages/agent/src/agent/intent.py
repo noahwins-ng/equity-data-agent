@@ -691,7 +691,7 @@ setup", "what do the charts say for META?", "is AAPL overbought?", \
 indicators, and trend.
 * "news" — the user asked for a news / headline read on one ticker \
 (e.g. "what's the news on AAPL?", "headlines on META", "any concerning \
-news for UNH?", "what's the news say on NVDA?", "how is sentiment on \
+news for INTC?", "what's the news say on NVDA?", "how is sentiment on \
 META?", "any catalysts for TSLA?"). The answer is a focused read on \
 recent headlines (positive and negative catalysts) tied to the running \
 story.

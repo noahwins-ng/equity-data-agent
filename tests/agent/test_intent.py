@@ -36,7 +36,7 @@ from agent.intent import IntentDecision, _heuristic_intent, classify_intent
         ("EPS for MSFT?", "quick_fact"),
         ("What's the volume today?", "quick_fact"),
         # Thesis tokens win even when a quick-fact token also appears
-        ("Give me a balanced thesis on V", "thesis"),
+        ("Give me a balanced thesis on AMD", "thesis"),
         ("Walk me through NVDA's setup", "thesis"),
         ("Should I buy AAPL?", "thesis"),
         ("Bull case for META", "thesis"),
@@ -52,7 +52,7 @@ def test_heuristic_classifies_known_phrases(question: str, expected: str) -> Non
     "question",
     [
         "Triangulate technicals fundamentals and news for META",
-        "Tell me about UNH",  # ambiguous open-ended
+        "Tell me about INTC",  # ambiguous open-ended
     ],
 )
 def test_heuristic_returns_none_for_ambiguous_questions(question: str) -> None:
@@ -123,26 +123,26 @@ def _patch_llm_pipeline(
 def test_llm_fallback_returns_thesis(monkeypatch: pytest.MonkeyPatch) -> None:
     """Heuristic returns None → LLM fires → returns "thesis"."""
     _patch_llm_pipeline(monkeypatch, IntentDecision(intent="thesis"))
-    assert classify_intent("Give me your read on UNH") == "thesis"
+    assert classify_intent("Give me your read on INTC") == "thesis"
 
 
 def test_llm_fallback_returns_quick_fact(monkeypatch: pytest.MonkeyPatch) -> None:
     """Heuristic returns None → LLM fires → returns "quick_fact"."""
     _patch_llm_pipeline(monkeypatch, IntentDecision(intent="quick_fact"))
-    assert classify_intent("Tell me about UNH") == "quick_fact"
+    assert classify_intent("Tell me about INTC") == "quick_fact"
 
 
 def test_llm_failure_defaults_to_thesis(monkeypatch: pytest.MonkeyPatch) -> None:
     """Any LLM exception biases to thesis — the safe default that preserves
     QNT-67 / QNT-128 contracts."""
     _patch_llm_pipeline(monkeypatch, None, invoke_raises=RuntimeError("network"))
-    assert classify_intent("Tell me about UNH") == "thesis"
+    assert classify_intent("Tell me about INTC") == "thesis"
 
 
 def test_llm_unexpected_shape_defaults_to_thesis(monkeypatch: pytest.MonkeyPatch) -> None:
     """An ``include_raw=True``-shaped failure (parsed=None) biases to thesis."""
     _patch_llm_pipeline(monkeypatch, {"parsed": None, "parsing_error": "x"})
-    assert classify_intent("Tell me about UNH") == "thesis"
+    assert classify_intent("Tell me about INTC") == "thesis"
 
 
 def test_llm_include_raw_dict_with_parsed_intent(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -150,7 +150,7 @@ def test_llm_include_raw_dict_with_parsed_intent(monkeypatch: pytest.MonkeyPatch
     so a future opt-in to raw logging keeps producing typed intents."""
     decision = IntentDecision(intent="quick_fact")
     _patch_llm_pipeline(monkeypatch, {"parsed": decision, "raw": "..."})
-    assert classify_intent("Tell me about UNH") == "quick_fact"
+    assert classify_intent("Tell me about INTC") == "quick_fact"
 
 
 def test_llm_classifier_uses_small_tiering_alias(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -165,7 +165,7 @@ def test_llm_classifier_uses_small_tiering_alias(monkeypatch: pytest.MonkeyPatch
     get_llm_spy = MagicMock(return_value=llm)
     monkeypatch.setattr(intent_module, "get_llm", get_llm_spy)
 
-    classify_intent("Give me your read on UNH")  # heuristic abstains -> LLM fires
+    classify_intent("Give me your read on INTC")  # heuristic abstains -> LLM fires
 
     assert get_llm_spy.call_args.kwargs.get("model_alias") == SMALL_NODE_ALIAS
 
@@ -186,7 +186,7 @@ def test_heuristic_short_circuits_llm_call(monkeypatch: pytest.MonkeyPatch) -> N
     [
         "Compare NVDA vs AAPL on valuation.",
         "How does META stack up against GOOGL on margins?",
-        "Which is cheaper, V or MA?".replace("MA", "JPM"),  # MA isn't in TICKERS
+        "Which is cheaper, MU or INTC?",
         "NVDA vs AAPL",
         "AAPL versus MSFT — which is the better buy?",
     ],
@@ -258,11 +258,11 @@ def test_heuristic_classifies_conversational(question: str) -> None:
 def test_heuristic_ambiguous_open_ended_about_ticker_is_not_conversational() -> None:
     """An open-ended ticker question that happens to start with a word
     overlapping the conversational vocabulary must not route to
-    conversational. ``Tell me about UNH`` is the canonical example —
+    conversational. ``Tell me about INTC`` is the canonical example —
     QNT-149 has it as the headline ambiguity case."""
     from agent.intent import _heuristic_intent
 
-    assert _heuristic_intent("Tell me about UNH") is None
+    assert _heuristic_intent("Tell me about INTC") is None
 
 
 def test_extract_tickers_handles_ordering_and_dupes() -> None:
@@ -281,7 +281,7 @@ def test_llm_fallback_returns_comparison(monkeypatch: pytest.MonkeyPatch) -> Non
     """Heuristic returns None → LLM picks comparison."""
     _patch_llm_pipeline(monkeypatch, IntentDecision(intent="comparison"))
     assert (
-        classify_intent("How would you contrast UNH and the broader healthcare names?")
+        classify_intent("How would you contrast INTC and the broader semiconductor names?")
         == "comparison"
     )
 
@@ -321,7 +321,7 @@ def test_heuristic_help_phrase_with_ticker_does_not_misclassify_as_conversationa
         ("TA on TSLA please", "technical"),
         ("chart setup for MSFT", "technical"),
         ("What's the news sentiment on AAPL?", "news"),
-        ("what is the sentiment for UNH?", "news"),
+        ("what is the sentiment for INTC?", "news"),
         ("give me a news read on META", "news"),
     ],
 )
@@ -443,7 +443,7 @@ def test_with_source_llm_path(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_llm_pipeline(monkeypatch, IntentDecision(intent="thesis"))
     from agent.intent import classify_intent_with_source
 
-    intent, source, _flag = classify_intent_with_source("Tell me about UNH")
+    intent, source, _flag = classify_intent_with_source("Tell me about INTC")
     assert intent == "thesis"
     assert source == "llm"
 
@@ -453,7 +453,7 @@ def test_with_source_fallback_path_on_llm_exception(monkeypatch: pytest.MonkeyPa
     _patch_llm_pipeline(monkeypatch, None, invoke_raises=RuntimeError("timeout"))
     from agent.intent import classify_intent_with_source
 
-    intent, source, _flag = classify_intent_with_source("Tell me about UNH")
+    intent, source, _flag = classify_intent_with_source("Tell me about INTC")
     assert intent == "thesis"
     assert source == "fallback"
 
@@ -463,7 +463,7 @@ def test_with_source_fallback_path_on_unexpected_shape(monkeypatch: pytest.Monke
     _patch_llm_pipeline(monkeypatch, {"parsed": None, "parsing_error": "x"})
     from agent.intent import classify_intent_with_source
 
-    intent, source, _flag = classify_intent_with_source("Tell me about UNH")
+    intent, source, _flag = classify_intent_with_source("Tell me about INTC")
     assert intent == "thesis"
     assert source == "fallback"
 
@@ -474,7 +474,7 @@ def test_with_source_llm_include_raw_dict(monkeypatch: pytest.MonkeyPatch) -> No
     _patch_llm_pipeline(monkeypatch, {"parsed": decision, "raw": "..."})
     from agent.intent import classify_intent_with_source
 
-    intent, source, _flag = classify_intent_with_source("Tell me about UNH")
+    intent, source, _flag = classify_intent_with_source("Tell me about INTC")
     assert intent == "quick_fact"
     assert source == "llm"
 

@@ -43,9 +43,9 @@ TICKERS: list[str] = [
     "AMZN",
     "META",
     "TSLA",
-    "JPM",
-    "V",
-    "UNH",
+    "MU",
+    "AMD",
+    "INTC",
 ]
 ENDPOINTS: list[str] = ["quote", "ohlcv", "indicators", "fundamentals", "news"]
 

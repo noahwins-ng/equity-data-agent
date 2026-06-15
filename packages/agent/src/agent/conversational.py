@@ -113,9 +113,9 @@ _SUGGESTION_BANK: tuple[tuple[str, str], ...] = (
     ("fundamental", "How is MSFT valued relative to its earnings?"),
     ("fundamental", "What's the fundamental case for AMZN?"),
     ("news", "What's driving META headlines lately?"),
-    ("news", "Are there any concerning news items on UNH?"),
+    ("news", "Are there any concerning news items on INTC?"),
     ("thesis", "Should I be cautious about META based on the latest data?"),
-    ("thesis", "Give me a balanced thesis on V right now."),
+    ("thesis", "Give me a balanced thesis on AMD right now."),
     ("comparison", "Compare NVDA vs AAPL on valuation."),
     ("comparison", "How does META stack up against GOOGL?"),
     ("comparison", "Compare AMZN vs MSFT on growth."),
@@ -166,8 +166,8 @@ def _pick_suggestions(hint: str | None, tickers: Iterable[str]) -> list[str]:
 # cold "what can you do?" could ship "trend for a specific stock?" — which then
 # routes straight to clarify on click because no ticker was named.
 #
-# Tickers are matched case-sensitively against the uppercase symbol so the
-# single-letter "V" can't false-match a stray lowercase "v" inside prose.
+# Tickers are matched case-sensitively against the uppercase symbol so a short
+# symbol can't false-match a stray lowercase occurrence inside prose.
 _COVERED_TICKER_RE = re.compile(r"\b(" + "|".join(TICKERS) + r")\b")
 
 # Placeholder / unsupported-scope phrases that make a suggestion unanswerable.

@@ -6,9 +6,9 @@ TICKERS: list[str] = [
     "AMZN",
     "META",
     "TSLA",
-    "JPM",
-    "V",
-    "UNH",
+    "MU",
+    "AMD",
+    "INTC",
 ]
 
 # Benchmark tickers flow through the OHLCV pipeline only — no fundamentals,
@@ -194,87 +194,76 @@ TICKER_METADATA: dict[str, dict[str, str | list[str]]] = {
             "FSD take rate / regulatory milestones",
         ],
     },
-    "JPM": {
-        "name": "JPMorgan Chase",
-        "sector": "Financials",
-        "industry": "Diversified Banks",
+    "MU": {
+        "name": "Micron Technology",
+        "sector": "Technology",
+        "industry": "Semiconductors",
         "description": (
-            "Largest US bank by assets. Four segments: Consumer & Community "
-            "Banking, Corporate & Investment Bank, Commercial Banking, and "
-            "Asset & Wealth Management. Diversified earnings stream insulates "
-            "against any single-cycle downturn."
+            "Makes memory and storage: DRAM (the majority of revenue) and NAND "
+            "flash, sold into data center, mobile, PC, auto, and industrial "
+            "markets. High-bandwidth memory (HBM) for AI accelerators is the "
+            "current growth driver. Commodity-cyclical with boom/bust pricing."
         ),
-        "key_competitors": [
-            "Bank of America",
-            "Citigroup",
-            "Wells Fargo",
-            "Goldman Sachs",
-            "Morgan Stanley",
-        ],
+        "key_competitors": ["Samsung", "SK Hynix", "Kioxia", "Western Digital", "SanDisk"],
         "key_risks": [
-            "Net interest income sensitivity to rate path",
-            "Credit losses if recession hits",
-            "Capital rules (Basel III endgame)",
-            "Investment-banking fee cyclicality",
+            "DRAM/NAND price cyclicality (oversupply downcycles)",
+            "Capital intensity of leading-edge fabs",
+            "HBM execution vs. SK Hynix and Samsung",
+            "China export controls and demand exposure",
         ],
         "watch": [
-            "Net interest income",
-            "Provision for credit losses",
-            "CET1 ratio",
-            "Investment banking fees",
+            "DRAM and NAND pricing trend",
+            "HBM revenue ramp",
+            "Gross margin",
+            "Inventory and capex",
         ],
     },
-    "V": {
-        "name": "Visa",
-        "sector": "Financials",
-        "industry": "Transaction & Payment Processing",
+    "AMD": {
+        "name": "Advanced Micro Devices",
+        "sector": "Technology",
+        "industry": "Semiconductors",
         "description": (
-            "Operates the world's largest card-payments network. Revenue is a "
-            "thin take-rate on payments volume, cross-border transactions, and "
-            "value-added services — capital-light with structurally high margins."
+            "Designs CPUs (Ryzen client, EPYC server), GPUs (Radeon gaming, "
+            "Instinct data-center AI accelerators), and adaptive/embedded silicon "
+            "(Xilinx). Data Center — EPYC share gains plus the Instinct MI "
+            "accelerator line — is the growth engine against NVIDIA and Intel."
         ),
-        "key_competitors": [
-            "Mastercard",
-            "American Express",
-            "PayPal",
-            "Stripe",
-            "real-time rails",
-        ],
+        "key_competitors": ["NVIDIA", "Intel", "Broadcom", "Qualcomm", "ARM"],
         "key_risks": [
-            "Antitrust scrutiny on interchange",
-            "Real-time-payments / account-to-account substitution",
-            "Cross-border travel volatility",
-            "Stablecoin / crypto rails competing for B2B flow",
+            "NVIDIA dominance in AI GPUs",
+            "Foundry dependence on TSMC",
+            "PC and gaming demand cyclicality",
+            "Execution on the Instinct accelerator roadmap",
         ],
         "watch": [
-            "Payments volume growth",
-            "Cross-border volume",
-            "Operating margin",
-            "Buyback pace",
+            "Data Center GPU (Instinct MI) revenue",
+            "Server CPU share gains vs. Intel",
+            "Gross margin",
+            "AI accelerator guidance",
         ],
     },
-    "UNH": {
-        "name": "UnitedHealth",
-        "sector": "Healthcare",
-        "industry": "Managed Health Care",
+    "INTC": {
+        "name": "Intel",
+        "sector": "Technology",
+        "industry": "Semiconductors",
         "description": (
-            "Two pillars: UnitedHealthcare (the largest US health insurer) and "
-            "Optum (health services — OptumRx pharmacy benefits, OptumHealth "
-            "care delivery, OptumInsight analytics). Vertical integration is "
-            "the structural moat."
+            "Integrated device manufacturer: designs and fabricates x86 CPUs for "
+            "client (PC) and data center, and is standing up Intel Foundry to "
+            "build chips for external customers. Mid-turnaround — racing to "
+            "regain process leadership (18A) while defending CPU share."
         ),
-        "key_competitors": ["Elevance Health", "CVS/Aetna", "Cigna", "Humana", "Centene"],
+        "key_competitors": ["AMD", "NVIDIA", "TSMC", "Samsung Foundry", "ARM"],
         "key_risks": [
-            "Medicare Advantage rate notices and utilisation trend",
-            "PBM regulatory scrutiny",
-            "Cybersecurity / Change Healthcare aftershocks",
-            "Medical loss ratio expansion",
+            "Process-node execution risk (18A yield and ramp)",
+            "Foundry build-out losses and capex strain",
+            "Server/PC share loss to AMD and ARM",
+            "Missing the AI accelerator wave",
         ],
         "watch": [
-            "Medical care ratio (MCR)",
-            "UnitedHealthcare membership",
-            "Optum revenue growth",
-            "EPS guidance",
+            "18A yield and ramp",
+            "Intel Foundry external wins and operating loss",
+            "Data Center & AI revenue",
+            "Gross margin and capex",
         ],
     },
     "SPY": {"name": "S&P 500 ETF", "sector": "Benchmark", "industry": "S&P 500 ETF"},
@@ -320,8 +309,8 @@ _validate_metadata_coverage(TICKERS, TICKER_METADATA)
 #   scope="any"      -> match in headline OR body
 #   scope="headline" -> match in headline only; used when the symbol/name has
 #                       a high false-positive rate inside body prose. META's
-#                       lowercase "meta" appears in metadata/metaphor; "V"
-#                       alone matches arbitrary words.
+#                       lowercase "meta" appears in metadata/metaphor; INTC's
+#                       "Intel" collides with lowercase "intel" (intelligence).
 #
 # Adding a ticker requires adding an entry here; the assert at module load
 # enforces this so the registry and the relevance config can never drift.
@@ -349,9 +338,14 @@ NEWS_RELEVANCE: dict[str, dict[str, object]] = {
         "scope": "headline",
     },
     "TSLA": {"aliases": ["TSLA", "Tesla", "Musk"], "scope": "any"},
-    "JPM": {"aliases": ["JPM", "JPMorgan", "JP Morgan", "Jamie Dimon"], "scope": "any"},
-    "V": {"aliases": ["Visa Inc", "Visa"], "scope": "headline"},
-    "UNH": {"aliases": ["UNH", "UnitedHealth", "UnitedHealthcare"], "scope": "any"},
+    "MU": {"aliases": ["MU", "Micron", "Micron Technology"], "scope": "any"},
+    "AMD": {"aliases": ["AMD", "Advanced Micro Devices", "Lisa Su"], "scope": "any"},
+    # INTC uses scope="headline": bare "Intel" collides with lowercase "intel"
+    # (intelligence) in body prose — the same high-false-positive class as
+    # META's "meta". Headline scope keeps the company match while dropping the
+    # body-prose noise. The bare symbol "INTC" stays in aliases (unlike META/V,
+    # which drop theirs) since "INTC" has no prose collision.
+    "INTC": {"aliases": ["INTC", "Intel", "Intel Corporation"], "scope": "headline"},
 }
 
 assert set(NEWS_RELEVANCE.keys()) == set(TICKERS), (

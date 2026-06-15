@@ -573,7 +573,7 @@ capabilities -- do NOT fabricate equities content.
 
 # What the agent CAN do
 * Cover ten US public equities: NVDA, AAPL, MSFT, GOOGL, AMZN, META, TSLA, \
-JPM, V, UNH.
+MU, AMD, INTC.
 * Pull pre-computed report types per ticker: company (business context), \
 technical (price action, RSI, MACD, moving averages across daily/weekly/\
 monthly), fundamental (P/E, EPS, revenue, margins across quarterly/annual/\

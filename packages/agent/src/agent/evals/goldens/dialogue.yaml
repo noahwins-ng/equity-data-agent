@@ -81,19 +81,19 @@ dialogues:
     anchors:
       pass: Agent should frame the risk view directly and ground any numbers.
 
-  - id: jpm-pronoun-after-thesis
-    ticker: JPM
+  - id: amd-pronoun-after-thesis
+    ticker: AMD
     turns:
-      - user: Give me a JPM thesis.
+      - user: Give me an AMD thesis.
       - user: compare that risk to the upside.
     expected_signals: [exploration_quality, analyst_likeness]
     anchors:
-      pass: Agent should understand "that risk" from the prior JPM turn.
+      pass: Agent should understand "that risk" from the prior AMD turn.
 
-  - id: unh-news-risk
-    ticker: UNH
+  - id: intc-news-risk
+    ticker: INTC
     turns:
-      - user: Are there any concerning UNH news items lately?
+      - user: Are there any concerning INTC news items lately?
       - user: so what is the risk to watch?
     expected_signals: [helpfulness, analyst_likeness, voice_match]
     anchors:

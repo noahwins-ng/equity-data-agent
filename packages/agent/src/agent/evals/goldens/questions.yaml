@@ -185,22 +185,22 @@ questions:
       aspects are populated to the extent their reports allow. Verdict
       mentions an aspect label verbatim.
 
-  - id: jpm-fundamental
-    ticker: JPM
-    question: "How is JPM valued versus its latest earnings?"
+  - id: mu-fundamental
+    ticker: MU
+    question: "How is MU valued versus its latest earnings?"
     expected_tools:
       - fundamental
     reference_thesis: |
       A useful four-aspect thesis. The Fundamental aspect carries a
       Premium / Inline / Discounted label quoted verbatim from the report
-      and its supports / challenges cite JPM's latest EPS, P/E, and
+      and its supports / challenges cite MU's latest EPS, P/E, and
       earnings-surprise direction (source: fundamental). Multiple framing
       uses the report's own bucket, not invented peer comparables. Verdict
       mentions the Fundamental label verbatim.
 
-  - id: v-combined
-    ticker: V
-    question: "Give me a balanced thesis on V right now."
+  - id: amd-combined
+    ticker: AMD
+    question: "Give me a balanced thesis on AMD right now."
     expected_tools:
       - technical
       - fundamental
@@ -212,29 +212,30 @@ questions:
       across them. Verdict mentions at least one aspect label verbatim.
       Confidence reflects how complete the supplied reports were.
 
-  - id: unh-fundamental
-    ticker: UNH
-    question: "What is UNH's current fundamental health?"
+  - id: amd-fundamental
+    ticker: AMD
+    question: "What is AMD's current fundamental health?"
     expected_tools:
       - fundamental
     reference_thesis: |
       A useful four-aspect thesis. The Fundamental aspect carries a
       Premium / Inline / Discounted label and its supports / challenges
-      cite UNH's latest revenue, EPS, P/E, and earnings-surprise direction
+      cite AMD's latest revenue, EPS, P/E, and earnings-surprise direction
       (source: fundamental). No invented forward earnings. Verdict
       mentions the Fundamental label verbatim.
 
-  - id: unh-news
-    ticker: UNH
-    question: "Are there any concerning news items on UNH lately?"
+  - id: intc-news
+    ticker: INTC
+    question: "What's the latest news on INTC -- any notable headlines?"
     expected_tools:
       - news
     reference_thesis: |
       A useful four-aspect thesis with the News aspect carrying the bulk
-      of analysis. News supports / challenges read headlines and material
-      items straight from the report (regulatory, litigation, M&A) without
-      manufacturing a narrative, citing (source: news). Verdict mentions an
-      aspect label verbatim.
+      of analysis. News supports / challenges read material headlines
+      straight from the report (upgrades, analyst calls, valuation, foundry
+      or product developments -- positive or negative as the report shows)
+      without manufacturing a narrative, citing (source: news). Verdict
+      mentions an aspect label verbatim.
 
   # QNT-149: quick-fact golden. Single-metric question that the classifier
   # heuristic routes to the quick_fact response shape.
@@ -286,27 +287,27 @@ questions:
 
   # QNT-176: focused-analysis goldens, reshaped for the QNT-208 per-focus
   # verdict + news catalyst fields.
-  - id: jpm-fundamental-deepdive
-    ticker: JPM
-    question: "Walk me through JPM's fundamentals -- valuation deep dive."
+  - id: mu-fundamental-deepdive
+    ticker: MU
+    question: "Walk me through MU's fundamentals -- valuation deep dive."
     expected_tools:
       - company
       - fundamental
     expected_intent: fundamental
     reference_thesis: |
       A useful answer is a focused fundamental read: 2-4 sentences of
-      summary leaning on JPM's valuation, latest EPS, revenue, and
+      summary leaning on MU's valuation, latest EPS, revenue, and
       net-margin posture pulled VERBATIM from the fundamental report and
-      grounded in JPM's actual business segments from the company report.
+      grounded in MU's actual business segments from the company report.
       Verdict is one of Premium / Inline / Discounted quoted from the
       report. 2-5 key-point bullets cite underlying metrics with (source:
       fundamental) or (source: company). Cited values list contains 1-4
       entries copied byte-for-byte. NO technical chart talk (RSI, MACD,
       SMA-50). NO four-section thesis.
 
-  - id: v-technical-analysis
-    ticker: V
-    question: "Give me a technical analysis of V -- chart setup and indicators."
+  - id: intc-technical-analysis
+    ticker: INTC
+    question: "Give me a technical analysis of INTC -- chart setup and indicators."
     expected_tools:
       - company
       - technical
@@ -322,16 +323,16 @@ questions:
       company). Cited values list surfaces RSI, MACD, SMA-50, or close
       price (1-4 entries). NO P/E / earnings talk.
 
-  - id: unh-news-sentiment
-    ticker: UNH
-    question: "What's the news on UNH -- any concerning headlines?"
+  - id: intc-news-sentiment
+    ticker: INTC
+    question: "What's the news on INTC -- recent headlines and catalysts?"
     expected_tools:
       - company
       - news
     expected_intent: news
     reference_thesis: |
       A useful answer is a focused news read: 2-4 sentences summarising
-      the running story for UNH (source: news) with (source: company) for
+      the running story for INTC (source: news) with (source: company) for
       any qualitative business context. ``existing_development`` carries the
       running story narrative. ``positive_catalysts`` and ``negative_catalysts``
       list cited headlines (each "(source: news)"). 2-5 key-point bullets
@@ -496,14 +497,14 @@ questions:
 
       **Value:** <close price> (source: technical)
 
-  - id: jpm-quickfact-eps
-    ticker: JPM
-    question: "What's JPM's latest EPS?"
+  - id: mu-quickfact-eps
+    ticker: MU
+    question: "What's MU's latest EPS?"
     expected_tools:
       - fundamental
     expected_intent: quick_fact
     reference_thesis: |
-      A useful answer states JPM's most recently reported EPS verbatim
+      A useful answer states MU's most recently reported EPS verbatim
       from the fundamental report, names the earnings-surprise direction
       (beat/miss) if the report states it, and cites (source: fundamental)
       inline.
@@ -527,9 +528,9 @@ questions:
       paragraph contrasts the two qualitatively without computing a
       cross-ticker ratio or delta.
 
-  - id: tsla-v-technical
+  - id: tsla-amd-technical
     ticker: TSLA
-    question: "Compare TSLA vs V on technical momentum -- who has the stronger chart setup?"
+    question: "Compare TSLA vs AMD on technical momentum -- who has the stronger chart setup?"
     expected_tools:
       - technical
     expected_intent: comparison
