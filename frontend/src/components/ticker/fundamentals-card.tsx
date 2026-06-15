@@ -20,6 +20,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { apiFetch, type FundamentalRow, type PeriodType } from "@/lib/api";
 import { changeColorClass, formatBps, formatCompact, formatPct, formatRatio, formatSignedPct } from "@/lib/format";
+import { TabStrip } from "../tab-strip";
 
 const PERIOD_TABS: { id: PeriodType; label: string; short: string }[] = [
   { id: "quarterly", label: "Quarterly", short: "Q" },
@@ -140,30 +141,12 @@ export function FundamentalsCard({
         <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-200">
           Fundamentals
         </h2>
-        <div
-          role="tablist"
-          aria-label="Period"
-          className="flex gap-0.5 text-[10px] wide:gap-1"
-        >
-          {PERIOD_TABS.map((p) => (
-            <button
-              key={p.id}
-              type="button"
-              role="tab"
-              aria-selected={period === p.id}
-              aria-label={p.label}
-              onClick={() => setPeriod(p.id)}
-              className={
-                period === p.id
-                  ? "rounded border border-zinc-600 bg-zinc-800 px-1.5 py-0.5 uppercase text-zinc-100"
-                  : "rounded border border-transparent px-1.5 py-0.5 uppercase text-zinc-400 hover:bg-zinc-900"
-              }
-            >
-              <span className="wide:hidden">{p.short}</span>
-              <span className="hidden wide:inline">{p.label}</span>
-            </button>
-          ))}
-        </div>
+        <TabStrip
+          tabs={PERIOD_TABS}
+          active={period}
+          onSelect={setPeriod}
+          ariaLabel="Period"
+        />
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-1">

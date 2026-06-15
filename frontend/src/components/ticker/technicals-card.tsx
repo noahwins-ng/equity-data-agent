@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 
 import { apiFetch, type IndicatorRow, type Timeframe } from "@/lib/api";
 import { changeColorClass, formatRatio } from "@/lib/format";
+import { TabStrip } from "../tab-strip";
 
 const TIMEFRAMES: { id: Timeframe; label: string; short: string }[] = [
   { id: "daily", label: "Daily", short: "D" },
@@ -159,30 +160,12 @@ export function TechnicalsCard({ ticker }: { ticker: string }) {
         <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-200">
           Technicals
         </h2>
-        <div
-          role="tablist"
-          aria-label="Aggregation"
-          className="flex gap-0.5 text-[10px] wide:gap-1"
-        >
-          {TIMEFRAMES.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              role="tab"
-              aria-selected={timeframe === t.id}
-              aria-label={t.label}
-              onClick={() => setTimeframe(t.id)}
-              className={
-                timeframe === t.id
-                  ? "rounded border border-zinc-600 bg-zinc-800 px-1.5 py-0.5 uppercase text-zinc-100"
-                  : "rounded border border-transparent px-1.5 py-0.5 uppercase text-zinc-400 hover:bg-zinc-900"
-              }
-            >
-              <span className="wide:hidden">{t.short}</span>
-              <span className="hidden wide:inline">{t.label}</span>
-            </button>
-          ))}
-        </div>
+        <TabStrip
+          tabs={TIMEFRAMES}
+          active={timeframe}
+          onSelect={setTimeframe}
+          ariaLabel="Aggregation"
+        />
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-1">
