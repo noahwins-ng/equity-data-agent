@@ -238,24 +238,27 @@ def test_article_to_row_meta_keeps_possessive_form() -> None:
     assert row is not None
 
 
-def test_article_to_row_v_drops_lone_letter_keeps_visa() -> None:
-    """V aliases: 'Visa' and 'Visa Inc' only — never the bare 'V'.
+def test_article_to_row_intc_headline_scope_ignores_body_intel() -> None:
+    """INTC is scope=headline: a body-only 'Intel' mention is dropped, a
+    headline naming Intel is kept.
 
-    First call: headline has lone 'V' -> drop. Second call: headline names
-    Visa Inc -> keep. Both rely on word-boundary matching.
+    This guards the lowercase-'intel' (intelligence) prose-collision the
+    headline scope exists for — the body is never read for INTC. First call:
+    'Intel' appears only in the summary -> drop. Second call: the headline
+    names Intel -> keep.
     """
     drop = _article_to_row(
         _finnhub_article(
-            headline="Vitamin C and Mr. V supplements gain shelf space",
-            summary="Niche category roundup.",
+            headline="Chip sector roundup: rivals expand foundry capacity",
+            summary="The piece briefly notes Intel among the named players.",
         ),
-        ticker="V",
+        ticker="INTC",
     )
     assert drop is None
 
     keep = _article_to_row(
-        _finnhub_article(headline="Visa Inc raises quarterly dividend"),
-        ticker="V",
+        _finnhub_article(headline="Intel raises quarterly dividend"),
+        ticker="INTC",
     )
     assert keep is not None
 

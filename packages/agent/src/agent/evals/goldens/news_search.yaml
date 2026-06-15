@@ -14,11 +14,11 @@
 #
 # Negatives carry no expected_terms (they must NOT fire the search).
 #
-# NOTE: fixtures use the current TICKERS set, including JPM / UNH / V. The
-# planned ticker swap (DE improvement arc: drop V/JPM/UNH, add MU/AMD/SNDK) must
-# sweep this file alongside questions.yaml / dialogue.yaml -- load_news_search_fixtures
-# gates every ticker against shared.tickers.TICKERS and will raise on a removed
-# symbol, the same way the questions.yaml per-ticker coverage test forces the swap.
+# NOTE: fixtures must reference only the current TICKERS set --
+# load_news_search_fixtures gates every ticker against shared.tickers.TICKERS
+# and will raise on a removed symbol, the same way the questions.yaml per-ticker
+# coverage test forces a ticker swap to sweep this file alongside
+# questions.yaml / dialogue.yaml.
 
 fixtures:
   # --- positives: targeted-event asks that MUST fire semantic news search ---
@@ -82,23 +82,23 @@ fixtures:
     expected_news_search: true
     expected_terms: [probe, investigation, regulator, eu, fine, antitrust]
 
-  - id: jpm-ceo-statement
-    ticker: JPM
-    question: "What did the JPMorgan CEO say recently?"
+  - id: amd-ceo-statement
+    ticker: AMD
+    question: "What did the AMD CEO say recently?"
     expected_news_search: true
-    expected_terms: [ceo, dimon, "jamie dimon", statement, said, comments]
+    expected_terms: [ceo, "lisa su", su, statement, said, comments]
 
-  - id: unh-investigation
-    ticker: UNH
-    question: "Is UnitedHealth under investigation?"
+  - id: intc-foundry
+    ticker: INTC
+    question: "Any news about Intel's foundry plans?"
     expected_news_search: true
-    expected_terms: [investigation, doj, probe, antitrust, inquiry]
+    expected_terms: [foundry, fab, manufacturing, "18a", customer, chips]
 
-  - id: v-merger
-    ticker: V
-    question: "Any merger or acquisition news involving Visa?"
+  - id: mu-pricing
+    ticker: MU
+    question: "Any news about Micron's memory pricing or demand?"
     expected_news_search: true
-    expected_terms: [merger, acquisition, deal, acquire, stake]
+    expected_terms: [pricing, demand, dram, nand, memory, hbm]
 
   # --- negatives: generic / off-domain asks that must NOT fire the search ---
   - id: aapl-generic-news

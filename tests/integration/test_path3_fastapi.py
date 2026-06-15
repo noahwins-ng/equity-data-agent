@@ -333,7 +333,7 @@ def test_tickers_endpoint_returns_full_universe(client: TestClient) -> None:
     assert isinstance(body, list)
     # All 10 portfolio tickers; benchmark (SPY) is intentionally excluded
     # by the endpoint (it returns TICKERS, not ALL_OHLCV_TICKERS).
-    assert "AAPL" in body and "NVDA" in body and "UNH" in body
+    assert "AAPL" in body and "NVDA" in body and "MU" in body
     assert "SPY" not in body
 
 

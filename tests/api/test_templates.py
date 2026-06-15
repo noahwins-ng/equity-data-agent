@@ -393,7 +393,7 @@ def test_fundamental_pe_nulled_with_low_eps_renders_near_zero_earnings(
     # QNT-87 end-to-end: pe_ratio=None + eps=0.01 → "N/M (near-zero earnings…".
     rows = [_fund_row(pe_ratio=None, eps=0.01)]
     _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, rows)})
-    report = build_fundamental_report("UNH")
+    report = build_fundamental_report("INTC")
     assert "P/E (quarterly): N/M (near-zero earnings" in report
 
 
@@ -557,15 +557,16 @@ def test_fundamental_peer_context_rendered_for_nvda(
     assert "27.50" in report
 
 
-def test_fundamental_peer_context_na_for_unh(
+def test_fundamental_peer_context_na_for_amzn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """UNH (Healthcare, 0 peers) renders N/A in PEER CONTEXT."""
+    """AMZN (Consumer Discretionary, 1 sector peer < _MIN_PEERS_FOR_MEDIAN)
+    renders N/A in PEER CONTEXT."""
     _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, [_fund_row()])})
-    report = build_fundamental_report("UNH")
+    report = build_fundamental_report("AMZN")
     assert "## PEER CONTEXT" in report
     assert "N/A (insufficient peers in coverage" in report
-    assert "Healthcare" in report
+    assert "Consumer Discretionary" in report
 
 
 def test_fundamental_header_freshness(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -635,7 +636,7 @@ def test_fundamental_renders_premium_inline_discounted_label(
         _fund_row(period_end=date(2025, 3, 31), pe_ratio=23.0),
     ]
     _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, rows)})
-    report = build_fundamental_report("UNH")
+    report = build_fundamental_report("AMD")
     assert "— Premium" in report
 
 
