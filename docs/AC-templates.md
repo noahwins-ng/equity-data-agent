@@ -17,14 +17,12 @@ Apply when `git diff --name-only main...HEAD` touches any of:
 
 - [ ] **CD runs green end-to-end** — all steps in `deploy.yml` pass, including the `Verify prod SHA matches merged commit` and `Verify Dagster loaded expected asset graph` gates (QNT-88 + QNT-89).
 - [ ] **No prod drift** — `ssh hetzner 'cd /opt/equity-data-agent && git status --short'` returns empty output after deploy. Untracked runtime logs (`health-monitor.log`, `health-monitor-heartbeat`) are expected; anything else means SCP drift or uncommitted hotfixes.
-- [ ] **Post-deploy smoke** — one cheap asset materialization succeeds on prod. Example:
-  ```bash
-  ssh hetzner 'docker exec equity-data-agent-dagster-daemon-1 \
-    /app/.venv/bin/dagster asset materialize \
-    --select ohlcv_raw --partition AAPL \
-    -m dagster_pipelines.definitions 2>&1 | tail -5'
-  ```
-  Any success output is sufficient; the goal is to prove the runtime can actually execute, not to backfill data.
+- [ ] **Post-deploy smoke** — one cheap real operation succeeds on prod, chosen to match the change surface:
+  - Dagster-definition changes: deploy workflow `Verify Dagster loaded expected asset graph` passes, then `make check-prod` shows the expected asset/check counts in `/health`.
+  - Observability changes: `make obs-smoke` passes, and any new datasource/dashboard-specific probe succeeds.
+  - API changes: `curl` a known-good prod endpoint through the same path users hit.
+  - Data/runtime changes: use Dagster UI/sensor evidence or the smallest supported job path for that asset; do not use direct `dagster asset materialize` as the generic ship gate unless the ticket specifically requires a manual materialization path.
+  The goal is to prove the deployed runtime path for the ticket works, not to backfill data.
 
 ### How `/sanity-check` and `/review` use this
 
