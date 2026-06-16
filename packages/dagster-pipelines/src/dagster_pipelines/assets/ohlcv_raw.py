@@ -15,6 +15,7 @@ from dagster import (
 )
 from shared.tickers import ALL_OHLCV_TICKERS
 
+from dagster_pipelines.rejects import Reject, record_rejects
 from dagster_pipelines.resources.clickhouse import ClickHouseResource
 from dagster_pipelines.retry_helpers import retry_after_seconds_from_exception
 
@@ -74,10 +75,36 @@ def ohlcv_raw(
                 time.sleep(wait)
             raise  # bubble up to trigger Dagster retry with jittered backoff
         context.log.warning("yfinance fetch failed for %s: %s — skipping", ticker, exc)
+        record_rejects(
+            context,
+            clickhouse,
+            source_asset="ohlcv_raw",
+            rejects=[
+                Reject(
+                    ticker=ticker,
+                    reason="fetch_failed",
+                    payload={"period": config.period},
+                    detail=str(exc)[:500],
+                )
+            ],
+        )
         return
 
     if raw is None or raw.empty:
         context.log.warning("yfinance returned empty DataFrame for %s — skipping", ticker)
+        record_rejects(
+            context,
+            clickhouse,
+            source_asset="ohlcv_raw",
+            rejects=[
+                Reject(
+                    ticker=ticker,
+                    reason="empty_fetch",
+                    payload={"period": config.period},
+                    detail="yfinance returned empty DataFrame",
+                )
+            ],
+        )
         return
 
     df: pd.DataFrame = raw.copy()

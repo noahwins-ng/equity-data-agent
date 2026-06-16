@@ -764,6 +764,33 @@ Open all observability tunnels with `make tunnel` (forwards 8123, 3100, 8082, 90
 
 CX41 totals: 16 GiB RAM. Pre-QNT-103 mem_limit allocation was 13.06 GiB (clickhouse 8 GiB + dagster trio 3.5 GiB + api 1 GiB + litellm 0.5 GiB + cloudflared 64 MiB); post-QNT-103 + QNT-164 it's 14.19 GiB. Leaves ~1.81 GiB host headroom outside cgroups, plus mem_limit is a hard ceiling (typical RSS sits well below it) and reservations are softer than limits, so realised free memory under typical load should remain above the 3 GiB AC threshold. Verify post-deploy via `make obs-status`.
 
+### What did ingestion drop? (reject sink — QNT-243)
+
+Source-ingest assets drop bad records (news below the relevance gate,
+fundamentals periods with missing Total Revenue, OHLCV empty/failed fetches).
+Every dropped row is persisted to `equity_raw.ingest_rejects` (ticker,
+`source_asset`, `reason`, `detail`, `raw_payload`, `rejected_at`) and the
+per-run count is emitted as Dagster asset metadata (`rejected_rows`) on the
+asset's materialization.
+
+```sql
+-- Recent rejects by source and reason
+SELECT source_asset, reason, count() AS n, max(rejected_at) AS latest
+FROM equity_raw.ingest_rejects FINAL
+WHERE rejected_at > now() - INTERVAL 7 DAY
+GROUP BY source_asset, reason ORDER BY n DESC;
+
+-- Drill into one ticker (e.g. why N news articles were discarded)
+SELECT rejected_at, reason, detail, raw_payload
+FROM equity_raw.ingest_rejects FINAL
+WHERE ticker = 'NVDA' AND source_asset = 'news_raw'
+ORDER BY rejected_at DESC LIMIT 20;
+```
+
+**Retention**: the table carries a 90-day TTL (`migration 027`) — reject rows
+are reconstructable debug data, so they prune automatically and never grow
+unbounded. No manual cleanup needed.
+
 ---
 
 ## Deterministic post-graph tripwires (QNT-193)

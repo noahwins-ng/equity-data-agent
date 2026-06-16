@@ -41,6 +41,7 @@ from dagster_pipelines.news_feeds import (
     make_resolver_client,
     resolve_publisher_host,
 )
+from dagster_pipelines.rejects import Reject, record_rejects
 from dagster_pipelines.resources.clickhouse import ClickHouseResource
 
 logger = logging.getLogger(__name__)
@@ -112,6 +113,25 @@ def _passes_relevance(ticker: str, headline: str, body: str) -> bool:
     if scope == "headline":
         return pattern.search(headline) is not None
     return pattern.search(headline) is not None or pattern.search(body) is not None
+
+
+def _reject_reason(article: dict[str, Any]) -> str:
+    """Classify why ``_article_to_row`` dropped an article, for the reject sink.
+
+    Mirrors the guard order in ``_article_to_row`` exactly: missing url/headline
+    or an invalid datetime are structural ("unusable"); anything else that
+    survives those guards but still drops failed the relevance gate. The two
+    functions must move together — kept separate so the drop-path classification
+    never perturbs the hot keep path.
+    """
+    url = (article.get("url") or "").strip()
+    headline = (article.get("headline") or "").strip()
+    if not url or not headline:
+        return "unusable"
+    epoch = article.get("datetime")
+    if not isinstance(epoch, int) or epoch <= 0:
+        return "unusable"
+    return "below_relevance"
 
 
 def _article_to_row(
@@ -207,6 +227,9 @@ def news_raw(
     articles = fetch_company_news(ticker, from_date=from_date, to_date=today)
     if not articles:
         context.log.warning("No articles returned for %s — skipping insert", ticker)
+        # No articles fetched is not a reject, but still emit the 0-count so the
+        # rejected_rows metric has no gaps for the QNT-240 dashboard.
+        record_rejects(context, clickhouse, source_asset="news_raw", rejects=[])
         return
 
     # One pooled client for all redirect resolutions in this partition.
@@ -219,6 +242,7 @@ def news_raw(
     resolver_client = make_resolver_client()
     try:
         rows: list[dict[str, Any]] = []
+        rejects: list[Reject] = []
         resolved_count = 0
         for article in articles:
             row = _article_to_row(article, ticker=ticker, resolver_client=resolver_client)
@@ -226,6 +250,19 @@ def news_raw(
                 rows.append(row)
                 if row["resolved_host"]:
                     resolved_count += 1
+            else:
+                rejects.append(
+                    Reject(
+                        ticker=ticker,
+                        reason=_reject_reason(article),
+                        payload={
+                            "url": article.get("url"),
+                            "headline": article.get("headline"),
+                            "datetime": article.get("datetime"),
+                            "publisher": article.get("source"),
+                        },
+                    )
+                )
     finally:
         resolver_client.close()
 
@@ -237,6 +274,7 @@ def news_raw(
         len(articles),
         dropped,
     )
+    record_rejects(context, clickhouse, source_asset="news_raw", rejects=rejects)
 
     if not rows:
         context.log.warning(

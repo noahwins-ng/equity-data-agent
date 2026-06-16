@@ -124,23 +124,25 @@ def test_ohlcv_raw_429_without_retry_after_re_raises_without_sleep(
     assert captured_sleeps == []
 
 
-def test_ohlcv_raw_non_429_failure_skips_silently(
+def test_ohlcv_raw_non_429_failure_records_reject_and_skips(
     monkeypatch: pytest.MonkeyPatch,
     captured_sleeps: list[float],
 ) -> None:
-    """A non-rate-limit failure (e.g. timeout) logs and returns — no retry,
-    no sleep. Pre-existing behavior; covered to pin against regressions
-    when the 429 branch is touched."""
+    """A non-rate-limit failure (e.g. timeout) logs, records a reject, and
+    returns — no retry, no sleep. The skip is no longer silent (QNT-243):
+    the dropped partition lands in the reject sink."""
 
     def _raise_other(*_args: object, **_kwargs: object) -> None:
         raise ValueError("connection reset")
 
     monkeypatch.setattr(_OHLCV_MODULE.yf, "download", _raise_other)
 
+    ch = _DummyClickHouse()
     context = build_asset_context(partition_key="NVDA")
     # Returns normally — does not raise.
-    ohlcv_raw(context, OHLCVConfig(period="5d"), clickhouse=_DummyClickHouse())
+    ohlcv_raw(context, OHLCVConfig(period="5d"), clickhouse=ch)
     assert captured_sleeps == []
+    assert [table for table, _ in ch.inserts] == ["equity_raw.ingest_rejects"]
 
 
 # ── fundamentals 429 + Retry-After ───────────────────────────────────────────
@@ -383,9 +385,12 @@ def test_external_ingest_assets_use_jittered_backoff() -> None:
 
 
 class _DummyClickHouse:
-    """Asset 429 paths re-raise before reaching insert_df, so a no-op stub
-    is sufficient. Keeps the test free of ClickHouseResource construction
-    cost (which would otherwise require pull-from-env config + a tunnel)."""
+    """Records insert_df calls. The 429 paths re-raise before any insert (the
+    pytest.raises assertion proves it); the non-429 skip path now records a
+    reject to the sink (QNT-243), which this captures."""
 
-    def insert_df(self, *_args: object, **_kwargs: object) -> None:  # pragma: no cover
-        raise AssertionError("insert_df must not be called on the 429-path tests")
+    def __init__(self) -> None:
+        self.inserts: list[tuple[str, object]] = []
+
+    def insert_df(self, table: str, df: object) -> None:
+        self.inserts.append((table, df))
