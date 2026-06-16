@@ -228,8 +228,10 @@ jobs:
             restart_if_prefix_changed "observability/grafana/" grafana
             restart_if_prefix_changed "observability/prometheus/" prometheus
             # QNT-169: ClickHouse only reads /etc/clickhouse-server/config.d/*.xml
-            # at startup; system-log TTL changes need a restart to take effect.
+            # and /etc/clickhouse-server/users.d/*.xml at startup; config/user
+            # changes need a restart to take effect.
             restart_if_prefix_changed "clickhouse/config.d/" clickhouse
+            restart_if_prefix_changed "clickhouse/users.d/" clickhouse
             if [ "$restarted_any" = 0 ]; then
               echo "[QNT-124] no bind-mounted config files changed — no restarts needed"
             fi
