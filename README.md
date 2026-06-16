@@ -20,8 +20,12 @@ Good demo prompts:
 - `Compare MSFT and GOOGL`
 - `What's the news sentiment on TSLA?`
 
-The current universe is 10 US equities: NVDA, AAPL, MSFT, GOOGL, AMZN, META,
-TSLA, JPM, V, and UNH. Data ingests daily after market close.
+The current universe is 10 US equities — a deliberately semis/tech-concentrated
+set: NVDA, AAPL, MSFT, GOOGL, AMZN, META, TSLA, MU, AMD, and INTC. The
+concentration is a scope choice, not a limitation: it keeps every ticker in
+sectors the agent can reason about with shared context (AI/data-center demand,
+the semiconductor cycle) rather than spreading thin across unrelated industries.
+Data ingests daily after market close.
 
 ## Why This Exists
 
@@ -45,7 +49,7 @@ tables. It only sees the report text FastAPI gives it.
 | Area | Proof |
 |---|---|
 | AI engineering | Intent-routed LangGraph agent, LiteLLM routing, structured outputs, SSE streaming, hallucination/provenance evals |
-| Data engineering | Dagster asset graph, ClickHouse warehouse, Qdrant news embeddings, idempotent migrations, multi-timeframe aggregation |
+| Data engineering | Medallion-layered ClickHouse warehouse (`equity_raw` -> `equity_derived`), Dagster asset graph with domain-bounded asset checks (the dbt-test equivalent), data-observability checks (freshness/volume/distribution/lineage), Qdrant news embeddings, idempotent migrations |
 | Product engineering | Next.js 16 app with watchlist, ticker detail, charting, fundamentals, news, and persistent chat panel |
 | Production ops | Hetzner Docker Compose backend, Vercel frontend, Cloudflare named tunnel, health checks, alerts, runbooks |
 | Engineering process | 19 ADRs, 7 phase retros, 700+ tests, security scanners, deploy gates, model bench history |
@@ -152,6 +156,53 @@ graph LR
 
 Read the fuller system description in
 [`docs/architecture/system-overview.md`](docs/architecture/system-overview.md).
+
+## Data Engineering
+
+The warehouse follows the standard data-engineering patterns under
+Dagster-native names:
+
+- **Medallion layering.** Two ClickHouse databases mirror a bronze ->
+  silver/gold split: `equity_raw` holds ingested source data (OHLCV,
+  fundamentals, news), `equity_derived` holds everything computed from it
+  (multi-timeframe bars, technical indicators, fundamental summaries). Every
+  derived table is rebuildable from raw, so the raw layer is the only thing that
+  must be durable. (Strict bronze would persist unparsed API payloads; skipped
+  deliberately at this volume.)
+- **Tests on the data (dbt-test equivalent).** Each asset carries
+  domain-bounded [asset checks](packages/dagster-pipelines/src/dagster_pipelines/asset_checks)
+  — the Dagster-native analogue of dbt tests — asserting real financial bounds,
+  not just non-null. They earn their keep: a `pe_in_band` check caught two
+  distinct P/E formula bugs that both passed human code review (a near-zero-EPS
+  blowup to a P/E of 28,545, and a quarterly ratio dividing full market cap by
+  single-quarter income instead of TTM).
+- **Data observability.** Freshness, volume/distribution, and lineage are
+  first-class: per-ticker freshness/staleness checks on OHLCV and news, volume
+  and distribution trends on a Grafana data-health dashboard
+  ([`observability/grafana/dashboards/data-health.json`](observability/grafana/dashboards/data-health.json)),
+  and the Dagster asset graph as lineage. Import-time registry asserts keep the
+  ticker universe, metadata, and news-relevance config from drifting.
+- **Idempotency.** All tables are `ReplacingMergeTree` with `FINAL`/`argMax`
+  read paths and append-only, re-runnable migrations, so re-ingesting a day or
+  restating a quarter overwrites cleanly rather than duplicating.
+
+### Where this design breaks at scale
+
+The system is deliberately scoped to 10 tickers. Several choices are right at
+this size but would have to change with volume — naming them is the point:
+
+- **Partition cardinality.** Tables `PARTITION BY ticker`, which is ideal at
+  10-15 values (ticker churn is an instant `DROP PARTITION` metadata op) but
+  degrades past ~100 partitions; a larger universe would switch to a time-based
+  scheme like `toYYYYMM(date)`.
+- **Market-data vendor.** yfinance is fine for a portfolio-scale daily pull but
+  carries no SLA; production scale means a paid feed (Polygon, databento, or a
+  direct exchange feed).
+- **Incremental / streaming.** Transforms full-rebuild today. Higher volume
+  would call for incremental models, and intraday data would need a streaming
+  ingest path rather than a daily batch.
+- **Single-node ClickHouse.** One node serves this comfortably; horizontal
+  growth means a multi-node, sharded ClickHouse cluster.
 
 ## Screenshots
 
