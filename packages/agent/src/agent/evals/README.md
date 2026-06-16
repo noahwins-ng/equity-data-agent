@@ -188,6 +188,56 @@ corpus that week carried no matching legal/recall/merger story for those tickers
 (tsla-recall returned 1 hit, unh-investigation 3; NVDA was dominated by the SK
 partnership story). They are the input to a future recall-improvement ticket.
 
+## Clean-window re-run for the new ticker universe (QNT-255)
+
+QNT-237 swapped the universe (V/JPM/UNH -> MU/AMD/INTC). Its AC5 eval passed the
+HARD gate but the judge QUALITY numbers were degraded by Groq free-tier
+rate-limiting mid-session. QNT-255 re-ran the full golden + dialogue suite on a
+verified clean window (sha `68facdf`, 2026-06-16) to get trustworthy numbers.
+
+Golden (run `20260616T175146Z-1f38b9`):
+
+| Field | Value |
+|---|---:|
+| Records | 41 |
+| hallucination_ok | 39/41 |
+| tool_call_ok | 41/41 |
+| provider_failures | 0/41 |
+| Composite | 4.29 (F=7.49 S=1.51 C=4.56 A=3.8) |
+| Cosine | 0.408 |
+
+Dialogue (run `20260616T182622Z-3bab54-dialogue`):
+
+| Field | Value |
+|---|---:|
+| Dialogues | 12 |
+| Numeric support | 12/12 clean |
+| Composite | 0.812 |
+| Non-hallucination | 0.983 |
+| Analyst-likeness | 0.758 |
+| Helpfulness | 0.808 |
+| Exploration | 0.662 |
+| Voice match | 0.850 |
+
+**No rate-limit degradation, no swap regression.** Golden composite 4.29 is flat
+against the last old-universe run (4.33, `20260612`), and the dialogue composite
+0.812 sits within one SE of the temp=0 baseline (0.836, `20260606`). The new
+tickers clear the hard gate cleanly: MU/AMD/INTC are 8/8 on hallucination and
+8/8 on tool-call contracts. The low judge composites on single-fact new-ticker
+goldens (e.g. `mu-quickfact-eps`, `mu-fundamental`) are the chronic structure
+axis scoring 0 on non-thesis query shapes (set-wide S≈1.5, identical old and new
+universe), not a new-ticker gap.
+
+**Note the gap (do not loosen the contract).** The 2 golden hallucination misses
+are `tsla-news-sentiment` and `meta-news-sentiment` — both *retained* tickers, so
+not swap-induced. A targeted re-run reproduced them (and intermittently
+`tsla-news`): the news narrate path emits an unsupported number (TSLA `2.5`, META
+`14`) absent from the report strings. This is a pre-existing news-synthesis
+prompt-quality issue (see the "news synthesis quoting fundamental-style numbers
+is the suspicious one" baseline note above), surfaced clearly on the clean
+window. It is the input to a follow-up prompt-tuning ticket; the contract stays
+as-is.
+
 ## Running locally
 
 Requires the API (`make dev-api`) and LiteLLM (`make dev-litellm`) running, plus an SSH tunnel to ClickHouse (`make tunnel`).
