@@ -10,11 +10,15 @@ Severity conventions:
 - WARN: stale or suspicious data — does not block downstream.
 """
 
+from datetime import timedelta
+from statistics import fmean, stdev
+
 from dagster import (
     AssetCheckResult,
     AssetCheckSeverity,
     asset_check,
 )
+from pandas import DataFrame
 
 from dagster_pipelines.assets.ohlcv_raw import ohlcv_raw
 from dagster_pipelines.resources.clickhouse import ClickHouseResource
@@ -22,6 +26,99 @@ from dagster_pipelines.resources.clickhouse import ClickHouseResource
 # Max staleness for most recent ohlcv_raw row. yfinance is daily, but weekends
 # and holidays make 7d a realistic upper bound before something is wrong.
 _MAX_STALENESS_DAYS = 7
+_ANOMALY_LOOKBACK_DAYS = 120
+_ANOMALY_RECENT_DAYS = 7
+_MIN_BASELINE_POINTS = 10
+_ROLLING_WINDOW_POINTS = 30
+_SIGMA_THRESHOLD = 4.0
+
+
+def _volume_spike_anomalies(
+    df: DataFrame,
+    *,
+    sigma_threshold: float = _SIGMA_THRESHOLD,
+    min_baseline_points: int = _MIN_BASELINE_POINTS,
+    window_points: int = _ROLLING_WINDOW_POINTS,
+    recent_days: int = _ANOMALY_RECENT_DAYS,
+) -> list[dict[str, object]]:
+    if df.empty:
+        return []
+    scored = df.sort_values(["ticker", "date"]).copy()
+    max_date = scored["date"].max()
+    min_recent_date = max_date - timedelta(days=recent_days)
+    anomalies: list[dict[str, object]] = []
+    for ticker, group in scored.groupby("ticker", sort=False):
+        volumes = [float(v) for v in group["volume"]]
+        dates = list(group["date"])
+        for index, volume in enumerate(volumes):
+            if dates[index] < min_recent_date:
+                continue
+            baseline = volumes[max(0, index - window_points) : index]
+            if len(baseline) < min_baseline_points:
+                continue
+            std = stdev(baseline)
+            if std <= 0:
+                continue
+            mean = fmean(baseline)
+            z_score = (volume - mean) / std
+            if z_score > sigma_threshold:
+                anomalies.append(
+                    {
+                        "ticker": str(ticker),
+                        "date": str(dates[index]),
+                        "volume": int(volume),
+                        "baseline_mean": round(mean, 2),
+                        "z_score": round(z_score, 2),
+                    }
+                )
+    return anomalies
+
+
+def _price_gap_anomalies(
+    df: DataFrame,
+    *,
+    sigma_threshold: float = _SIGMA_THRESHOLD,
+    min_baseline_points: int = _MIN_BASELINE_POINTS,
+    window_points: int = _ROLLING_WINDOW_POINTS,
+    recent_days: int = _ANOMALY_RECENT_DAYS,
+) -> list[dict[str, object]]:
+    if df.empty:
+        return []
+    scored = df.sort_values(["ticker", "date"]).copy()
+    max_date = scored["date"].max()
+    min_recent_date = max_date - timedelta(days=recent_days)
+    anomalies: list[dict[str, object]] = []
+    for ticker, group in scored.groupby("ticker", sort=False):
+        closes = [float(v) for v in group["close"]]
+        dates = list(group["date"])
+        gaps: list[float | None] = [None]
+        for previous, current in zip(closes, closes[1:], strict=False):
+            if previous <= 0:
+                gaps.append(None)
+            else:
+                gaps.append(abs((current - previous) / previous))
+        for index, gap in enumerate(gaps):
+            if gap is None or dates[index] < min_recent_date:
+                continue
+            baseline = [g for g in gaps[max(0, index - window_points) : index] if g is not None]
+            if len(baseline) < min_baseline_points:
+                continue
+            std = stdev(baseline)
+            if std <= 0:
+                continue
+            mean = fmean(baseline)
+            z_score = (gap - mean) / std
+            if z_score > sigma_threshold:
+                anomalies.append(
+                    {
+                        "ticker": str(ticker),
+                        "date": str(dates[index]),
+                        "gap_pct": round(gap * 100, 2),
+                        "baseline_mean_pct": round(mean * 100, 2),
+                        "z_score": round(z_score, 2),
+                    }
+                )
+    return anomalies
 
 
 @asset_check(asset=ohlcv_raw, blocking=True)
@@ -103,4 +200,52 @@ def ohlcv_raw_dates_fresh(clickhouse: ClickHouseResource) -> AssetCheckResult:
             "threshold_days": _MAX_STALENESS_DAYS,
         },
         description=(f"Latest row is {days_since} days old (threshold: {_MAX_STALENESS_DAYS}d)"),
+    )
+
+
+@asset_check(asset=ohlcv_raw)
+def ohlcv_raw_volume_spike_anomaly(clickhouse: ClickHouseResource) -> AssetCheckResult:
+    """Warn when recent per-ticker volume is a high-sigma outlier."""
+    df = clickhouse.query_df(
+        "SELECT ticker, date, sum(volume) AS volume "
+        "FROM equity_raw.ohlcv_raw FINAL "
+        f"WHERE date >= today() - INTERVAL {_ANOMALY_LOOKBACK_DAYS} DAY "
+        "GROUP BY ticker, date "
+        "ORDER BY ticker, date"
+    )
+    anomalies = _volume_spike_anomalies(df)
+    return AssetCheckResult(
+        passed=len(anomalies) == 0,
+        severity=AssetCheckSeverity.WARN,
+        metadata={
+            "anomalies": anomalies,
+            "anomaly_count": len(anomalies),
+            "sigma_threshold": _SIGMA_THRESHOLD,
+        },
+        description=f"{len(anomalies)} recent ticker-days had volume > {_SIGMA_THRESHOLD} sigma",
+    )
+
+
+@asset_check(asset=ohlcv_raw)
+def ohlcv_raw_price_gap_anomaly(clickhouse: ClickHouseResource) -> AssetCheckResult:
+    """Warn when recent close-to-close moves are high-sigma outliers."""
+    df = clickhouse.query_df(
+        "SELECT ticker, date, close "
+        "FROM equity_raw.ohlcv_raw FINAL "
+        f"WHERE date >= today() - INTERVAL {_ANOMALY_LOOKBACK_DAYS} DAY "
+        "ORDER BY ticker, date"
+    )
+    anomalies = _price_gap_anomalies(df)
+    return AssetCheckResult(
+        passed=len(anomalies) == 0,
+        severity=AssetCheckSeverity.WARN,
+        metadata={
+            "anomalies": anomalies,
+            "anomaly_count": len(anomalies),
+            "sigma_threshold": _SIGMA_THRESHOLD,
+        },
+        description=(
+            f"{len(anomalies)} recent ticker-days had close-to-close gaps "
+            f"> {_SIGMA_THRESHOLD} sigma"
+        ),
     )

@@ -27,6 +27,8 @@ from dagster_pipelines.asset_checks.ohlcv_raw_checks import (
     ohlcv_raw_has_rows,
     ohlcv_raw_no_future_dates,
     ohlcv_raw_no_null_close,
+    ohlcv_raw_price_gap_anomaly,
+    ohlcv_raw_volume_spike_anomaly,
 )
 from dagster_pipelines.asset_checks.technical_indicators_checks import (
     daily_adx_in_range,
@@ -47,6 +49,8 @@ ALL_ASSET_CHECKS = [
     ohlcv_raw_no_null_close,
     ohlcv_raw_no_future_dates,
     ohlcv_raw_dates_fresh,
+    ohlcv_raw_volume_spike_anomaly,
+    ohlcv_raw_price_gap_anomaly,
     # fundamentals
     fundamentals_has_rows,
     fundamentals_period_type_valid,
@@ -109,6 +113,8 @@ __all__ = [
     "ohlcv_raw_has_rows",
     "ohlcv_raw_no_future_dates",
     "ohlcv_raw_no_null_close",
+    "ohlcv_raw_price_gap_anomaly",
+    "ohlcv_raw_volume_spike_anomaly",
     "weekly_macd_signal_coherent",
     "weekly_recent_no_nan",
     "weekly_rsi_in_range",

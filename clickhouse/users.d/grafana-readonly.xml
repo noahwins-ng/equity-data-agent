@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<clickhouse>
+    <profiles>
+        <grafana_readonly>
+            <readonly>2</readonly>
+        </grafana_readonly>
+    </profiles>
+
+    <users>
+        <grafana_readonly>
+            <password></password>
+            <profile>grafana_readonly</profile>
+            <quota>default</quota>
+            <networks>
+                <ip>::/0</ip>
+            </networks>
+        </grafana_readonly>
+    </users>
+</clickhouse>

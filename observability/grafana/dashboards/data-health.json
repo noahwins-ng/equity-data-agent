@@ -1,0 +1,93 @@
+{
+  "uid": "data-health",
+  "title": "Data Health",
+  "tags": ["equity-data-agent", "data-health"],
+  "schemaVersion": 38,
+  "version": 1,
+  "editable": true,
+  "time": {"from": "now-30d", "to": "now"},
+  "refresh": "5m",
+  "timezone": "browser",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "OHLCV rows/day per ticker",
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 0},
+      "datasource": {"type": "grafana-clickhouse-datasource", "uid": "clickhouse"},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "timeseries",
+          "format": 0,
+          "rawSql": "SELECT toDateTime(date) AS time, ticker AS metric, count() AS value FROM equity_raw.ohlcv_raw FINAL WHERE $__timeFilter(toDateTime(date)) GROUP BY time, metric ORDER BY time, metric"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0}}
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "News rows/day per ticker",
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 0},
+      "datasource": {"type": "grafana-clickhouse-datasource", "uid": "clickhouse"},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "timeseries",
+          "format": 0,
+          "rawSql": "SELECT toStartOfDay(published_at) AS time, ticker AS metric, count() AS value FROM equity_raw.news_raw FINAL WHERE $__timeFilter(published_at) GROUP BY time, metric ORDER BY time, metric"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0}}
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "News volume rolling trend",
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 9},
+      "datasource": {"type": "grafana-clickhouse-datasource", "uid": "clickhouse"},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "timeseries",
+          "format": 0,
+          "rawSql": "WITH daily AS (SELECT toDate(published_at) AS day, ticker, count() AS rows FROM equity_raw.news_raw FINAL WHERE published_at >= now() - INTERVAL 45 DAY GROUP BY day, ticker) SELECT toDateTime(day) AS time, concat(ticker, ' 7d') AS metric, avg(rows) OVER (PARTITION BY ticker ORDER BY day ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS value FROM daily UNION ALL SELECT toDateTime(day) AS time, concat(ticker, ' 30d') AS metric, avg(rows) OVER (PARTITION BY ticker ORDER BY day ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) AS value FROM daily ORDER BY time, metric"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0}}
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Fundamental summary latest period_end",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 18},
+      "datasource": {"type": "grafana-clickhouse-datasource", "uid": "clickhouse"},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "timeseries",
+          "format": 0,
+          "rawSql": "SELECT now() AS time, ticker AS metric, dateDiff('day', max(period_end), today()) AS value FROM equity_derived.fundamental_summary FINAL GROUP BY metric ORDER BY metric"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "d", "min": 0}}
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Close price range (30d)",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 18},
+      "datasource": {"type": "grafana-clickhouse-datasource", "uid": "clickhouse"},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "timeseries",
+          "format": 0,
+          "rawSql": "SELECT toDateTime(date) AS time, ticker AS metric, close AS value FROM equity_raw.ohlcv_raw FINAL WHERE date >= today() - INTERVAL 30 DAY ORDER BY time, metric"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}}
+    }
+  ]
+}

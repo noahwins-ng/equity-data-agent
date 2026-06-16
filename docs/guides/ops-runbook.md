@@ -740,7 +740,7 @@ ssh hetzner 'docker exec equity-data-agent-clickhouse-1 clickhouse-client --quer
 | What | URL (via SSH tunnel) | Auth | Purpose |
 |---|---|---|---|
 | Dozzle | `http://localhost:8082` | SSH tunnel only | Tail any compose container's logs without `ssh hetzner`. |
-| Grafana | `http://localhost:3030` | `admin` / `admin` on first launch only — Grafana forces a password change at first login; the chosen password persists in `grafana_data` named volume across restarts. Store the new password in your password manager. To rotate later: `ssh hetzner 'docker exec equity-data-agent-grafana-1 grafana cli admin reset-admin-password <new>'`. | Host + per-container metrics, alert rules, alert history. |
+| Grafana | `http://localhost:3030` | `admin` / `admin` on first launch only — Grafana forces a password change at first login; the chosen password persists in `grafana_data` named volume across restarts. Store the new password in your password manager. To rotate later: `ssh hetzner 'docker exec equity-data-agent-grafana-1 grafana cli admin reset-admin-password <new>'`. | Host + per-container metrics, alert rules, alert history. The *Data Health* dashboard uses ClickHouse to show OHLCV/news rows per day, news 7/30-day rolling volume, fundamentals freshness, and recent close-price distribution by ticker. |
 | Prometheus | `http://localhost:9090` | SSH tunnel only | Raw PromQL access, scrape target health (`/targets`). |
 | Dagster UI | `http://localhost:3100` | SSH tunnel only | Asset graph, run history, sensor ticks. |
 | ClickHouse Play | `http://localhost:8123/play` | SSH tunnel only | Ad-hoc SQL against the warehouse. |
