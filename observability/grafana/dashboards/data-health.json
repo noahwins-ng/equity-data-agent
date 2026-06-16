@@ -52,7 +52,7 @@
           "refId": "A",
           "queryType": "timeseries",
           "format": 0,
-          "rawSql": "WITH daily AS (SELECT toDate(published_at) AS day, ticker, count() AS rows FROM equity_raw.news_raw FINAL WHERE published_at >= now() - INTERVAL 45 DAY GROUP BY day, ticker) SELECT toDateTime(day) AS time, concat(ticker, ' 7d') AS metric, avg(rows) OVER (PARTITION BY ticker ORDER BY day ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS value FROM daily UNION ALL SELECT toDateTime(day) AS time, concat(ticker, ' 30d') AS metric, avg(rows) OVER (PARTITION BY ticker ORDER BY day ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) AS value FROM daily ORDER BY time, metric"
+          "rawSql": "WITH daily AS (SELECT toDate(published_at) AS day, ticker, count() AS rows FROM equity_raw.news_raw FINAL WHERE published_at >= now() - INTERVAL 45 DAY GROUP BY day, ticker) SELECT time, metric, value FROM (SELECT toDateTime(day) AS time, concat(ticker, ' 7d') AS metric, avg(rows) OVER (PARTITION BY ticker ORDER BY day ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS value FROM daily UNION ALL SELECT toDateTime(day) AS time, concat(ticker, ' 30d') AS metric, avg(rows) OVER (PARTITION BY ticker ORDER BY day ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) AS value FROM daily) ORDER BY time ASC, metric ASC"
         }
       ],
       "fieldConfig": {"defaults": {"unit": "short", "min": 0}}

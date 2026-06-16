@@ -255,7 +255,7 @@ endif
 	git push -u origin HEAD
 	gh pr create \
 		--title "QNT-$(QNT): $(TITLE)" \
-		--body "$$(cat <<'EOF'\nCloses QNT-$(QNT)\n\n---\n\nGenerated with [Claude Code](https://claude.com/claude-code)\nEOF\n)"
+		--body "$$(cat <<'EOF'\nCloses QNT-$(QNT)\nEOF\n)"
 
 # ─── Help ─────────────────────────────────────────────────────
 
