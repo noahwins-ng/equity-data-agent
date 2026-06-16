@@ -14,6 +14,7 @@ from dagster import (
 )
 from shared.tickers import TICKERS
 
+from dagster_pipelines.rejects import Reject, record_rejects
 from dagster_pipelines.resources.clickhouse import ClickHouseResource
 from dagster_pipelines.retry_helpers import retry_after_seconds_from_exception
 
@@ -29,6 +30,7 @@ def _extract_periods(
     info: dict,
     ticker: str,
     period_type: str,
+    rejects: list[Reject] | None = None,
 ) -> list[dict]:
     """Extract rows from yfinance financial statement DataFrames.
 
@@ -40,6 +42,9 @@ def _extract_periods(
     while the cells are still empty (QNT-179, AAPL Q2 FY2026 race). Without
     this guard, ``_safe_get``'s zero default lands an all-zero stub row in
     ClickHouse that downstream ratios divide by zero against.
+
+    When a ``rejects`` list is supplied, each skipped period is appended to it
+    (QNT-243) so the drop is recorded to the reject sink rather than vanishing.
     """
     if income_stmt.empty:
         return []
@@ -50,6 +55,15 @@ def _extract_periods(
         if revenue is None:
             # yfinance has the period header but no values yet; skip the
             # whole period so we don't half-ingest a quarter.
+            if rejects is not None:
+                rejects.append(
+                    Reject(
+                        ticker=ticker,
+                        reason="nan_period",
+                        payload={"period_end": str(period_end), "period_type": period_type},
+                        detail="Total Revenue missing/NaN",
+                    )
+                )
             continue
 
         row: dict = {
@@ -168,6 +182,7 @@ def fundamentals(
         return
 
     all_rows: list[dict] = []
+    rejects: list[Reject] = []
 
     # Quarterly financials
     try:
@@ -175,7 +190,7 @@ def fundamentals(
         q_balance = stock.quarterly_balance_sheet
         q_cashflow = stock.quarterly_cashflow
         all_rows.extend(
-            _extract_periods(q_income, q_balance, q_cashflow, info, ticker, "quarterly")
+            _extract_periods(q_income, q_balance, q_cashflow, info, ticker, "quarterly", rejects)
         )
     except Exception as exc:
         context.log.warning("Quarterly data failed for %s: %s", ticker, exc)
@@ -185,9 +200,13 @@ def fundamentals(
         a_income = stock.financials
         a_balance = stock.balance_sheet
         a_cashflow = stock.cashflow
-        all_rows.extend(_extract_periods(a_income, a_balance, a_cashflow, info, ticker, "annual"))
+        all_rows.extend(
+            _extract_periods(a_income, a_balance, a_cashflow, info, ticker, "annual", rejects)
+        )
     except Exception as exc:
         context.log.warning("Annual data failed for %s: %s", ticker, exc)
+
+    record_rejects(context, clickhouse, source_asset="fundamentals", rejects=rejects)
 
     if not all_rows:
         context.log.warning("No fundamental data found for %s — skipping", ticker)
