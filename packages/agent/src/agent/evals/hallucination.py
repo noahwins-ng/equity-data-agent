@@ -7,11 +7,25 @@ enforcement of ADR-003.
 
 Verbatim vs. value-equivalent:
     The AC says "verbatim". We canonicalise away pure formatting differences
-    (leading ``$``, trailing ``%``, comma thousand-separators) so a thesis
-    that writes ``$1,234`` is accepted when the report wrote ``1234`` — that
-    is formatting, not arithmetic. Decimal precision is preserved: a thesis
+    (leading ``$``, trailing ``%``, comma thousand-separators, and a glued
+    magnitude unit — ``$2.5T``/``$14B``/``20k``) so a thesis that writes
+    ``$1,234`` is accepted when the report wrote ``1234`` — that is
+    formatting, not arithmetic. Decimal precision is preserved: a thesis
     that writes ``12.30`` against a report that wrote ``12.3`` IS flagged,
     because changing precision is rounding and rounding is arithmetic.
+
+    Magnitude units (QNT-255 follow-up): news reports quote market caps and
+    deal sizes with a glued scale suffix (``Breaches $2.5T``, ``$14B AI
+    Push``). The model expands these to ``$2.5 trillion`` / ``$14 billion``,
+    writing the bare mantissa. The report's ``$2.5T`` token did not extract a
+    ``2.5`` (the right-boundary rejected the glued ``T``), so the grounded
+    mantissa read as unsupported — a false positive that flagged clean
+    TSLA/META news answers (the QNT-255 clean-window finding). We now strip
+    the unit symmetrically, like ``%``. Blind spot: this collapses scale, so
+    ``$5M`` is accepted against a report ``$5B`` (both → ``5``); accepted for
+    the same reason as the sign / window blind spots below — a misquoted
+    scale is not arithmetic, and the per-section structure / LLM-as-judge
+    surface gross magnitude errors at a higher level.
 
 Sign-magnitude support (QNT-128):
     Reports format YoY changes with explicit signs (``Free cash flow:
@@ -54,8 +68,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 # Match: optional sign, optional $, digits with optional comma-thousands or
-# plain run, optional decimal portion, optional trailing %.
-# Examples that match: 12, 12.3, 1,234, $1,234.56, 25%, -3.5%, +0.42
+# plain run, optional decimal portion, optional trailing %, optional glued
+# magnitude unit.
+# Examples that match: 12, 12.3, 1,234, $1,234.56, 25%, -3.5%, +0.42, $2.5T, $14B
 _NUMBER_RE = re.compile(
     r"""
     (?<![\w.])                  # left boundary: no preceding word-char or dot
@@ -68,13 +83,17 @@ _NUMBER_RE = re.compile(
     )
     (?:\.\d+)?                  # optional decimal part
     %?                          # optional trailing percent
+    (?:bn|tn|mn|[kmbt])?        # optional glued magnitude unit ($2.5T, $14B,
+                                # 20k) — a scale label, not arithmetic. Stripped
+                                # in _canonicalise so report "$14B" and a thesis
+                                # "$14 billion" both reduce to "14". IGNORECASE.
     (?!\w|\.\d)                 # right boundary: not a word-char and not the
                                 # start of another decimal portion. A trailing
                                 # sentence "." or comma IS allowed so "72.5."
                                 # matches as 72.5, while "1.5.3" still does not
                                 # match (avoids version-string partials).
     """,
-    re.VERBOSE,
+    re.VERBOSE | re.IGNORECASE,
 )
 
 # Markdown / list scaffolding that we don't want to count as numeric claims.
@@ -90,6 +109,11 @@ _PERIOD_IDIOM_RE = re.compile(
     r"(?<![\w.])\d+(?:\.\d+)?[-\s](?:year|yr|day|week|wk|month|mo|quarter|qtr)s?\b",
     re.IGNORECASE,
 )
+
+# Magnitude unit glued to a number ($2.5T, $14B, 20k). The (?<=\d) lookbehind
+# ties it to the digits so a bare "K"/"M" is never stripped. Kept in sync with
+# the unit alternation inside _NUMBER_RE.
+_MAGNITUDE_UNIT_RE = re.compile(r"(?<=\d)(?:bn|tn|mn|[kmbt])$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -132,9 +156,11 @@ def _strip_period_idiom(text: str) -> str:
 def _canonicalise(token: str) -> str:
     """Normalise a numeric token to its value form.
 
-    Strips leading ``$``, trailing ``%``, and comma thousand-separators —
-    none of those are arithmetic. Decimal precision (trailing zeros) is
-    preserved on purpose: rounding is arithmetic, so ``12.30`` ≠ ``12.3``.
+    Strips leading ``$``, trailing ``%``, a glued magnitude unit
+    (``$2.5T`` → ``2.5``, ``$14B`` → ``14``, ``20k`` → ``20``), and comma
+    thousand-separators — none of those are arithmetic. Decimal precision
+    (trailing zeros) is preserved on purpose: rounding is arithmetic, so
+    ``12.30`` ≠ ``12.3``.
     """
     cleaned = token.lstrip("+")
     if cleaned.startswith("$"):
@@ -145,6 +171,13 @@ def _canonicalise(token: str) -> str:
         cleaned = "-" + cleaned[2:]
     if cleaned.endswith("%"):
         cleaned = cleaned[:-1]
+    # A magnitude unit glued to the digits ($2.5T / $14B / 20k) is a scale
+    # label, like %/$ — drop it so the report's "$14B" and a thesis's expanded
+    # "$14 billion" both reduce to "14". The (?<=\d) guard keeps it tied to a
+    # number. Blind spot: this also collapses scale, so a thesis "$5M" reads as
+    # supported by a report "$5B" (both → "5"); accepted like the sign /
+    # window blind spots above — a misquoted scale is not arithmetic.
+    cleaned = _MAGNITUDE_UNIT_RE.sub("", cleaned)
     return cleaned.replace(",", "")
 
 

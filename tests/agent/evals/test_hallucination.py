@@ -91,6 +91,71 @@ class TestPeriodIdiom:
         assert result.unsupported == ()
 
 
+class TestMagnitudeUnit:
+    """Numbers glued to a magnitude unit ($2.5T, $14B, 20k) are value-equivalent
+    to their expanded form.
+
+    QNT-255 clean-window finding: news reports quote market caps / deal sizes
+    with a glued scale suffix ("Breaches $2.5T", "$14B AI Push"). The model
+    expands them ("$2.5 trillion", "$14 billion") and writes the bare mantissa.
+    Before the fix the report's "$2.5T" extracted NO "2.5" (the right boundary
+    rejected the glued "T"), so a grounded answer read as hallucinated — the
+    sole cause of the reproducible tsla-news-sentiment / meta-news-sentiment
+    flags on the otherwise-clean QNT-255 sweep.
+    """
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("market cap of $2.5T", {"2.5"}),
+            ("a $14B AI push", {"14"}),
+            ("$2.52 trillion valuation", {"2.52"}),
+            ("raised 20k units", {"20"}),
+            ("$1.05B buyback", {"1.05"}),
+        ],
+    )
+    def test_glued_unit_reduces_to_mantissa(self, text: str, expected: set[str]) -> None:
+        assert set(extract_numbers(text)) == expected
+
+    @pytest.mark.parametrize(
+        "text",
+        ["Q3 earnings", "3D printing", "running 5km", "spread of 2bps", "the 5x multiple"],
+    )
+    def test_non_magnitude_letter_suffix_not_stripped(self, text: str) -> None:
+        # Defence: the unit set is closed to k/m/b/t/bn/tn/mn. A trailing letter
+        # that is not a magnitude unit must NOT cause a spurious bare-number
+        # extraction (Q3/3D/5km/2bps/5x are not "3"/"5"/"2" claims).
+        assert extract_numbers(text) == frozenset()
+
+    def test_real_tsla_market_cap_finding_passes(self) -> None:
+        # Real QNT-255 trace: report headline "Breaches $2.5T", model wrote the
+        # expanded "$2.5 trillion". The bare 2.5 was the sole unsupported number.
+        thesis = "SpaceX hit a $2.5 trillion market cap, past Tesla (source: news)."
+        reports = ["SpaceX Market Cap Breaches $2.5T: Goes Past Tesla, TSMC And Broadcom"]
+        result = check(thesis, reports)
+        assert result.ok
+        assert result.unsupported == ()
+
+    def test_real_meta_deal_size_finding_passes(self) -> None:
+        # Real QNT-255 trace: report headline "$14B AI Push", model wrote
+        # "$14 billion". The bare 14 was the sole unsupported number.
+        thesis = "Meta is making a $14 billion AI push beyond advertising (source: news)."
+        reports = ["Meta's $14B AI Push Faces Growing Pressure to Deliver Results"]
+        result = check(thesis, reports)
+        assert result.ok
+        assert result.unsupported == ()
+
+    def test_rounded_mantissa_with_unit_still_flagged(self) -> None:
+        # Defence: stripping the unit must not also forgive rounding. Report
+        # says $2.52T; a thesis writing $2.5T is a rounded mantissa (2.5 vs
+        # 2.52) and stays flagged — the unit strip is orthogonal to precision.
+        thesis = "valued at $2.5T (source: news)."
+        reports = ["hitting a market cap of $2.52T"]
+        result = check(thesis, reports)
+        assert not result.ok
+        assert "2.5" in result.unsupported
+
+
 class TestCheck:
     """End-to-end behaviour of the hallucination detector."""
 
