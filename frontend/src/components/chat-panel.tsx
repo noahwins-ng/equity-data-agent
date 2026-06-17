@@ -214,12 +214,14 @@ function EmptyState({
     );
   }
   const suggestions = emptyStateSuggestions(ticker);
-  // Anchor at the top of the scroll area rather than vertically centering
-  // (audit #21): a centered cluster left large dead space above AND below the
-  // four buttons. Top-aligned with a short capability blurb, the suggestions
-  // read as the opening of a conversation that grows downward.
+  // Vertically centre the empty-state cluster. The earlier top-anchor (audit
+  // #21) was a reaction to dead space, but with no runs yet the panel is mostly
+  // void below a top-clinging block — centering reads as a deliberate "start
+  // here" focal point. This only affects runs.length === 0; once the first run
+  // streams in, RunBlock takes over (top-anchored, grows downward), so there is
+  // no jump-from-the-middle.
   return (
-    <div className="flex h-full flex-col gap-4 px-4 py-6">
+    <div className="flex h-full flex-col justify-center gap-4 px-4 py-6">
       <div className="space-y-1">
         <p className="text-sm font-medium text-zinc-200">Research {ticker}</p>
         <p className="text-xs leading-relaxed text-zinc-500">
