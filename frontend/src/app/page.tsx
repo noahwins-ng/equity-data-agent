@@ -91,12 +91,17 @@ export default async function Home() {
   const ranked = rows
     .filter((r) => r.daily_change_pct !== null)
     .sort((a, b) => (b.daily_change_pct ?? 0) - (a.daily_change_pct ?? 0));
-  const gainers = ranked.slice(0, 4);
-  // Start losers no earlier than index 4 so the two columns never share a
-  // ticker when fewer than 8 names have a non-null daily_change_pct (e.g. a
-  // partial-ingest day on the 10-ticker universe).
-  const losers = ranked.slice(Math.max(4, ranked.length - 4)).reverse();
-  const hasMovers = ranked.length > 0;
+  // Partition by SIGN, not by rank position. Slicing top-4 / bottom-4 by
+  // position meant an all-green day put the 4 smallest gains (still positive,
+  // still green) under "Top losers" — a self-contradictory `+1.2%` loser. A
+  // column only exists when there is real movement in its direction: on an
+  // all-green day the losers column simply doesn't render (and vice versa).
+  const gainers = ranked.filter((r) => (r.daily_change_pct ?? 0) > 0).slice(0, 4);
+  const losers = ranked
+    .filter((r) => (r.daily_change_pct ?? 0) < 0)
+    .slice(-4)
+    .reverse(); // most-negative first
+  const hasMovers = gainers.length > 0 || losers.length > 0;
 
   return (
     <div className="mx-auto flex h-full w-full max-w-3xl flex-col justify-center gap-10 p-6 md:p-10">
