@@ -187,16 +187,19 @@ export function AppShell({ children, watchlist }: Props) {
           {children}
         </main>
 
-        <div className="hidden md:flex md:min-h-0 md:flex-col xl:col-start-3">
+        {/* QNT-256: ONE ChatPanel instance, positioned by CSS (mirrors the
+            watchlist node above). On <md it is an absolute overlay gated
+            visible by `mobilePanel === "chat"`; on md+ it is the static grid
+            rail. Never conditionally mounted — so closing the mobile overlay
+            only hides it and the runs/thread_id state survives reopen. */}
+        <div
+          className={`absolute inset-x-0 bottom-0 top-0 z-40 min-h-0 flex-col md:static md:inset-auto md:z-auto md:flex xl:col-start-3 ${
+            mobilePanel === "chat" ? "flex" : "hidden md:flex"
+          }`}
+        >
           <ChatPanel />
         </div>
       </div>
-
-      {mobilePanel === "chat" && (
-        <div className="absolute inset-x-0 bottom-0 top-10 z-40 md:hidden">
-          <ChatPanel />
-        </div>
-      )}
     </>
   );
 }
