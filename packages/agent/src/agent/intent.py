@@ -50,7 +50,7 @@ from typing import Literal
 
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
-from shared.tickers import TICKERS
+from shared.tickers import TICKER_NAME_ALIASES, TICKERS
 
 from agent.llm import SMALL_NODE_ALIAS, get_llm
 from agent.prompts import SIMPLE_GREETING_INPUTS, ConversationMessage
@@ -517,11 +517,35 @@ def has_comparison_phrase(question: str) -> bool:
 _SHORT_QUESTION_WORD_LIMIT = 12
 
 # A comparison ask must name at least 2 tickers from our coverage list AND
-# carry a comparison phrase. Heuristic accepts the upper-cased symbol on a
-# word boundary (no slashes — ``$NVDA`` and ``NVDA's`` are tolerated by the
-# strip later, but the boundary check is alpha-only).
-_TICKER_BOUNDARY_RE = re.compile(
-    r"(?<![A-Za-z])(" + "|".join(re.escape(t) for t in TICKERS) + r")(?![A-Za-z])"
+# carry a comparison phrase. ``extract_tickers`` accepts either the symbol or
+# the company name on an alpha word boundary (no slashes — ``$NVDA`` and
+# ``NVDA's`` are tolerated by the strip later).
+#
+# QNT-257: company-name -> ticker resolution. ``extract_tickers`` recognises the
+# plain company name a user types ("micron", "google", "tesla"), not just the
+# symbol, so a name-only chat ask no longer bounces to the clarify node. The
+# alias data lives next to the registry in ``shared.tickers``; this layer only
+# compiles it into a matcher.
+#
+# One combined regex matches either a symbol OR a name alias, case-insensitively
+# on alpha word boundaries. The alternation tokens are lower-cased and set-deduped
+# (matching is IGNORECASE, so a symbol whose short name equals it -- META vs the
+# "Meta" alias -- would otherwise be a redundant alternative), then sorted
+# longest-first so a multi-word alias ("Advanced Micro Devices") wins over any
+# contained token. Each match is mapped back to its ticker via
+# ``_NAME_ALIAS_TO_TICKER`` (symbols resolve to themselves).
+_TICKERS_SET: frozenset[str] = frozenset(TICKERS)
+_NAME_ALIAS_TO_TICKER: dict[str, str] = {
+    alias.lower(): ticker for ticker, aliases in TICKER_NAME_ALIASES.items() for alias in aliases
+}
+_REFERENCE_TOKENS: list[str] = sorted(
+    {token.lower() for token in (*TICKERS, *_NAME_ALIAS_TO_TICKER.keys())},
+    key=len,
+    reverse=True,
+)
+_TICKER_REFERENCE_RE = re.compile(
+    r"(?<![A-Za-z])(" + "|".join(re.escape(t) for t in _REFERENCE_TOKENS) + r")(?![A-Za-z])",
+    re.IGNORECASE,
 )
 
 
@@ -539,15 +563,25 @@ def _matches_any(text: str, tokens: tuple[str, ...]) -> str | None:
 
 
 def extract_tickers(text: str) -> list[str]:
-    """Return the unique tickers from ``shared.tickers.TICKERS`` mentioned
-    in ``text``, in first-occurrence order.
+    """Return the unique tickers mentioned in ``text``, in first-occurrence order.
+
+    Matches both the literal symbol (``MU``) and the company name a user types
+    (``micron``), case-insensitively on alpha word boundaries (QNT-257). A
+    symbol and its name in the same question collapse to one entry ("compare
+    Micron and MU" -> ``["MU"]``).
 
     Public so the graph can reuse the same parser for the comparison node
     without duplicating the regex.
     """
     seen: list[str] = []
-    for match in _TICKER_BOUNDARY_RE.finditer(text.upper()):
-        ticker = match.group(1)
+    for match in _TICKER_REFERENCE_RE.finditer(text):
+        token = match.group(1)
+        # Every matched token came from TICKERS or _NAME_ALIAS_TO_TICKER (the only
+        # alternation sources), so the lookup below can't KeyError: a non-symbol
+        # match is always a known alias key.
+        ticker = (
+            token.upper() if token.upper() in _TICKERS_SET else _NAME_ALIAS_TO_TICKER[token.lower()]
+        )
         if ticker not in seen:
             seen.append(ticker)
     return seen

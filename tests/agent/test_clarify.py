@@ -168,6 +168,16 @@ def test_detect_ambiguity_focused_no_ticker(intent: str) -> None:
     assert _detect_ambiguity(intent, "what's the read?", has_prior_turn=False) == "needs_ticker"  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize(
+    "question",
+    ["what's the thesis of micron", "is intel a buy?", "thoughts on Tesla"],
+)
+def test_detect_ambiguity_company_name_only_passes(question: str) -> None:
+    """QNT-257: a name-only ask (no symbol, no URL ticker, no prior turn) now
+    resolves via extract_tickers and proceeds instead of bouncing to clarify."""
+    assert _detect_ambiguity("thesis", question, has_prior_turn=False) is None
+
+
 @pytest.mark.parametrize("question", ["What do you think?", "Your thoughts?", "what's your take"])
 def test_detect_ambiguity_view_gesture_conversational(question: str) -> None:
     """QNT-214 follow-up: the LLM mislabels a bare 'what do you think?' as

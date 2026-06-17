@@ -137,7 +137,7 @@ Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`
 
 ## Ticker Scope
 
-10 US equities — defined in `packages/shared/src/shared/tickers.py`. Adding or removing a ticker touches three registry structures plus several backfill surfaces and an eval-golden sweep — follow `docs/guides/ticker-lifecycle.md`. Never hardcode ticker lists in business logic.
+10 US equities — defined in `packages/shared/src/shared/tickers.py`. Adding or removing a ticker touches four registry structures plus several backfill surfaces and an eval-golden sweep — follow `docs/guides/ticker-lifecycle.md`. Never hardcode ticker lists in business logic.
 
 ## Working Docs
 

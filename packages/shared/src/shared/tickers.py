@@ -352,3 +352,54 @@ assert set(NEWS_RELEVANCE.keys()) == set(TICKERS), (
     "NEWS_RELEVANCE must cover every TICKERS entry. Adding a ticker requires "
     "a relevance config entry here so news ingest can keep/drop its articles."
 )
+
+# QNT-257: company-name -> ticker resolution for the agent. The chat ticker
+# parser (agent.intent.extract_tickers) historically matched only the literal
+# symbol, so "thesis on micron" resolved to nothing and bounced to the clarify
+# node, while "thesis on MU" worked. This map lets the parser recognise the
+# plain company name a user actually types.
+#
+# Deliberately CONSERVATIVE and distinct from NEWS_RELEVANCE.aliases: the news
+# aliases are tuned for article keep/drop (they include exec names like "Musk"
+# and product brands like "AWS"/"Azure"/"CUDA"), which over-resolve in chat
+# prose. Here we list only the company name + the common short name a user would
+# type. No exec names, no product brands (out of scope per QNT-257). The bare
+# symbol is matched separately by the parser, so it is NOT repeated here.
+#
+# Collision notes (accepted trade-offs, pinned in tests/agent/test_intent.py):
+#   * "Meta"/"Facebook" -> META. Matched on word boundary, so "metadata" /
+#     "metaphor" do NOT resolve; a standalone "meta" token does (rare in an
+#     equities chat).
+#   * "Intel" -> INTC. Lowercase "intel" meaning "intelligence" is a theoretical
+#     collision, but a chat ask naming "intel" is overwhelmingly the company.
+#   * Common-word names ("apple", "amazon", "google", "tesla", "micron") are
+#     themselves English/unit words, so "tesla coil", "apple juice", "amazon
+#     rainforest", "sub-micron" resolve to the ticker. This is the deliberate
+#     cost of plain-name resolution at the conservative cut: you cannot catch
+#     "what's tesla's thesis" without also catching "tesla coil" unless you add
+#     context-aware NER (out of scope). The boundary is alpha-only on purpose --
+#     tightening it to block hyphens would also drop legitimate "Micron-based" /
+#     "Tesla-built" mentions. These are pinned as accepted in
+#     test_extract_tickers_accepted_common_word_collisions; revisit with an
+#     entity-disambiguation pass if any becomes loud in production.
+#
+# Adding a ticker requires an entry here; the assert below enforces coverage so
+# the registry and this map can never drift (mirrors NEWS_RELEVANCE / metadata).
+TICKER_NAME_ALIASES: dict[str, list[str]] = {
+    "NVDA": ["Nvidia"],
+    "AAPL": ["Apple"],
+    "MSFT": ["Microsoft"],
+    "GOOGL": ["Google", "Alphabet"],
+    "AMZN": ["Amazon"],
+    "META": ["Meta", "Facebook"],
+    "TSLA": ["Tesla"],
+    "MU": ["Micron"],
+    "AMD": ["Advanced Micro Devices"],
+    "INTC": ["Intel"],
+}
+
+assert set(TICKER_NAME_ALIASES.keys()) == set(TICKERS), (
+    "TICKER_NAME_ALIASES must cover every TICKERS entry. Adding a ticker "
+    "requires a company-name alias entry here so the agent's chat parser can "
+    "resolve the plain company name, not just the symbol."
+)
