@@ -1,10 +1,10 @@
 # Ticker Lifecycle — Adding & Removing a Symbol
 
 The "adding a ticker = adding one string" claim is folklore. In reality a ticker
-touches **three registry structures** in one file, **several backfill surfaces**
+touches **four registry structures** in one file, **several backfill surfaces**
 across the medallion, the **frontend logo set**, and an **eval-golden sweep**.
-This guide is the runbook. Two load-time asserts in
-`packages/shared/src/shared/tickers.py` keep the three registry structures
+This guide is the runbook. Three load-time asserts in
+`packages/shared/src/shared/tickers.py` keep the four registry structures
 honest; everything else is process.
 
 The portfolio is fixed at **10 tickers** (`TICKERS`) plus a benchmark set
@@ -18,8 +18,9 @@ land, remove second).
 
 ### 1. Registry edits — `packages/shared/src/shared/tickers.py`
 
-All three are in one file. The module-load asserts will refuse to import if you
-miss `TICKER_METADATA` or `NEWS_RELEVANCE`, so you cannot half-add a ticker.
+All four are in one file. The module-load asserts will refuse to import if you
+miss `TICKER_METADATA`, `NEWS_RELEVANCE`, or `TICKER_NAME_ALIASES`, so you cannot
+half-add a ticker.
 
 1. **`TICKERS`** — append the symbol string.
 
@@ -38,6 +39,16 @@ miss `TICKER_METADATA` or `NEWS_RELEVANCE`, so you cannot half-add a ticker.
    `scope="any"` tickers the bare symbol **must** be in `aliases`
    (`test_news_relevance.py` enforces this). The `set(NEWS_RELEVANCE) ==
    set(TICKERS)` assert enforces coverage.
+
+4. **`TICKER_NAME_ALIASES`** (QNT-257) — the company name + common short name a
+   user types in chat (e.g. `"GOOGL": ["Google", "Alphabet"]`). The agent's
+   ticker parser (`agent.intent.extract_tickers`) matches these so a name-only
+   ask ("thesis on micron") resolves instead of bouncing to the clarify node.
+   Keep it **conservative**: company / short name only — NOT exec names or
+   product brands (those over-resolve in prose; that's why this is separate from
+   `NEWS_RELEVANCE.aliases`). Do **not** repeat the bare symbol (matched
+   separately). The `set(TICKER_NAME_ALIASES) == set(TICKERS)` assert enforces
+   coverage; `test_ticker_name_aliases.py` pins the invariants.
 
 Run the asserts + config tests before touching data:
 
@@ -114,9 +125,9 @@ the bound against the new ticker's real data — don't explain the WARN away
 
 ### 1. Registry edits
 
-Delete the symbol from **all three** structures in `tickers.py` (`TICKERS`,
-`TICKER_METADATA`, `NEWS_RELEVANCE`). The two load-time asserts keep them in
-sync — drop it from `TICKERS` only and import fails.
+Delete the symbol from **all four** structures in `tickers.py` (`TICKERS`,
+`TICKER_METADATA`, `NEWS_RELEVANCE`, `TICKER_NAME_ALIASES`). The three load-time
+asserts keep them in sync — drop it from `TICKERS` only and import fails.
 
 ### 2. Dagster partitions
 

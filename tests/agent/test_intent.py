@@ -277,6 +277,75 @@ def test_extract_tickers_handles_ordering_and_dupes() -> None:
     assert extract_tickers("nvdaily") == []
 
 
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        # QNT-257: plain company name resolves to the ticker (the symptom).
+        ("what's the thesis of micron", ["MU"]),
+        ("what's the thesis of Micron", ["MU"]),
+        ("google vs tesla", ["GOOGL", "TSLA"]),
+        ("is Apple a buy?", ["AAPL"]),
+        ("thoughts on Alphabet", ["GOOGL"]),
+        ("how does Advanced Micro Devices look", ["AMD"]),
+    ],
+)
+def test_extract_tickers_resolves_company_names(question: str, expected: list[str]) -> None:
+    from agent.intent import extract_tickers
+
+    assert extract_tickers(question) == expected
+
+
+def test_extract_tickers_collapses_symbol_and_name() -> None:
+    """A symbol and its company name in one question yield one entry (QNT-257)."""
+    from agent.intent import extract_tickers
+
+    assert extract_tickers("compare Micron and MU") == ["MU"]
+    assert extract_tickers("MU vs micron") == ["MU"]
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        # Collision guards (QNT-257): accepted resolutions for prose-colliding names.
+        ("is intel a buy?", ["INTC"]),
+        ("news on Facebook", ["META"]),
+        ("thesis on Meta", ["META"]),
+        # ...and the no-false-positive cases the word boundary protects.
+        ("show me the metadata for this run", []),
+        ("any intelligence on the sector?", []),
+    ],
+)
+def test_extract_tickers_collision_guards(question: str, expected: list[str]) -> None:
+    from agent.intent import extract_tickers
+
+    assert extract_tickers(question) == expected
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        # ACCEPTED trade-offs (QNT-257): the company short name is itself an
+        # English/unit word, so these resolve to the ticker. This is the
+        # deliberate cost of plain-name resolution — you can't catch "tesla's
+        # thesis" without also catching "tesla coil" absent context-aware NER
+        # (out of scope). Pinned so a future alias widener sees the risk surface;
+        # the alpha-only boundary is intentional (blocking hyphens would drop
+        # legitimate "Micron-based" / "Tesla-built").
+        ("a tesla coil experiment", ["TSLA"]),
+        ("apple juice recipe", ["AAPL"]),
+        ("the amazon rainforest", ["AMZN"]),
+        ("just google it", ["GOOGL"]),
+        ("sub-micron lithography", ["MU"]),
+    ],
+)
+def test_extract_tickers_accepted_common_word_collisions(
+    question: str, expected: list[str]
+) -> None:
+    from agent.intent import extract_tickers
+
+    assert extract_tickers(question) == expected
+
+
 def test_llm_fallback_returns_comparison(monkeypatch: pytest.MonkeyPatch) -> None:
     """Heuristic returns None → LLM picks comparison."""
     _patch_llm_pipeline(monkeypatch, IntentDecision(intent="comparison"))
