@@ -44,6 +44,34 @@ class OHLCVRow(BaseModel):
 
 ---
 
+## Adding a Source-Boundary Data Contract (shared)
+
+**Location**: `packages/shared/src/shared/contracts.py` (QNT-259)
+
+**Pattern**: A Pandera `DataFrameSchema` per ingestion source is the executable spec of the *shape* the source hands us. The ingestion asset calls `validate_contract(df, <SOURCE>_CONTRACT)` before any DB write. Two-tier policy:
+- **Schema violation** (renamed/missing column, dtype change, empty frame) → `validate_contract` raises `SchemaContractViolation`. Left uncaught in the asset, it hard-fails the partition and fires the QNT-62 Discord run-failure sensor.
+- **Value violation** (out-of-range/bad-enum cell) → returned in `ContractResult.value_rejects`; the asset maps them to `Reject(reason="contract_value_violation", ...)` and routes to the `ingest_rejects` sink. Clean rows proceed.
+
+```python
+result = validate_contract(df, OHLCV_CONTRACT)   # raises on schema drift
+df = result.valid_df
+if result.value_rejects:
+    record_rejects(context, clickhouse, source_asset="ohlcv_raw", rejects=[
+        Reject(ticker=ticker, reason="contract_value_violation",
+               payload={"column": r.column, "value": r.failure_case, "check": r.check})
+        for r in result.value_rejects
+    ])
+```
+
+**Conventions**:
+- `strict=False` (tolerate extra/reordered columns — they don't break us) and `coerce=False` (so dtype drift is *detected*, not silently coerced).
+- Pin dtypes only where drift is meaningful and the payload is stable; make benign-NaN columns `nullable=True` so clean inputs aren't newly quarantined.
+- A new source (e.g. EDGAR 8-K) reuses this: add a `*_CONTRACT`, wire one `validate_contract` call.
+
+**Evolving a contract**: when a source *legitimately* changes shape, bump the `*_CONTRACT` in the same commit (diff-visible, same discipline as a ClickHouse migration) and update the fixtures in `tests/dagster/test_source_contracts.py`. Never widen a contract just to silence an alert. Full steps in the `contracts.py` module docstring.
+
+---
+
 ## Adding a Dagster Resource
 
 **Location**: `packages/dagster-pipelines/src/dagster_pipelines/resources/<name>.py`

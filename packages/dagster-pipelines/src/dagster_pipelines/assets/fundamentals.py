@@ -12,6 +12,7 @@ from dagster import (
     StaticPartitionsDefinition,
     asset,
 )
+from shared.contracts import FUNDAMENTALS_CONTRACT, validate_contract
 from shared.tickers import TICKERS
 
 from dagster_pipelines.rejects import Reject, record_rejects
@@ -206,13 +207,30 @@ def fundamentals(
     except Exception as exc:
         context.log.warning("Annual data failed for %s: %s", ticker, exc)
 
-    record_rejects(context, clickhouse, source_asset="fundamentals", rejects=rejects)
-
     if not all_rows:
         context.log.warning("No fundamental data found for %s — skipping", ticker)
+        record_rejects(context, clickhouse, source_asset="fundamentals", rejects=rejects)
         return
 
     df = pd.DataFrame(all_rows)
+
+    # Source-boundary contract (QNT-259): validate the assembled per-period frame
+    # before any DB write. A schema violation (renamed/missing column, dtype
+    # drift) raises and hard-fails the partition -> QNT-62 Discord sensor; a
+    # value violation (period_type outside the enum, negative shares) routes to
+    # the ingest_rejects sink alongside the nan_period drops above.
+    result = validate_contract(df, FUNDAMENTALS_CONTRACT)
+    df = result.valid_df
+    rejects.extend(
+        Reject(
+            ticker=ticker,
+            reason="contract_value_violation",
+            payload={"column": r.column, "value": r.failure_case, "check": r.check},
+        )
+        for r in result.value_rejects
+    )
+
+    record_rejects(context, clickhouse, source_asset="fundamentals", rejects=rejects)
 
     # Ensure correct types for ClickHouse
     df["shares_outstanding"] = df["shares_outstanding"].astype("int64")

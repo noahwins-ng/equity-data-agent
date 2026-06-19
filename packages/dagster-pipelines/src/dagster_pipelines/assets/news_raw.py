@@ -34,6 +34,7 @@ from dagster import (
     StaticPartitionsDefinition,
     asset,
 )
+from shared.contracts import NEWS_RAW_CONTRACT, validate_contract
 from shared.tickers import NEWS_RELEVANCE, TICKERS
 
 from dagster_pipelines.news_feeds import (
@@ -231,6 +232,13 @@ def news_raw(
         # rejected_rows metric has no gaps for the QNT-240 dashboard.
         record_rejects(context, clickhouse, source_asset="news_raw", rejects=[])
         return
+
+    # Source-boundary contract (QNT-259): validate the raw Finnhub frame before
+    # per-article processing, so a renamed/missing Finnhub key hard-fails the
+    # partition (-> QNT-62 Discord sensor) instead of silently degrading every
+    # article to an "unusable" reject. Schema-tier only; per-row value handling
+    # stays in _article_to_row below.
+    validate_contract(pd.DataFrame(articles), NEWS_RAW_CONTRACT)
 
     # One pooled client for all redirect resolutions in this partition.
     # Connection reuse is the difference between ~30 ms/call (warm pool) and
