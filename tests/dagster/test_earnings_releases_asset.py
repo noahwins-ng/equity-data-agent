@@ -36,6 +36,12 @@ _TABLE = "equity_raw.earnings_releases_raw"
 @dataclass
 class _RecordingClickHouse:
     inserts: list[tuple[str, pd.DataFrame]] = field(default_factory=list)
+    # Accessions the table already holds for the partition ticker — the
+    # skip-already-ingested short-circuit queries these before any fetch.
+    existing_accessions: list[str] = field(default_factory=list)
+
+    def query_df(self, query: str, parameters: dict | None = None) -> pd.DataFrame:
+        return pd.DataFrame({"accession": self.existing_accessions})
 
     def insert_df(self, table: str, df: pd.DataFrame) -> None:
         self.inserts.append((table, df))
@@ -178,3 +184,55 @@ def test_asset_idempotent_doc_id_across_runs(monkeypatch) -> None:
         doc_ids.append(int(ch.table_rows().iloc[0]["doc_id"]))
 
     assert doc_ids[0] == doc_ids[1]
+
+
+def test_asset_skips_already_ingested_filings(monkeypatch) -> None:
+    """A discovered filing whose accession is already stored must NOT be
+    re-resolved or re-fetched — the skip-already-ingested short-circuit avoids
+    the two redundant EDGAR requests per stored release on steady-state weeks."""
+    new = _filing("0001045810-26-000051", date(2026, 5, 20))
+    old = _filing("0001045810-25-000228", date(2025, 11, 19))
+    resolve_calls: list[str] = []
+    fetch_calls: list[str] = []
+
+    def _resolve(f, client):
+        resolve_calls.append(f.accession)
+        return ("EX-99.1", f"https://sec.gov/{f.accession}.htm")
+
+    def _body(u, client):
+        fetch_calls.append(u)
+        return "Headline\nBody prose for the quarter."
+
+    _patch_edgar(monkeypatch, filings=[new, old], resolve=_resolve, body=_body)
+
+    ch = _RecordingClickHouse(existing_accessions=[old.accession])
+    ctx = build_asset_context(partition_key="NVDA")
+    earnings_releases_raw(ctx, EarningsReleasesConfig(), clickhouse=ch)  # type: ignore[arg-type]
+
+    # Only the new filing was resolved/fetched; the already-ingested one skipped.
+    assert resolve_calls == [new.accession]
+    assert len(fetch_calls) == 1
+    rows = ch.table_rows()
+    assert list(rows["accession"]) == [new.accession]
+
+
+def test_asset_no_new_filings_skips_insert(monkeypatch) -> None:
+    """When every discovered filing is already ingested, the asset fetches
+    nothing, writes no rows, and still emits the 0-count reject metric."""
+    f = _filing("0001045810-25-000228", date(2025, 11, 19))
+    resolved = False
+
+    def _resolve(filing, client):
+        nonlocal resolved
+        resolved = True
+        return ("EX-99.1", "https://sec.gov/x.htm")
+
+    _patch_edgar(monkeypatch, filings=[f], resolve=_resolve, body=lambda u, client: "x\ny")
+
+    ch = _RecordingClickHouse(existing_accessions=[f.accession])
+    ctx = build_asset_context(partition_key="NVDA")
+    earnings_releases_raw(ctx, EarningsReleasesConfig(), clickhouse=ch)  # type: ignore[arg-type]
+
+    assert resolved is False  # never reached the fetch path
+    assert ch.table_rows().empty
+    assert ch.reject_rows().empty  # 0-count emitted as metadata, no rows written
