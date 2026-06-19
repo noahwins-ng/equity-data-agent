@@ -13,6 +13,7 @@ from dagster import (
     StaticPartitionsDefinition,
     asset,
 )
+from shared.contracts import OHLCV_CONTRACT, validate_contract
 from shared.tickers import ALL_OHLCV_TICKERS
 
 from dagster_pipelines.rejects import Reject, record_rejects
@@ -116,6 +117,27 @@ def ohlcv_raw(
     df = df.reset_index()
     df.columns = [str(c).lower().replace(" ", "_") for c in df.columns]
     # Columns after normalisation: date, open, high, low, close, adj_close, volume
+
+    # Source-boundary contract (QNT-259): validate the shape yfinance handed us
+    # before any DB write. A schema violation (renamed/missing column, dtype
+    # drift) raises and hard-fails the partition -> QNT-62 Discord sensor; a
+    # value violation (negative volume) routes to the ingest_rejects sink.
+    result = validate_contract(df, OHLCV_CONTRACT)
+    df = result.valid_df
+    if result.value_rejects:
+        record_rejects(
+            context,
+            clickhouse,
+            source_asset="ohlcv_raw",
+            rejects=[
+                Reject(
+                    ticker=ticker,
+                    reason="contract_value_violation",
+                    payload={"column": r.column, "value": r.failure_case, "check": r.check},
+                )
+                for r in result.value_rejects
+            ],
+        )
 
     df["ticker"] = ticker
     df["date"] = pd.to_datetime(df["date"]).dt.date

@@ -5,6 +5,7 @@ requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.10.0",
     "pydantic-settings>=2.7.0",
+    "pandera>=0.20.0",
 ]
 
 [build-system]
