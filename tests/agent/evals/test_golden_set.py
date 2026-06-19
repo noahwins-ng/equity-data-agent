@@ -161,8 +161,12 @@ class TestRunRecord:
         stub_judge: MagicMock,  # noqa: ARG002
     ) -> None:
         # If one ticker breaks, the sweep must keep going; run_record swallows
-        # the graph exception and returns a failing outcome.
-        def boom(_tools: object) -> object:
+        # the graph exception and returns a failing outcome. Accept **kwargs so
+        # the stub tolerates build_graph's compact_company_tool= call path
+        # regardless of routing (matches the sibling boom stubs below) -- without
+        # it the stub raises TypeError instead of the intended RuntimeError when
+        # the record routes through the company-report path, a test-order flake.
+        def boom(_tools: object, **_kwargs: object) -> object:
             raise RuntimeError("graph broken")
 
         monkeypatch.setattr(golden_set, "build_graph", boom)

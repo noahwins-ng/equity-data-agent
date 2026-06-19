@@ -16,6 +16,7 @@ assert on the side effects (sleep duration, raised exception).
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from datetime import date
 from importlib import import_module
@@ -65,11 +66,20 @@ def captured_sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     assert on the first element (the Retry-After sleep); the rate-limit
     sleep at the end never fires here because the asset re-raises before
     reaching it.
+
+    ``_OHLCV_MODULE.time`` is the global ``time`` module singleton, so patching
+    its ``sleep`` replaces ``time.sleep`` process-wide -- a background thread
+    (httpx connection pool, Langfuse flush) that sleeps during the test would
+    otherwise leak a stray entry into ``sleeps`` and flake the assertion. The
+    asset under test runs synchronously on the test's main thread, so only
+    main-thread sleeps are recorded.
     """
     sleeps: list[float] = []
+    main_thread = threading.main_thread()
 
     def _record(seconds: float) -> None:
-        sleeps.append(seconds)
+        if threading.current_thread() is main_thread:
+            sleeps.append(seconds)
 
     monkeypatch.setattr(_OHLCV_MODULE.time, "sleep", _record)
     monkeypatch.setattr(_FUND_MODULE.time, "sleep", _record)
