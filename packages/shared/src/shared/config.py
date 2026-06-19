@@ -80,6 +80,12 @@ class Settings(BaseSettings):
     # ingest is offline; news_raw asset surfaces a clear error on first call.
     FINNHUB_API_KEY: str = ""
 
+    # SEC EDGAR 8-K earnings-release ingestion (QNT-260). SEC fair-use requires
+    # a declared User-Agent carrying a contact address; there is no API key.
+    # https://www.sec.gov/os/webmaster-faq#developers — keep the email current so
+    # SEC can reach us before rate-limiting. Override via env in prod.
+    SEC_EDGAR_USER_AGENT: str = "equity-data-agent noahwins.dev@gmail.com"
+
     # Provenance strip values surfaced by /api/v1/health (QNT-132).
     # Single source of truth for the data-driven UI bottom strip — vendor swap
     # or schedule shift updates the API, frontend re-renders without a deploy.

@@ -1,4 +1,6 @@
 from dagster_pipelines.assets.aggregation import ohlcv_monthly, ohlcv_weekly
+from dagster_pipelines.assets.earnings_embeddings import earnings_embeddings
+from dagster_pipelines.assets.earnings_releases_raw import earnings_releases_raw
 from dagster_pipelines.assets.fundamental_summary import fundamental_summary
 from dagster_pipelines.assets.fundamentals import fundamentals
 from dagster_pipelines.assets.indicators import (
@@ -11,6 +13,8 @@ from dagster_pipelines.assets.news_raw import news_raw
 from dagster_pipelines.assets.ohlcv_raw import ohlcv_raw
 
 __all__ = [
+    "earnings_embeddings",
+    "earnings_releases_raw",
     "fundamental_summary",
     "fundamentals",
     "news_embeddings",

@@ -48,6 +48,12 @@ news_raw_job = define_asset_job(
     tags=DEPLOY_WINDOW_RUN_RETRY_TAGS,
 )
 
+earnings_releases_job = define_asset_job(
+    name="earnings_releases_job",
+    selection=AssetSelection.assets("earnings_releases_raw"),
+    tags=DEPLOY_WINDOW_RUN_RETRY_TAGS,
+)
+
 
 # ── Schedules ─────────────────────────────────────────────────
 
@@ -162,5 +168,35 @@ def news_raw_schedule(context: ScheduleEvaluationContext):
     for ticker in TICKERS:
         yield RunRequest(
             run_key=f"news_raw_{ticker}_{ts}",
+            partition_key=ticker,
+        )
+
+
+# Earnings releases are quarterly, so a weekly poll is ample — it catches each
+# new 8-K within a week of filing without re-fetching unchanged exhibits daily.
+# Sat 23:00 ET is clear of every other schedule (ohlcv weekday 17:00 + monthly
+# 1st 06:00, fundamentals Sun 22:00, news daily 02:00), so its 10-partition
+# fan-out — plus the sensor-triggered earnings_embeddings runs — never overlaps
+# another job's window. Both assets are I/O-bound (EDGAR HTTP / Qdrant cloud
+# inference), low-memory like news; runs drain 3-at-a-time under
+# max_concurrent_runs: 3 (QNT-113) at mem_limit: 3g (QNT-116) — slower, not
+# unsafe (concurrency pre-flight per docs/patterns.md).
+@schedule(
+    job=earnings_releases_job,
+    cron_schedule="0 23 * * 6",  # 23:00 ET, Saturday
+    execution_timezone="America/New_York",
+    default_status=DefaultScheduleStatus.RUNNING,
+)
+def earnings_releases_schedule(context: ScheduleEvaluationContext):
+    """Weekly 8-K earnings-release refresh via SEC EDGAR (QNT-260).
+
+    Discovers Item 2.02 filings in a rolling ~15-month window per ticker and
+    upserts the cleaned EX-99.1 narrative. Idempotent on ReplacingMergeTree, so
+    re-discovering an already-stored release is a no-op merge.
+    """
+    ts = context.scheduled_execution_time.isoformat() if context.scheduled_execution_time else ""
+    for ticker in TICKERS:
+        yield RunRequest(
+            run_key=f"earnings_releases_{ticker}_{ts}",
             partition_key=ticker,
         )

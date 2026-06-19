@@ -55,6 +55,16 @@ news_downstream_job = define_asset_job(
     tags=DEPLOY_WINDOW_RUN_RETRY_TAGS,
 )
 
+# QNT-260: earnings_embeddings embeds server-side via Qdrant Cloud Inference,
+# same I/O-bound profile as news_embeddings — no concurrency rule needed; fans
+# out under max_concurrent_runs: 3 alongside the others.
+earnings_downstream_job = define_asset_job(
+    name="earnings_downstream_job",
+    selection=AssetSelection.assets("earnings_embeddings"),
+    op_retry_policy=DEPLOY_WINDOW_RETRY,
+    tags=DEPLOY_WINDOW_RUN_RETRY_TAGS,
+)
+
 
 # ── Sensors ───────────────────────────────────────────────────
 
@@ -124,4 +134,10 @@ news_raw_sensor = _build_materialization_sensor(
     name="news_raw_sensor",
     asset_key=AssetKey("news_raw"),
     job=news_downstream_job,
+)
+
+earnings_releases_sensor = _build_materialization_sensor(
+    name="earnings_releases_sensor",
+    asset_key=AssetKey("earnings_releases_raw"),
+    job=earnings_downstream_job,
 )
