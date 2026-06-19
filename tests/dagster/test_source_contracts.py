@@ -25,6 +25,7 @@ from dagster_pipelines.assets.fundamentals import fundamentals
 from dagster_pipelines.assets.ohlcv_raw import OHLCVConfig, ohlcv_raw
 from dagster_pipelines.rejects import REJECTS_TABLE
 from shared.contracts import (
+    EARNINGS_RELEASE_CONTRACT,
     FUNDAMENTALS_CONTRACT,
     NEWS_RAW_CONTRACT,
     OHLCV_CONTRACT,
@@ -290,3 +291,56 @@ def test_clean_inputs_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
     assert ch.reject_rows().empty
     ohlcv_writes = [df for table, df in ch.inserts if table == "equity_raw.ohlcv_raw"]
     assert len(ohlcv_writes) == 1 and len(ohlcv_writes[0]) == 2
+
+
+# ── EARNINGS_RELEASE_CONTRACT (QNT-260) ──────────────────────────────────────
+
+
+def _earnings_source_frame() -> pd.DataFrame:
+    """A clean assembled earnings-release frame (columns as
+    earnings_releases_raw builds them right before the ClickHouse write)."""
+    return pd.DataFrame(
+        {
+            "doc_id": [123, 456],
+            "ticker": ["NVDA", "NVDA"],
+            "cik": ["0001045810", "0001045810"],
+            "accession": ["0001045810-25-000228", "0001045810-25-000115"],
+            "form": ["8-K", "8-K"],
+            "items": ["2.02,9.01", "2.02,9.01"],
+            "filing_date": pd.to_datetime(["2025-11-19", "2025-05-28"]),
+            "exhibit": ["EX-99.1", "EX-99.1"],
+            "title": ["NVIDIA Announces Q3 Results", "NVIDIA Announces Q1 Results"],
+            "url": ["https://sec.gov/a.htm", "https://sec.gov/b.htm"],
+            "body": ["Record revenue narrative ...", "Strong quarter narrative ..."],
+        }
+    )
+
+
+def test_earnings_clean_frame_passes() -> None:
+    result = validate_contract(_earnings_source_frame(), EARNINGS_RELEASE_CONTRACT)
+    assert not result.value_rejects
+    assert len(result.valid_df) == 2
+
+
+def test_earnings_missing_column_is_schema_violation() -> None:
+    df = _earnings_source_frame().drop(columns=["body"])
+    with pytest.raises(SchemaContractViolation):
+        validate_contract(df, EARNINGS_RELEASE_CONTRACT)
+
+
+def test_earnings_empty_body_is_value_reject() -> None:
+    df = _earnings_source_frame()
+    df.loc[0, "body"] = ""  # cleaned to nothing -> quarantine, not crash
+    result = validate_contract(df, EARNINGS_RELEASE_CONTRACT)
+    assert len(result.value_rejects) == 1
+    assert result.value_rejects[0].column == "body"
+    # The clean row survives.
+    assert len(result.valid_df) == 1
+    assert result.valid_df.iloc[0]["doc_id"] == 456
+
+
+def test_earnings_filing_date_dtype_drift_is_schema_violation() -> None:
+    df = _earnings_source_frame()
+    df["filing_date"] = ["2025-11-19", "2025-05-28"]  # strings, not datetime64
+    with pytest.raises(SchemaContractViolation):
+        validate_contract(df, EARNINGS_RELEASE_CONTRACT)

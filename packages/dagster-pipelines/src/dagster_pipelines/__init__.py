@@ -1,4 +1,6 @@
 from dagster_pipelines.assets import (
+    earnings_embeddings,
+    earnings_releases_raw,
     fundamental_summary,
     news_embeddings,
     ohlcv_monthly,
@@ -32,6 +34,8 @@ __all__ = [
     "ClickHouseResource",
     "QdrantCollectionSpec",
     "QdrantResource",
+    "earnings_embeddings",
+    "earnings_releases_raw",
     "fundamentals_downstream_job",
     "fundamentals_sensor",
     "fundamentals_weekly_job",

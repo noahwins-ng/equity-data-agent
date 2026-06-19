@@ -245,3 +245,40 @@ NEWS_RAW_CONTRACT = pa.DataFrameSchema(
     coerce=False,
     name="news_raw",
 )
+
+# EDGAR 8-K earnings releases (QNT-260). EDGAR hands us a discovery JSON
+# (efts.sec.gov full-text search) plus per-filing HTML, so — like fundamentals —
+# the contracted "source shape" is the assembled per-release frame the asset
+# builds just before the ClickHouse write, not a single raw payload. A renamed
+# EFTS key or a missing column is a schema-tier hard-fail; an empty body (HTML
+# clean produced nothing) is a value-tier reject routed to ingest_rejects, since
+# a release we can't extract narrative from has no RAG value. filing_date is
+# pinned to datetime64 (the asset normalises EDGAR's YYYY-MM-DD strings) so a
+# date-parse regression is caught here, not as a silent epoch-0 row downstream.
+EARNINGS_RELEASE_CONTRACT = pa.DataFrameSchema(
+    {
+        "doc_id": pa.Column(nullable=False, required=True, checks=pa.Check.ge(0)),
+        "ticker": pa.Column(str, nullable=False, required=True),
+        "cik": pa.Column(str, nullable=False, required=True),
+        "accession": pa.Column(str, nullable=False, required=True),
+        "form": pa.Column(str, nullable=False, required=True),
+        "items": pa.Column(str, nullable=False, required=True),
+        "filing_date": pa.Column("datetime64[ns]", nullable=False, required=True),
+        # period_ending is intentionally omitted: it is a Nullable(Date) column a
+        # missing EDGAR value legitimately leaves NULL, so it is not part of the
+        # contracted shape. Add it here if a future schema change makes it load-
+        # bearing (so a rename/type drift on it would be caught).
+        "exhibit": pa.Column(str, nullable=False, required=True),
+        "title": pa.Column(str, nullable=True, required=True),
+        "url": pa.Column(str, nullable=False, required=True),
+        # Empty/whitespace body is a value-tier reject: the filing was discovered
+        # and fetched, but HTML cleaning yielded no narrative — quarantine the row
+        # rather than embedding an empty document downstream.
+        "body": pa.Column(
+            str, nullable=False, required=True, checks=pa.Check.str_length(min_value=1)
+        ),
+    },
+    strict=False,
+    coerce=False,
+    name="earnings_release",
+)

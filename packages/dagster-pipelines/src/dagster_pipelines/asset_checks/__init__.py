@@ -1,3 +1,12 @@
+from dagster_pipelines.asset_checks.earnings_embeddings_checks import (
+    earnings_embeddings_all_releases_indexed,
+    earnings_embeddings_dimension,
+)
+from dagster_pipelines.asset_checks.earnings_releases_checks import (
+    earnings_releases_has_rows,
+    earnings_releases_non_empty_body,
+    earnings_releases_valid_filing_date,
+)
 from dagster_pipelines.asset_checks.fundamental_summary_checks import (
     fundamental_summary_ebitda_margin_in_band,
     fundamental_summary_net_margin_in_band,
@@ -82,10 +91,22 @@ ALL_ASSET_CHECKS = [
     news_embeddings_vector_count_matches_source,
     news_embeddings_no_orphaned_vectors,
     news_embeddings_embedding_dimension,
+    # earnings_releases
+    earnings_releases_has_rows,
+    earnings_releases_non_empty_body,
+    earnings_releases_valid_filing_date,
+    # earnings_embeddings
+    earnings_embeddings_all_releases_indexed,
+    earnings_embeddings_dimension,
 ]
 
 __all__ = [
     "ALL_ASSET_CHECKS",
+    "earnings_embeddings_all_releases_indexed",
+    "earnings_embeddings_dimension",
+    "earnings_releases_has_rows",
+    "earnings_releases_non_empty_body",
+    "earnings_releases_valid_filing_date",
     "daily_adx_in_range",
     "daily_atr_non_negative",
     "daily_bb_pct_b_in_soft_band",

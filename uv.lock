@@ -546,6 +546,7 @@ version = "0.1.0"
 source = { editable = "packages/dagster-pipelines" }
 dependencies = [
     { name = "agent" },
+    { name = "beautifulsoup4" },
     { name = "clickhouse-connect" },
     { name = "dagster" },
     { name = "dagster-docker" },
@@ -562,6 +563,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "agent", editable = "packages/agent" },
+    { name = "beautifulsoup4", specifier = ">=4.12.0" },
     { name = "clickhouse-connect", specifier = ">=0.8.0" },
     { name = "dagster", specifier = ">=1.9.0" },
     { name = "dagster-docker", specifier = ">=0.25.0" },

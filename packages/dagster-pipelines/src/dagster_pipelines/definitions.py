@@ -2,6 +2,8 @@ from dagster import Definitions
 
 from dagster_pipelines.asset_checks import ALL_ASSET_CHECKS
 from dagster_pipelines.assets.aggregation import ohlcv_monthly, ohlcv_weekly
+from dagster_pipelines.assets.earnings_embeddings import earnings_embeddings
+from dagster_pipelines.assets.earnings_releases_raw import earnings_releases_raw
 from dagster_pipelines.assets.fundamental_summary import fundamental_summary
 from dagster_pipelines.assets.fundamentals import fundamentals
 from dagster_pipelines.assets.indicators import (
@@ -17,6 +19,8 @@ from dagster_pipelines.resources.clickhouse import ClickHouseResource
 from dagster_pipelines.resources.qdrant import QdrantResource
 from dagster_pipelines.run_failure_alert import dagster_run_failure_alert_sensor
 from dagster_pipelines.schedules import (
+    earnings_releases_job,
+    earnings_releases_schedule,
     fundamentals_weekly_job,
     fundamentals_weekly_schedule,
     news_raw_job,
@@ -27,6 +31,8 @@ from dagster_pipelines.schedules import (
     ohlcv_monthly_refresh_schedule,
 )
 from dagster_pipelines.sensors import (
+    earnings_downstream_job,
+    earnings_releases_sensor,
     fundamentals_downstream_job,
     fundamentals_sensor,
     news_downstream_job,
@@ -47,6 +53,8 @@ defs = Definitions(
         fundamentals,
         news_raw,
         news_embeddings,
+        earnings_releases_raw,
+        earnings_embeddings,
         ohlcv_weekly,
         ohlcv_monthly,
         fundamental_summary,
@@ -60,9 +68,11 @@ defs = Definitions(
         ohlcv_monthly_refresh_job,
         fundamentals_weekly_job,
         news_raw_job,
+        earnings_releases_job,
         ohlcv_downstream_job,
         fundamentals_downstream_job,
         news_downstream_job,
+        earnings_downstream_job,
         vercel_deploy_job,
         online_eval_job,
     ],
@@ -71,6 +81,7 @@ defs = Definitions(
         ohlcv_monthly_refresh_schedule,
         fundamentals_weekly_schedule,
         news_raw_schedule,
+        earnings_releases_schedule,
         vercel_deploy_after_ohlcv,
         vercel_deploy_after_news,
         vercel_deploy_after_fundamentals,
@@ -80,6 +91,7 @@ defs = Definitions(
         ohlcv_raw_sensor,
         fundamentals_sensor,
         news_raw_sensor,
+        earnings_releases_sensor,
         dagster_run_failure_alert_sensor,
     ],
     resources={
