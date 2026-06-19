@@ -130,12 +130,42 @@ def earnings_releases_raw(
         until.isoformat(),
     )
 
+    # Accessions already ingested for this ticker. 8-K filings are immutable once
+    # filed, so a discovered filing whose accession is already a row needs no
+    # re-fetch — skipping it before resolve/fetch avoids the two redundant EDGAR
+    # requests (manifest + document) per already-stored release, which is the
+    # bulk of the weekly steady-state cost (the corpus only gains ~1 filing per
+    # ticker per quarter). Previously-*rejected* filings have no row, so their
+    # accession is absent here and they are correctly retried. Discovery (the one
+    # cheap call) still runs so a newly-filed release is always found.
+    existing = clickhouse.query_df(
+        "SELECT DISTINCT accession FROM equity_raw.earnings_releases_raw FINAL "
+        "WHERE ticker = %(ticker)s",
+        parameters={"ticker": ticker},
+    )
+    ingested_accessions: set[str] = set(existing["accession"]) if not existing.empty else set()
+
     http = httpx.Client(timeout=_REQUEST_TIMEOUT_SECONDS, headers=edgar_headers())
     rows: list[dict[str, Any]] = []
     rejects: list[Reject] = []
     try:
-        filings = discover_earnings_filings(ticker, since=since, until=until, client=http)
-        context.log.info("Found %d earnings filings for %s", len(filings), ticker)
+        discovered = discover_earnings_filings(ticker, since=since, until=until, client=http)
+        filings = [f for f in discovered if f.accession not in ingested_accessions]
+        context.log.info(
+            "Found %d earnings filings for %s (%d new, %d already ingested)",
+            len(discovered),
+            ticker,
+            len(filings),
+            len(discovered) - len(filings),
+        )
+
+        if not filings:
+            # Steady-state week: every discovered release is already stored, so
+            # there is nothing to fetch. Emit the 0-count reject metric (keeps the
+            # QNT-240 dashboard series gap-free) and return without a DB write.
+            context.log.info("No new earnings releases for %s — skipping insert", ticker)
+            record_rejects(context, clickhouse, source_asset="earnings_releases_raw", rejects=[])
+            return
 
         for filing in filings:
             try:
