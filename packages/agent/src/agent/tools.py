@@ -180,7 +180,17 @@ def search_news(ticker: str, query: str) -> str:
         return "[]"
 
     url = f"{_base_url()}/api/v1/search/news"
-    params = {"ticker": ticker_upper, "query": query, "limit": _SEARCH_LIMIT}
+    # QNT-262: request hybrid (dense + BM25 RRF) + Cohere rerank. search_news is
+    # only ever called on a targeted (needs_news_search) query — the gather node
+    # gates it — so turning rerank on here keeps the cross-encoder off the broad/
+    # overview hot path while applying it exactly where lexical precision matters.
+    params = {
+        "ticker": ticker_upper,
+        "query": query,
+        "limit": _SEARCH_LIMIT,
+        "hybrid": True,
+        "rerank": True,
+    }
     try:
         response = httpx.get(url, params=params, timeout=_TIMEOUT_SEC)
     except Exception as exc:  # noqa: BLE001 — never-raise contract (QNT-57 AC #2)

@@ -33,20 +33,28 @@ class _FakeQueryResponse:
 
 
 class _FakeClient:
-    """Records the last query_points call and returns canned scored points."""
+    """Records the last query_points call and returns canned scored points.
+
+    QNT-262: optionally serves a ``scroll`` corpus for the hybrid path. ``scroll``
+    raises if no corpus was supplied so a test that doesn't expect the hybrid
+    branch fails loudly rather than silently scrolling an empty corpus.
+    """
 
     def __init__(
         self,
         response: _FakeQueryResponse | None = None,
         *,
         raises: Exception | None = None,
+        scroll_points: list[_FakeScoredPoint] | None = None,
     ) -> None:
         self._response = response or _FakeQueryResponse(points=[])
         self._raises = raises
+        self._scroll_points = scroll_points
         self.last_collection: str | None = None
         self.last_query: Any = None
         self.last_filter: Filter | None = None
         self.last_limit: int | None = None
+        self.scroll_calls = 0
 
     def query_points(
         self,
@@ -63,6 +71,22 @@ class _FakeClient:
         if self._raises is not None:
             raise self._raises
         return self._response
+
+    def scroll(
+        self,
+        collection_name: str,
+        scroll_filter: Filter | None = None,
+        limit: int = 256,
+        with_payload: bool = True,
+        with_vectors: bool = False,
+        offset: Any = None,
+    ) -> tuple[list[_FakeScoredPoint], Any]:
+        self.scroll_calls += 1
+        if self._scroll_points is None:
+            raise AssertionError("scroll() called but no corpus configured")
+        # Single page; second call (offset set) would not happen — return None
+        # offset to terminate the pagination loop.
+        return self._scroll_points, None
 
 
 def _install_fake(monkeypatch: pytest.MonkeyPatch, fake: _FakeClient) -> None:
@@ -334,3 +358,107 @@ def test_missing_payload_fields_round_trip_as_null(
     body = r.json()
     assert body[0]["source"] is None
     assert body[0]["date"] == "2026-04-19"
+
+
+# --- QNT-262: hybrid (dense + BM25 RRF) + rerank --------------------------------
+
+
+def _point(pid: int, headline: str, *, body: str = "", score: float = 0.5) -> _FakeScoredPoint:
+    return _FakeScoredPoint(
+        point_id=pid,
+        score=score,
+        payload={
+            "ticker": "NVDA",
+            "published_at": _ts(2026, 4, 20),
+            "url": f"https://ex.com/{pid}",
+            "headline": headline,
+            "body": body,
+            "source": "finnhub",
+        },
+    )
+
+
+def test_hybrid_surfaces_lexical_only_hit(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Dense returns two generic hits and misses the entity match; the corpus
+    # carries a third doc that lexically contains "Hynix". BM25 ranks that doc,
+    # RRF fuses it into the result the dense ranker alone would never surface --
+    # the exact short-doc/entity case hybrid exists for.
+    dense = _FakeQueryResponse(points=[_point(111, "NVDA data center"), _point(222, "chip demand")])
+    corpus = [
+        _point(111, "NVDA data center"),
+        _point(222, "chip demand"),
+        _point(333, "NVDA inks SK Hynix HBM supply deal"),
+    ]
+    fake = _FakeClient(dense, scroll_points=corpus)
+    _install_fake(monkeypatch, fake)
+
+    r = client.get(
+        "/api/v1/search/news",
+        params={"query": "SK Hynix supply", "ticker": "NVDA", "hybrid": True},
+    )
+    assert r.status_code == 200
+    headlines = [row["headline"] for row in r.json()]
+    assert "NVDA inks SK Hynix HBM supply deal" in headlines
+    assert fake.scroll_calls == 1
+
+
+def test_hybrid_without_ticker_falls_back_to_dense(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # hybrid=true but no ticker -> the BM25 scroll would be unbounded, so the
+    # endpoint stays on the dense path and never scrolls.
+    fake = _FakeClient(_FakeQueryResponse(points=[_point(1, "generic")]))
+    _install_fake(monkeypatch, fake)
+
+    r = client.get("/api/v1/search/news", params={"query": "rate cut", "hybrid": True})
+    assert r.status_code == 200
+    assert fake.scroll_calls == 0
+
+
+def test_hybrid_rerank_noops_without_cohere_key(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # rerank=true with no COHERE_API_KEY (default "") must degrade to the fused
+    # order, not error -- the never-hard-dependency contract.
+    monkeypatch.setattr(search_module.settings, "COHERE_API_KEY", "", raising=False)
+    corpus = [_point(111, "alpha"), _point(222, "beta")]
+    fake = _FakeClient(_FakeQueryResponse(points=corpus), scroll_points=corpus)
+    _install_fake(monkeypatch, fake)
+
+    r = client.get(
+        "/api/v1/search/news",
+        params={"query": "alpha", "ticker": "NVDA", "hybrid": True, "rerank": True},
+    )
+    assert r.status_code == 200
+    # "alpha" lexically matches doc 111 -> it ranks at or above beta; both survive.
+    assert {row["headline"] for row in r.json()} == {"alpha", "beta"}
+
+
+def test_hybrid_rerank_reorders_when_key_present(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # With a key, the Cohere layer reorders the fused candidates. Stub the rerank
+    # client to invert the order and assert the response follows the reranker.
+    monkeypatch.setattr(search_module.settings, "COHERE_API_KEY", "test-key", raising=False)
+    corpus = [_point(111, "alpha"), _point(222, "beta")]
+    fake = _FakeClient(_FakeQueryResponse(points=corpus), scroll_points=corpus)
+    _install_fake(monkeypatch, fake)
+
+    def _fake_rerank(query, documents, *, api_key, model, top_n):  # type: ignore[no-untyped-def]
+        # Reverse the candidate order with descending relevance scores.
+        ids = list(documents)[::-1]
+        return [(doc_id, 0.9 - i * 0.1) for i, doc_id in enumerate(ids)]
+
+    monkeypatch.setattr(search_module, "cohere_rerank", _fake_rerank)
+
+    r = client.get(
+        "/api/v1/search/news",
+        params={"query": "alpha beta", "ticker": "NVDA", "hybrid": True, "rerank": True},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert [row["headline"] for row in body] == ["beta", "alpha"]
+    # Reranked rows carry the Cohere relevance score, not a cosine.
+    assert body[0]["score"] == 0.9

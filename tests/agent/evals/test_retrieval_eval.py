@@ -23,6 +23,7 @@ from agent.evals.retrieval_eval import (
     load_qrels_trec,
     load_retrieval_queries,
     load_run_trec,
+    summarise_comparison,
 )
 from shared.tickers import TICKERS
 
@@ -94,6 +95,20 @@ def test_all_floors_have_metrics() -> None:
 def test_history_schema_has_retrieval_columns() -> None:
     for col in ("recall_at_5", "recall_at_20", "mrr", "ndcg_at_10", "retrieval_n"):
         assert col in HISTORY_FIELDS, f"history.csv missing retrieval column {col!r}"
+
+
+# --- hybrid A/B scorecard (QNT-262) --------------------------------------------
+
+
+def test_comparison_scorecard_shows_signed_delta() -> None:
+    dense = {"R@5": 0.40, "R@20": 0.60, "RR": 0.70, "nDCG@10": 0.55}
+    hybrid = {"R@5": 0.52, "R@20": 0.68, "RR": 0.75, "nDCG@10": 0.61}
+    out = summarise_comparison(dense, hybrid, n_queries=50, label="hybrid+rerank")
+    assert "hybrid+rerank" in out
+    # A positive lift renders with an explicit + sign, a regression with -.
+    assert "+0.1200" in out  # R@5 lift
+    regressed = summarise_comparison({"R@5": 0.50}, {"R@5": 0.40}, n_queries=50, label="hybrid")
+    assert "-0.1000" in regressed
 
 
 # --- number-grounding faithfulness gate (AC5, second deterministic layer) ------

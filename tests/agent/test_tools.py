@@ -264,13 +264,25 @@ def test_search_news_returns_pretty_json(monkeypatch: pytest.MonkeyPatch) -> Non
     assert result == json.dumps(payload, indent=2)
     url, params = recorder.calls[0]
     assert url == "http://test-api:8000/api/v1/search/news"
-    assert params == {"ticker": "NVDA", "query": "earnings surprise", "limit": 5}
+    assert params == {
+        "ticker": "NVDA",
+        "query": "earnings surprise",
+        "limit": 5,
+        "hybrid": True,
+        "rerank": True,
+    }
 
 
 def test_search_news_uppercases_ticker_in_query(monkeypatch: pytest.MonkeyPatch) -> None:
     recorder = _install_recorder(monkeypatch, lambda _u, _p: _json_ok([{"x": 1}]))
     search_news("nvda", "ai chips")
-    assert recorder.calls[0][1] == {"ticker": "NVDA", "query": "ai chips", "limit": 5}
+    assert recorder.calls[0][1] == {
+        "ticker": "NVDA",
+        "query": "ai chips",
+        "limit": 5,
+        "hybrid": True,
+        "rerank": True,
+    }
 
 
 # ───────────────────────── search_news — degraded paths ──────────────────────

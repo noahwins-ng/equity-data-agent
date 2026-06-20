@@ -189,6 +189,24 @@ class Settings(BaseSettings):
     # 86_400 = once per day. Tests override to a few seconds.
     AGENT_THREAD_PRUNE_INTERVAL_SECONDS: int = 86_400
 
+    # ─── QNT-262: hybrid retrieval (dense + BM25 RRF) + Cohere rerank ─────────
+    #
+    # Hybrid fuses the dense MiniLM ranking with a client-side BM25 ranking over
+    # the ticker-scoped corpus via RRF — no Qdrant schema change, no re-index
+    # (the collections stay dense-only). Master switch so the dense-only path
+    # stays one flag away if fusion ever regresses a query class.
+    HYBRID_SEARCH_ENABLED: bool = True
+    # Cohere Rerank 3.5 cross-encoder over the fused candidate set. Gated TWICE:
+    # the agent only calls search_news on a targeted (needs_news_search) query,
+    # AND the rerank no-ops when COHERE_API_KEY is empty — so the hot path is
+    # never taxed and a missing key degrades to the fused order, not an error.
+    # Free trial: 1000 calls/mo, 10 rpm. Register at https://dashboard.cohere.com.
+    COHERE_API_KEY: str = ""
+    COHERE_RERANK_MODEL: str = "rerank-v3.5"
+    # Fused candidates fed to the reranker. Wider than the returned top-k (4-8)
+    # so the cross-encoder can pull a buried-but-relevant hit up into the cut.
+    RERANK_CANDIDATES: int = 20
+
     @property
     def is_prod(self) -> bool:
         return self.ENV == "prod"

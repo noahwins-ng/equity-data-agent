@@ -6,6 +6,10 @@ dependencies = [
     "pydantic>=2.10.0",
     "pydantic-settings>=2.7.0",
     "pandera>=0.20.0",
+    # QNT-262: client-side BM25 for hybrid retrieval (pure-python, no re-index).
+    # httpx for the thin Cohere Rerank REST client (no SDK).
+    "rank-bm25>=0.2.2",
+    "httpx>=0.27.0",
 ]
 
 [build-system]
