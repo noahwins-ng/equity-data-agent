@@ -524,3 +524,70 @@ def test_earnings_qdrant_unreachable_falls_back_to_empty(
     r = client.get("/api/v1/search/earnings", params={"query": "guidance", "ticker": "NVDA"})
     assert r.status_code == 200
     assert r.json() == []
+
+
+def _earnings_point(
+    pid: int, section: str, *, text: str = "", score: float = 0.5
+) -> _FakeScoredPoint:
+    return _FakeScoredPoint(
+        point_id=pid,
+        score=score,
+        payload={
+            "ticker": "NVDA",
+            "filing_date": _ts(2026, 5, 28),
+            "url": f"https://sec.gov/{pid}",
+            "title": "NVDA earnings release",
+            "section": section,
+            "text": text,
+        },
+    )
+
+
+def test_earnings_hybrid_rerank_demotes_boilerplate(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QNT-263 follow-up: dense ranks 8-K boilerplate (About NVIDIA) top, but
+    hybrid+rerank reorders the guidance chunk above it -- the exact failure mode
+    that left the agent's folded earnings excerpts useless."""
+    monkeypatch.setattr(search_module.settings, "COHERE_API_KEY", "test-key", raising=False)
+    # Dense puts boilerplate first; corpus also carries a guidance chunk.
+    boiler = _earnings_point(
+        1, "About NVIDIA", text="NVIDIA is the world leader in AI.", score=0.53
+    )
+    guidance = _earnings_point(
+        2, "Outlook", text="Management guided Q2 revenue to a record.", score=0.49
+    )
+    fake = _FakeClient(
+        _FakeQueryResponse(points=[boiler, guidance]), scroll_points=[boiler, guidance]
+    )
+    _install_fake(monkeypatch, fake)
+
+    def _fake_rerank(query, documents, *, api_key, model, top_n):  # type: ignore[no-untyped-def]
+        # Cross-encoder scores the guidance chunk (id 2) above boilerplate (id 1).
+        order = sorted(documents, key=lambda d: 0 if d == "2" else 1)
+        return [(doc_id, 0.9 - i * 0.2) for i, doc_id in enumerate(order)]
+
+    monkeypatch.setattr(search_module, "cohere_rerank", _fake_rerank)
+
+    r = client.get(
+        "/api/v1/search/earnings",
+        params={"query": "guidance outlook", "ticker": "NVDA", "hybrid": True, "rerank": True},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert fake.last_collection == "equity_earnings"
+    # Guidance chunk reranked to the top, ahead of the dense-leading boilerplate.
+    assert [row["section"] for row in body] == ["Outlook", "About NVIDIA"]
+    assert body[0]["score"] == 0.9
+
+
+def test_earnings_hybrid_without_ticker_falls_back_to_dense(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # hybrid=true but no ticker -> unbounded BM25 scroll, so stay on dense.
+    fake = _FakeClient(_FakeQueryResponse(points=[_earnings_point(1, "Summary")]))
+    _install_fake(monkeypatch, fake)
+
+    r = client.get("/api/v1/search/earnings", params={"query": "guidance", "hybrid": True})
+    assert r.status_code == 200
+    assert fake.scroll_calls == 0
