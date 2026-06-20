@@ -236,7 +236,19 @@ def search_earnings(ticker: str, query: str) -> str:
         return "[]"
 
     url = f"{_base_url()}/api/v1/search/earnings"
-    params = {"ticker": ticker_upper, "query": query, "limit": _SEARCH_LIMIT}
+    # QNT-263 follow-up: request hybrid (dense + BM25 RRF) + Cohere rerank. The
+    # 8-K corpus is dense MiniLM's worst case -- repeated boilerplate ("About
+    # <co>", Non-GAAP definitions) scores as high as the guidance narrative, so
+    # the cross-encoder rerank is what makes the folded excerpts worth citing.
+    # search_earnings only fires on a targeted earnings ask (the gather node
+    # gates it), so rerank stays off the broad hot path -- same contract as news.
+    params = {
+        "ticker": ticker_upper,
+        "query": query,
+        "limit": _SEARCH_LIMIT,
+        "hybrid": True,
+        "rerank": True,
+    }
     try:
         response = httpx.get(url, params=params, timeout=_TIMEOUT_SEC)
     except Exception as exc:  # noqa: BLE001 — never-raise contract (QNT-57 AC #2)

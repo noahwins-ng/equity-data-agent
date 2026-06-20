@@ -366,8 +366,15 @@ def test_search_earnings_returns_pretty_json(monkeypatch: pytest.MonkeyPatch) ->
     assert result == json.dumps(payload, indent=2)
     url, params = recorder.calls[0]
     assert url == "http://test-api:8000/api/v1/search/earnings"
-    # Dense-only (no hybrid/rerank — that's news-scoped, QNT-262) + uppercased ticker.
-    assert params == {"ticker": "NVDA", "query": "what was the guidance?", "limit": 5}
+    # QNT-263 follow-up: requests hybrid + rerank (8-K boilerplate needs it) +
+    # uppercased ticker.
+    assert params == {
+        "ticker": "NVDA",
+        "query": "what was the guidance?",
+        "limit": 5,
+        "hybrid": True,
+        "rerank": True,
+    }
 
 
 def test_search_earnings_http_error_degrades_to_empty_array(
