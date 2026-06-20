@@ -231,12 +231,18 @@ _NEWS_SEARCH_INTENTS: frozenset[Intent] = frozenset({"news", "quick_fact", "thes
 # QNT-263: intents whose synthesis consumes the fundamental report, so an
 # earnings-release hit (folded into ``reports["fundamental"]``) actually reaches
 # the prompt. The earnings narrative is management framing + guidance -- a
-# fundamental-flavoured read -- so it belongs with the fundamental slot, gated to
-# the intents that gather and cite it (focused fundamental + thesis). Mirrors the
-# _NEWS_SEARCH_INTENTS gate: fire the RAG fetch only where the synthesis can use
-# it. A technical/news focused read does not gather fundamental, so firing there
-# would be a wasted Qdrant call.
-_EARNINGS_SEARCH_INTENTS: frozenset[Intent] = frozenset({"fundamental", "thesis"})
+# fundamental-flavoured read -- so it belongs with the fundamental slot. This is
+# the earnings analogue of _NEWS_SEARCH_INTENTS: fire the RAG fetch only where
+# the synthesis can use it. ``quick_fact`` is included (QNT-263 follow-up) for
+# the same reason it sits in _NEWS_SEARCH_INTENTS -- ``build_quick_fact_prompt``
+# renders every ``reports`` key and the quick-fact citation vocabulary already
+# allows ``(source: fundamental)``, so a natural single-fact earnings ask ("what
+# did management say about guidance?", which classifies as quick_fact) reaches
+# the 8-K corpus instead of only the news headlines. ``news`` stays EXCLUDED: a
+# focused news read is forbidden from citing the fundamental report
+# (FOCUSED_SYSTEM_PROMPT rule 3), so firing there would be a wasted Qdrant call;
+# ``technical`` likewise never gathers fundamental.
+_EARNINGS_SEARCH_INTENTS: frozenset[Intent] = frozenset({"fundamental", "thesis", "quick_fact"})
 
 _MAX_TOOL_ATTEMPTS = 2  # first try + one retry
 _EXPLORATION_EXCLUSIONS: tuple[str, ...] = (

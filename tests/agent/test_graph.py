@@ -1714,6 +1714,29 @@ def test_needs_earnings_search_routes_through_search_earnings(
     assert sources[0]["headline"] == "NVDA Q1 FY26 earnings release"
 
 
+def test_quick_fact_earnings_ask_routes_through_search_earnings(
+    monkeypatch: pytest.MonkeyPatch, stub_llm: _StructuredLLM
+) -> None:
+    """QNT-263 follow-up: the natural single-fact earnings phrasing classifies as
+    quick_fact, which is now in _EARNINGS_SEARCH_INTENTS -- so it reaches the 8-K
+    corpus (build_quick_fact_prompt renders the fundamental report it folds into)
+    instead of only the news headlines, mirroring quick_fact in the news gate."""
+    monkeypatch.setattr(
+        graph_module, "classify_intent_with_source", lambda _q, **_: ("quick_fact", "llm", False)
+    )
+    question = "what did NVDA management say about guidance in the latest earnings?"
+    search_earnings = MagicMock(return_value=_earnings_rows())
+    graph = build_graph(
+        {name: _mock_tool(name) for name in REPORT_TOOLS},
+        search_earnings_tool=search_earnings,
+    )
+    result = graph.invoke({"ticker": "NVDA", "question": question})
+
+    search_earnings.assert_called_once_with("NVDA", question)
+    assert "Management guided Q2 revenue" in result["reports"]["fundamental"]
+    assert all(s["corpus"] == "earnings" for s in result["retrieved_sources"])
+
+
 def test_earnings_search_skipped_for_non_consuming_intent(
     monkeypatch: pytest.MonkeyPatch, stub_llm: _StructuredLLM
 ) -> None:
