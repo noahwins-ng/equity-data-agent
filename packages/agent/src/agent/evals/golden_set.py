@@ -113,6 +113,14 @@ HISTORY_FIELDS = (
     "voice_match_se",
     "dialogue_composite_se",
     "dialogue_n",
+    # QNT-261: retrieval-eval aggregate, written on a single eval_type="retrieval"
+    # row per run (recall@k / MRR / nDCG from ir_measures). Blank on every other
+    # eval_type's rows. retrieval_n is the labeled-query count.
+    "recall_at_5",
+    "recall_at_20",
+    "mrr",
+    "ndcg_at_10",
+    "retrieval_n",
 )
 
 

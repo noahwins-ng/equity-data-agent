@@ -48,7 +48,15 @@ jobs:
 
       - name: Unit tests
         # Exit code 5 = no tests collected; treat as success during bootstrap
-        run: uv run pytest -m "not integration" || [ $? -eq 5 ]
+        run: uv run pytest -m "not integration and not eval" || [ $? -eq 5 ]
+
+      # QNT-261: deterministic RAG eval gate (ir_measures retrieval metrics +
+      # number-grounding faithfulness) scored against committed frozen artifacts.
+      # No LLM keys, no network -- free, fast, reproducible, blocking. The
+      # LLM-judged generation layer (DeepEval/RAGAS) lives off the hot path
+      # (nightly / workflow_dispatch), never here.
+      - name: RAG eval gate (retrieval + number-grounding)
+        run: uv run pytest -m eval -v
 
       - name: Integration tests
         run: uv run pytest -m integration -v
