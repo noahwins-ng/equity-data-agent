@@ -188,6 +188,67 @@ corpus that week carried no matching legal/recall/merger story for those tickers
 (tsla-recall returned 1 hit, unh-investigation 3; NVDA was dominated by the SK
 partnership story). They are the input to a future recall-improvement ticket.
 
+### (f) RAG retrieval eval — `retrieval_eval.py` + `goldens/retrieval.yaml` (QNT-261)
+
+The news-search eval (e) scores *structural* relevance (does a hit contain an
+expected term) and reports a rolling hit-rate; it cannot separate a retrieval
+miss from a synthesis miss, and has no notion of *ranking* quality. This is the
+industry-standard **stage-1 retrieval eval**: a labeled relevance set scored with
+classic IR metrics (recall@k / MRR / nDCG via `ir_measures`), DETERMINISTIC and
+LLM-free, kept **separate** from the generation judge. Build-before-upgrade — the
+QNT-262 hybrid/rerank lift is measured against this baseline, not assumed.
+
+Three files joined by query id (standard IR layout, `goldens/`):
+
+| File | Role |
+|------|------|
+| `retrieval.yaml` | **topics** — 51 queries (news ×38 over all 10 tickers; earnings ×13 over NVDA+AAPL) + `anchor_terms` (the relevance criterion). Hand-authored. |
+| `retrieval_qrels.trec` | **labels** — `qid 0 docid 1` per relevant Qdrant point id, captured from the live corpus by `--label`. |
+| `retrieval_run.trec` | **frozen run** — the dense-retrieval ranking captured by `--baseline`; what the CI gate scores offline. |
+
+**doc_id = the Qdrant point id** (UInt64) — what a vector search returns, aligned
+across both corpora and the later S3-Vectors substrate (`equity_news` =
+`blake2b(ticker:url_id)`, `equity_earnings` = `blake2b(ticker:doc_id:chunk_index)`).
+
+**Labels are independent of the ranking under test.** A doc is relevant to a query
+if its payload text contains one of the query's `anchor_terms`, scanned over the
+*full* ticker-scoped corpus — not the dense top-k. That independence is what makes
+recall/MRR/nDCG meaningful: we measure whether dense retrieval surfaces the
+lexically-relevant docs against a ground truth it didn't produce. Labels + run are
+frozen TREC files so the CI gate is reproducible even as the live corpus rolls;
+`anchor_terms` document how the labels regenerate.
+
+**2026-06-20 dense baseline** (current MiniLM-L6 dense retrieval, 51 queries):
+
+| Metric | Value | Gate floor |
+|--------|-------|-----------|
+| recall@5 | 0.4802 | 0.40 |
+| recall@20 | 0.7232 | 0.60 |
+| MRR | 0.8450 | 0.70 |
+| nDCG@10 | 0.7023 | 0.55 |
+
+The low recall@5 (<half the relevant docs in top-5) is the headline finding and
+the explicit motivation for QNT-262 (hybrid + rerank). The floors are regression
+tripwires set ~0.08–0.15 below the measured baseline; re-derive them against a
+fresh baseline whenever retrieval changes.
+
+**The per-PR CI gate.** `tests/agent/evals/test_retrieval_eval.py` (marked
+`eval`) loads the frozen qrels + run, recomputes the metrics via `ir_measures`,
+and asserts each clears its floor — plus a number-grounding faithfulness tripwire.
+No LLM keys, no network: free, fast, reproducible, blocking (`ci.yml` runs
+`pytest -m eval` as its own step). The LLM-judged generation layer (DeepEval /
+RAGAS, QNT-264) lives off the hot path (nightly / dispatch), never per-PR.
+
+```bash
+uv run python -m agent.evals.retrieval_eval --label      # rewrite qrels (live Qdrant)
+uv run python -m agent.evals.retrieval_eval --baseline   # rewrite run + history (live Qdrant)
+uv run python -m agent.evals.retrieval_eval              # offline score + gate (the CI path)
+```
+
+The baseline appends one `eval_type="retrieval"` row to `history.csv`
+(`recall_at_5` / `recall_at_20` / `mrr` / `ndcg_at_10` / `retrieval_n`) stamped
+with the same `git_sha` + `prompt_version` as every other eval type.
+
 ## Clean-window re-run for the new ticker universe (QNT-255)
 
 QNT-237 swapped the universe (V/JPM/UNH -> MU/AMD/INTC). Its AC5 eval passed the

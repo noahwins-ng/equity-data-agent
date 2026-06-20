@@ -20,6 +20,13 @@ dev = [
     # QNT-160 — security scanners; pinned versions so CI and local parity.
     "pip-audit>=2.7.3",
     "bandit>=1.8.0",
+    # QNT-261: deterministic IR metrics (recall@k / MRR / nDCG) for the retrieval
+    # eval. DEV-ONLY on purpose: the eval harness (agent.evals.retrieval_eval)
+    # runs in CI/local, never on the prod runtime path, and ir-measures pulls the
+    # pytrec-eval-terrier C-extension (no aarch64 wheel -> needs gcc). Keeping it
+    # out of the agent package's runtime deps keeps `uv sync --no-dev` (the prod
+    # image build) free of a compiler toolchain + scipy.
+    "ir-measures>=0.3.3",
 ]
 
 [tool.ruff]
@@ -40,6 +47,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
     "integration: requires live ClickHouse (auto-skipped locally without tunnel)",
+    "eval: deterministic RAG eval gate (ir_measures + number-grounding; no LLM, no network) -- QNT-261",
 ]
 
 [tool.bandit]

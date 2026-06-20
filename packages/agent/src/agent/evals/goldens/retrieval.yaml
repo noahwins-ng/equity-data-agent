@@ -1,0 +1,313 @@
+# RAG retrieval-eval topics (QNT-261).
+#
+# Stage-1 retrieval eval: query -> relevant doc ids, scored with classic IR
+# metrics (recall@k / MRR / nDCG via ir_measures), SEPARATE from the generation
+# judge. See agent.evals.retrieval_eval + docs/v2-overall-enhancement.md
+# ("RAG eval framework").
+#
+# This file is the TOPICS half (queries + the relevance criterion). The LABELS
+# (qid -> relevant Qdrant point ids) live in retrieval_qrels.trec, and the frozen
+# dense ranking in retrieval_run.trec -- both captured from the live corpus and
+# committed so the CI gate scores them offline. Regenerate after a corpus change:
+#   uv run python -m agent.evals.retrieval_eval --label      # rewrites qrels
+#   uv run python -m agent.evals.retrieval_eval --baseline   # rewrites run + history
+#
+# Fields:
+#   id            stable slug, also the TREC query id.
+#   corpus        news | earnings  (-> equity_news | equity_earnings).
+#   ticker        must be in shared.tickers.TICKERS.
+#   query         the natural-language search text sent to dense retrieval.
+#   anchor_terms  the lexical relevance criterion: a doc is labeled relevant if
+#                 its payload text contains ANY of these (case-insensitive),
+#                 scanned over the FULL ticker-scoped corpus -- independent of the
+#                 dense ranking under test. Hand-picked to be discriminative
+#                 (each query labels a small relevant set, 1-25 docs) so recall@k
+#                 is meaningful.
+#
+# Coverage: news across all 10 tickers; earnings on NVDA + AAPL (the only tickers
+# with 8-K release chunks indexed so far -- QNT-260 backfill). Earnings queries
+# extend automatically as more tickers land: add topics, re-run --label/--baseline.
+
+queries:
+  # ===================== NEWS corpus (equity_news) =====================
+
+  # --- AAPL ---
+  - id: aapl-intel-deal
+    corpus: news
+    ticker: AAPL
+    query: "Did Apple strike a chip deal with Intel?"
+    anchor_terms: ["intel chip", "intel deal", "intel partnership", "apple chip deal"]
+  - id: aapl-memory-price
+    corpus: news
+    ticker: AAPL
+    query: "Is Apple warning about memory price increases?"
+    anchor_terms: ["memory price"]
+  - id: aapl-tim-cook-prices
+    corpus: news
+    ticker: AAPL
+    query: "What did Tim Cook say about rising prices?"
+    anchor_terms: ["tim cook"]
+  - id: aapl-wwdc
+    corpus: news
+    ticker: AAPL
+    query: "What did Apple announce at WWDC 2026?"
+    anchor_terms: ["wwdc"]
+
+  # --- AMD ---
+  - id: amd-meta-chip
+    corpus: news
+    ticker: AMD
+    query: "Did AMD sign an AI chip pact with Meta?"
+    anchor_terms: ["meta ai chip", "meta chip", "meta pact"]
+  - id: amd-mext-acq
+    corpus: news
+    ticker: AMD
+    query: "What acquisition did AMD make recently?"
+    anchor_terms: ["mext", "acquisition"]
+  - id: amd-rackspace
+    corpus: news
+    ticker: AMD
+    query: "What is the AMD Rackspace AI cloud deal?"
+    anchor_terms: ["rackspace"]
+  - id: amd-epyc
+    corpus: news
+    ticker: AMD
+    query: "How is AMD's EPYC positioned in AI infrastructure?"
+    anchor_terms: ["epyc"]
+
+  # --- AMZN ---
+  - id: amzn-trainium
+    corpus: news
+    ticker: AMZN
+    query: "What's the latest on Amazon's Trainium chips?"
+    anchor_terms: ["trainium"]
+  - id: amzn-anthropic
+    corpus: news
+    ticker: AMZN
+    query: "How is Amazon's relationship with Anthropic developing?"
+    anchor_terms: ["anthropic"]
+  - id: amzn-missouri-ai
+    corpus: news
+    ticker: AMZN
+    query: "What is Amazon's Missouri AI data center investment?"
+    anchor_terms: ["missouri"]
+  - id: amzn-logistics
+    corpus: news
+    ticker: AMZN
+    query: "How does Amazon's logistics scale help its broader business?"
+    anchor_terms: ["logistics"]
+
+  # --- GOOGL ---
+  - id: googl-waymo-recall
+    corpus: news
+    ticker: GOOGL
+    query: "Did Waymo recall any robotaxis?"
+    anchor_terms: ["waymo"]
+  - id: googl-cloud
+    corpus: news
+    ticker: GOOGL
+    query: "What new Google Cloud customers or deals were announced?"
+    anchor_terms: ["google cloud"]
+  - id: googl-threat-intel
+    corpus: news
+    ticker: GOOGL
+    query: "What did Google's threat intelligence group find?"
+    anchor_terms: ["threat intelligence"]
+  - id: googl-epstein-records
+    corpus: news
+    ticker: GOOGL
+    query: "Was Google asked to preserve records in the Epstein investigation?"
+    anchor_terms: ["epstein"]
+
+  # --- INTC ---
+  - id: intc-foundry-deal
+    corpus: news
+    ticker: INTC
+    query: "Did Intel land an Apple chip partnership?"
+    anchor_terms: ["apple chip deal", "apple partnership", "apple deal"]
+  - id: intc-18a
+    corpus: news
+    ticker: INTC
+    query: "What's the status of Intel's 18A process?"
+    anchor_terms: ["18a"]
+  - id: intc-make-chips
+    corpus: news
+    ticker: INTC
+    query: "Will Intel make chips in America?"
+    anchor_terms: ["make chips", "chips in america", "manufacturing milestone"]
+  - id: intc-capital-raise
+    corpus: news
+    ticker: INTC
+    query: "Is Intel raising capital?"
+    anchor_terms: ["capital raise"]
+
+  # --- META ---
+  - id: meta-threads
+    corpus: news
+    ticker: META
+    query: "How many users does Meta's Threads have now?"
+    anchor_terms: ["threads"]
+  - id: meta-data-center
+    corpus: news
+    ticker: META
+    query: "What data center is Meta building for AI?"
+    anchor_terms: ["data center"]
+  - id: meta-kosa
+    corpus: news
+    ticker: META
+    query: "Is Meta backing the Kids Online Safety Act?"
+    anchor_terms: ["kids online safety", "kosa"]
+  - id: meta-restructuring
+    corpus: news
+    ticker: META
+    query: "What's happening with Meta's AI team restructuring?"
+    anchor_terms: ["restructuring"]
+
+  # --- MSFT ---
+  - id: msft-xbox
+    corpus: news
+    ticker: MSFT
+    query: "Is Microsoft spinning off Xbox?"
+    anchor_terms: ["xbox"]
+  - id: msft-bytedance
+    corpus: news
+    ticker: MSFT
+    query: "What is Microsoft's AI business with ByteDance?"
+    anchor_terms: ["bytedance"]
+  - id: msft-ai-infra
+    corpus: news
+    ticker: MSFT
+    query: "How is Microsoft investing in AI infrastructure?"
+    anchor_terms: ["ai infrastructure"]
+
+  # --- MU ---
+  - id: mu-hbm
+    corpus: news
+    ticker: MU
+    query: "Did Micron win an HBM supplier role?"
+    anchor_terms: ["hbm"]
+  - id: mu-q3
+    corpus: news
+    ticker: MU
+    query: "What are expectations for Micron's Q3 results?"
+    anchor_terms: ["q3"]
+  - id: mu-stifel
+    corpus: news
+    ticker: MU
+    query: "What is Stifel's price target on Micron?"
+    anchor_terms: ["stifel"]
+
+  # --- NVDA ---
+  - id: nvda-bond-debt
+    corpus: news
+    ticker: NVDA
+    query: "What is Nvidia's $25 billion bond sale about?"
+    anchor_terms: ["bond sale", "debt deal", "25 billion"]
+  - id: nvda-jensen
+    corpus: news
+    ticker: NVDA
+    query: "What did Nvidia CEO Jensen Huang say recently?"
+    anchor_terms: ["jensen huang"]
+  - id: nvda-china
+    corpus: news
+    ticker: NVDA
+    query: "What's the latest on Nvidia's China trade situation?"
+    anchor_terms: ["china"]
+  - id: nvda-hbm-memory
+    corpus: news
+    ticker: NVDA
+    query: "Which memory partners is Nvidia working with on HBM?"
+    anchor_terms: ["hbm", "sk hynix"]
+
+  # --- TSLA ---
+  - id: tsla-robotaxi
+    corpus: news
+    ticker: TSLA
+    query: "What's new with Tesla's robotaxi?"
+    anchor_terms: ["robotaxi"]
+  - id: tsla-delivery
+    corpus: news
+    ticker: TSLA
+    query: "What are analysts saying about Tesla's Q2 deliveries?"
+    anchor_terms: ["delivery"]
+  - id: tsla-musk-chip
+    corpus: news
+    ticker: TSLA
+    query: "Is Elon Musk building a chip better than Nvidia's?"
+    anchor_terms: ["2-3x better", "better than nvidia"]
+  - id: tsla-affordable
+    corpus: news
+    ticker: TSLA
+    query: "What happened to Tesla's affordable car plans?"
+    anchor_terms: ["affordable"]
+
+  # ===================== EARNINGS corpus (equity_earnings) =====================
+
+  # --- NVDA 8-K releases ---
+  - id: nvda-data-center
+    corpus: earnings
+    ticker: NVDA
+    query: "What was NVIDIA's Data Center revenue?"
+    anchor_terms: ["data center"]
+  - id: nvda-conference-call
+    corpus: earnings
+    ticker: NVDA
+    query: "When is NVIDIA's earnings conference call and webcast?"
+    anchor_terms: ["conference call", "webcast"]
+  - id: nvda-outlook
+    corpus: earnings
+    ticker: NVDA
+    query: "What is NVIDIA's revenue outlook for next quarter?"
+    anchor_terms: ["outlook"]
+  - id: nvda-cfo
+    corpus: earnings
+    ticker: NVDA
+    query: "What did NVIDIA's CFO say in the commentary?"
+    anchor_terms: ["cfo commentary"]
+  - id: nvda-gaming
+    corpus: earnings
+    ticker: NVDA
+    query: "How did NVIDIA's Gaming segment perform?"
+    anchor_terms: ["gaming"]
+  - id: nvda-dividend
+    corpus: earnings
+    ticker: NVDA
+    query: "Did NVIDIA declare a quarterly cash dividend?"
+    anchor_terms: ["dividend"]
+  - id: nvda-highlights
+    corpus: earnings
+    ticker: NVDA
+    query: "What were the highlights of NVIDIA's quarter?"
+    anchor_terms: ["highlights"]
+
+  # --- AAPL 8-K releases ---
+  - id: aapl-balance-sheet
+    corpus: earnings
+    ticker: AAPL
+    query: "What is on Apple's condensed consolidated balance sheet?"
+    anchor_terms: ["balance sheet"]
+  - id: aapl-net-sales
+    corpus: earnings
+    ticker: AAPL
+    query: "What were Apple's net sales this quarter?"
+    anchor_terms: ["net sales"]
+  - id: aapl-services-rev
+    corpus: earnings
+    ticker: AAPL
+    query: "How much services revenue did Apple report?"
+    anchor_terms: ["services revenue"]
+  - id: aapl-eps
+    corpus: earnings
+    ticker: AAPL
+    query: "What was Apple's diluted earnings per share?"
+    anchor_terms: ["earnings per share", "diluted"]
+  - id: aapl-non-gaap
+    corpus: earnings
+    ticker: AAPL
+    query: "What non-GAAP reconciliations did Apple provide?"
+    anchor_terms: ["non-gaap"]
+  - id: aapl-operations
+    corpus: earnings
+    ticker: AAPL
+    query: "What did Apple's statements of operations show?"
+    anchor_terms: ["statements of operations"]
