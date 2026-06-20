@@ -32,6 +32,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/search", tags=["search"])
 
 COLLECTION = "equity_news"
+# QNT-263: the second RAG corpus — 8-K Item 2.02 earnings-release narrative
+# (equity_earnings). Same MiniLM space as news, different payload shape (a
+# chunked filing section, not a headline+body), so it gets its own endpoint
+# rather than a branch inside /news.
+EARNINGS_COLLECTION = "equity_earnings"
 EMBED_MODEL = "sentence-transformers/all-minilm-l6-v2"
 
 # Pagination page size for the BM25 corpus scroll (hybrid path). The corpus is
@@ -309,3 +314,92 @@ def search_news(
     # these rows into the synthesis prompt AND surfaces them as provenance, so
     # dropping the tail here benefits both consumers in one place.
     return _apply_relevance_filter(rows)
+
+
+def _earnings_row_from_payload(payload: dict[str, Any], score: float | None) -> dict[str, Any]:
+    """Display row for an earnings-release chunk hit (QNT-263).
+
+    Distinct shape from the news row: an 8-K release is a chunked filing
+    section, so we surface ``title`` (the release headline), ``section`` (the
+    chunk's section tag), and ``text`` (the chunk body) rather than
+    headline/source/body. ``date`` is the ISO filing date derived from the
+    stored unix-seconds ``filing_date``.
+    """
+    filing_unix = payload.get("filing_date")
+    if isinstance(filing_unix, int | float):
+        date_str: str | None = datetime.fromtimestamp(filing_unix, tz=UTC).date().isoformat()
+    else:
+        date_str = None
+    return {
+        "title": payload.get("title"),
+        "section": payload.get("section"),
+        "date": date_str,
+        "score": score,
+        "url": payload.get("url"),
+        "text": payload.get("text") or "",
+    }
+
+
+@router.get("/earnings")
+def search_earnings(
+    query: str = Query(
+        ...,
+        min_length=1,
+        max_length=512,
+        description="Natural-language search text",
+    ),
+    ticker: str | None = Query(
+        default=None,
+        description="Restrict results to a single ticker from shared.tickers.TICKERS",
+    ),
+    limit: int = Query(default=5, ge=1, le=50),
+) -> list[dict[str, Any]]:
+    """Semantic search over the 8-K earnings-release corpus (QNT-263).
+
+    The second RAG corpus: management framing + guidance narrative chunked from
+    8-K Item 2.02 / EX-99.1 filings (``equity_earnings``). Dense MiniLM search
+    only — hybrid/rerank is news-scoped (QNT-262) and out of scope here. Shares
+    the news endpoint's degraded contract: any Qdrant transient returns ``[]``
+    with HTTP 200 so the agent's earnings tool reads "unreachable" and "no
+    matches" the same way.
+    """
+    import httpx
+    from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
+    from qdrant_client.models import Document, FieldCondition, Filter, MatchValue
+
+    if ticker is not None:
+        ticker = ticker.upper()
+        if ticker not in TICKERS:
+            raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+
+    query_filter: Filter | None = None
+    if ticker is not None:
+        query_filter = Filter(must=[FieldCondition(key="ticker", match=MatchValue(value=ticker))])
+
+    try:
+        response = get_client().query_points(
+            collection_name=EARNINGS_COLLECTION,
+            query=Document(text=query, model=EMBED_MODEL),
+            query_filter=query_filter,
+            limit=limit,
+            with_payload=True,
+        )
+    except (ResponseHandlingException, UnexpectedResponse, httpx.HTTPError) as exc:
+        logger.warning(
+            "Qdrant earnings search failed for query=%r ticker=%r",
+            query,
+            ticker,
+            exc_info=exc,
+        )
+        return []
+
+    # No relevance-gap trim here (deliberate). The QNT-226 trim
+    # (_apply_relevance_filter) is calibrated to the NEWS score distribution
+    # (short MiniLM headlines, _MIN_SCORE/_RELEVANCE_GAP from a news clean-window
+    # pull); earnings chunks are longer and score on a different scale, so
+    # inheriting those constants would mis-trim. The agent's own news retrieval
+    # already runs unfiltered (it fires the hybrid path, which skips the trim
+    # too), so returning the raw top-`limit` dense hits keeps the two corpora
+    # consistent for the agent. An earnings-specific floor, if the dense tail
+    # proves noisy, is a calibrated follow-up — not a borrowed news constant.
+    return [_earnings_row_from_payload(p.payload or {}, p.score) for p in response.points]

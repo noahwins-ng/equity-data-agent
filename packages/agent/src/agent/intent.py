@@ -487,6 +487,74 @@ def _is_targeted_news(question: str) -> bool:
     )
 
 
+# QNT-263: deterministic earnings-corpus routing. The second RAG corpus
+# (equity_earnings) holds 8-K Item 2.02 narrative -- management framing,
+# guidance language, quarterly highlights. A question that asks about that
+# narrative ("what did management say about guidance?", "NVDA's outlook for the
+# quarter") should reach the earnings corpus; the quantitative numbers
+# (revenue/EPS/margins) already flow through the fundamental report and are NOT
+# RAG material. Tokens carry "guidance"/"outlook"/"management"/"earnings call"
+# signal -- broad phrasings like a bare "earnings" (which usually wants the
+# number) are intentionally absent so the firing stays narrative-shaped.
+# False-positive blast radius is contained by the intent gate (the gather node
+# only fires earnings search on _EARNINGS_SEARCH_INTENTS), the same way
+# _is_targeted_news is gated to _NEWS_SEARCH_INTENTS.
+_EARNINGS_SEARCH_TOKENS: tuple[str, ...] = (
+    "guidance",
+    "guided",
+    "outlook",
+    "forecast",
+    "earnings call",
+    "earnings release",
+    "earnings report",
+    "earnings commentary",
+    "management commentary",
+    "management said",
+    "what did management say",
+    "how did management",
+    "press release",
+    "quarterly results",
+    "raised its guidance",
+    "cut its guidance",
+)
+
+
+def _is_earnings_search(question: str) -> bool:
+    """Return True when a question should use semantic earnings-release search.
+
+    Deterministic product routing, mirroring :func:`_is_targeted_news`: a
+    narrative earnings ask (management framing, guidance, outlook) reaches the
+    equity_earnings corpus. Independent of intent -- the gather node gates the
+    actual fetch to the intents whose synthesis reads the fundamental report.
+    """
+    return _matches_any(question.lower(), _EARNINGS_SEARCH_TOKENS) is not None
+
+
+def route_search_corpora(question: str) -> tuple[str, ...]:
+    """Return which RAG corpora a question should reach: news and/or earnings.
+
+    QNT-263 multi-corpus routing. Composes the two deterministic single-corpus
+    routers (:func:`_is_targeted_news`, :func:`_is_earnings_search`) into the
+    ordered set of corpora to search. ``()`` means neither fires (the canned
+    digests carry the answer); ``("news", "earnings")`` means a query that
+    spans both ("what did the CEO say about guidance?" -- a named-executive
+    news event AND a guidance ask).
+
+    This MUST stay a pure OR of the per-corpus deciders the runtime reads
+    (``_is_targeted_news`` -> news, ``_is_earnings_search`` -> earnings): the
+    gather node gates each corpus on the SAME decider this composes, and the
+    routing eval (goldens/routing.yaml) scores this function. That is what makes
+    "what the eval scores == what the agent does" hold -- do NOT add routing
+    logic here that the gather node won't see.
+    """
+    corpora: list[str] = []
+    if _is_targeted_news(question):
+        corpora.append("news")
+    if _is_earnings_search(question):
+        corpora.append("earnings")
+    return tuple(corpora)
+
+
 def underspecified_gesture(question: str) -> Literal["view", "compare"] | None:
     """Return 'compare'/'view' if ``question`` is a subject-less analysis ask.
 
@@ -863,9 +931,11 @@ __all__ = [
     "ClassifierSource",
     "Intent",
     "IntentDecision",
+    "_is_earnings_search",
     "classify_intent",
     "classify_intent_with_source",
     "extract_tickers",
     "has_comparison_phrase",
+    "route_search_corpora",
     "underspecified_gesture",
 ]

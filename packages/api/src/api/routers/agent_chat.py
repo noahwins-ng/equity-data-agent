@@ -87,9 +87,11 @@ emitter failure + stubbed test graphs that bypass synthesize). The panel's
                     classifier); the panel renders a verdict-free, multi-lens
                     scan card and skips the thesis card.
 
-``retrieved_sources`` — ``{sources: [{headline, source, date, url}, ...]}``
-                    emitted (QNT-226) when the agent's semantic news search
-                    surfaced hits this turn. The panel renders a compact
+``retrieved_sources`` — ``{sources: [{headline, source, date, url, corpus}, ...]}``
+                    emitted (QNT-226) when the agent's semantic search surfaced
+                    hits this turn. Each source carries ``corpus`` (QNT-263:
+                    ``"news"`` or ``"earnings"``) so the panel labels which
+                    corpus a citation came from. The panel renders a compact
                     clickable provenance list. Only fires when ``gather`` ran
                     (a followup turn reuses hydrated state and re-emits nothing).
 
@@ -161,6 +163,7 @@ from agent.tools import (
     default_report_tools,
     get_company_report_compact,
     get_comparison_metrics,
+    search_earnings,
     search_news,
 )
 from agent.tracing import langfuse, make_callback_handler, propagate_attributes
@@ -229,6 +232,8 @@ _TOOL_LABELS: dict[str, str] = {
     "news": "Scanning news",
     # QNT-222: semantic news search fired on targeted news asks.
     "news_search": "Searching news",
+    # QNT-263: semantic earnings-release search fired on earnings-narrative asks.
+    "earnings_search": "Searching earnings releases",
 }
 
 
@@ -474,18 +479,23 @@ def _instrument_tools(
     return wrapped
 
 
-def _instrument_search_news(
+def _instrument_search_tool(
     fn: Callable[[str, str], str],
     queue: asyncio.Queue[tuple[str, dict[str, Any]]],
     loop: asyncio.AbstractEventLoop,
+    *,
+    tool_name: str,
+    hit_noun: str,
 ) -> Callable[[str, str], str]:
-    """QNT-222: ``tool_call`` / ``tool_result`` instrumentation for the two-arg
-    ``search_news(ticker, query)`` tool.
+    """QNT-222/263: ``tool_call`` / ``tool_result`` instrumentation for a two-arg
+    semantic-search tool (``search_news`` / ``search_earnings``).
 
-    ``_instrument_tools`` wraps single-arg report tools; the semantic search
-    tool carries the user's question as a second arg, so it gets its own
-    wrapper. The ``tool_call`` event surfaces the search path on the panel
-    (AC2); the result summary reports the number of retrieved headlines.
+    ``_instrument_tools`` wraps single-arg report tools; a semantic search tool
+    carries the user's question as a second arg, so it gets its own wrapper.
+    The ``tool_call`` event surfaces the search path on the panel; the result
+    summary reports the retrieved-hit count. ``tool_name`` selects the panel
+    label (``news_search`` / ``earnings_search``) and ``hit_noun`` the summary
+    unit so the two corpora read distinctly in the trace.
     """
 
     def _post(event: str, data: dict[str, Any]) -> None:
@@ -496,8 +506,8 @@ def _instrument_search_news(
         _post(
             "tool_call",
             {
-                "name": "news_search",
-                "label": _tool_label("news_search"),
+                "name": tool_name,
+                "label": _tool_label(tool_name),
                 "args": {"ticker": ticker, "query": query},
                 "started_at": started_at,
             },
@@ -511,10 +521,10 @@ def _instrument_search_news(
         _post(
             "tool_result",
             {
-                "name": "news_search",
-                "label": _tool_label("news_search"),
+                "name": tool_name,
+                "label": _tool_label(tool_name),
                 "latency_ms": latency_ms,
-                "summary": f"{hit_count} headlines" if hit_count else "no matches",
+                "summary": f"{hit_count} {hit_noun}" if hit_count else "no matches",
                 "ok": True,
                 "started_at": started_at,
             },
@@ -774,7 +784,15 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
         # QNT-222: semantic news search, wired as its own (ticker, query) tool
         # outside the single-arg plan-surface map. Fired by the graph only on
         # targeted news asks (litigation, CEO, buyback, lawsuit, recall, ...).
-        search_news_tool = _instrument_search_news(search_news, queue, loop)
+        search_news_tool = _instrument_search_tool(
+            search_news, queue, loop, tool_name="news_search", hit_noun="headlines"
+        )
+        # QNT-263: semantic earnings-release search, the second RAG corpus. Fired
+        # by the graph only on earnings-narrative asks (guidance, outlook,
+        # management framing).
+        search_earnings_tool = _instrument_search_tool(
+            search_earnings, queue, loop, tool_name="earnings_search", hit_noun="excerpts"
+        )
         # QNT-209: attach the SqliteSaver only when the request named a
         # thread_id. The ephemeral compile path keeps the existing behavior
         # for curl / tests / non-frontend callers — no checkpoint rows, no
@@ -796,6 +814,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
             checkpointer=checkpointer,  # type: ignore[arg-type]
             compact_company_tool=compact_company,
             search_news_tool=search_news_tool,
+            search_earnings_tool=search_earnings_tool,
             comparison_metrics_tool=get_comparison_metrics,
         )
 

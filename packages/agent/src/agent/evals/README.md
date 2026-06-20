@@ -249,6 +249,26 @@ The baseline appends one `eval_type="retrieval"` row to `history.csv`
 (`recall_at_5` / `recall_at_20` / `mrr` / `ndcg_at_10` / `retrieval_n`) stamped
 with the same `git_sha` + `prompt_version` as every other eval type.
 
+### (g) Multi-corpus routing eval — `routing_eval.py` + `goldens/routing.yaml` (QNT-263)
+
+Eval (f) measures retrieval quality *within* a corpus; this measures whether a
+question is routed to the *right* corpus in the first place — the senior
+multi-corpus signal. For each fixture, `agent.intent.route_search_corpora(question)`
+must equal the expected set of corpora (news and/or earnings, or neither). The
+router is DETERMINISTIC and LLM-free (`_is_targeted_news` + `_is_earnings_search`),
+so it runs **offline** in the default pytest sweep
+(`tests/agent/evals/test_routing_yaml.py`) as well as standalone for the scorecard.
+
+24 fixtures across four routing classes (news-only, earnings-only, both, neither);
+coverage floors keep every class populated so the "both" signal can't silently
+collapse. The deterministic gate fails on any misroute — a miss is a bug, not a
+model wobble. **2026-06-20: 24/24 (100%).**
+
+```bash
+uv run python -m agent.evals.routing_eval                 # offline scorecard + gate
+uv run python -m agent.evals.routing_eval --only nvda-ceo-guidance
+```
+
 ## Clean-window re-run for the new ticker universe (QNT-255)
 
 QNT-237 swapped the universe (V/JPM/UNH -> MU/AMD/INTC). Its AC5 eval passed the

@@ -1574,6 +1574,8 @@ def test_targeted_news_drops_focused_card_and_surfaces_sources(
             "source": "Reuters",
             "date": "2026-06-01",
             "url": "https://ex.com/a",
+            # QNT-263: provenance carries the corpus tag.
+            "corpus": "news",
         }
     ]
     # And folded into the news report the narrator speaks from.
@@ -1652,11 +1654,137 @@ def test_parse_search_sources_extracts_fields_and_degrades() -> None:
             "source": "Bloomberg",
             "date": "2026-05-02",
             "url": "https://ex.com/x",
+            # QNT-263: provenance carries the corpus so the frontend distinguishes
+            # a news hit from an earnings-release hit.
+            "corpus": "news",
         }
     ]
     assert graph_module._parse_search_sources("[]") == []
     assert graph_module._parse_search_sources("not json") == []
     assert graph_module._parse_search_sources("[1, 2, 3]") == []
+
+
+# ─── QNT-263: multi-corpus routing (news + 8-K earnings) ─────────────────────
+
+
+def _earnings_rows(*, n: int = 1) -> str:
+    """A search_earnings stub payload: earnings-chunk display rows."""
+    return json.dumps(
+        [
+            {
+                "title": "NVDA Q1 FY26 earnings release",
+                "section": "guidance",
+                "date": "2026-05-28",
+                "url": "https://sec.gov/ex99-1",
+                "text": "Management guided Q2 revenue to a record on data-center demand.",
+                "score": 0.7,
+            }
+            for _ in range(n)
+        ]
+    )
+
+
+def test_needs_earnings_search_routes_through_search_earnings(
+    monkeypatch: pytest.MonkeyPatch, stub_llm: _StructuredLLM
+) -> None:
+    """QNT-263 AC1/AC2: an earnings-narrative ask (deterministic
+    needs_earnings_search) on a fundamental-report-consuming intent fires the
+    earnings search, folds the release excerpt into the fundamental report, and
+    surfaces corpus-tagged provenance."""
+    monkeypatch.setattr(
+        graph_module, "classify_intent_with_source", lambda _q, **_: ("thesis", "llm", False)
+    )
+    # Names the ticker so the ask reaches gather (a tickerless analysis ask
+    # routes to clarify, like the other search tests).
+    question = "what did NVDA management say about guidance and the outlook?"
+    search_earnings = MagicMock(return_value=_earnings_rows())
+    graph = build_graph(
+        {name: _mock_tool(name) for name in REPORT_TOOLS},
+        search_earnings_tool=search_earnings,
+    )
+    result = graph.invoke({"ticker": "NVDA", "question": question})
+
+    # Fired once with the ticker + verbatim question as the query.
+    search_earnings.assert_called_once_with("NVDA", question)
+    # Folded into the fundamental report the thesis synthesis reads.
+    assert "Management guided Q2 revenue" in result["reports"]["fundamental"]
+    # Provenance distinguishes the corpus (AC2).
+    sources = result["retrieved_sources"]
+    assert sources and all(s["corpus"] == "earnings" for s in sources)
+    assert sources[0]["headline"] == "NVDA Q1 FY26 earnings release"
+
+
+def test_earnings_search_skipped_for_non_consuming_intent(
+    monkeypatch: pytest.MonkeyPatch, stub_llm: _StructuredLLM
+) -> None:
+    """A technical focused read does not gather the fundamental report, so even
+    with the earnings flag set the search must not fire (gate scoped to
+    _EARNINGS_SEARCH_INTENTS)."""
+    monkeypatch.setattr(
+        graph_module, "classify_intent_with_source", lambda _q, **_: ("technical", "llm", False)
+    )
+    search_earnings = MagicMock(return_value=_earnings_rows())
+    graph = build_graph(
+        {name: _mock_tool(name) for name in REPORT_TOOLS},
+        search_earnings_tool=search_earnings,
+    )
+    # Names the ticker so it reaches gather -- the assertion then proves the
+    # INTENT gate (technical not in _EARNINGS_SEARCH_INTENTS) skipped the search,
+    # not that an earlier clarify gate did.
+    graph.invoke({"ticker": "NVDA", "question": "what did NVDA management say about guidance?"})
+
+    search_earnings.assert_not_called()
+
+
+def test_both_corpora_route_and_tag_distinct_provenance(
+    monkeypatch: pytest.MonkeyPatch, stub_llm: _StructuredLLM
+) -> None:
+    """QNT-263: a query spanning a named news event AND an earnings ask reaches
+    BOTH corpora, and the merged provenance keeps each hit's corpus tag."""
+    monkeypatch.setattr(
+        graph_module, "classify_intent_with_source", lambda _q, **_: ("thesis", "llm", True)
+    )
+    question = "what did NVDA's CEO say about guidance?"
+    search_news = _recording_search_news(
+        [{"headline": "NVDA CEO comments at conference", "source": "Reuters", "date": "2026-06-01"}]
+    )
+    search_earnings = MagicMock(return_value=_earnings_rows())
+    graph = build_graph(
+        {name: _mock_tool(name) for name in REPORT_TOOLS},
+        search_news_tool=search_news,
+        search_earnings_tool=search_earnings,
+    )
+    result = graph.invoke({"ticker": "NVDA", "question": question})
+
+    search_news.assert_called_once_with("NVDA", question)
+    search_earnings.assert_called_once_with("NVDA", question)
+    corpora = {s["corpus"] for s in result["retrieved_sources"]}
+    assert corpora == {"news", "earnings"}
+
+
+def test_format_earnings_hits_and_parse_sources_degrade() -> None:
+    """QNT-263: earnings render + provenance parse mirror the news helpers and
+    degrade to ''/[] on every bad-payload path."""
+    rows = _earnings_rows()
+    block = graph_module._format_earnings_hits(rows)
+    assert "Earnings-release excerpts" in block
+    assert "NVDA Q1 FY26 earnings release" in block
+    assert "Management guided Q2 revenue" in block
+    assert graph_module._format_earnings_hits("[]") == ""
+    assert graph_module._format_earnings_hits("not json") == ""
+
+    sources = graph_module._parse_earnings_sources(rows)
+    assert sources == [
+        {
+            "headline": "NVDA Q1 FY26 earnings release",
+            "source": "guidance",
+            "date": "2026-05-28",
+            "url": "https://sec.gov/ex99-1",
+            "corpus": "earnings",
+        }
+    ]
+    assert graph_module._parse_earnings_sources("[]") == []
+    assert graph_module._parse_earnings_sources("[1, 2, 3]") == []
 
 
 def test_format_search_hits_renders_rows_and_degrades_to_empty() -> None:

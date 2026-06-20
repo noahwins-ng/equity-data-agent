@@ -615,3 +615,38 @@ def test_is_targeted_news_distinguishes_targeted_from_generic() -> None:
     assert _is_targeted_news("headlines on META") is False
     # Whole-word matching: "sue" must not fire on "issue", "sec" not on "second".
     assert _is_targeted_news("what are the issues this second?") is False
+
+
+# ─── QNT-263: multi-corpus routing (news vs 8-K earnings) ────────────────────
+
+
+def test_is_earnings_search_fires_on_narrative_asks() -> None:
+    from agent.intent import _is_earnings_search
+
+    assert _is_earnings_search("what did management say about guidance?") is True
+    assert _is_earnings_search("what was NVDA's outlook for next quarter?") is True
+    assert _is_earnings_search("summarize AAPL's latest earnings release") is True
+    assert _is_earnings_search("what did NVDA say on the earnings call?") is True
+    assert _is_earnings_search("management commentary on margins") is True
+    assert _is_earnings_search("what was Intel's forward guidance?") is True
+    # The numbers (P/E, revenue, RSI) are NOT RAG material -- they flow through
+    # the fundamental report, so a bare metric ask must not fire earnings search.
+    assert _is_earnings_search("what's NVDA's P/E?") is False
+    assert _is_earnings_search("what's the RSI on TSLA?") is False
+    assert _is_earnings_search("what's the news on AAPL?") is False
+    # Whole-word matching: "guided" token must not fire on an unrelated substring.
+    assert _is_earnings_search("what are the misguidedness issues?") is False
+
+
+def test_route_search_corpora_news_earnings_both_neither() -> None:
+    from agent.intent import route_search_corpora
+
+    # news-only: a named event with no earnings-narrative signal.
+    assert route_search_corpora("any litigation on NVDA?") == ("news",)
+    # earnings-only: management framing / guidance with no named news event.
+    assert route_search_corpora("what was NVDA's outlook for the quarter?") == ("earnings",)
+    # both: a named-executive news event AND a guidance ask -> ordered news,earnings.
+    assert route_search_corpora("what did the CEO say about guidance?") == ("news", "earnings")
+    # neither: generic / single-metric -> canned digests carry it.
+    assert route_search_corpora("what's the news on AAPL?") == ()
+    assert route_search_corpora("what's MSFT's P/E?") == ()

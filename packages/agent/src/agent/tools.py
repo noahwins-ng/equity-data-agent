@@ -219,6 +219,44 @@ def search_news(ticker: str, query: str) -> str:
     return json.dumps(payload, indent=2)
 
 
+def search_earnings(ticker: str, query: str) -> str:
+    """Semantic search against the 8-K earnings-release corpus, as pretty JSON.
+
+    QNT-263: the second RAG corpus (``equity_earnings`` — management framing +
+    guidance narrative). Mirrors :func:`search_news`'s never-raise contract:
+    degrades to ``"[]"`` on every failure mode (Qdrant outage, HTTP error,
+    malformed JSON, empty result set, invalid ticker, empty / over-long query).
+    Rows carry ``{title, section, date, score, url, text}`` — the earnings-chunk
+    display shape, distinct from the news headline shape.
+    """
+    ticker_upper, err = _normalize_ticker(ticker)
+    if err is not None:
+        return "[]"
+    if not query or len(query) > _QUERY_MAX_LEN:
+        return "[]"
+
+    url = f"{_base_url()}/api/v1/search/earnings"
+    params = {"ticker": ticker_upper, "query": query, "limit": _SEARCH_LIMIT}
+    try:
+        response = httpx.get(url, params=params, timeout=_TIMEOUT_SEC)
+    except Exception as exc:  # noqa: BLE001 — never-raise contract (QNT-57 AC #2)
+        logger.warning("search_earnings: request failed ticker=%s: %s", ticker_upper, exc)
+        return "[]"
+
+    if response.status_code >= 400:
+        logger.warning("search_earnings: http %d ticker=%s", response.status_code, ticker_upper)
+        return "[]"
+
+    try:
+        payload = response.json()
+    except ValueError:
+        logger.warning("search_earnings: invalid JSON ticker=%s", ticker_upper)
+        return "[]"
+    if not payload:
+        return "[]"
+    return json.dumps(payload, indent=2)
+
+
 def get_comparison_metrics(tickers: list[str]) -> str:
     """QNT-224: lean N-way comparison metrics, returned as pretty JSON.
 
@@ -277,5 +315,6 @@ __all__ = [
     "get_news_report",
     "get_summary_report",
     "get_technical_report",
+    "search_earnings",
     "search_news",
 ]
