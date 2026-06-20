@@ -1,0 +1,147 @@
+# RAG multi-corpus routing golden set (QNT-263).
+#
+# One deterministic layer: route_search_corpora(question) must equal the
+# fixture's ``expected_corpora`` -- the set of RAG corpora a question should
+# reach. This is the senior multi-corpus-routing signal: a query about a named
+# news event reaches the news corpus, a query about management framing /
+# guidance reaches the 8-K earnings corpus, a query that spans both reaches
+# both, and a generic / single-metric / off-domain ask reaches neither (the
+# canned digests carry it).
+#
+# The router is DETERMINISTIC (agent.intent.route_search_corpora, composed of
+# _is_targeted_news + _is_earnings_search), so a fixture whose phrasing
+# disagrees with its expected_corpora is a CURATION bug, not a model miss --
+# test_routing_yaml pins the two together, the same contract
+# test_news_search_yaml enforces for the news flag.
+#
+# corpora vocabulary: "news" (equity_news) | "earnings" (equity_earnings).
+# An empty list means neither corpus fires.
+#
+# NOTE: fixtures must reference only the current TICKERS set --
+# load_routing_fixtures gates every ticker against shared.tickers.TICKERS and
+# raises on a removed symbol, forcing a ticker swap to sweep this file.
+
+fixtures:
+  # --- news-only: a named event/entity that wants the news corpus -----------
+  - id: nvda-litigation
+    ticker: NVDA
+    question: "Is NVDA tangled up in any litigation right now?"
+    expected_corpora: [news]
+
+  - id: amd-acquisition
+    ticker: AMD
+    question: "Any news on the AMD acquisition of a networking startup?"
+    expected_corpora: [news]
+
+  - id: intc-buyback
+    ticker: INTC
+    question: "Did Intel announce a buyback?"
+    expected_corpora: [news]
+
+  - id: mu-partnership
+    ticker: MU
+    question: "What's the latest on the Micron partnership with SK Hynix?"
+    expected_corpora: [news]
+
+  - id: tsla-recall
+    ticker: TSLA
+    question: "Is TSLA facing any recall?"
+    expected_corpora: [news]
+
+  - id: googl-antitrust
+    ticker: GOOGL
+    question: "Is there an antitrust probe against GOOGL?"
+    expected_corpora: [news]
+
+  - id: meta-layoffs
+    ticker: META
+    question: "Any headlines on META about layoffs?"
+    expected_corpora: [news]
+
+  # --- earnings-only: management narrative / guidance wants the 8-K corpus ---
+  - id: nvda-mgmt-guidance
+    ticker: NVDA
+    question: "What did management say about guidance?"
+    expected_corpora: [earnings]
+
+  - id: nvda-outlook
+    ticker: NVDA
+    question: "What was NVDA's outlook for next quarter?"
+    expected_corpora: [earnings]
+
+  - id: aapl-earnings-release
+    ticker: AAPL
+    question: "Summarize AAPL's latest earnings release."
+    expected_corpora: [earnings]
+
+  - id: msft-guidance
+    ticker: MSFT
+    question: "What's the guidance for MSFT next year?"
+    expected_corpora: [earnings]
+
+  - id: amd-mgmt-commentary
+    ticker: AMD
+    question: "What was the management commentary on margins for AMD?"
+    expected_corpora: [earnings]
+
+  - id: intc-forward-guidance
+    ticker: INTC
+    question: "What was Intel's forward guidance?"
+    expected_corpora: [earnings]
+
+  - id: nvda-earnings-call
+    ticker: NVDA
+    question: "What did NVDA say on the earnings call?"
+    expected_corpora: [earnings]
+
+  - id: tsla-frame-quarter
+    ticker: TSLA
+    question: "How did management frame the quarter?"
+    expected_corpora: [earnings]
+
+  # --- both: a query that spans a named news event AND the earnings narrative
+  - id: nvda-ceo-guidance
+    ticker: NVDA
+    question: "What did the CEO say about guidance?"
+    expected_corpora: [news, earnings]
+
+  - id: googl-probe-outlook
+    ticker: GOOGL
+    question: "Did management address the antitrust probe in its outlook?"
+    expected_corpora: [news, earnings]
+
+  - id: intc-buyback-guidance
+    ticker: INTC
+    question: "Any news on the buyback, and what was the guidance?"
+    expected_corpora: [news, earnings]
+
+  # --- neither: generic / single-metric / off-domain -> canned digests ------
+  - id: aapl-generic-news
+    ticker: AAPL
+    question: "What's the news on AAPL?"
+    expected_corpora: []
+
+  - id: nvda-rsi
+    ticker: NVDA
+    question: "What's NVDA's RSI right now?"
+    expected_corpora: []
+
+  - id: msft-pe
+    ticker: MSFT
+    question: "What's the P/E for MSFT?"
+    expected_corpora: []
+
+  - id: amd-intc-compare
+    ticker: AMD
+    question: "Compare AMD and INTC."
+    expected_corpora: []
+
+  - id: tsla-price-action
+    ticker: TSLA
+    question: "How's TSLA's price action looking?"
+    expected_corpora: []
+
+  - id: meta-volume
+    ticker: META
+    question: "What's the volume on META?"
+    expected_corpora: []

@@ -57,6 +57,7 @@ from agent.intent import (
     _EXPLORATION_TRIGGERS,
     ClassifierSource,
     Intent,
+    _is_earnings_search,
     classify_intent_with_source,
     extract_tickers,
     has_comparison_phrase,
@@ -227,6 +228,16 @@ _FOCUSED_REPORT: dict[Intent, str] = {
 # Qdrant call. Gate the RAG fetch to the intents that can use it.
 _NEWS_SEARCH_INTENTS: frozenset[Intent] = frozenset({"news", "quick_fact", "thesis"})
 
+# QNT-263: intents whose synthesis consumes the fundamental report, so an
+# earnings-release hit (folded into ``reports["fundamental"]``) actually reaches
+# the prompt. The earnings narrative is management framing + guidance -- a
+# fundamental-flavoured read -- so it belongs with the fundamental slot, gated to
+# the intents that gather and cite it (focused fundamental + thesis). Mirrors the
+# _NEWS_SEARCH_INTENTS gate: fire the RAG fetch only where the synthesis can use
+# it. A technical/news focused read does not gather fundamental, so firing there
+# would be a wasted Qdrant call.
+_EARNINGS_SEARCH_INTENTS: frozenset[Intent] = frozenset({"fundamental", "thesis"})
+
 _MAX_TOOL_ATTEMPTS = 2  # first try + one retry
 _EXPLORATION_EXCLUSIONS: tuple[str, ...] = (
     # These are named lens or warm-follow-up requests. Let the existing
@@ -369,6 +380,13 @@ class AgentState(TypedDict):
     # ran or it returned nothing. Set by gather_node, read by the SSE endpoint
     # (gated on gather having run so a followup turn doesn't re-emit prior hits).
     retrieved_sources: NotRequired[list[dict[str, str]]]
+    # QNT-263: deterministic earnings-corpus routing signal. Set by classify_node
+    # via agent.intent._is_earnings_search (mirrors needs_news_search). When set
+    # and the intent reads the fundamental report (_EARNINGS_SEARCH_INTENTS),
+    # gather fires search_earnings over the equity_earnings corpus and folds the
+    # hits into reports["fundamental"], tagging each retrieved source corpus=
+    # "earnings" so provenance distinguishes the corpus a hit came from.
+    needs_earnings_search: NotRequired[bool]
     # QNT-212: ordered list of node names actually visited this turn.
     # Each node writes the FULL accumulated list (not a single element with
     # a reducer) -- a reducer would also accumulate across turns out of the
@@ -785,6 +803,82 @@ def _parse_search_sources(raw: str) -> list[dict[str, str]]:
                 "source": str(row.get("source") or "").strip(),
                 "date": str(row.get("date") or "").strip(),
                 "url": str(row.get("url") or "").strip(),
+                # QNT-263: stamp the corpus so the provenance list distinguishes a
+                # news hit from an earnings-release hit (AC2).
+                "corpus": "news",
+            }
+        )
+    return sources
+
+
+def _format_earnings_hits(raw: str) -> str:
+    """QNT-263: render ``search_earnings`` JSON rows into a report-shaped block.
+
+    ``search_earnings`` returns ``json.dumps([{title, section, date, score, url,
+    text}, ...])`` on a hit and ``"[]"`` on every degraded path. We render each
+    chunk as a ``"- "`` bullet (title + section + date) with the truncated chunk
+    text indented under it, mirroring :func:`_format_search_hits` so the block
+    folds cleanly into the fundamental report the synthesis already consumes.
+    Returns ``""`` when there is nothing usable so the caller can skip the merge.
+    """
+    try:
+        rows = json.loads(raw)
+    except (ValueError, TypeError):
+        return ""
+    if not isinstance(rows, list) or not rows:
+        return ""
+    lines: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        title = str(row.get("title", "")).strip()
+        section = str(row.get("section", "")).strip()
+        if not title and not section:
+            continue
+        date = str(row.get("date", "")).strip()
+        head = title or section
+        meta = ", ".join(part for part in (section if title else "", date) if part)
+        lines.append(f"- {head}" + (f" ({meta})" if meta else ""))
+        text = _truncate_body(str(row.get("text", "")))
+        if text:
+            lines.append(f"  {text}")
+    if not lines:
+        return ""
+    return "## Earnings-release excerpts matching your question\n" + "\n".join(lines)
+
+
+def _parse_earnings_sources(raw: str) -> list[dict[str, str]]:
+    """QNT-263: extract corpus-tagged provenance rows from ``search_earnings`` JSON.
+
+    Mirrors :func:`_parse_search_sources` but maps the earnings-chunk shape onto
+    the same ``{headline, source, date, url, corpus}`` provenance dict the SSE
+    wrapper already surfaces — ``title`` -> headline, section -> source — and
+    tags ``corpus="earnings"`` so the frontend can label which corpus a cited
+    hit came from (AC2). ``search_earnings`` degrades to ``"[]"``, so a bad/empty
+    payload yields ``[]``.
+    """
+    try:
+        rows = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(rows, list):
+        return []
+    sources: list[dict[str, str]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        title = str(row.get("title") or "").strip()
+        section = str(row.get("section") or "").strip()
+        headline = title or section
+        if not headline:
+            continue
+        sources.append(
+            {
+                "headline": headline,
+                "source": section if title else "8-K earnings release",
+                "date": str(row.get("date") or "").strip(),
+                "url": str(row.get("url") or "").strip(),
+                "corpus": "earnings",
             }
         )
     return sources
@@ -1247,6 +1341,7 @@ def build_graph(
     checkpointer: BaseCheckpointSaver | None = None,
     compact_company_tool: ToolFn | None = None,
     search_news_tool: SearchToolFn | None = None,
+    search_earnings_tool: SearchToolFn | None = None,
     comparison_metrics_tool: ComparisonMetricsToolFn | None = None,
 ) -> CompiledStateGraph:
     """Compile the classify -> plan -> gather -> synthesize graph (QNT-149, QNT-159).
@@ -1284,6 +1379,13 @@ def build_graph(
     ``_NEWS_SEARCH_INTENTS`` (news / quick_fact / thesis). Generic news asks
     leave the flag False and keep the canned digest. None ⇒ canned-digest-only
     (CLI / eval / tests).
+
+    QNT-263: ``search_earnings_tool`` is the sibling ``(ticker, query) -> str``
+    callable for the second RAG corpus (semantic search over the Qdrant
+    equity_earnings collection). Fired by gather only on an earnings-narrative
+    ask (``needs_earnings_search`` + ``_EARNINGS_SEARCH_INTENTS``); the retrieved
+    release excerpts fold into ``reports["fundamental"]`` and their provenance is
+    tagged ``corpus="earnings"``. None ⇒ news-corpus-only (CLI / eval / tests).
 
     QNT-224: ``comparison_metrics_tool`` is an optional ``(list[str]) -> str``
     callable hitting the lean comparison-metrics endpoint. Fired only on a 3-4
@@ -1400,6 +1502,10 @@ def build_graph(
             "classifier_source": classifier_source,
             "ambiguity_kind": ambiguity_kind,
             "needs_news_search": needs_news_search,
+            # QNT-263: deterministic earnings-corpus routing, computed from the
+            # real question independent of the (possibly stubbed) intent LLM —
+            # mirrors how needs_news_search is a pure _is_targeted_news call.
+            "needs_earnings_search": _is_earnings_search(question),
             "messages": _append_user_message(history, question),
         }
 
@@ -1672,6 +1778,36 @@ def build_graph(
                     "gather %s: folded %d targeted-news hits into news report",
                     ticker,
                     len(retrieved_sources),
+                )
+
+        # QNT-263: multi-corpus routing. An earnings-narrative ask (guidance,
+        # management framing, outlook) additionally searches the equity_earnings
+        # corpus and folds the release excerpts into reports["fundamental"] (the
+        # earnings narrative is a fundamental-flavoured read). Gated, like news,
+        # on the deterministic flag AND the intents whose synthesis reads the
+        # fundamental report (_EARNINGS_SEARCH_INTENTS). Each hit's provenance is
+        # tagged corpus="earnings" and appended to the same retrieved_sources
+        # list, so the frontend distinguishes which corpus a citation came from.
+        if (
+            state.get("needs_earnings_search")
+            and intent in _EARNINGS_SEARCH_INTENTS
+            and search_earnings_tool is not None
+        ):
+            try:
+                raw = search_earnings_tool(ticker, question)
+            except Exception as exc:  # noqa: BLE001 — search is additive; never crash gather
+                logger.warning("gather %s: search_earnings failed: %s (continuing)", ticker, exc)
+                raw = "[]"
+            earnings_sources = _parse_earnings_sources(raw)
+            hits = _format_earnings_hits(raw)
+            if hits:
+                existing = reports.get("fundamental")
+                reports["fundamental"] = f"{existing}\n\n{hits}" if existing else hits
+                retrieved_sources = retrieved_sources + earnings_sources
+                logger.info(
+                    "gather %s: folded %d earnings-release hits into fundamental report",
+                    ticker,
+                    len(earnings_sources),
                 )
 
         logger.info(

@@ -462,3 +462,65 @@ def test_hybrid_rerank_reorders_when_key_present(
     assert [row["headline"] for row in body] == ["beta", "alpha"]
     # Reranked rows carry the Cohere relevance score, not a cosine.
     assert body[0]["score"] == 0.9
+
+
+# --- QNT-263: earnings-release corpus search (/api/v1/search/earnings) ----------
+
+
+def test_earnings_returns_chunk_rows_with_iso_date(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeClient(
+        _FakeQueryResponse(
+            points=[
+                _FakeScoredPoint(
+                    point_id=901,
+                    score=0.73,
+                    payload={
+                        "ticker": "NVDA",
+                        "filing_date": _ts(2026, 5, 28),
+                        "url": "https://sec.gov/ex99-1",
+                        "title": "NVDA Q1 FY26 earnings release",
+                        "section": "guidance",
+                        "text": "Management guided Q2 revenue to a record.",
+                    },
+                )
+            ]
+        )
+    )
+    _install_fake(monkeypatch, fake)
+
+    r = client.get("/api/v1/search/earnings", params={"query": "guidance", "ticker": "NVDA"})
+    assert r.status_code == 200
+    # Earnings rows carry the chunk display shape (title/section/text), distinct
+    # from the news headline shape. No relevance-gap trim on this corpus.
+    assert r.json() == [
+        {
+            "title": "NVDA Q1 FY26 earnings release",
+            "section": "guidance",
+            "date": "2026-05-28",
+            "score": 0.73,
+            "url": "https://sec.gov/ex99-1",
+            "text": "Management guided Q2 revenue to a record.",
+        }
+    ]
+    # Queries the second corpus, embedded in the same MiniLM space.
+    assert fake.last_collection == "equity_earnings"
+    assert isinstance(fake.last_query, Document)
+    assert fake.last_query.model == search_module.EMBED_MODEL
+
+
+def test_earnings_unknown_ticker_returns_404(client: TestClient) -> None:
+    r = client.get("/api/v1/search/earnings", params={"query": "guidance", "ticker": "BOGUS"})
+    assert r.status_code == 404
+
+
+def test_earnings_qdrant_unreachable_falls_back_to_empty(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeClient(raises=httpx.ConnectError("connection refused"))
+    _install_fake(monkeypatch, fake)
+
+    r = client.get("/api/v1/search/earnings", params={"query": "guidance", "ticker": "NVDA"})
+    assert r.status_code == 200
+    assert r.json() == []

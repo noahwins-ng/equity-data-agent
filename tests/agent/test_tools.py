@@ -23,6 +23,7 @@ from agent.tools import (
     get_news_report,
     get_summary_report,
     get_technical_report,
+    search_earnings,
     search_news,
 )
 
@@ -341,6 +342,60 @@ def test_search_news_invalid_query_returns_empty_array(
         monkeypatch, lambda _u, _p: pytest.fail("httpx should not be called")
     )
     assert search_news("NVDA", query) == "[]"
+    assert recorder.calls == []
+
+
+# ───────────────────────── search_earnings (QNT-263) ─────────────────────────
+
+
+def test_search_earnings_returns_pretty_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = [
+        {
+            "title": "NVDA Q1 FY26 earnings release",
+            "section": "guidance",
+            "date": "2026-05-28",
+            "score": 0.71,
+            "url": "https://sec.gov/ex99-1",
+            "text": "Management guided Q2 revenue to a record.",
+        }
+    ]
+    recorder = _install_recorder(monkeypatch, lambda _u, _p: _json_ok(payload))
+
+    result = search_earnings("nvda", "what was the guidance?")
+
+    assert result == json.dumps(payload, indent=2)
+    url, params = recorder.calls[0]
+    assert url == "http://test-api:8000/api/v1/search/earnings"
+    # Dense-only (no hybrid/rerank — that's news-scoped, QNT-262) + uppercased ticker.
+    assert params == {"ticker": "NVDA", "query": "what was the guidance?", "limit": 5}
+
+
+def test_search_earnings_http_error_degrades_to_empty_array(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_recorder(monkeypatch, lambda _u, _p: httpx.Response(500, text="boom"))
+    assert search_earnings("NVDA", "guidance") == "[]"
+
+
+def test_search_earnings_unknown_ticker_returns_empty_array(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = _install_recorder(
+        monkeypatch, lambda _u, _p: pytest.fail("httpx should not be called")
+    )
+    assert search_earnings("XXXX", "guidance") == "[]"
+    assert recorder.calls == []
+
+
+@pytest.mark.parametrize("query", ["", "x" * 513])
+def test_search_earnings_invalid_query_returns_empty_array(
+    query: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = _install_recorder(
+        monkeypatch, lambda _u, _p: pytest.fail("httpx should not be called")
+    )
+    assert search_earnings("NVDA", query) == "[]"
     assert recorder.calls == []
 
 
