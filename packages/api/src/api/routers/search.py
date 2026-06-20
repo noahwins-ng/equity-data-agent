@@ -21,6 +21,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
+from shared.config import settings
+from shared.retrieval import bm25_ranking, cohere_rerank, reciprocal_rank_fusion
 from shared.tickers import TICKERS
 
 from api.qdrant import get_client
@@ -31,6 +33,11 @@ router = APIRouter(prefix="/api/v1/search", tags=["search"])
 
 COLLECTION = "equity_news"
 EMBED_MODEL = "sentence-transformers/all-minilm-l6-v2"
+
+# Pagination page size for the BM25 corpus scroll (hybrid path). The corpus is
+# the 7-day rolling, ticker-scoped news slice (ADR-009) — tens of docs — so one
+# page almost always suffices; the loop is a safety net, not a hot loop.
+_SCROLL_PAGE = 256
 
 # QNT-226: relevance filter. MiniLM-L6 cosine scores on short finance text are
 # query-dependent and cluster tightly -- a clean-window calibration pull showed
@@ -72,6 +79,140 @@ def _apply_relevance_filter(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [r for r in rows if isinstance(r["score"], int | float) and r["score"] >= cutoff]
 
 
+def _row_from_payload(payload: dict[str, Any], score: float | None) -> dict[str, Any]:
+    """Build the display row the frontend + agent consume from a Qdrant payload.
+
+    Shared by the dense and hybrid paths so both surface identical fields
+    (``headline, source, date, score, url, body``). ``date`` is an ISO date
+    string derived from the stored unix-seconds ``published_at``.
+    """
+    published_unix = payload.get("published_at")
+    if isinstance(published_unix, int | float):
+        date_str: str | None = datetime.fromtimestamp(published_unix, tz=UTC).date().isoformat()
+    else:
+        date_str = None
+    return {
+        "headline": payload.get("headline"),
+        "source": payload.get("source"),
+        "date": date_str,
+        "score": score,
+        "url": payload.get("url"),
+        # QNT-225: the article summary (Finnhub body) so the agent reads the
+        # story, not just the headline. Empty string for points embedded before
+        # QNT-225 (headline-only) until they roll out of the 7-day window.
+        "body": payload.get("body") or "",
+    }
+
+
+def _bm25_text(payload: dict[str, Any]) -> str:
+    """The lexical haystack BM25 scores — headline + body, mirroring embed text."""
+    headline = str(payload.get("headline") or "")
+    body = str(payload.get("body") or "")
+    return f"{headline}\n\n{body}".strip()
+
+
+def _scroll_ticker_corpus(
+    client: Any, query_filter: Any
+) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+    """Page the ticker-scoped corpus into ``{id: bm25_text}`` + ``{id: payload}``.
+
+    The full ticker slice (not just the dense hits) feeds BM25 so a lexical-only
+    match the dense ranker missed can still enter the fusion — the whole point of
+    hybrid. Ids are stringified to share a key space with the dense ranking.
+    """
+    corpus_text: dict[str, str] = {}
+    payloads: dict[str, dict[str, Any]] = {}
+    offset: Any = None
+    while True:
+        points, offset = client.scroll(
+            collection_name=COLLECTION,
+            scroll_filter=query_filter,
+            limit=_SCROLL_PAGE,
+            with_payload=True,
+            with_vectors=False,
+            offset=offset,
+        )
+        for p in points:
+            payload = p.payload or {}
+            doc_id = str(p.id)
+            corpus_text[doc_id] = _bm25_text(payload)
+            payloads[doc_id] = payload
+        if offset is None:
+            break
+    return corpus_text, payloads
+
+
+def _hybrid_search(query: str, ticker: str, limit: int, rerank: bool) -> list[dict[str, Any]]:
+    """Dense + BM25 RRF fusion (QNT-262), with an optional Cohere rerank layer.
+
+    Fuses the dense MiniLM ranking with a client-side BM25 ranking over the
+    ticker-scoped corpus via RRF; when ``rerank`` is set and a Cohere key is
+    configured, a cross-encoder reorders the fused candidate set for precision.
+    Falls back to ``[]`` on any Qdrant transient — same degraded contract as the
+    dense path. The cosine relevance-gap trim (QNT-226) is dense-only and does
+    not apply here: fusion + rerank ordering (and BM25 zero-score exclusion) do
+    the trimming, and RRF scores are not on the cosine scale that trim assumes.
+    """
+    import httpx
+    from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
+    from qdrant_client.models import Document, FieldCondition, Filter, MatchValue
+
+    flt = Filter(must=[FieldCondition(key="ticker", match=MatchValue(value=ticker))])
+    # Wide candidate pool so the reranker / fusion can pull a buried hit into the
+    # returned top-k (4-8). RERANK_CANDIDATES is the fused-set width; cap the
+    # dense fetch so a large `limit` (public endpoint, up to 50) can't drive an
+    # oversized dense query — the BM25 corpus is the full ticker slice regardless.
+    fetch_k = min(max(settings.RERANK_CANDIDATES, limit * 4), 50)
+    client = get_client()
+    try:
+        dense = client.query_points(
+            collection_name=COLLECTION,
+            query=Document(text=query, model=EMBED_MODEL),
+            query_filter=flt,
+            limit=fetch_k,
+            with_payload=False,
+        )
+        corpus_text, payloads = _scroll_ticker_corpus(client, flt)
+    except (ResponseHandlingException, UnexpectedResponse, httpx.HTTPError) as exc:
+        logger.warning(
+            "Qdrant hybrid search failed for query=%r ticker=%r", query, ticker, exc_info=exc
+        )
+        return []
+
+    dense_ids = [str(p.id) for p in dense.points]
+    dense_scores = {str(p.id): p.score for p in dense.points}
+    bm25_ids = bm25_ranking(corpus_text, query, limit=fetch_k)
+    fused = reciprocal_rank_fusion([dense_ids, bm25_ids])
+    candidate_ids = [doc_id for doc_id, _ in fused[: settings.RERANK_CANDIDATES]]
+
+    order = candidate_ids
+    rerank_scores: dict[str, float] = {}
+    if rerank and settings.COHERE_API_KEY:
+        docs = {doc_id: corpus_text.get(doc_id, "") for doc_id in candidate_ids}
+        reranked = cohere_rerank(
+            query,
+            docs,
+            api_key=settings.COHERE_API_KEY,
+            model=settings.COHERE_RERANK_MODEL,
+            top_n=limit,
+        )
+        if reranked is not None:
+            order = [doc_id for doc_id, _ in reranked]
+            rerank_scores = dict(reranked)
+
+    rows: list[dict[str, Any]] = []
+    for doc_id in order[:limit]:
+        payload = payloads.get(doc_id)
+        if payload is None:
+            continue
+        # Reranked rows carry the Cohere relevance score (0-1, cosine-like);
+        # non-reranked rows keep the dense cosine where the doc was a dense hit,
+        # else None (a BM25-only hit has no comparable vector score).
+        score = rerank_scores.get(doc_id, dense_scores.get(doc_id))
+        rows.append(_row_from_payload(payload, score))
+    return rows
+
+
 @router.get("/news")
 def search_news(
     query: str = Query(
@@ -85,6 +226,14 @@ def search_news(
         description="Restrict results to a single ticker from shared.tickers.TICKERS",
     ),
     limit: int = Query(default=5, ge=1, le=50),
+    hybrid: bool = Query(
+        default=False,
+        description="QNT-262: fuse dense + BM25 (RRF). Requires a ticker; ignored otherwise.",
+    ),
+    rerank: bool = Query(
+        default=False,
+        description="QNT-262: Cohere rerank the fused set. No-ops without a Cohere key.",
+    ),
 ) -> list[dict[str, Any]]:
     """Return the top-``limit`` news headlines most semantically similar to ``query``.
 
@@ -101,6 +250,12 @@ def search_news(
         ticker = ticker.upper()
         if ticker not in TICKERS:
             raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+
+    # QNT-262: hybrid (dense + BM25 RRF, optional rerank) needs a ticker to keep
+    # the BM25 corpus scroll bounded. Without one, or with the master switch off,
+    # fall through to the unchanged dense path (and its QNT-226 relevance trim).
+    if hybrid and settings.HYBRID_SEARCH_ENABLED and ticker is not None:
+        return _hybrid_search(query, ticker, limit, rerank)
 
     query_filter: Filter | None = None
     if ticker is not None:

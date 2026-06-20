@@ -65,6 +65,7 @@ import ir_measures
 import yaml
 from ir_measures import RR, R, nDCG
 from shared.config import settings
+from shared.retrieval import bm25_ranking, cohere_rerank, reciprocal_rank_fusion
 from shared.tickers import TICKERS
 
 from agent.evals.golden_set import (
@@ -83,6 +84,10 @@ _GOLDENS = Path(__file__).parent / "goldens"
 RETRIEVAL_GOLDENS_PATH = _GOLDENS / "retrieval.yaml"
 RETRIEVAL_QRELS_PATH = _GOLDENS / "retrieval_qrels.trec"
 RETRIEVAL_RUN_PATH = _GOLDENS / "retrieval_run.trec"
+# QNT-262: the frozen hybrid (dense + BM25 RRF [+ rerank]) ranking, written by
+# ``--hybrid``. Kept beside the dense run so the lift is reproducible from the
+# committed artifacts, not just the PR table.
+RETRIEVAL_RUN_HYBRID_PATH = _GOLDENS / "retrieval_run_hybrid.trec"
 
 # Same embed model + collections the production search path uses, so the
 # baseline measures the retrieval the system actually serves (api/routers/search
@@ -334,6 +339,75 @@ def dense_run_ids(
     return [(p.id, float(p.score)) for p in response.points if isinstance(p.id, int)]
 
 
+def corpus_texts(client: QdrantClient, query: RetrievalQuery) -> dict[str, str]:
+    """Scroll the ticker-scoped corpus into ``{str(point_id): searchable_text}``.
+
+    The BM25 half of hybrid scores the *full* ticker slice (same scan
+    ``scan_relevant_ids`` walks), so a lexical-only doc the dense ranker missed
+    can still enter the fusion. Uses ``_searchable_text`` so the BM25 haystack
+    matches the relevance criterion's, per corpus.
+    """
+    from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+    collection = COLLECTIONS[query.corpus]
+    flt = Filter(must=[FieldCondition(key="ticker", match=MatchValue(value=query.ticker))])
+    texts: dict[str, str] = {}
+    offset: Any = None
+    while True:
+        points, offset = client.scroll(
+            collection_name=collection,
+            scroll_filter=flt,
+            limit=256,
+            with_payload=True,
+            with_vectors=False,
+            offset=offset,
+        )
+        for p in points:
+            if isinstance(p.id, int):
+                texts[str(p.id)] = _searchable_text(query.corpus, p.payload or {})
+        if offset is None:
+            break
+    return texts
+
+
+def hybrid_run_ids(
+    client: QdrantClient,
+    query: RetrievalQuery,
+    *,
+    depth: int = RUN_DEPTH,
+    rerank: bool = False,
+) -> list[tuple[int, float]]:
+    """Hybrid retrieval under test: dense + BM25 RRF, optionally Cohere-reranked.
+
+    Fuses the dense ranking (``dense_run_ids``) with a BM25 ranking over the
+    ticker corpus (``corpus_texts``) via RRF; when ``rerank`` is set and a Cohere
+    key is configured, the fused candidate set is reordered by the cross-encoder.
+    Returns up to ``depth`` ``(point_id, score)`` pairs descending — the same
+    shape ``dense_run_ids`` returns, so the two are A/B-scored identically.
+    """
+    dense = dense_run_ids(client, query, depth=depth)
+    dense_ids = [str(pid) for pid, _ in dense]
+    corpus = corpus_texts(client, query)
+    bm25_ids = bm25_ranking(corpus, query.query, limit=depth)
+    fused = reciprocal_rank_fusion([dense_ids, bm25_ids])
+
+    candidate_ids = [doc_id for doc_id, _ in fused[: settings.RERANK_CANDIDATES]]
+    ordered: list[tuple[str, float]] = fused[:depth]
+    if rerank and settings.COHERE_API_KEY:
+        docs = {doc_id: corpus.get(doc_id, "") for doc_id in candidate_ids}
+        reranked = cohere_rerank(
+            query.query,
+            docs,
+            api_key=settings.COHERE_API_KEY,
+            model=settings.COHERE_RERANK_MODEL,
+            top_n=len(candidate_ids),
+        )
+        if reranked is not None:
+            ordered = reranked[:depth]
+
+    return [(int(doc_id), score) for doc_id, score in ordered]
+
+
 # --- history.csv tracking ------------------------------------------------------
 
 
@@ -390,6 +464,25 @@ def summarise(metrics: dict[str, float], *, n_queries: int) -> str:
         f"  nDCG@10:   {metrics.get('nDCG@10', 0.0):.4f}  (floor {GATE_FLOORS['nDCG@10']})",
     ]
     lines.append("  GATE: FAIL -- " + "; ".join(failures) if failures else "  GATE: PASS")
+    return "\n".join(lines)
+
+
+def summarise_comparison(
+    dense: dict[str, float], hybrid: dict[str, float], *, n_queries: int, label: str
+) -> str:
+    """Before/after scorecard: dense baseline vs hybrid, with per-metric delta.
+
+    The AC3 artifact — pasted into the PR so the hybrid+rerank lift (or null
+    result) is quantified against the same live corpus, not an assumption.
+    """
+    lines = [
+        f"RETRIEVAL EVAL -- dense vs {label} ({n_queries} labeled queries, ir_measures)",
+        f"  {'metric':<10} {'dense':>8} {'hybrid':>8} {'delta':>8}",
+    ]
+    for name in ("R@5", "R@20", "RR", "nDCG@10"):
+        d = dense.get(name, 0.0)
+        h = hybrid.get(name, 0.0)
+        lines.append(f"  {name:<10} {d:>8.4f} {h:>8.4f} {h - d:>+8.4f}")
     return "\n".join(lines)
 
 
@@ -454,6 +547,48 @@ def run_baseline() -> int:
     return 0
 
 
+def run_hybrid(*, rerank: bool) -> int:
+    """``--hybrid``: live dense vs hybrid A/B over the labeled set (QNT-262).
+
+    Runs current dense retrieval and hybrid (dense + BM25 RRF [+ Cohere rerank])
+    over the SAME live corpus in one pass, scores both against the frozen qrels,
+    freezes the hybrid run, appends a history row, and prints the before/after
+    scorecard. Records the AC3 lift. ``--rerank`` adds the Cohere layer; it
+    no-ops (logs, falls back to fused) when COHERE_API_KEY is unset.
+    """
+    queries = load_retrieval_queries()
+    qrels = load_qrels_trec()
+    problems = _check_alignment(queries, ("qrels", set(qrels)))
+    if problems:
+        print("label the corpus first (--label):\n  " + "\n  ".join(problems), file=sys.stderr)
+        return 1
+
+    rerank_active = rerank and bool(settings.COHERE_API_KEY)
+    if rerank and not rerank_active:
+        print(
+            "note: --rerank requested but COHERE_API_KEY unset -- measuring fused-only",
+            file=sys.stderr,
+        )
+    label = "hybrid+rerank" if rerank_active else "hybrid"
+
+    client = _qdrant_client()
+    dense_run: dict[str, dict[str, float]] = {}
+    hybrid_run: dict[str, dict[str, float]] = {}
+    for q in queries:
+        dense_run[q.id] = {str(pid): score for pid, score in dense_run_ids(client, q)}
+        hybrid_run[q.id] = {
+            str(pid): score for pid, score in hybrid_run_ids(client, q, rerank=rerank)
+        }
+
+    dense_metrics = compute_metrics(qrels, dense_run)
+    hybrid_metrics = compute_metrics(qrels, hybrid_run)
+    write_run_trec(hybrid_run, RETRIEVAL_RUN_HYBRID_PATH)
+    rid = append_retrieval_history(hybrid_metrics, n_queries=len(queries))
+    print(summarise_comparison(dense_metrics, hybrid_metrics, n_queries=len(queries), label=label))
+    print(f"\nfrozen hybrid run: {RETRIEVAL_RUN_HYBRID_PATH}\nhistory run_id: {rid}")
+    return 0
+
+
 def score_offline() -> int:
     """Default: offline frozen qrels + run -> metrics + gate. The CI path."""
     queries = load_retrieval_queries()
@@ -477,6 +612,16 @@ def main(argv: list[str] | None = None) -> int:
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--label", action="store_true", help="Write qrels from the live corpus.")
     group.add_argument("--baseline", action="store_true", help="Record dense baseline (live).")
+    group.add_argument(
+        "--hybrid",
+        action="store_true",
+        help="Live dense-vs-hybrid A/B + before/after scorecard (QNT-262).",
+    )
+    parser.add_argument(
+        "--rerank",
+        action="store_true",
+        help="With --hybrid, add the Cohere rerank layer (no-op without a key).",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -485,6 +630,8 @@ def main(argv: list[str] | None = None) -> int:
         return label_corpus()
     if args.baseline:
         return run_baseline()
+    if args.hybrid:
+        return run_hybrid(rerank=args.rerank)
     return score_offline()
 
 
@@ -496,16 +643,20 @@ __all__ = [
     "MIN_QUERIES",
     "RETRIEVAL_GOLDENS_PATH",
     "RETRIEVAL_QRELS_PATH",
+    "RETRIEVAL_RUN_HYBRID_PATH",
     "RETRIEVAL_RUN_PATH",
     "RUN_DEPTH",
     "RetrievalQuery",
     "append_retrieval_history",
     "compute_metrics",
+    "corpus_texts",
     "gate_failures",
+    "hybrid_run_ids",
     "load_qrels_trec",
     "load_retrieval_queries",
     "load_run_trec",
     "summarise",
+    "summarise_comparison",
     "write_qrels_trec",
     "write_run_trec",
 ]
