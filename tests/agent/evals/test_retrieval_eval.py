@@ -18,6 +18,7 @@ from agent.evals.retrieval_eval import (
     GATE_FLOORS,
     MAX_QUERIES,
     MIN_QUERIES,
+    RETRIEVAL_RUN_HYBRID_PATH,
     compute_metrics,
     gate_failures,
     load_qrels_trec,
@@ -65,9 +66,13 @@ def test_qrels_align_with_topics() -> None:
 
 
 def test_run_covers_every_topic() -> None:
+    # The gated artifact is the served (hybrid+rerank) run after the QNT-262
+    # follow-up; its coverage is what the gate depends on.
     topic_ids = {q.id for q in load_retrieval_queries()}
-    run = load_run_trec()
-    assert set(run) == topic_ids, "frozen run out of sync with topics -- re-run --baseline"
+    run = load_run_trec(RETRIEVAL_RUN_HYBRID_PATH)
+    assert set(run) == topic_ids, (
+        "frozen served run out of sync with topics -- re-run --hybrid --rerank"
+    )
 
 
 # --- the retrieval gate (AC2/AC5): metrics meet their floors -------------------
@@ -75,7 +80,7 @@ def test_run_covers_every_topic() -> None:
 
 def test_retrieval_metrics_pass_gate() -> None:
     qrels = load_qrels_trec()
-    run = load_run_trec()
+    run = load_run_trec(RETRIEVAL_RUN_HYBRID_PATH)
     metrics = compute_metrics(qrels, run)
     failures = gate_failures(metrics)
     assert not failures, "retrieval regression: " + "; ".join(failures)
@@ -84,7 +89,7 @@ def test_retrieval_metrics_pass_gate() -> None:
 def test_all_floors_have_metrics() -> None:
     """Every gated metric name must actually be produced by compute_metrics,
     otherwise a typo'd floor key would silently never gate."""
-    metrics = compute_metrics(load_qrels_trec(), load_run_trec())
+    metrics = compute_metrics(load_qrels_trec(), load_run_trec(RETRIEVAL_RUN_HYBRID_PATH))
     for name in GATE_FLOORS:
         assert name in metrics, f"gate floor {name!r} has no matching metric"
 

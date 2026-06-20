@@ -917,3 +917,4 @@ run_id,git_sha,prompt_version,ticker,question_id,question,faithfulness,structure
 20260616T182622Z-3bab54-dialogue,68facdf,dc79f7ab0c,,ALL,,,,,,,,,,,dialogue_summary,,,0.7583,,0.8083,,0.9833,,0.6625,,0.85,,0.8125,equity-agent/bench-cerebras-gptoss120b (cerebras/gpt-oss-120b),groq/llama-3.3-70b-versatile,0.057,0.0583,0.0167,0.0694,0.0526,0.0462,12
 e2331302,869b203,dc79f7ab0c,,,,,,,,,,,,,retrieval,,,,,,,,,,,,,,,,,,,,,,,0.4802,0.7232,0.845,0.7023,51
 174163a5,e0c21a6,dc79f7ab0c,,,,,,,,,,,,,retrieval,,,,,,,,,,,,,,,,,,,,,,,0.4859,0.7611,0.8252,0.7083,51
+3afb5818,a73098a,dc79f7ab0c,,,,,,,,,,,,,retrieval,,,,,,,,,,,,,,,,,,,,,,,0.5317,0.7611,0.9379,0.7857,51

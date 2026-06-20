@@ -84,9 +84,13 @@ _GOLDENS = Path(__file__).parent / "goldens"
 RETRIEVAL_GOLDENS_PATH = _GOLDENS / "retrieval.yaml"
 RETRIEVAL_QRELS_PATH = _GOLDENS / "retrieval_qrels.trec"
 RETRIEVAL_RUN_PATH = _GOLDENS / "retrieval_run.trec"
-# QNT-262: the frozen hybrid (dense + BM25 RRF [+ rerank]) ranking, written by
-# ``--hybrid``. Kept beside the dense run so the lift is reproducible from the
-# committed artifacts, not just the PR table.
+# QNT-262: the frozen SERVED-path ranking -- hybrid (dense + BM25 RRF) + Cohere
+# rerank -- written by ``--hybrid --rerank``. This is the GATED run after the
+# QNT-262 follow-up: prod serves this path, so ``score_offline`` scores it.
+# ``retrieval_run.trec`` (dense) is kept as the committed A/B reference (the
+# "before"); only the rerank run is frozen here (``run_hybrid`` writes it only
+# when rerank is active, so a fused-only ``--hybrid`` can't clobber the gated
+# run with weaker numbers).
 RETRIEVAL_RUN_HYBRID_PATH = _GOLDENS / "retrieval_run_hybrid.trec"
 
 # Same embed model + collections the production search path uses, so the
@@ -104,17 +108,23 @@ MAX_QUERIES = 200
 # the 4-8 band is the faithfulness-relevant cut-off -- 20 covers both.
 RUN_DEPTH = 20
 
-# Per-PR gate floors. Set just below the recorded dense baseline (see
-# history.csv) so the gate catches a real regression without failing on day one;
-# re-derive against a fresh baseline when retrieval changes (QNT-262 hybrid).
-# NB these are regression tripwires anchored to the MEASURED MiniLM-dense
-# baseline, NOT the design-doc aspirational targets (recall@20 >= 0.8).
-# Measured 2026-06-20 dense baseline: R@5 0.48, R@20 0.72, RR 0.85, nDCG@10 0.70.
+# Per-PR gate floors. Set ~0.08 below the recorded baseline (see history.csv) so
+# the gate catches a real regression without failing on day one; re-derive
+# against a fresh baseline when retrieval changes. NB these are regression
+# tripwires anchored to the MEASURED baseline, NOT the design-doc aspirational
+# targets (recall@20 >= 0.8).
+#
+# QNT-262 follow-up: PROMOTED to the SERVED path -- prod now serves hybrid (dense
+# + BM25 RRF) + Cohere Rerank 3.5, so the gate scores that frozen run
+# (retrieval_run_hybrid.trec), not the dense-only one. Measured 2026-06-20
+# served baseline: R@5 0.53, R@20 0.76, RR 0.94, nDCG@10 0.79 (vs the dense
+# 0.48/0.72/0.85/0.70 the dense reference still records). Floors re-derived
+# against the served numbers so the gate now catches a rerank-path regression.
 GATE_FLOORS: dict[str, float] = {
-    "R@5": 0.40,
-    "R@20": 0.60,
-    "RR": 0.70,
-    "nDCG@10": 0.55,
+    "R@5": 0.45,
+    "R@20": 0.68,
+    "RR": 0.85,
+    "nDCG@10": 0.70,
 }
 
 # ir_measures metric objects, evaluated together in one pass.
@@ -453,11 +463,11 @@ def append_retrieval_history(
     return rid
 
 
-def summarise(metrics: dict[str, float], *, n_queries: int) -> str:
+def summarise(metrics: dict[str, float], *, n_queries: int, label: str = "baseline") -> str:
     """Human-readable scorecard + gate verdict for stdout / the README."""
     failures = gate_failures(metrics)
     lines = [
-        f"RETRIEVAL EVAL (dense baseline; {n_queries} labeled queries, deterministic ir_measures)",
+        f"RETRIEVAL EVAL ({label}; {n_queries} labeled queries, deterministic ir_measures)",
         f"  recall@5:  {metrics.get('R@5', 0.0):.4f}  (floor {GATE_FLOORS['R@5']})",
         f"  recall@20: {metrics.get('R@20', 0.0):.4f}  (floor {GATE_FLOORS['R@20']})",
         f"  MRR:       {metrics.get('RR', 0.0):.4f}  (floor {GATE_FLOORS['RR']})",
@@ -542,7 +552,9 @@ def run_baseline() -> int:
     write_run_trec(run)
     metrics = compute_metrics(qrels, run)
     rid = append_retrieval_history(metrics, n_queries=len(queries))
-    print(summarise(metrics, n_queries=len(queries)))
+    # Dense is the A/B reference, not the gate (the gate scores the served
+    # hybrid+rerank run); skip the gate verdict here to avoid implying it.
+    print(summarise(metrics, n_queries=len(queries), label="dense reference"))
     print(f"\nfrozen run: {RETRIEVAL_RUN_PATH}\nhistory run_id: {rid}")
     return 0
 
@@ -552,9 +564,13 @@ def run_hybrid(*, rerank: bool) -> int:
 
     Runs current dense retrieval and hybrid (dense + BM25 RRF [+ Cohere rerank])
     over the SAME live corpus in one pass, scores both against the frozen qrels,
-    freezes the hybrid run, appends a history row, and prints the before/after
-    scorecard. Records the AC3 lift. ``--rerank`` adds the Cohere layer; it
-    no-ops (logs, falls back to fused) when COHERE_API_KEY is unset.
+    appends a history row, and prints the before/after scorecard. ``--rerank``
+    adds the Cohere layer; it no-ops (logs, falls back to fused) when
+    COHERE_API_KEY is unset.
+
+    The frozen served run (``retrieval_run_hybrid.trec``, the GATED artifact) is
+    rewritten ONLY when rerank is active -- so a fused-only ``--hybrid`` is a
+    print-only diagnostic that can't clobber the gated run with weaker numbers.
     """
     queries = load_retrieval_queries()
     qrels = load_qrels_trec()
@@ -571,6 +587,14 @@ def run_hybrid(*, rerank: bool) -> int:
         )
     label = "hybrid+rerank" if rerank_active else "hybrid"
 
+    # Cohere Rerank 3.5 trial = 10 rpm. One rerank call per query, so throttle to
+    # stay under the ceiling -- otherwise 429s degrade calls to the fused order
+    # (cohere_rerank returns None) and silently UNDERSTATE the rerank lift. No
+    # throttle on the fused-only path (no network per query).
+    import time
+
+    throttle_s = 60.0 / 10 if rerank_active else 0.0
+
     client = _qdrant_client()
     dense_run: dict[str, dict[str, float]] = {}
     hybrid_run: dict[str, dict[str, float]] = {}
@@ -579,31 +603,41 @@ def run_hybrid(*, rerank: bool) -> int:
         hybrid_run[q.id] = {
             str(pid): score for pid, score in hybrid_run_ids(client, q, rerank=rerank)
         }
+        if throttle_s:
+            time.sleep(throttle_s)
 
     dense_metrics = compute_metrics(qrels, dense_run)
     hybrid_metrics = compute_metrics(qrels, hybrid_run)
-    write_run_trec(hybrid_run, RETRIEVAL_RUN_HYBRID_PATH)
     rid = append_retrieval_history(hybrid_metrics, n_queries=len(queries))
     print(summarise_comparison(dense_metrics, hybrid_metrics, n_queries=len(queries), label=label))
-    print(f"\nfrozen hybrid run: {RETRIEVAL_RUN_HYBRID_PATH}\nhistory run_id: {rid}")
+    # Only the served path (rerank active) is the gated artifact; freeze it. A
+    # fused-only run prints the A/B but leaves the committed gated run intact.
+    if rerank_active:
+        write_run_trec(hybrid_run, RETRIEVAL_RUN_HYBRID_PATH)
+        print(f"\nfrozen served run: {RETRIEVAL_RUN_HYBRID_PATH}")
+    print(f"history run_id: {rid}")
     return 0
 
 
 def score_offline() -> int:
-    """Default: offline frozen qrels + run -> metrics + gate. The CI path."""
+    """Default: offline frozen qrels + SERVED run -> metrics + gate. The CI path.
+
+    QNT-262 follow-up: scores the frozen hybrid+rerank run (the path prod serves),
+    not the dense reference, so the per-PR gate guards the served retrieval.
+    """
     queries = load_retrieval_queries()
     qrels = load_qrels_trec()
-    run = load_run_trec()
+    run = load_run_trec(RETRIEVAL_RUN_HYBRID_PATH)
     problems = _check_alignment(queries, ("qrels", set(qrels)), ("run", set(run)))
     if problems:
         print(
-            "frozen artifacts out of sync with topics (re-run --label / --baseline):\n  "
+            "frozen artifacts out of sync with topics (re-run --label / --hybrid --rerank):\n  "
             + "\n  ".join(problems),
             file=sys.stderr,
         )
         return 1
     metrics = compute_metrics(qrels, run)
-    print(summarise(metrics, n_queries=len(queries)))
+    print(summarise(metrics, n_queries=len(queries), label="served path: hybrid+rerank"))
     return 1 if gate_failures(metrics) else 0
 
 
