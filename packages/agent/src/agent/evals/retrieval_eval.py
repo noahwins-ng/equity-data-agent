@@ -65,7 +65,13 @@ import ir_measures
 import yaml
 from ir_measures import RR, R, nDCG
 from shared.config import settings
-from shared.retrieval import bm25_ranking, cohere_rerank, reciprocal_rank_fusion
+from shared.retrieval import (
+    bm25_ranking,
+    cohere_rerank,
+    contextualize_chunk,
+    contextualized_text,
+    reciprocal_rank_fusion,
+)
 from shared.tickers import TICKERS
 
 from agent.evals.golden_set import (
@@ -98,6 +104,12 @@ RETRIEVAL_RUN_HYBRID_PATH = _GOLDENS / "retrieval_run_hybrid.trec"
 # + api/qdrant; assets/{news,earnings}_embeddings). MiniLM-L6 -> 384-dim cosine.
 EMBED_MODEL = "sentence-transformers/all-minilm-l6-v2"
 COLLECTIONS = {"news": "equity_news", "earnings": "equity_earnings"}
+
+# QNT-273: the contextual A/B index. Same chunks + point ids + plain payload as
+# ``equity_earnings``, but each vector embeds ``context_blurb \n\n chunk`` — so
+# dense retrieval over this collection vs the plain one is the contextual lift,
+# scored against the one shared qrels file (ids match across both).
+CONTEXTUAL_COLLECTION = "equity_earnings_ctx"
 
 # Min labeled queries for the set to reliably catch a >5% regression (design-doc
 # calibration: a 50-q set is the floor). Upper bound mirrors the 200 target.
@@ -327,17 +339,25 @@ def scan_relevant_ids(client: QdrantClient, query: RetrievalQuery) -> list[int]:
 
 
 def dense_run_ids(
-    client: QdrantClient, query: RetrievalQuery, *, depth: int = RUN_DEPTH
+    client: QdrantClient,
+    query: RetrievalQuery,
+    *,
+    depth: int = RUN_DEPTH,
+    collection: str | None = None,
 ) -> list[tuple[int, float]]:
     """Run current dense retrieval -- the ranking under test.
 
     Returns up to ``depth`` ``(point_id, score)`` pairs, descending by score,
     reproducing the production search path (same model, collection, ticker
     filter) minus the API's relevance-gap trim so the full ranking is scored.
+
+    ``collection`` overrides the corpus default so the QNT-273 A/B can score the
+    SAME query against the contextual index (``equity_earnings_ctx``); point ids
+    are identical across the two collections, so one qrels file scores both.
     """
     from qdrant_client.models import Document, FieldCondition, Filter, MatchValue
 
-    collection = COLLECTIONS[query.corpus]
+    collection = collection or COLLECTIONS[query.corpus]
     flt = Filter(must=[FieldCondition(key="ticker", match=MatchValue(value=query.ticker))])
     response = client.query_points(
         collection_name=collection,
@@ -478,21 +498,23 @@ def summarise(metrics: dict[str, float], *, n_queries: int, label: str = "baseli
 
 
 def summarise_comparison(
-    dense: dict[str, float], hybrid: dict[str, float], *, n_queries: int, label: str
+    dense: dict[str, float], variant: dict[str, float], *, n_queries: int, label: str
 ) -> str:
-    """Before/after scorecard: dense baseline vs hybrid, with per-metric delta.
+    """Before/after scorecard: dense baseline vs a ``label`` variant, with deltas.
 
-    The AC3 artifact — pasted into the PR so the hybrid+rerank lift (or null
-    result) is quantified against the same live corpus, not an assumption.
+    The AC3 artifact — pasted into the PR so the lift (or null result) of the
+    variant under test (hybrid+rerank for QNT-262, contextual for QNT-273) is
+    quantified against the same live corpus, not an assumption. The variant
+    column header tracks ``label`` so the scorecard never mislabels the run.
     """
     lines = [
         f"RETRIEVAL EVAL -- dense vs {label} ({n_queries} labeled queries, ir_measures)",
-        f"  {'metric':<10} {'dense':>8} {'hybrid':>8} {'delta':>8}",
+        f"  {'metric':<10} {'dense':>8} {label[:8]:>8} {'delta':>8}",
     ]
     for name in ("R@5", "R@20", "RR", "nDCG@10"):
         d = dense.get(name, 0.0)
-        h = hybrid.get(name, 0.0)
-        lines.append(f"  {name:<10} {d:>8.4f} {h:>8.4f} {h - d:>+8.4f}")
+        v = variant.get(name, 0.0)
+        lines.append(f"  {name:<10} {d:>8.4f} {v:>8.4f} {v - d:>+8.4f}")
     return "\n".join(lines)
 
 
@@ -619,6 +641,198 @@ def run_hybrid(*, rerank: bool) -> int:
     return 0
 
 
+def build_contextual_index(
+    client: QdrantClient, queries: list[RetrievalQuery], *, throttle_s: float = 1.0
+) -> int:
+    """Build/refresh ``equity_earnings_ctx`` — the contextual A/B index (QNT-273).
+
+    For every earnings ticker in the labeled set, scroll the plain
+    ``equity_earnings`` points, reconstruct each release's parent document from
+    its chunks (ordered by ``chunk_index``), generate a 1-sentence context blurb
+    per chunk (``shared.contextualize_chunk`` -> LiteLLM free model), and upsert
+    the enriched embedding under the SAME point id + plain payload. Idempotent on
+    a SUCCESSFUL enrichment: a re-run skips points whose ctx payload already
+    carries a non-empty ``context`` and retries the rest, so a 429 mid-build (the
+    blurb falls back to "") is healed by re-running rather than frozen plain.
+    Returns the number of chunks enriched this run.
+
+    The parent doc is reconstructed from the indexed chunks (not re-read from
+    ClickHouse) so the harness needs only Qdrant + the LiteLLM proxy — no tunnel.
+    """
+    import time
+
+    from qdrant_client.models import (
+        Distance,
+        Document,
+        FieldCondition,
+        Filter,
+        MatchValue,
+        PayloadSchemaType,
+        PointStruct,
+        VectorParams,
+    )
+
+    tickers = sorted({q.ticker for q in queries if q.corpus == "earnings"})
+    existing_cols = {c.name for c in client.get_collections().collections}
+    if CONTEXTUAL_COLLECTION not in existing_cols:
+        client.create_collection(
+            collection_name=CONTEXTUAL_COLLECTION,
+            vectors_config=VectorParams(size=384, distance=Distance.COSINE),
+        )
+        client.create_payload_index(
+            collection_name=CONTEXTUAL_COLLECTION,
+            field_name="ticker",
+            field_schema=PayloadSchemaType.KEYWORD,
+        )
+
+    enriched = 0
+    for ticker in tickers:
+        flt = Filter(must=[FieldCondition(key="ticker", match=MatchValue(value=ticker))])
+        # plain points (id + payload) and the ids already SUCCESSFULLY enriched.
+        plain: list[tuple[int, dict[str, Any]]] = []
+        offset: Any = None
+        while True:
+            recs, offset = client.scroll(
+                collection_name=COLLECTIONS["earnings"],
+                scroll_filter=flt,
+                limit=256,
+                with_payload=True,
+                with_vectors=False,
+                offset=offset,
+            )
+            plain.extend((int(r.id), r.payload or {}) for r in recs if isinstance(r.id, int))
+            if offset is None:
+                break
+        done_ids = _ctx_enriched_ids(client, flt)
+
+        # Reconstruct each release's document from its chunks (chunk_index order).
+        docs: dict[int, str] = {}
+        by_doc: dict[int, list[tuple[int, str]]] = {}
+        for _pid, payload in plain:
+            by_doc.setdefault(int(payload.get("doc_id", 0)), []).append(
+                (int(payload.get("chunk_index", 0)), str(payload.get("text", "")))
+            )
+        for doc_id, chunks in by_doc.items():
+            docs[doc_id] = " ".join(text for _idx, text in sorted(chunks))
+
+        points: list[PointStruct] = []
+        for pid, payload in plain:
+            if pid in done_ids:
+                continue
+            text = str(payload.get("text", ""))
+            document = docs.get(int(payload.get("doc_id", 0)), text)
+            blurb = contextualize_chunk(
+                document,
+                text,
+                base_url=settings.LITELLM_BASE_URL,
+                model=settings.CONTEXT_MODEL,
+                max_doc_chars=settings.CONTEXT_MAX_DOC_CHARS,
+            )
+            if blurb:
+                enriched += 1
+            time.sleep(throttle_s)
+            points.append(
+                PointStruct(
+                    id=pid,
+                    vector=Document(text=contextualized_text(blurb, text), model=EMBED_MODEL),
+                    payload={**payload, "context": blurb},
+                )
+            )
+        if points:
+            client.upsert(collection_name=CONTEXTUAL_COLLECTION, points=points, wait=True)
+        logger.info(
+            "ctx %s: %d plain, %d upserted this run (%d already enriched)",
+            ticker,
+            len(plain),
+            len(points),
+            len(done_ids),
+        )
+    return enriched
+
+
+def _ctx_enriched_ids(client: QdrantClient, flt: Any) -> set[int]:
+    """Ctx point ids whose payload already carries a non-empty ``context``.
+
+    Only successfully-enriched points count as done, so a re-run retries the ones
+    a 429 left plain (empty context). Returns ``set()`` if the ctx collection does
+    not exist yet (first build); a transient/auth error propagates rather than
+    masquerading as "nothing enriched" (which would force a full re-enrichment).
+    """
+    from qdrant_client.http.exceptions import UnexpectedResponse
+
+    ids: set[int] = set()
+    offset: Any = None
+    try:
+        while True:
+            recs, offset = client.scroll(
+                collection_name=CONTEXTUAL_COLLECTION,
+                scroll_filter=flt,
+                limit=256,
+                with_payload=True,
+                with_vectors=False,
+                offset=offset,
+            )
+            ids.update(
+                int(r.id)
+                for r in recs
+                if isinstance(r.id, int) and (r.payload or {}).get("context")
+            )
+            if offset is None:
+                return ids
+    except UnexpectedResponse as exc:
+        if exc.status_code == 404:  # collection not created yet on the first build
+            return set()
+        raise
+
+
+def run_contextual() -> int:
+    """``--contextual``: build the ctx index, then A/B plain vs contextual (QNT-273).
+
+    Enriches + embeds the earnings corpus into ``equity_earnings_ctx`` (idempotent),
+    then runs dense retrieval over the plain ``equity_earnings`` and the contextual
+    index for the EARNINGS labeled queries, scores both against the shared qrels,
+    appends a history row, and prints the before/after scorecard. This is the AC3
+    artifact — the measured lift (or null result) that the ship-or-revert decision
+    is recorded against in the PR.
+    """
+    queries = load_retrieval_queries()
+    earnings = [q for q in queries if q.corpus == "earnings"]
+    if not earnings:
+        print("no earnings queries in the labeled set — nothing to A/B", file=sys.stderr)
+        return 1
+    qrels = load_qrels_trec()
+    problems = _check_alignment(queries, ("qrels", set(qrels)))
+    if problems:
+        print("label the corpus first (--label):\n  " + "\n  ".join(problems), file=sys.stderr)
+        return 1
+
+    client = _qdrant_client()
+    n_enriched = build_contextual_index(
+        client, earnings, throttle_s=settings.CONTEXT_THROTTLE_SECONDS
+    )
+    print(f"contextual index ready: {n_enriched} chunks enriched this run\n")
+
+    earnings_qrels = {q.id: qrels[q.id] for q in earnings if q.id in qrels}
+    plain_run: dict[str, dict[str, float]] = {}
+    ctx_run: dict[str, dict[str, float]] = {}
+    for q in earnings:
+        plain_run[q.id] = {str(pid): s for pid, s in dense_run_ids(client, q)}
+        ctx_run[q.id] = {
+            str(pid): s for pid, s in dense_run_ids(client, q, collection=CONTEXTUAL_COLLECTION)
+        }
+
+    plain_metrics = compute_metrics(earnings_qrels, plain_run)
+    ctx_metrics = compute_metrics(earnings_qrels, ctx_run)
+    rid = append_retrieval_history(ctx_metrics, n_queries=len(earnings))
+    print(
+        summarise_comparison(
+            plain_metrics, ctx_metrics, n_queries=len(earnings), label="contextual"
+        )
+    )
+    print(f"\nhistory run_id: {rid}")
+    return 0
+
+
 def score_offline() -> int:
     """Default: offline frozen qrels + SERVED run -> metrics + gate. The CI path.
 
@@ -651,6 +865,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Live dense-vs-hybrid A/B + before/after scorecard (QNT-262).",
     )
+    group.add_argument(
+        "--contextual",
+        action="store_true",
+        help="Build the contextual index + dense plain-vs-contextual A/B (QNT-273).",
+    )
     parser.add_argument(
         "--rerank",
         action="store_true",
@@ -666,6 +885,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_baseline()
     if args.hybrid:
         return run_hybrid(rerank=args.rerank)
+    if args.contextual:
+        return run_contextual()
     return score_offline()
 
 
@@ -680,8 +901,10 @@ __all__ = [
     "RETRIEVAL_RUN_HYBRID_PATH",
     "RETRIEVAL_RUN_PATH",
     "RUN_DEPTH",
+    "CONTEXTUAL_COLLECTION",
     "RetrievalQuery",
     "append_retrieval_history",
+    "build_contextual_index",
     "compute_metrics",
     "corpus_texts",
     "gate_failures",

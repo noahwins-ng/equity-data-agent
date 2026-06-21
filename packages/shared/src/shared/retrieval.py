@@ -128,9 +128,96 @@ def cohere_rerank(
     return reranked
 
 
+# ─── QNT-273: contextual retrieval (index-time chunk-context enrichment) ──────
+
+# Anthropic's Contextual Retrieval prompt (Sep 2024), adapted for 8-K earnings
+# releases. The whole release is the stable prefix (cache-friendly — see below);
+# the chunk is the variable suffix. We ask for a single short sentence, no
+# preamble, so the blurb can be prepended verbatim before embedding.
+_CONTEXT_SYSTEM = (
+    "You situate a text chunk within its parent document for search retrieval. "
+    "Given the full earnings release and one chunk from it, write a single short "
+    "sentence (max 25 words) naming the company, the period/event, and what the "
+    "chunk covers, so the chunk is findable out of context. Output only that "
+    "sentence — no preamble, no quotes, no markdown."
+)
+_CONTEXT_USER = (
+    "<document>\n{document}\n</document>\n\n<chunk>\n{chunk}\n</chunk>\n\nContext sentence:"
+)
+
+
+def contextualize_chunk(
+    document: str,
+    chunk: str,
+    *,
+    base_url: str,
+    model: str,
+    max_doc_chars: int = 12_000,
+    max_tokens: int = 80,
+    timeout: float = 30.0,
+) -> str:
+    """Generate a 1-sentence parent-document context for ``chunk`` via an LLM.
+
+    Calls the LiteLLM proxy (OpenAI-compatible ``/chat/completions``) with a free
+    model; the returned sentence is meant to be prepended to ``chunk`` before
+    embedding (Anthropic Contextual Retrieval). The document is the stable first
+    message and the chunk the variable suffix, so a gpt-oss model on Groq
+    prompt-caches the document prefix across a release's chunks.
+
+    Returns ``""`` (not an exception) on any failure or empty output, so the
+    caller embeds the plain chunk rather than erroring — enrichment is an
+    additive precision layer at index time, never a hard dependency.
+    """
+    if not chunk.strip():
+        return ""
+
+    import httpx
+
+    document = document[:max_doc_chars]
+    try:
+        response = httpx.post(
+            f"{base_url}/chat/completions",
+            headers={"Authorization": "Bearer litellm-proxy"},
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": _CONTEXT_SYSTEM},
+                    {
+                        "role": "user",
+                        "content": _CONTEXT_USER.format(document=document, chunk=chunk),
+                    },
+                ],
+                "max_tokens": max_tokens,
+                "temperature": 0,
+            },
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        content = response.json()["choices"][0]["message"]["content"]
+    except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
+        logger.warning(
+            "contextualize_chunk failed (model=%s): %s — embedding plain chunk", model, exc
+        )
+        return ""
+
+    return (content or "").strip()
+
+
+def contextualized_text(context: str, chunk: str) -> str:
+    """Prepend ``context`` to ``chunk`` for embedding, or return the plain chunk.
+
+    The single join convention shared by the ingest asset and the eval harness so
+    the embedded text is identical on both sides of the A/B.
+    """
+    context = context.strip()
+    return f"{context}\n\n{chunk}" if context else chunk
+
+
 __all__ = [
     "RRF_K",
     "bm25_ranking",
     "cohere_rerank",
+    "contextualize_chunk",
+    "contextualized_text",
     "reciprocal_rank_fusion",
 ]
