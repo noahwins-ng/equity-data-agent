@@ -207,6 +207,38 @@ class Settings(BaseSettings):
     # so the cross-encoder can pull a buried-but-relevant hit up into the cut.
     RERANK_CANDIDATES: int = 20
 
+    # ─── QNT-273: contextual retrieval (index-time chunk-context enrichment) ──
+    #
+    # At index time, an LLM writes a 1-2 sentence blurb situating each 8-K chunk
+    # in its parent release; the blurb is prepended to the chunk before embedding
+    # (Anthropic Contextual Retrieval, Sep 2024). Enrichment is index-time only;
+    # never on the query hot path.
+    #
+    # Master switch — left OFF after the QNT-261 A/B (run_id 97602ba8, 13 earnings
+    # queries / AAPL+NVDA): the lift was mixed — MRR +6.9%, nDCG@10 +4.0%, R@20
+    # +4.8%, but R@5 -4.0%. Ranking quality improves (directionally matching
+    # Anthropic) but the R@5 dip is within noise on a 2-ticker sample, and a
+    # recurring per-chunk ingest LLM call isn't justified on that. DECISION: HOLD
+    # — capability stays one flag-flip away; revisit when the earnings golden set
+    # grows. ``uv run python -m agent.evals.retrieval_eval --contextual`` re-runs
+    # the A/B.
+    EARNINGS_CONTEXTUAL: bool = False
+    # LiteLLM alias for the enrichment call. The free gpt-oss-20b on Groq — a
+    # gpt-oss model, so Groq prompt-caches the repeated parent-doc prefix across
+    # a release's ~30 chunks (reference_groq_prompt_caching), making the
+    # whole-document context the Anthropic method wants nearly free per chunk.
+    CONTEXT_MODEL: str = "equity-agent/small"
+    # Parent-document text is truncated to this many chars before the enrichment
+    # call. An 8-K leads with its dateline + summary (company, quarter, headline
+    # numbers — exactly the situating context a chunk needs), so the first ~4k
+    # chars ground the blurb while keeping each call's input under the free-tier
+    # per-minute token ceiling; a 12k window measured ~15s/call from Groq TPM
+    # throttling vs ~3s at 4k (QNT-273).
+    CONTEXT_MAX_DOC_CHARS: int = 4_000
+    # Seconds slept between enrichment calls during a contextual ingest run, to
+    # stay under the free-tier RPM ceiling. Index-time only, so latency is free.
+    CONTEXT_THROTTLE_SECONDS: float = 1.0
+
     @property
     def is_prod(self) -> bool:
         return self.ENV == "prod"

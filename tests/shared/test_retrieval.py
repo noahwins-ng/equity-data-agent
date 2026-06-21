@@ -8,7 +8,16 @@ tested via its no-op/fallback contract in the API hybrid tests.
 
 from __future__ import annotations
 
-from shared.retrieval import bm25_ranking, cohere_rerank, reciprocal_rank_fusion
+from typing import Any
+
+import httpx
+from shared.retrieval import (
+    bm25_ranking,
+    cohere_rerank,
+    contextualize_chunk,
+    contextualized_text,
+    reciprocal_rank_fusion,
+)
 
 
 def test_rrf_rewards_agreement_across_rankers() -> None:
@@ -65,3 +74,51 @@ def test_cohere_rerank_returns_none_without_key() -> None:
 
 def test_cohere_rerank_returns_none_for_empty_docs() -> None:
     assert cohere_rerank("q", {}, api_key="key", model="rerank-v3.5", top_n=5) is None
+
+
+# --- QNT-273: contextual chunk enrichment ------------------------------------
+
+
+def test_contextualized_text_prepends_or_passes_through() -> None:
+    assert (
+        contextualized_text("A 2025 release.", "Revenue rose.")
+        == "A 2025 release.\n\nRevenue rose."
+    )
+    # Empty/whitespace context -> plain chunk, never a stray blank prefix.
+    assert contextualized_text("", "Revenue rose.") == "Revenue rose."
+    assert contextualized_text("   ", "Revenue rose.") == "Revenue rose."
+
+
+def test_contextualize_chunk_empty_chunk_short_circuits() -> None:
+    # No chunk -> no network call, empty context.
+    assert contextualize_chunk("doc", "  ", base_url="http://x", model="m") == ""
+
+
+def test_contextualize_chunk_success(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_post(url, **kwargs):  # noqa: ANN001, ANN003
+        captured["url"] = url
+        captured["json"] = kwargs["json"]
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": " NVIDIA Q1 data center revenue.\n"}}]},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    out = contextualize_chunk(
+        "full doc", "a chunk", base_url="http://proxy", model="equity-agent/small"
+    )
+    assert out == "NVIDIA Q1 data center revenue."  # stripped
+    assert captured["url"] == "http://proxy/chat/completions"
+    assert captured["json"]["model"] == "equity-agent/small"
+
+
+def test_contextualize_chunk_failure_returns_empty(monkeypatch) -> None:
+    def boom(url, **kwargs):  # noqa: ANN001, ANN003
+        raise httpx.ConnectError("proxy down")
+
+    monkeypatch.setattr(httpx, "post", boom)
+    # Graceful: a proxy failure yields "" so the caller embeds the plain chunk.
+    assert contextualize_chunk("doc", "chunk", base_url="http://x", model="m") == ""

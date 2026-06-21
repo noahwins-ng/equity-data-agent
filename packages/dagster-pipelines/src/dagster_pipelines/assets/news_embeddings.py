@@ -8,6 +8,15 @@ tier post-Finnhub backfill.
 
 Embedding happens server-side on Qdrant Cloud (``cloud_inference=True``),
 so the run-worker here is I/O-bound rather than memory-bound.
+
+QNT-273 (contextual retrieval) is intentionally NOT applied here. Index-time
+chunk-context enrichment fixes the parent-document context that *chunking* a
+long document loses — the 8-K corpus's failure mode. A news doc is a headline
+plus a short body that is barely chunked (one or a few points per article), so
+there is no parent-document context to recover; the enrichment LLM call would
+add ingest cost and free-tier load for ~no retrieval lift. The technique is
+scoped to ``earnings_embeddings`` (see ``shared.contextualize_chunk`` and
+``settings.EARNINGS_CONTEXTUAL``).
 """
 
 import hashlib

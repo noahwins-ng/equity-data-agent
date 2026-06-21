@@ -27,6 +27,8 @@ from dagster import (
     StaticPartitionsDefinition,
     asset,
 )
+from shared.config import settings
+from shared.retrieval import contextualize_chunk, contextualized_text
 from shared.tickers import TICKERS
 
 from dagster_pipelines.edgar_feeds import chunk_release
@@ -112,6 +114,8 @@ def earnings_embeddings(
     indexed. Re-runs are idempotent — the delta filter short-circuits the upsert
     when every chunk already exists.
     """
+    import time
+
     import pandas as pd
     from qdrant_client.models import Document, PointStruct
 
@@ -126,24 +130,47 @@ def earnings_embeddings(
 
     existing_ids: set[int] = set(qdrant.scroll_ids(COLLECTION, query_filter=ticker_filter(ticker)))
 
+    # QNT-273: index-time chunk-context enrichment. When enabled, an LLM writes a
+    # 1-sentence parent-release blurb per NEW chunk (the delta filter below caps
+    # the call volume to genuinely-new chunks), prepended before embedding. OFF
+    # by default — the embedded text equals the plain chunk until the A/B earns
+    # the ingest cost. Plain `text` payload is preserved either way (display +
+    # the lexical retrieval-eval criterion read it), and the blurb is stored in
+    # `context` for debuggability.
+    contextual = settings.EARNINGS_CONTEXTUAL
+
     points: list[PointStruct] = []
     total_chunks = 0
+    enriched = 0
     for record in df.to_dict(orient="records"):
         doc_id = int(record["doc_id"])
+        body = str(record["body"])
         # earnings_releases_raw.filing_date is Date NOT NULL, so the cast from a
         # NaT-capable pd.Timestamp to a concrete Timestamp is safe (matches the
         # published_at handling in news_embeddings).
         filing_at: pd.Timestamp = pd.Timestamp(record["filing_date"]).tz_localize("UTC")  # type: ignore[assignment]
         filing_ts = int(filing_at.timestamp())
-        for chunk in chunk_release(str(record["body"])):
+        for chunk in chunk_release(body):
             total_chunks += 1
             pid = point_id(ticker, doc_id, chunk.index)
             if pid in existing_ids:
                 continue
+            blurb = ""
+            if contextual:
+                blurb = contextualize_chunk(
+                    body,
+                    chunk.text,
+                    base_url=settings.LITELLM_BASE_URL,
+                    model=settings.CONTEXT_MODEL,
+                    max_doc_chars=settings.CONTEXT_MAX_DOC_CHARS,
+                )
+                if blurb:
+                    enriched += 1
+                time.sleep(settings.CONTEXT_THROTTLE_SECONDS)
             points.append(
                 PointStruct(
                     id=pid,
-                    vector=Document(text=chunk.text, model=EMBED_MODEL),
+                    vector=Document(text=contextualized_text(blurb, chunk.text), model=EMBED_MODEL),
                     payload={
                         "ticker": ticker,
                         "doc_id": doc_id,
@@ -153,6 +180,7 @@ def earnings_embeddings(
                         "url": str(record["url"]),
                         "title": str(record["title"]),
                         "text": chunk.text,
+                        "context": blurb,
                     },
                 )
             )
@@ -160,12 +188,14 @@ def earnings_embeddings(
     if points:
         qdrant.upsert_points(COLLECTION, points)
         context.log.info(
-            "Upserted %d new earnings chunks for %s to %s (%d total chunks, %d already indexed)",
+            "Upserted %d new earnings chunks for %s to %s (%d total chunks, %d already "
+            "indexed, %d context-enriched)",
             len(points),
             ticker,
             COLLECTION,
             total_chunks,
             total_chunks - len(points),
+            enriched,
         )
     else:
         context.log.info(
