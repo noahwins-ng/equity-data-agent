@@ -1,0 +1,70 @@
+name: LLM-judged RAG eval (DeepEval)
+
+# QNT-264 — the LLM-judged generation eval (DeepEval RAGAS set + custom G-Eval)
+# runs OFF the per-PR hot path. ci.yml gates every PR with the DETERMINISTIC RAG
+# eval (ir_measures retrieval + number-grounding, no keys); this workflow runs
+# the judged nuance layer nightly and on demand, with the LLM/stack credentials
+# as job-scoped secrets that the per-PR CI never sees.
+#
+# Two layers run under `-m deepeval`:
+#   * offline wiring (always) — metric set / thresholds / history schema / judge
+#     identity are internally consistent. No stack, no tokens.
+#   * live judged sample (only when the stack secrets below are set) — runs the
+#     real agent on a small sample and judges it through DeepEval. Skips (never
+#     fails) when the stack is unreachable, so a missing secret degrades to the
+#     wiring-only run rather than a red build.
+#
+# Advisory by design: this is not a merge gate (it isn't wired to pull_request),
+# so a quality dip surfaces here without blocking PRs. Triage and file a
+# follow-up when a metric sustains a drop on a clean rate-limit window.
+
+on:
+  schedule:
+    # 03:30 UTC nightly — low-traffic window, off the deploy critical path.
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+    inputs:
+      sample:
+        description: "Golden records to judge (budget lever; each ~8-12 judge calls)"
+        required: false
+        default: "4"
+
+permissions:
+  contents: read
+
+jobs:
+  deepeval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --all-packages
+
+      - name: DeepEval LLM-judged suite (-m deepeval)
+        # Stack/judge credentials are job-scoped secrets, present ONLY here —
+        # never in the per-PR ci.yml. When unset, the live judged test skips and
+        # the offline wiring tests still run. DEEPEVAL_SAMPLE caps the judge-call
+        # volume (budget lever, AC2).
+        env:
+          DEEPEVAL_SAMPLE: ${{ github.event.inputs.sample || '4' }}
+          DEEPEVAL_TELEMETRY_OPT_OUT: "YES"
+          LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL }}
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+          CLICKHOUSE_HOST: ${{ secrets.CLICKHOUSE_HOST }}
+          CLICKHOUSE_PORT: ${{ secrets.CLICKHOUSE_PORT }}
+          CLICKHOUSE_USER: ${{ secrets.CLICKHOUSE_USER }}
+          CLICKHOUSE_PASSWORD: ${{ secrets.CLICKHOUSE_PASSWORD }}
+          COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+        run: uv run pytest -m deepeval -v

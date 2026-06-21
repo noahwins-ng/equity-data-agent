@@ -121,6 +121,17 @@ HISTORY_FIELDS = (
     "mrr",
     "ndcg_at_10",
     "retrieval_n",
+    # QNT-264: LLM-judged DeepEval generation metrics (RAGAS set + custom G-Eval),
+    # written on a single eval_type="deepeval" row per run. 0.0-1.0 floats, blank
+    # on every other eval_type's rows. Distinct from the integer `faithfulness`
+    # judge axis above (0-10, golden-set) -- the deepeval_* prefix avoids the
+    # collision. deepeval_n is the sampled-record count (sample-gated, AC2).
+    "deepeval_faithfulness",
+    "deepeval_answer_relevancy",
+    "deepeval_context_precision",
+    "deepeval_context_recall",
+    "deepeval_geval",
+    "deepeval_n",
 )
 
 
@@ -178,6 +189,11 @@ class EvalOutcome:
     # real contract result. Such rows are excluded from the exit gate and from
     # history.csv -- they measure free-tier capacity, not the agent code.
     provider_error: bool = False
+    # QNT-264: the flattened report strings the agent gathered for this record --
+    # the retrieval CONTEXT the DeepEval RAGAS metrics score the thesis against
+    # (faithfulness / context precision / recall). Empty on the provider-error
+    # path (no reports gathered); the default keeps that construction untouched.
+    reports: tuple[str, ...] = ()
 
 
 def load_goldens(path: Path = GOLDENS_PATH) -> list[GoldenRecord]:
@@ -423,6 +439,7 @@ def run_record(record: GoldenRecord, *, llm_for_judge: Any | None = None) -> Eva
         judge_score=judge_score,
         cosine=cosine_score,
         elapsed_ms=elapsed_ms,
+        reports=tuple(flat_reports),
     )
 
 

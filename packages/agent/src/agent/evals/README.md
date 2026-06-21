@@ -269,6 +269,90 @@ uv run python -m agent.evals.routing_eval                 # offline scorecard + 
 uv run python -m agent.evals.routing_eval --only nvda-ceo-guidance
 ```
 
+### (h) LLM-judged generation eval — `deepeval_eval.py` + `test_deepeval.py` (QNT-264)
+
+Evals (a)–(g) are deterministic or single-axis. This is the **LLM-judged nuance
+layer** the 2026 two-stage RAG-eval blend calls for (docs/v2-overall-enhancement.md
+"RAG eval framework", Track 2.7): the **RAGAS metric set** — faithfulness, answer
+relevancy, context precision, context recall — plus one **custom G-Eval**
+(`VerdictGroundedness`: is the investment verdict justified by the retrieved
+evidence, without overstating confidence). All run through **DeepEval**, the
+pytest-native production CI-gating framework that subsumes RAGAS (same metrics +
+G-Eval, one framework — standalone RAGAS was dropped to avoid redundant tooling).
+
+**Off the per-PR hot path (the whole point).** ci.yml wires no LLM keys and our
+free-tier budget (Gemini 20 RPD, Groq TPD) makes judge-on-every-PR a bad fit, so
+the suite is marked `deepeval` — neither the unit step (`-m "not integration and
+not eval"`) nor the deterministic RAG gate (`-m eval`) collects it. It runs in a
+**separate workflow** (`.github/workflows/llm-eval.yml`, nightly `schedule:` +
+`workflow_dispatch`, stack/judge credentials as job-scoped secrets) and locally.
+The per-PR RAG gate stays the deterministic one (eval (f), QNT-261).
+
+**Judge routing + budget (AC2).** The judge is the SAME pinned free model the
+dialogue judge uses (`equity-agent/bench-cerebras-gptoss120b` →
+`cerebras/gpt-oss-120b`), reached through the LiteLLM proxy via `get_judge_llm()`
+— no new provider key. A custom `LiteLLMJudge(DeepEvalBaseLLM)` wraps it;
+`generate` honours DeepEval's optional `schema` kwarg via LangChain
+`with_structured_output`. Gated to a **SAMPLE** (`DEEPEVAL_SAMPLE`, default 4
+records) on a clean window: each record costs **~8–12 judge calls** across the
+five metrics, so a 4-record run is **~32–48 calls** — inside the free tier. Metrics
+run `async_mode=False` so the calls serialise rather than burst the rate limit.
+
+**Coexistence, not replacement (AC4).** The in-house number-grounding check (eval
+(a)) is retained and asserted additively per case — it's a stricter, deterministic,
+verbatim faithfulness layer for financial figures than generic LLM-judged
+faithfulness. DeepEval is the nuance layer on top.
+
+**Recorded alongside the IR metrics (AC5).** Each run appends one
+`eval_type="deepeval"` row to `history.csv` (`deepeval_faithfulness` /
+`deepeval_answer_relevancy` / `deepeval_context_precision` /
+`deepeval_context_recall` / `deepeval_geval` / `deepeval_n`), stamped with the same
+`git_sha` + `prompt_version` as every other eval type. The `deepeval_*` prefix keeps
+these 0–1 floats distinct from the integer golden-set `faithfulness` judge axis.
+
+**Soft by default (the established judge philosophy).** Like the golden judge
+(`EVAL_MIN_JUDGE` off until history earns a trustworthy number), the DeepEval
+metric scores are a *recorded soft signal*. The pytest suite hard-asserts only
+the real contracts — every RAGAS axis produced a score, and the deterministic
+number-grounding ran additively (AC4). DeepEval's canonical `assert_test`
+threshold gate is opt-in behind `DEEPEVAL_ENFORCE_THRESHOLDS`; enable it once a
+clean ≥50-record baseline re-derives the floors, the same way the retrieval gate
+floors are anchored to a measured baseline (not the design-doc aspirations).
+
+The thresholds (faithfulness/context-precision/context-recall ≥ 0.8,
+answer-relevancy ≥ 0.75, G-Eval ≥ 0.7) are the design-doc calibration targets.
+
+**First recorded baseline** (run `20260621T042449Z-b07f37-deepeval`, sha
+`b0d2ccb`, 2026-06-21, clean window, 4 focused-query records):
+
+| Metric | Score | Design target |
+|--------|------:|--------------:|
+| faithfulness | 0.97 | ≥ 0.8 |
+| answer_relevancy | 0.76 | ≥ 0.75 |
+| context_precision | 0.88 | ≥ 0.8 |
+| context_recall | **0.29** | ≥ 0.8 |
+| VerdictGroundedness (G-Eval) | 0.93 | ≥ 0.7 |
+| number-grounding (deterministic) | 4/4 clean | — |
+
+**The low `context_recall` is a measurement-design finding, not a retrieval bug.**
+Context recall checks whether the *reference answer's* statements are
+reconstructable from the retrieval context. The golden references are hand-written
+analyst *synthesis* (verdicts, interpretation), while the retrieval context is the
+raw pre-computed report data — so the synthesized claims aren't directly
+attributable to a context chunk and recall reads low. This is the same shape as
+the structure axis scoring 0 on non-thesis query shapes (above): the framework
+surfacing a real signal about the eval inputs, not a code defect. The follow-up is
+a recall-appropriate golden set (references that mirror the retrieved slice) +
+re-derived floors on a ≥50-record clean window, before flipping
+`DEEPEVAL_ENFORCE_THRESHOLDS` on.
+
+```bash
+uv run python -m agent.evals.deepeval_eval                 # sample run + record (needs stack)
+uv run python -m agent.evals.deepeval_eval --sample 8
+uv run python -m agent.evals.deepeval_eval --only NVDA --no-record
+uv run pytest -m deepeval -v                               # the pytest cases (live test skips w/o stack)
+```
+
 ## Clean-window re-run for the new ticker universe (QNT-255)
 
 QNT-237 swapped the universe (V/JPM/UNH -> MU/AMD/INTC). Its AC5 eval passed the

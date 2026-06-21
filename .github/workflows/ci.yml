@@ -47,8 +47,11 @@ jobs:
         run: uv run pyright
 
       - name: Unit tests
-        # Exit code 5 = no tests collected; treat as success during bootstrap
-        run: uv run pytest -m "not integration and not eval" || [ $? -eq 5 ]
+        # Exit code 5 = no tests collected; treat as success during bootstrap.
+        # `not deepeval` (QNT-264) keeps the LLM-judged generation suite OFF the
+        # per-PR path -- it's neither integration nor eval, so it would otherwise
+        # be collected here; it runs only in the nightly/dispatch llm-eval.yml.
+        run: uv run pytest -m "not integration and not eval and not deepeval" || [ $? -eq 5 ]
 
       # QNT-261: deterministic RAG eval gate (ir_measures retrieval metrics +
       # number-grounding faithfulness) scored against committed frozen artifacts.
