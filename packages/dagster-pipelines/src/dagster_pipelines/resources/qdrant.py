@@ -252,3 +252,39 @@ class QdrantResource(ConfigurableResource):
             f"scroll_ids hit safety cap of {max_pages} pages × {page_size} for "
             f"{collection!r}; collection is larger than the current check assumes"
         )
+
+    def scroll_payloads(
+        self,
+        collection: str,
+        query_filter: Any | None = None,
+        page_size: int = 10_000,
+        max_pages: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Return all point payloads from ``collection`` matching ``query_filter``.
+
+        Sibling of :meth:`scroll_ids` that keeps payloads, so a coverage check can
+        derive which releases are indexed from ONE paginated scroll instead of a
+        per-release ``count()`` fan-out (QNT-263 follow-up: the fan-out tripped
+        Qdrant free-tier rate limits under concurrent backfills). Same
+        ``max_pages`` safety cap → ``RuntimeError`` rather than partial data.
+        """
+        client = self._client()
+        payloads: list[dict[str, Any]] = []
+        offset: Any = None
+        for _ in range(max_pages):
+            records, next_offset = client.scroll(
+                collection_name=collection,
+                scroll_filter=query_filter,
+                limit=page_size,
+                with_payload=True,
+                with_vectors=False,
+                offset=offset,
+            )
+            payloads.extend(r.payload or {} for r in records)
+            if next_offset is None:
+                return payloads
+            offset = next_offset
+        raise RuntimeError(
+            f"scroll_payloads hit safety cap of {max_pages} pages × {page_size} for "
+            f"{collection!r}; collection is larger than the current check assumes"
+        )
