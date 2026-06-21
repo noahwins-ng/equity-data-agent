@@ -34,18 +34,6 @@ _TABLE = "equity_raw.earnings_releases_raw"
 _DEFAULT_SEVERITY = AssetCheckSeverity.WARN
 
 
-def _doc_id_filter(ticker: str, doc_id: int):
-    """Qdrant filter matching points for one (ticker, doc_id) release."""
-    from qdrant_client.models import FieldCondition, Filter, MatchValue
-
-    return Filter(
-        must=[
-            FieldCondition(key="ticker", match=MatchValue(value=ticker)),
-            FieldCondition(key="doc_id", match=MatchValue(value=doc_id)),
-        ]
-    )
-
-
 @asset_check(asset=earnings_embeddings)
 def earnings_embeddings_all_releases_indexed(
     clickhouse: ClickHouseResource,
@@ -53,33 +41,44 @@ def earnings_embeddings_all_releases_indexed(
 ) -> AssetCheckResult:
     """Warn if any ClickHouse release has zero Qdrant points.
 
-    For each release (ticker, doc_id) in earnings_releases_raw, the embed step
-    must have produced >= 1 chunk point. A release with zero points means the
-    asset skipped it (transient Qdrant failure past the retry budget, or a body
-    that chunked to nothing). Per-doc counts are cheap — the corpus is a handful
-    of releases per ticker.
+    Every release (ticker, doc_id) in earnings_releases_raw must have produced
+    >= 1 chunk point. A release with zero points means the asset skipped it
+    (transient Qdrant failure past the retry budget, or a body that chunked to
+    nothing).
+
+    QNT-263 follow-up: derive the indexed (ticker, doc_id) set from ONE paginated
+    scroll of the collection, then diff against ClickHouse — instead of a
+    ``count()`` per release. The old per-doc fan-out fired ~one Qdrant call per
+    release, which under a concurrent backfill (8 partitions × the fan-out) blew
+    the Qdrant free-tier request-rate limit and failed the check on data that was
+    actually fully indexed. One scroll is O(pages) calls regardless of corpus
+    size, so the check no longer scales its Qdrant load with the release count.
     """
     releases = clickhouse.query_df(
         f"SELECT ticker, doc_id FROM {_TABLE} FINAL GROUP BY ticker, doc_id"
     )
-    missing: list[dict[str, object]] = []
-    total = 0
-    for ticker, doc_id in zip(releases["ticker"], releases["doc_id"], strict=False):
-        total += 1
-        count = qdrant.count(COLLECTION, query_filter=_doc_id_filter(str(ticker), int(doc_id)))
-        if count == 0:
-            missing.append({"ticker": str(ticker), "doc_id": int(doc_id)})
+    expected = {
+        (str(t), int(d)) for t, d in zip(releases["ticker"], releases["doc_id"], strict=False)
+    }
 
+    indexed: set[tuple[str, int]] = set()
+    for payload in qdrant.scroll_payloads(COLLECTION):
+        ticker = payload.get("ticker")
+        doc_id = payload.get("doc_id")
+        if ticker is not None and doc_id is not None:
+            indexed.add((str(ticker), int(doc_id)))
+
+    missing = sorted(expected - indexed)
     return AssetCheckResult(
         passed=len(missing) == 0,
         severity=_DEFAULT_SEVERITY,
         metadata={
-            "releases_checked": total,
+            "releases_checked": len(expected),
             "unindexed_count": len(missing),
-            "unindexed_releases": missing,
+            "unindexed_releases": [{"ticker": t, "doc_id": d} for t, d in missing],
             "collection": COLLECTION,
         },
-        description=f"{len(missing)}/{total} releases have zero Qdrant points",
+        description=f"{len(missing)}/{len(expected)} releases have zero Qdrant points",
     )
 
 
