@@ -7,7 +7,7 @@
 | Layer | What it does | Technology | Where it lives |
 |---|---|---|---|
 | Calculation | Complex financial math (indicators, ratios, aggregations) | Python/SQL | `packages/dagster-pipelines/` |
-| Serving | Turns DB rows into reports + JSON arrays; trivial presentation arithmetic (daily change %, RSI categories, trend labels) | FastAPI | `packages/api/` |
+| Serving | Turns DB rows into reports + JSON arrays; trivial presentation arithmetic (daily change %, RSI categories, trend labels); hybrid + reranked semantic retrieval over Qdrant | FastAPI | `packages/api/` |
 | Reasoning | Interprets reports, writes theses | LangGraph | `packages/agent/` |
 | Shared | Schemas, config, ticker registry | Pydantic | `packages/shared/` |
 | Presentation | Charts, agent chat UI | Next.js 16 | `frontend/` |
@@ -38,8 +38,13 @@ yfinance ──→ Dagster ──→ ClickHouse (equity_raw.ohlcv_raw)
                                                       ▼
                                               LangGraph Agent ──→ Investment Thesis (SSE stream)
                                                       │
-News API ──→ Dagster ──→ ClickHouse (equity_raw.news_raw)
-                    └──→ Qdrant Cloud (equity_news embeddings) ──→ FastAPI ──────────┘
+Finnhub ────→ Dagster ──→ ClickHouse (equity_raw.news_raw)
+                    └──→ Qdrant Cloud (equity_news embeddings) ──→ FastAPI ──────────┤
+                                                                                     │
+SEC Edgar ──→ Dagster ──→ ClickHouse (equity_raw.earnings_releases_raw)              │
+   (8-K)            └──→ Qdrant Cloud (equity_earnings embeddings) ──→ FastAPI ───────┘
+
+(failed ingests from any asset land in equity_raw.ingest_rejects)
 ```
 
 ## Databases
@@ -47,24 +52,29 @@ News API ──→ Dagster ──→ ClickHouse (equity_raw.news_raw)
 **ClickHouse** (Hetzner, accessed via SSH tunnel in dev):
 
 `equity_raw` — ingested data:
-- `ohlcv_raw` — daily OHLCV bars from yfinance (2-year history, 5-day incremental)
-- `fundamentals` — quarterly/annual financial statements per ticker (revenue, net income, balance sheet, etc.)
-- `news_raw` — raw news headlines and body text before embedding
+- `ohlcv_raw` — daily OHLCV bars from yfinance (2-year history, 5-day incremental); stores both `close` and `adj_close` to carry split/dividend adjustment
+- `fundamentals` — quarterly/annual financial statements per ticker (revenue, net income, balance sheet, implied shares outstanding, etc.)
+- `news_raw` — Finnhub news (QNT-141 / ADR-015): headline + body, plus `publisher_name`, `image_url`, `resolved_host`, and `sentiment_label` (`'pending'` until the downstream classifier scores it)
+- `earnings_releases_raw` — SEC Edgar 8-K filing corpus (QNT-263): `doc_id, cik, accession, form, items, filing_date, period_ending, exhibit, title, url, body` per filing, chunked downstream by section
+- `ingest_rejects` — reject sink for failed ingestions from any asset (`ticker, source_asset, reason, detail, raw_payload`; 90-day TTL)
 
 `equity_derived` — computed data:
 - `ohlcv_weekly` — weekly bars aggregated from ohlcv_raw (open=first, close=last, adj_close=last, high=max, low=min, volume=sum)
 - `ohlcv_monthly` — monthly bars aggregated from ohlcv_raw
-- `technical_indicators_daily` — RSI-14, MACD(12/26/9), SMA-20/50, EMA-12/26, BB(20,2) on daily bars (computed from `adj_close`)
+- `technical_indicators_daily` — RSI-14, MACD(12/26/9), SMA-20/50/200, EMA-12/26, BB(20,2) + `bb_pct_b`, ADX-14, ATR-14, OBV, `macd_bullish_cross` on daily bars (computed from `adj_close`)
 - `technical_indicators_weekly` — same indicators computed on weekly bars
 - `technical_indicators_monthly` — same indicators computed on monthly bars
-- `fundamental_summary` — 15 derived ratios (P/E, EV/EBITDA, margins, YoY growth, etc.) from fundamentals + ohlcv_raw. Quarterly P/E uses TTM (trailing-four-quarter) net_income; P/E is nulled out (N/M convention) when `|EPS| < $0.10`.
+- `fundamental_summary` — derived ratios (P/E, EV/EBITDA, margins, YoY growth, etc.) plus TTM aggregates (`revenue_ttm`, `net_income_ttm`, `fcf_ttm`), margin levels (`ebitda_margin_pct`) and YoY margin deltas (`gross_margin_bps_yoy`, `net_margin_bps_yoy`) from fundamentals + ohlcv_raw. Quarterly P/E uses TTM (trailing-four-quarter) net_income; P/E is nulled out (N/M convention) when `|EPS| < $0.10`.
 
-**Data quality**: 25 Dagster `@asset_check`s registered across 10 assets (QNT-68 + QNT-93) — row counts, null/bound checks, RSI 0-100, MACD/signal coherence, P/E and margin domain bounds, news headline/URL integrity, Qdrant vector count/dimension/orphan checks. Checks run inline with the asset and surface in the Dagster UI. Asset checks earned their keep in Phase 4: `news_embeddings_vector_count_matches_source` caught QNT-120 (cross-ticker Qdrant ID collision) within 24h of shipping.
+**No dbt** — all transformations are Dagster Python/SQL assets with full lineage; the V2 arc evaluated dbt and kept the Dagster-native layer.
+
+**Data quality**: 37 Dagster `@asset_check`s registered across 12 assets (QNT-68 + QNT-93 + earnings corpus) — row counts, null/bound checks, RSI 0-100, MACD/signal coherence, P/E and margin domain bounds, news headline/URL integrity, earnings filing integrity, Qdrant vector count/dimension/orphan checks for both collections. Checks run inline with the asset and surface in the Dagster UI; the CD gate asserts a floor (`>=10` assets / `>=25` checks, `deploy.yml`). Asset checks earned their keep in Phase 4: `news_embeddings_vector_count_matches_source` caught QNT-120 (cross-ticker Qdrant ID collision) within 24h of shipping.
 
 All tables use `ReplacingMergeTree` for idempotency. FastAPI queries **must** use `SELECT ... FROM table FINAL` for consistent reads (see ADR-001).
 
-**Qdrant Cloud** (managed, free tier):
-- `equity_news` collection — news embeddings via **Qdrant Cloud Inference** (ADR-009: model `sentence-transformers/all-minilm-l6-v2`, 384-dim, embedded server-side so the Dagster run-worker stays I/O-bound). Point ID = `blake2b(f"{ticker}:{url_id}", digest_size=8)` — namespaced by ticker (QNT-120) to match ClickHouse's `(ticker, url)` composite key so cross-mentioned URLs land as one point per ticker. Payload: `{ticker, published_at, url, headline, source}`; indexed on `ticker` (keyword) and `published_at` (integer). Re-embed window: trailing 7 days of `fetched_at` per ticker on every tick.
+**Qdrant Cloud** (managed, free tier) — two collections, both embedded via **Qdrant Cloud Inference** (ADR-009: model `sentence-transformers/all-minilm-l6-v2`, 384-dim, embedded server-side so the Dagster run-worker stays I/O-bound):
+- `equity_news` — news embeddings. **Headline + body** are embedded (QNT-225), not just the headline. Point ID = `blake2b(f"{ticker}:{url_id}", digest_size=8)` — namespaced by ticker (QNT-120) to match ClickHouse's `(ticker, url)` composite key so cross-mentioned URLs land as one point per ticker. Payload: `{ticker, published_at, url, headline, source}`; indexed on `ticker` (keyword) and `published_at` (integer). Re-embed window: trailing 7 days of `fetched_at` per ticker on every tick, with garbage collection of expired points (QNT-145).
+- `equity_earnings` — 8-K release embeddings (QNT-263), chunked by section. Point ID = `blake2b(f"{ticker}:{doc_id}:{chunk_index}")`. Payload preserves plain chunk text (for display + lexical retrieval eval); indexed on `ticker` (keyword), `doc_id` (integer), `filing_date` (integer), `section` (keyword). **Contextual retrieval** (QNT-273) — an LLM-written one-sentence parent-release blurb prepended to each new chunk before embedding — is wired here but **gated OFF by default** (`settings.EARNINGS_CONTEXTUAL`); it is deliberately *not* applied to `equity_news` (no parent-document context to recover).
 
 ## API Endpoint Categories
 
@@ -73,18 +83,24 @@ All tables use `ReplacingMergeTree` for idempotency. FastAPI queries **must** us
 - `GET /api/v1/reports/fundamental/{ticker}` — human-readable fundamental summary
 - `GET /api/v1/reports/news/{ticker}` — recent news summary (top-N headlines + narrative)
 - `GET /api/v1/reports/summary/{ticker}` — combined text overview for agent "at a glance" tool
+- `GET /api/v1/reports/company/{ticker}?profile=compact|full` — static company profile (description, competitors, key risks, watch items); `compact` drops the competitor/watch lists for the thesis/comparison hot path
+- `GET /api/v1/reports/comparison-metrics?tickers=...` — JSON comparison metrics for an N-way (2–4 ticker) lean comparison
 
 **Data endpoints** (JSON, consumed by Next.js frontend):
 - `GET /api/v1/ohlcv/{ticker}?timeframe=daily|weekly|monthly` — `{time, open, high, low, close, adj_close, volume}[]` — `time` is ISO date `"YYYY-MM-DD"`. Chart renders `adj_close` as candlestick close to avoid split artifacts.
-- `GET /api/v1/indicators/{ticker}?timeframe=daily|weekly|monthly` — `{time, rsi_14, macd, macd_signal, macd_hist, sma_20, sma_50, ema_12, ema_26, bb_upper, bb_middle, bb_lower}[]` — `null` during warm-up
+- `GET /api/v1/indicators/{ticker}?timeframe=daily|weekly|monthly` — `{time, rsi_14, macd, macd_signal, macd_hist, sma_20, sma_50, sma_200, ema_12, ema_26, bb_upper, bb_middle, bb_lower, bb_pct_b, adx_14, atr_14, obv}[]` — `null` during warm-up
 - `GET /api/v1/fundamentals/{ticker}` — `{ticker, period_end, period_type, pe_ratio, ev_ebitda, ...}[]` for ratios table
+- `GET /api/v1/quote/{ticker}` — quote header bundle: latest price, prev close, market cap, P/E, sector/industry metadata
+- `GET /api/v1/news/{ticker}?days=1-90&limit=1-100` — news feed rows for the ticker detail page
 - `GET /api/v1/dashboard/summary` — `[{ticker, price, daily_change_pct, rsi_14, rsi_signal, trend_status}]` all tickers in one call. `price` = latest available close (not adj_close). `rsi_signal`: overbought/neutral/oversold. `trend_status`: bullish/bearish/neutral (close vs SMA-50).
 
 **Search endpoints** (JSON, consumed by frontend and agent):
-- `GET /api/v1/search/news?ticker=NVDA&query=earnings` — Qdrant semantic search over news embeddings. Returns top-N `{headline, source, date, score, url}` ranked by cosine similarity. Query string is embedded server-side via Qdrant Cloud Inference using the same model as `news_embeddings` so query-time and embed-time vectors share one vector space. Returns `[]` (HTTP 200) if Qdrant is unreachable or no matches — frontend renders "no news" the same way as "service down".
+- `GET /api/v1/search/news?ticker=NVDA&query=earnings&hybrid=&rerank=&limit=` — semantic search over the `equity_news` collection. Defaults to **hybrid** retrieval (dense Qdrant Cloud Inference + client-side BM25, fused with RRF — QNT-262) with optional **Cohere rerank** on the fused set. Query string is embedded server-side using the same model as `news_embeddings` so query-time and embed-time vectors share one vector space. Returns top-N `{headline, source, date, score, url}`, or `[]` (HTTP 200) if Qdrant is unreachable or no matches — frontend renders "no news" the same way as "service down".
+- `GET /api/v1/search/earnings?ticker=NVDA&query=guidance&hybrid=&rerank=&limit=` — same signature over the `equity_earnings` 8-K corpus (QNT-263).
 
 **Utility endpoints**:
 - `GET /api/v1/tickers` — list of active tickers from `shared.tickers.TICKERS`
+- `GET /api/v1/logos` — `{ticker: data_url}` map of Finnhub company logos as base64 data URLs (avoids cross-origin fetches on the watchlist)
 - `GET /api/v1/health` — service health check
 
 **Agent endpoint**:
@@ -129,6 +145,11 @@ flowchart TD
   Named-lens prompts such as "drill into the news angle" stay on the existing
   focused or warm-follow-up paths to avoid routing overlap.
 
+**Per-node model tiering** (QNT-220): the cheap, structured `classify` and `plan`
+nodes run on the small `equity-agent/small` alias (Groq `gpt-oss-20b`), while
+`synthesize` and `narrate` stay on the 70B default. The small tier falls back to the
+70B default on Groq TPD exhaustion, so a 429 degrades cost, not function. See LLM Routing.
+
 ## The Agentic Boundary
 
 The agent ONLY interacts with FastAPI endpoints via tool calls. It never:
@@ -137,6 +158,25 @@ The agent ONLY interacts with FastAPI endpoints via tool calls. It never:
 - Accesses raw data
 
 This boundary is enforced by architecture (no DB credentials in the agent package) and by the system prompt.
+
+**Agent tools** (`packages/agent/src/agent/tools.py`) — every tool wraps a FastAPI endpoint:
+- `get_summary_report`, `get_technical_report`, `get_fundamental_report`, `get_news_report`, `get_company_report` (+ `get_company_report_compact`, QNT-220) — the report tools
+- `search_news(ticker, query)` / `search_earnings(ticker, query)` — semantic retrieval (QNT-262/263), each requesting hybrid + rerank automatically
+- `get_comparison_metrics(tickers)` — lean N-way comparison metrics JSON (QNT-224)
+
+## Retrieval / RAG
+
+Two RAG corpora back the agent's evidence-grounded answers (see Databases → Qdrant Cloud):
+- `equity_news` — Finnhub news (headline + body), QNT-222/225
+- `equity_earnings` — SEC 8-K release chunks, QNT-263
+
+Retrieval is **query-time hybrid** (QNT-262): dense vectors via Qdrant Cloud Inference plus
+client-side BM25, fused with Reciprocal Rank Fusion, then an **optional Cohere cross-encoder
+rerank** on the fused set (gated on `settings.COHERE_API_KEY`). A query-relative relevance-gap
+filter drops weakly-matched tail results. The agent only fires search when the classifier sets
+the targeted `needs_news_search` / `needs_earnings_search` flags — ordinary report requests
+skip Qdrant entirely. Retrieval quality is guarded by a deterministic ir-measures eval
+(recall@k / MRR / nDCG, see LLM Routing → Eval harness).
 
 ## Public-API Contract & Abuse Controls (QNT-161 / ADR-017)
 
@@ -176,7 +216,7 @@ Technical indicators are computed independently on each timeframe's OHLCV table,
 
 ## Ticker Scope
 
-10 US equities defined in `packages/shared/src/shared/tickers.py`. This is the single source of truth — all assets, schedules, and partitions derive from this list.
+10 US equities — `NVDA, AAPL, MSFT, GOOGL, AMZN, META, TSLA, MU, AMD, INTC` — defined in `packages/shared/src/shared/tickers.py`. This is the single source of truth — all assets, schedules, and partitions derive from this list. A separate `SPY` benchmark ticker (`BENCHMARK_TICKERS`) is partitioned independently for relative comparisons.
 
 ## Partitioning & Concurrency
 
@@ -185,10 +225,16 @@ All per-ticker Dagster assets use `StaticPartitionsDefinition` over the 10 ticke
 ## LLM Routing
 
 LiteLLM proxy (v1.81.14-stable, pinned) routes model requests (see ADR-011):
-- **Default**: Groq (`https://api.groq.com/openai/v1`, `llama-3.3-70b-versatile`) via `GROQ_API_KEY`. Picked over Llama-4-Scout after QNT-138's clean-window bench (cosine 0.364 vs Scout's 0.342, both 16/16 hallucination_ok). ~500 tok/s inference, email-only free tier.
-- **Auto-fallbacks**: Llama-4-Scout-17B (`equity-agent/fallback-llama4scout`) first — same Groq provider/key, 5× the default's daily TPD. Selected on a quality-then-capacity basis after QNT-129's bench rejected Qwen3-32B (regressed 15/16 → 11/16 hallucination_ok despite the TPD headroom). QNT-215 adds Cerebras-hosted `gpt-oss-120b` as emergency provider-diverse capacity after Scout, then Groq-hosted `gpt-oss-120b` as the final same-provider fallback.
+- **Default**: Groq (`https://api.groq.com/openai/v1`, `llama-3.3-70b-versatile`) via `GROQ_API_KEY`. Picked over Llama-4-Scout after QNT-138's clean-window bench (cosine 0.364 vs Scout's 0.342, both 16/16 hallucination_ok). ~500 tok/s inference, email-only free tier. A 45s per-model timeout (QNT-223 / ADR-021) bounds the throttled tail: a stalled call aborts and reroutes to the fallback within the same client call instead of retrying to ~120s.
+- **Auto-fallbacks** (recursive): Llama-4-Scout-17B (`equity-agent/fallback-llama4scout`) first — same Groq provider/key, 5× the default's daily TPD, selected on a quality-then-capacity basis after QNT-129's bench rejected Qwen3-32B (regressed 15/16 → 11/16 hallucination_ok). Then Groq-hosted `gpt-oss-120b` (`equity-agent/fallback-groq-gptoss120b`) as the final same-provider capacity insurance. **The Cerebras `gpt-oss-120b` hop (added QNT-215) was removed in QNT-227** — it could not serve a 9-12k-token synthesize within the 60s client timeout, so it was pure tail-latency risk.
+- **Small tier**: `equity-agent/small` = Groq `gpt-oss-20b` (QNT-220) — drives the cheap, structured `classify` / `plan` nodes; falls back to the 70B default on Groq TPD exhaustion. (prompt-cache-capable on Groq, aligning with the QNT-223 cache direction.)
 - **Override**: Google AI Studio Gemini 2.5 Flash via `GEMINI_API_KEY` — free-tier quality override (15 RPM / 1500 RPD) for the hero demo thesis. (Pro was the original pick in ADR-011 but returned `limit: 0` on free tier at first live test — see QNT-123 and ADR-011 §Revision history.)
-- **Eval harness**: `python -m agent.evals` runs a 16-question golden set across all 10 portfolio tickers; results persist to `packages/agent/src/agent/evals/history.csv`. Hallucination check enforces ADR-003 (every numeric literal must trace to a tool-output report, with sign-magnitude equivalence per QNT-128). See `docs/model-bench-2026-04.md` for cross-model results.
+- **Eval harness**: `python -m agent.evals` runs a 41-record golden set (`evals/goldens/questions.yaml`) across all 10 portfolio tickers and every intent (thesis, quick_fact, comparison, focused, exploration, conversational); results persist to `packages/agent/src/agent/evals/history.csv`. Layers:
+  - *Hallucination check* (per-PR, deterministic) — every numeric literal must trace to a tool-output report, with sign-magnitude equivalence (ADR-003 / QNT-128).
+  - *Retrieval eval* (per-PR, deterministic, LLM-free) — ir-measures recall@k / MRR / nDCG over both Qdrant corpora (QNT-261; `ir-measures` is a dev-only dep).
+  - *DeepEval RAGAS + G-Eval* (off the hot path) — LLM-judged generation quality (faithfulness, relevancy, context precision/recall + custom G-Eval) via `.github/workflows/llm-eval.yml` (nightly/`workflow_dispatch`), thresholds SOFT by default (QNT-264).
+  - *News-search eval* (QNT-231) and *dialogue eval* — structural relevance + dialogue-quality layers, reported not gated (corpus rolls daily).
+  - See `docs/model-bench-2026-04.md` for cross-model results.
 - **Tracing**: Langfuse (`us.cloud.langfuse.com`) captures every plan → gather → synthesize span per run.
 - **Domain thresholds in reports, not prompts** (ADR-012): canonical RSI 70/30 and P/E rich/cheap bands live in the FastAPI report templates so the agent can quote them without leaking pretraining knowledge.
 - Config: `litellm_config.yaml` at repo root, model alias `equity-agent/default`

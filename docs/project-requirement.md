@@ -6,7 +6,7 @@ product and architecture spec — delivery history lives in
 [`docs/decisions/`](decisions/), and post-phase lessons live in
 [`docs/retros/`](retros/).
 
-- Last reviewed: 2026-05-16
+- Last reviewed: 2026-06-22
 - Re-verify cadence: every phase retro (or sooner when an ADR lands that
   changes a contract here).
 
@@ -102,7 +102,7 @@ visible in Dagster.
 The production universe is intentionally small:
 
 ```text
-NVDA, AAPL, MSFT, GOOGL, AMZN, META, TSLA, JPM, V, UNH
+NVDA, AAPL, MSFT, GOOGL, AMZN, META, TSLA, MU, AMD, INTC
 ```
 
 The canonical registry lives in `packages/shared/src/shared/tickers.py`.
@@ -119,6 +119,7 @@ graph LR
     subgraph Sources
         YF[yfinance]
         NEWS[Finnhub /company-news]
+        EDGAR[SEC Edgar 8-K]
     end
 
     subgraph Dagster
@@ -129,6 +130,8 @@ graph LR
         FSUM[fundamental_summary]
         NRAW[news_raw]
         EMB[news_embeddings]
+        ERAW[earnings_releases_raw]
+        EEMB[earnings_embeddings]
     end
 
     subgraph Storage
@@ -144,7 +147,7 @@ graph LR
     end
 
     subgraph Agent
-        GRAPH[classify -> plan -> gather -> synthesize]
+        GRAPH[classify -> route -> plan/gather -> synthesize -> narrate]
         TOOLS[report tools]
     end
 
@@ -156,6 +159,8 @@ graph LR
     YF --> FUND --> CH
     NEWS --> NRAW --> CH
     NRAW --> EMB --> QD
+    EDGAR --> ERAW --> CH
+    ERAW --> EEMB --> QD
     OHLCV --> AGG --> CH
     CH --> TECH --> CH
     OHLCV --> FSUM
@@ -446,19 +451,80 @@ Financial display conventions:
 - Frontend quarterly views may present TTM P/E, ROE, ROA, and FCF yield where
   that matches market convention.
 
-### 6.8 Qdrant Collection
+### 6.8 Qdrant Collections
 
-Collection: `equity_news`
+Two collections, both embedded via Qdrant Cloud Inference using
+`sentence-transformers/all-minilm-l6-v2` (384-dim, cosine distance).
 
-Requirements:
+`equity_news` requirements:
 
-- Embedding model: Qdrant Cloud Inference using
-  `sentence-transformers/all-minilm-l6-v2`.
-- Vector dimension: 384.
-- Distance: cosine.
 - Point ID: deterministic hash namespaced by ticker and article URL id.
+- Embedded text: headline **and** body (QNT-225).
 - Payload: ticker, published timestamp, URL, headline, source/publisher fields.
-- Re-embed window: trailing recent news window per ticker.
+- Re-embed window: trailing recent news window per ticker, with garbage
+  collection of expired points.
+
+`equity_earnings` requirements (QNT-263):
+
+- Source: chunked SEC 8-K release sections from
+  `equity_raw.earnings_releases_raw`.
+- Point ID: deterministic hash namespaced by ticker, doc id, and chunk index.
+- Payload preserves plain chunk text (for display and lexical retrieval eval),
+  indexed on ticker, doc id, filing date, and section.
+- Optional contextual retrieval (QNT-273): an LLM-written one-sentence
+  parent-release blurb prepended per new chunk before embedding, gated OFF by
+  default via `settings.EARNINGS_CONTEXTUAL`. Deliberately not applied to
+  `equity_news`.
+
+### 6.9 `equity_raw.earnings_releases_raw`
+
+SEC Edgar 8-K filing corpus (QNT-263), chunked downstream by section for the
+`equity_earnings` vector collection.
+
+Key columns:
+
+```sql
+doc_id UInt64
+ticker LowCardinality(String)
+cik String
+accession String
+form String
+items String
+filing_date Date
+period_ending Nullable(Date)
+exhibit String
+title String
+url String
+body String
+fetched_at DateTime
+```
+
+Engine:
+
+```sql
+ReplacingMergeTree(fetched_at)
+PARTITION BY ticker
+ORDER BY (ticker, filing_date, doc_id)
+```
+
+### 6.10 `equity_raw.ingest_rejects`
+
+Reject sink for ingestion failures from any asset, so a bad payload is captured
+for inspection rather than silently dropped.
+
+Key columns:
+
+```sql
+rejected_at DateTime
+ticker LowCardinality(String)
+source_asset LowCardinality(String)
+reason LowCardinality(String)
+detail String
+raw_payload String
+id UInt64
+```
+
+Rows expire on a 90-day TTL (`rejected_at + INTERVAL 90 DAY`).
 
 ## 7. Dagster Requirements
 
@@ -472,7 +538,9 @@ Core asset groups:
 - `technical_indicators`: daily, weekly, and monthly indicator computation.
 - `fundamental_summary`: derived financial ratios and TTM metrics.
 - `news_raw`: Finnhub news ingestion and relevance filtering.
-- `news_embeddings`: ClickHouse news rows to Qdrant vectors.
+- `news_embeddings`: ClickHouse news rows to `equity_news` Qdrant vectors.
+- `earnings_releases_raw`: SEC Edgar 8-K filing ingestion.
+- `earnings_embeddings`: 8-K release chunks to `equity_earnings` Qdrant vectors.
 
 ### 7.2 Partitioning
 
@@ -560,6 +628,7 @@ Frontend-facing endpoints:
 - `GET /api/v1/news/{ticker}?days={n}&limit={n}`
 - `GET /api/v1/quote/{ticker}`
 - `GET /api/v1/logos`
+- `GET /api/v1/reports/comparison-metrics?tickers={...}` (JSON metrics for N-way lean comparison)
 - `GET /api/v1/tickers`
 - `GET /api/v1/health`
 
@@ -573,15 +642,19 @@ Data endpoint requirements:
 - Preserve nulls for unavailable financial values.
 - Return 404 for unknown ticker paths.
 
-### 8.4 Search Endpoint
+### 8.4 Search Endpoints
 
-`GET /api/v1/search/news`
+- `GET /api/v1/search/news` — over the `equity_news` collection.
+- `GET /api/v1/search/earnings` — over the `equity_earnings` 8-K corpus (QNT-263).
 
 Requirements:
 
 - Filter by ticker.
 - Limit result count.
 - Use Qdrant semantic search over the same embedding space as ingestion.
+- Default to hybrid retrieval (dense + client-side BM25 fused with RRF, QNT-262),
+  with optional Cohere cross-encoder rerank on the fused set (gated on
+  `COHERE_API_KEY`); both are toggleable via `hybrid` / `rerank` query params.
 - Return empty results for no matches or degraded vector search paths where the
   UI should not distinguish outage from empty state.
 
@@ -627,11 +700,23 @@ Status semantics:
 
 ### 9.1 Graph Shape
 
-The graph is linear:
+A classify-driven router selects one of four paths, then all paths converge on
+`narrate` (QNT-215 / QNT-220):
 
 ```text
-classify -> plan -> gather -> synthesize
+classify -> router -> { clarify | synthesize | explore_supervisor | plan }
+plan -> gather -> synthesize
+* -> narrate
 ```
+
+- Greetings, capability asks, and ordinary warm-thread follow-ups skip report
+  gathering: `classify -> synthesize -> narrate`.
+- Ambiguous questions ask back without tools: `classify -> clarify -> narrate`.
+- Normal thesis / quick-fact / comparison / focused requests run the stable
+  report pipeline: `classify -> plan -> gather -> synthesize -> narrate`.
+- Broad, anchored exploratory prompts route through `explore_supervisor`, which
+  may inspect up to three report tools before synthesis.
+- `classify` and `plan` run on the small model tier (see §13.1).
 
 ### 9.2 Supported Intents
 
@@ -644,6 +729,8 @@ Supported response shapes:
 - `fundamental`: focused fundamental analysis.
 - `technical`: focused technical analysis.
 - `news_sentiment`: focused news/sentiment analysis.
+- `exploration`: verdict-free multi-lens scan of a broad exploratory question
+  (QNT-220).
 
 ### 9.3 Tool Surface
 
@@ -653,6 +740,11 @@ Default report tools:
 - `technical`
 - `fundamental`
 - `news`
+
+Additional tools available to the planner/supervisor: `summary`, a compact
+company variant for the thesis/comparison hot path, `search_news` and
+`search_earnings` (semantic retrieval), and `get_comparison_metrics` (lean
+N-way comparison).
 
 The graph should accept tools as an injected mapping so unit tests can run
 offline with fakes.
@@ -762,8 +854,10 @@ Chat requirements:
 - Reads active ticker from the route.
 - Sends `POST /api/v1/agent/chat` requests.
 - Parses SSE frames without the Vercel AI SDK.
-- Renders tool calls/results, prose chunks, structured thesis, quick fact,
-  comparison, conversational, and focused payloads.
+- Renders tool calls/results, prose chunks, a streaming narrative bubble, and
+  the structured thesis, quick-fact, comparison, lean-comparison, focused,
+  exploration, and conversational payloads, plus a retrieved-sources provenance
+  list for RAG-backed answers.
 - Provides useful cold-start and fallback suggestions.
 - Handles rate-limit, timeout, and unknown-ticker errors gracefully.
 
@@ -861,8 +955,13 @@ the routing decision (Groq default, Gemini override).
 
 Current production pattern:
 
-- Default: Groq Llama-3.3-70B.
-- Groq fallback: Llama-4-Scout-17B.
+- Default: Groq Llama-3.3-70B, with a 45s per-model timeout (QNT-223 / ADR-021)
+  that aborts a throttled call and reroutes within the same client call.
+- Groq fallbacks (recursive): Llama-4-Scout-17B, then `gpt-oss-120b` as
+  last-resort same-provider capacity. (The Cerebras hop added in QNT-215 was
+  removed in QNT-227 — it could not serve synthesize within the client timeout.)
+- Small tier: Groq `gpt-oss-20b` drives the `classify` / `plan` nodes (QNT-220),
+  falling back to the 70B default on TPD exhaustion.
 - Optional override: Gemini 2.5 Flash.
 - Bench aliases: available for eval comparisons.
 
@@ -878,6 +977,14 @@ The eval harness must preserve:
 - Numeric provenance/hallucination checks.
 - Judge/correctness signal.
 - History CSV for model and prompt comparisons.
+
+Additional eval layers:
+
+- Retrieval eval (QNT-261): deterministic, LLM-free ir-measures recall@k / MRR /
+  nDCG over both Qdrant corpora; runs per-PR (`ir-measures` is a dev-only dep).
+- LLM-judged generation eval (QNT-264): DeepEval RAGAS set + custom G-Eval, run
+  off the per-PR hot path via `.github/workflows/llm-eval.yml`
+  (nightly / `workflow_dispatch`), thresholds SOFT by default.
 
 README-level model benchmark tables should be updated only when the benchmark
 set or production default changes.

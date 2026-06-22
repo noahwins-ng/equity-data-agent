@@ -304,48 +304,51 @@ Run-level retry is **activated globally** by `run_retries.enabled: true` in `dag
 
 ---
 
-## Tracing a LangGraph Node or Tool (Langfuse)
+## Tracing the Agent (Langfuse)
 
-**Location**: anything in `packages/agent/src/agent/` that calls the LLM or is a graph node / tool.
+**Location**: the request boundary (`api.routers.agent_chat`, `agent.__main__`) and any graph node in `packages/agent/src/agent/`.
 
-ADR-007 pins the graph at `plan → gather → synthesize`; QNT-61 wires Langfuse so every one of those nodes, plus every tool, shows up in a single trace with prompt / output / tokens / latency captured.
+ADR-019 replaced the Phase-5 per-node `@observe` + `traced_invoke` wrapper with the Langfuse-LangGraph cookbook pattern: open **one** parent trace at the request boundary, attach a single `CallbackHandler` at graph entry, and let LangGraph propagate the runnable `config` so every node's `llm.invoke(...)` is auto-traced. This halved per-chat events to stay under the 50k/mo free tier — the tool wrappers are **not** traced (they are HTTP calls to FastAPI, not LLM calls).
 
 ```python
-from agent.llm import get_llm
-from agent.tracing import langfuse, observe
+# Request boundary — parent trace + one handler attached at graph entry.
+from agent.tracing import make_callback_handler, observe, propagate_attributes
 
-@observe()  # graph node — one span per node, auto-nested under the run's trace
-def synthesize(state: State) -> State:
+@observe(name="agent-chat")
+def _runner(...):
+    with propagate_attributes(trace_name="agent-chat",
+                              session_id=thread_id,
+                              user_id=sha256(client_ip)[:12]):
+        handler = make_callback_handler()
+        config = {"callbacks": [handler]} if handler else {}
+        graph.invoke(state, config=config)
+
+# Graph node — accept config, forward it to the LLM call.
+def synthesize(state: AgentState, config: RunnableConfig) -> dict:
     llm = get_llm()
-    response = langfuse.traced_invoke(
-        llm,
-        build_prompt(state),
-        name="synthesize",  # shows up as the generation span name in the UI
-    )
+    response = llm.invoke(build_prompt(state), config=_prompt_cfg(config, "system-prompt"))
     return {"thesis": response.content}
-
-@observe()  # tool — same pattern, different `as_type` default
-def get_technical_report(ticker: str) -> str:
-    return httpx.get(f"{api_url}/api/v1/reports/technical/{ticker}").text
 ```
 
 **Two non-negotiables**:
-1. Every LLM call goes through `langfuse.traced_invoke(...)`. `tests/test_tracing.py::test_no_raw_llm_invoke_in_agent_package` fails CI if a raw `llm.invoke(...)` sneaks into the agent package.
-2. Every graph node and every tool carries `@observe()`. Without it, the Langfuse trace tree collapses and you lose the `plan → gather → synthesize` boundaries in the UI.
+1. Every `llm.invoke(...)` passes `config=` so callbacks propagate. `tests/agent/test_tracing.py::test_llm_invoke_calls_pass_config_kwarg` fails CI if a call omits it. (This replaced the old "route through `traced_invoke`" invariant.)
+2. The parent trace lives at the request boundary, not per-node. Don't re-add `@observe` to nodes or tools — it double-roots the trace and re-inflates event volume (the exact thing ADR-019 cut).
 
-**Config**: `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_BASE_URL` in `.env`. Unset keys → tracing auto-disables, `traced_invoke` becomes a pass-through, nothing blows up in tests or offline dev. Region matters: the US project and EU project live on different hosts (`us.cloud.langfuse.com` vs `cloud.langfuse.com`) — a trace sent to the wrong region is silently dropped with no auth error.
+**Prompt linking (QNT-199)**: `_prompt_cfg(config, "<prompt-name>")` in `graph.py` attaches `langfuse_prompt` metadata so each generation links to its registered prompt in the Langfuse UI. `scripts/push_prompts.py` registers the five named prompts on every deploy; when keys are unset it falls back to the QNT-187 content-hash (`prompt_version`) metadata.
 
-**Short-lived processes** (CLI, scripts): call `langfuse.flush()` before exit — otherwise the last span never reaches the server. `agent.__main__.main()` already does this in a `finally` block; copy the pattern for any new entry point.
+**Config**: `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_BASE_URL` in `.env`. Unset keys → `make_callback_handler()` returns `None`, callers branch on the empty-config form, nothing blows up in tests or offline dev. Region matters: the US and EU projects live on different hosts (`us.cloud.langfuse.com` vs `cloud.langfuse.com`) — a trace sent to the wrong region is silently dropped with no auth error.
+
+**Short-lived processes** (CLI, scripts): call `tracing.flush()` before exit — otherwise the last span never reaches the server. `agent.__main__` already does this in a `finally` block; copy the pattern for any new entry point.
 
 ---
 
 ## Adding a Ticker
 
-**Location**: `packages/shared/src/shared/tickers.py`
+**Location**: `packages/shared/src/shared/tickers.py` — but it is not a one-liner.
 
-1. Add the ticker string to `TICKERS` list
-2. Add metadata to `TICKER_METADATA` dict
-3. That's it — all Dagster partitions, API endpoints, and agent tools derive from this list automatically
+Adding or removing a ticker touches **four registry structures** in `tickers.py` — `TICKERS`, `TICKER_METADATA`, `NEWS_RELEVANCE`, `TICKER_NAME_ALIASES` — plus several backfill surfaces and an eval-golden sweep. Dagster partitions, API endpoints, and agent tools derive from `TICKERS` automatically, but the metadata / relevance / alias structures and the goldens do not — a missing entry fails *silently* (no news, unparseable in chat, or a broken eval row).
+
+**Follow `docs/guides/ticker-lifecycle.md`** for the full checklist. Never hardcode ticker lists in business logic — derive from the registry or the `/api/v1/tickers` endpoint.
 
 ---
 
