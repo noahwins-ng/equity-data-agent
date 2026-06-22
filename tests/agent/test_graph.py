@@ -1860,3 +1860,124 @@ def test_format_search_hits_truncates_long_body() -> None:
     body_line = next(line for line in block.splitlines() if line.startswith("  "))
     assert body_line.endswith("...")
     assert len(body_line.strip()) <= 284  # 280 + ellipsis, word-boundary cut
+
+
+def test_format_earnings_hits_preserves_full_chunk() -> None:
+    """QNT-276 AC3: an earnings chunk is preserved close to its full ~900-char
+    length -- the old global 280 cap (still used for news) gutted the 8-K
+    guidance paragraph that is the whole reason the earnings corpus exists."""
+    # ~850 chars: well past the 280 news budget, inside the 900 earnings budget.
+    text = "word " * 170
+    rows = json.dumps(
+        [
+            {
+                "title": "NVDA Q1 FY26 earnings release",
+                "section": "guidance",
+                "date": "2026-05-28",
+                "url": "https://sec.gov/x",
+                "text": text,
+            }
+        ]
+    )
+    block = graph_module._format_earnings_hits(rows)
+    body_line = next(line for line in block.splitlines() if line.startswith("  "))
+    # Full chunk survives -- not truncated at the 280-char news budget.
+    assert "..." not in body_line
+    assert len(body_line.strip()) > 280
+
+    # A chunk past the earnings budget cuts near ~900, still far above 280.
+    long_text = "word " * 250  # ~1250 chars
+    long_rows = json.dumps(
+        [{"title": "t", "section": "guidance", "date": "d", "url": "u", "text": long_text}]
+    )
+    long_block = graph_module._format_earnings_hits(long_rows)
+    long_body = next(line for line in long_block.splitlines() if line.startswith("  "))
+    assert long_body.endswith("...")
+    assert 280 < len(long_body.strip()) <= 904  # 900 + ellipsis, word-boundary cut
+
+
+def test_news_fold_orders_retrieved_hits_ahead_of_canned_digest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-276 AC1: the retrieved-hits block LEADS the news report, ahead of the
+    canned digest, so the synthesis prompt never sees it demoted below the
+    generic headlines."""
+    monkeypatch.setattr(
+        graph_module, "classify_intent_with_source", lambda _q, **_: ("news", "llm", True)
+    )
+    llm = _news_focused_llm()
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+
+    search = _recording_search_news(
+        [{"headline": "NVDA sued over chip patents", "source": "Reuters", "date": "2026-06-01"}]
+    )
+    graph = build_graph(
+        {name: _mock_tool(name) for name in REPORT_TOOLS},
+        search_news_tool=search,
+    )
+    report = graph.invoke({"ticker": "NVDA", "question": "any litigation news on NVDA?"})[
+        "reports"
+    ]["news"]
+
+    # Both blocks present, retrieved hit ordered ahead of the canned digest.
+    assert "NVDA sued over chip patents" in report
+    assert "news for NVDA" in report
+    assert report.index("NVDA sued over chip patents") < report.index("news for NVDA")
+
+
+def test_earnings_fold_orders_retrieved_hits_ahead_of_canned_digest(
+    monkeypatch: pytest.MonkeyPatch, stub_llm: _StructuredLLM
+) -> None:
+    """QNT-276 AC1: the retrieved earnings excerpts LEAD the fundamental report,
+    ahead of the canned fundamental digest -- same foregrounding as the news
+    fold."""
+    monkeypatch.setattr(
+        graph_module, "classify_intent_with_source", lambda _q, **_: ("thesis", "llm", False)
+    )
+    search_earnings = MagicMock(return_value=_earnings_rows())
+    graph = build_graph(
+        {name: _mock_tool(name) for name in REPORT_TOOLS},
+        search_earnings_tool=search_earnings,
+    )
+    report = graph.invoke(
+        {"ticker": "NVDA", "question": "what did NVDA management say about guidance?"}
+    )["reports"]["fundamental"]
+
+    assert "Management guided Q2 revenue" in report
+    assert "fundamental for NVDA" in report
+    assert report.index("Management guided Q2 revenue") < report.index("fundamental for NVDA")
+
+
+def test_targeted_earnings_drops_focused_card_and_surfaces_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-276: the news narrative-only pattern extends to the fundamental focus.
+    An earnings-narrative ask (intent=fundamental, needs_earnings_search) WITH
+    retrieved hits drops the focused-card LLM call and lets narrate own the
+    answer, foregrounding the retrieved 8-K excerpt; the hits surface as
+    corpus-tagged ``retrieved_sources``."""
+    monkeypatch.setattr(
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("fundamental", "llm", False),
+    )
+    llm = _StructuredLLM()
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+
+    search_earnings = MagicMock(return_value=_earnings_rows())
+    graph = build_graph(
+        {name: _mock_tool(name) for name in REPORT_TOOLS},
+        search_earnings_tool=search_earnings,
+    )
+    question = "what did NVDA management say about guidance and the outlook?"
+    result = graph.invoke({"ticker": "NVDA", "question": question})
+
+    search_earnings.assert_called_once_with("NVDA", question)
+    # Focused card dropped; the focused-card LLM call was never made.
+    assert result["focused"] is None
+    llm.structured_invoke.assert_not_called()
+    # Retrieved earnings hits surfaced as corpus-tagged provenance.
+    sources = result["retrieved_sources"]
+    assert sources and all(s["corpus"] == "earnings" for s in sources)
+    # And folded into the fundamental report the narrator speaks from.
+    assert "Management guided Q2 revenue" in result["reports"]["fundamental"]

@@ -152,6 +152,17 @@ it verbatim -- voice framing does not substitute for the label.
 """
 
 
+# QNT-276: headings that mark a folded retrieved-evidence block -- search_news /
+# search_earnings hits that matched the user's question, foregrounded ahead of
+# the canned digest. Defined here as the single source of truth: the graph fold
+# helpers (``_format_search_hits`` / ``_format_earnings_hits``) render exactly
+# these strings, and the synthesis prompt's "retrieved evidence is primary" rule
+# names them verbatim. test_synthesis_prompt_foregrounds_retrieved_evidence pins
+# that the prompt text and the constants stay in sync.
+RETRIEVED_NEWS_HEADING = "Headlines matching your question"
+RETRIEVED_EARNINGS_HEADING = "Earnings-release excerpts matching your question"
+
+
 SYSTEM_PROMPT = (
     ANALYST_VOICE_BLOCK
     + """You are an investment research analyst writing about US public equities.
@@ -273,9 +284,20 @@ headlines that bear on the question (partnerships, analyst notes, \
 regulatory actions, product launches, demand signals, recalls, guidance \
 changes, lawsuits), the news aspect should cite at least one in supports \
 or challenges -- whichever the headline argues. Quote the headline's own \
-language compactly; cite as `(source: news)`. If news has zero headlines \
-or all headlines are off-topic, the omission is fine and rule 1 (no \
-padding) still applies.
+language compactly; cite as `(source: news)`. If the generic news digest \
+has zero headlines or all of them are off-topic, the omission is fine and \
+rule 1 (no padding) still applies -- but this license covers the generic \
+digest ONLY, never a retrieved-evidence block (next rule).
+
+**Retrieved evidence is primary -- you must cite it.** A report may open \
+with a section headed "Headlines matching your question" (in the news \
+report) or "Earnings-release excerpts matching your question" (in the \
+fundamental report). Those rows were retrieved specifically because they \
+match the user's question, so they are the primary evidence for this turn: \
+cite at least one of them, quoting its own language compactly, in the \
+aspect it bears on (`(source: news)` or `(source: fundamental)`). The \
+"omission is fine" license above does NOT extend to a "matching your \
+question" block -- dropping retrieved evidence as off-topic is not allowed.
 
 # Verdict
 Pick ``verdict`` from: Overweight / Neutral / Underweight. Rules:
