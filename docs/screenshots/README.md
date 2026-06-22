@@ -4,7 +4,7 @@ This directory holds the four screenshots embedded in the repo `README.md` (the 
 
 Each screenshot has a single canonical filename and a single canonical capture command — pick a representative ticker (NVDA is the default for the bench) and follow the recipe.
 
-> **Refresh status (2026-06-22):** `terminal-live.png` and `dagster-lineage.svg` are stale — see the per-item notes below. `langfuse-trace.png` and `cli-thesis.png` are current.
+> **Refresh status (2026-06-22):** `terminal-live.png` and `dagster-lineage.svg` are stale — see the per-item notes below. `langfuse-trace.png` and `cli-thesis.png` are current. Two more (`rag-provenance.png`, `dagster-asset-checks.png`) are planned but not yet captured — see §5–§6.
 
 ## 1. `langfuse-trace.png`
 
@@ -61,6 +61,30 @@ The hero shot (top of the README, reused in the "Screenshots" section): the thre
 4. Screenshot the full browser viewport at 1600 px wide minimum and save as `docs/screenshots/terminal-live.png`.
 
 Frame it so all three panes are visible — the persistent three-pane workspace is the point.
+
+## 5. `rag-provenance.png` (planned — not yet captured)
+
+The chat panel rendering retrieved-sources provenance (citation links/chips under an answer) — backs the grounded-RAG claim in the README's AI Engineering section, which currently has no image.
+
+Capture from the live site:
+
+1. Open the live app: https://equity-data-agent-ynr2.vercel.app
+2. Ask a targeted-event prompt that fires RAG, e.g. `What's the latest on TSLA litigation?` or `Any buyback news on AAPL?`
+3. Once the answer streams with the retrieved-sources list, screenshot the chat panel (1200 px wide minimum) and save as `docs/screenshots/rag-provenance.png`.
+
+Not yet referenced in the repo `README.md` — add the `![...]` embed (AI Engineering or Screenshots section) once captured.
+
+## 6. `dagster-asset-checks.png` (planned — not yet captured)
+
+The Dagster asset-checks view showing passed/failed domain-bounded checks (RSI 0-100, P/E band, MACD coherence, etc.) — backs the "37 domain-bounded asset checks (dbt-test equivalent)" claim, the strongest DE differentiator with no image today.
+
+```bash
+make dev-dagster   # http://localhost:3000 (tunnel up), or SSH-tunnel to prod Dagster
+```
+
+Navigate: top nav → **Assets** → pick an asset with checks (e.g. `fundamental_summary` or `technical_indicators_daily`) → the **Checks** tab (or the global asset-checks list). Frame several checks with pass/fail status and a bound description visible. Screenshot 1600 px wide minimum and save as `docs/screenshots/dagster-asset-checks.png`.
+
+Not yet referenced in the repo `README.md` — add the `![...]` embed once captured.
 
 ## Re-capture cadence
 
