@@ -13,21 +13,14 @@
 
 ## Highlights
 
-A 30-second scan, split by discipline. Every line is backed by a section below.
+A 30-second scan, split by discipline. Every cell is backed by a section below.
 
-**Data engineering**
-
-- Medallion ClickHouse warehouse (`equity_raw` -> `equity_derived`), 28 idempotent migrations, all `ReplacingMergeTree` with `FINAL`/`argMax` read paths.
-- Dagster asset graph: 17 technical-indicator columns across three timeframes, 20+ fundamental ratios, and two RAG embedding corpora (news + SEC 8-K).
-- 37 domain-bounded asset checks (the dbt-test equivalent) **plus Pandera source-boundary contracts** that route bad rows to an auditable reject sink.
-- Data observability: per-ticker freshness, volume/distribution and anomaly checks on a Grafana data-health dashboard, with the Dagster asset graph as lineage.
-
-**AI engineering**
-
-- LangGraph agent: 9 response shapes, a router with a deterministic clarify step, and multi-turn continuity via a checkpointer.
-- Grounded RAG over **news + SEC-8K earnings** corpora — hybrid dense+BM25 retrieval, Cohere reranking, targeted-event routing, streamed provenance.
-- Layered eval suite: numeric grounding, golden-set regression, tool-call correctness, dialogue quality, **IR retrieval metrics (recall@k / MRR / nDCG)**, and an **LLM-judged RAGAS + G-Eval** harness.
-- LiteLLM provider routing with a fallback chain and per-node model tiering; every request is a Langfuse trace with a prompt-version hash.
+| Data engineering | AI engineering |
+|---|---|
+| Medallion ClickHouse warehouse (`equity_raw` -> `equity_derived`), 28 idempotent migrations, `ReplacingMergeTree` + `FINAL`/`argMax` reads | LangGraph agent: 9 response shapes, a router with a deterministic clarify step, multi-turn continuity via a checkpointer |
+| Dagster asset graph: 17 indicator columns across three timeframes, 20+ fundamental ratios, two RAG embedding corpora (news + SEC 8-K) | Grounded RAG over news + SEC-8K corpora: hybrid dense+BM25, Cohere reranking, targeted-event routing, streamed provenance |
+| 37 domain-bounded asset checks (dbt-test equivalent) **plus Pandera source contracts** routing bad rows to an auditable reject sink | Layered evals: numeric grounding, golden regression, tool-call, dialogue, IR retrieval metrics (recall@k / MRR / nDCG), LLM-judged RAGAS/G-Eval |
+| Data observability: per-ticker freshness, volume/distribution + anomaly checks on a Grafana dashboard, Dagster asset graph as lineage | LiteLLM provider routing + fallback chain + per-node model tiering; every request a Langfuse trace with a prompt-version hash |
 
 ## Try It
 
