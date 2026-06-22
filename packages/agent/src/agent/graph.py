@@ -67,6 +67,8 @@ from agent.llm import SMALL_NODE_ALIAS, get_llm
 from agent.prompts import (
     HISTORY_TURN_LIMIT,
     REPORT_TOOLS,
+    RETRIEVED_EARNINGS_HEADING,
+    RETRIEVED_NEWS_HEADING,
     ConversationMessage,
     build_clarify_prompt,
     build_comparison_prompt,
@@ -726,19 +728,24 @@ def _gather_reports(
     return reports, errors
 
 
-# QNT-225: max chars of the article body (Finnhub summary) rendered under each
-# retrieved headline. Bounds the added prompt cost (~5 hits/turn) while giving
-# the synthesis enough story to disambiguate an event from a name-drop. Whole
-# sentences aren't guaranteed; we cut on a word boundary and add an ellipsis.
-_SEARCH_BODY_MAX_CHARS = 280
+# QNT-225/276: per-corpus body budget for a folded retrieved hit. A news body is
+# a short Finnhub summary -- 280 chars disambiguates an event from a name-drop
+# while bounding the added prompt cost (~5 hits/turn). An earnings chunk is up to
+# 900 chars (edgar_feeds._CHUNK_MAX_CHARS) of 8-K guidance prose, and the chunk
+# itself is the whole reason the earnings corpus exists; the old single 280 cap
+# discarded ~two thirds of every retrieved chunk before the LLM saw it, so
+# earnings preserves the full chunk. Whole sentences aren't guaranteed; we cut on
+# a word boundary and add an ellipsis.
+_NEWS_BODY_MAX_CHARS = 280
+_EARNINGS_BODY_MAX_CHARS = 900
 
 
-def _truncate_body(body: str) -> str:
-    """Trim an article body to ``_SEARCH_BODY_MAX_CHARS`` on a word boundary."""
+def _truncate_body(body: str, max_chars: int = _NEWS_BODY_MAX_CHARS) -> str:
+    """Trim a folded hit's body to ``max_chars`` on a word boundary."""
     body = body.strip()
-    if len(body) <= _SEARCH_BODY_MAX_CHARS:
+    if len(body) <= max_chars:
         return body
-    cut = body[:_SEARCH_BODY_MAX_CHARS].rsplit(" ", 1)[0].rstrip()
+    cut = body[:max_chars].rsplit(" ", 1)[0].rstrip()
     return f"{cut}..."
 
 
@@ -778,7 +785,7 @@ def _format_search_hits(raw: str) -> str:
             lines.append(f"  {body}")
     if not lines:
         return ""
-    return "## Headlines matching your question\n" + "\n".join(lines)
+    return f"## {RETRIEVED_NEWS_HEADING}\n" + "\n".join(lines)
 
 
 def _parse_search_sources(raw: str) -> list[dict[str, str]]:
@@ -845,12 +852,14 @@ def _format_earnings_hits(raw: str) -> str:
         head = title or section
         meta = ", ".join(part for part in (section if title else "", date) if part)
         lines.append(f"- {head}" + (f" ({meta})" if meta else ""))
-        text = _truncate_body(str(row.get("text", "")))
+        # QNT-276: earnings preserves close to the full ~900-char chunk (vs the
+        # 280-char news budget) so the 8-K guidance paragraph reaches the LLM.
+        text = _truncate_body(str(row.get("text", "")), _EARNINGS_BODY_MAX_CHARS)
         if text:
             lines.append(f"  {text}")
     if not lines:
         return ""
-    return "## Earnings-release excerpts matching your question\n" + "\n".join(lines)
+    return f"## {RETRIEVED_EARNINGS_HEADING}\n" + "\n".join(lines)
 
 
 def _parse_earnings_sources(raw: str) -> list[dict[str, str]]:
@@ -1779,7 +1788,11 @@ def build_graph(
             hits = _format_search_hits(raw)
             if hits:
                 existing = reports.get("news")
-                reports["news"] = f"{existing}\n\n{hits}" if existing else hits
+                # QNT-276: retrieved hits LEAD, canned digest follows. The block
+                # that specifically matched the question must sit ahead of the
+                # generic digest, not below it where the synthesis prompt's
+                # "omission is fine" license used to demote it.
+                reports["news"] = f"{hits}\n\n{existing}" if existing else hits
                 logger.info(
                     "gather %s: folded %d targeted-news hits into news report",
                     ticker,
@@ -1808,7 +1821,9 @@ def build_graph(
             hits = _format_earnings_hits(raw)
             if hits:
                 existing = reports.get("fundamental")
-                reports["fundamental"] = f"{existing}\n\n{hits}" if existing else hits
+                # QNT-276: retrieved earnings excerpts LEAD, canned fundamental
+                # digest follows -- same foregrounding as the news fold above.
+                reports["fundamental"] = f"{hits}\n\n{existing}" if existing else hits
                 retrieved_sources = retrieved_sources + earnings_sources
                 logger.info(
                     "gather %s: folded %d earnings-release hits into fundamental report",
@@ -2173,25 +2188,27 @@ def build_graph(
                 return _fallback(
                     "I couldn't pull a report to answer that focused analysis right now."
                 )
-            # QNT-226: targeted news ask -> lighter shape. When the classifier
-            # flagged needs_news_search AND search_news actually returned
-            # provenance, skip the focused-card LLM call and let narrate own the
-            # spoken answer (mirrors the QNT-211 followup narrative-only path:
-            # synthesize returns the payload slot as None, narrate speaks). The
-            # retrieved-sources list renders below the voice as the structured
-            # surface, so the user still sees the articles even if narrate
-            # degrades. Gated on retrieved_sources being non-empty: a degraded
-            # search (Qdrant down, zero hits) keeps the full focused card, since
-            # the canned digest is then the only substrate and the structured
-            # card is the right shape for it.
-            if (
-                intent == "news"
-                and state.get("needs_news_search")
-                and state.get("retrieved_sources")
-            ):
+            # QNT-226/276: focused read that actually fired a RAG search AND got
+            # hits -> lighter shape. Skip the focused-card LLM call and let
+            # narrate own the spoken answer (mirrors the QNT-211 followup
+            # narrative-only path: synthesize returns the payload slot as None,
+            # narrate speaks). The retrieved-sources list renders below the voice
+            # as the structured surface, so the user still sees the hits even if
+            # narrate degrades. QNT-276 extends this from the news focus
+            # (search_news) to the fundamental focus (search_earnings), so an
+            # earnings-narrative ask foregrounds the retrieved 8-K excerpt the
+            # same way instead of synthesizing a valuation card around it. Gated
+            # on retrieved_sources being non-empty: a degraded search (Qdrant
+            # down, zero hits) keeps the full focused card, since the canned
+            # digest is then the only substrate and the card is the right shape.
+            fired_search = (intent == "news" and state.get("needs_news_search")) or (
+                intent == "fundamental" and state.get("needs_earnings_search")
+            )
+            if fired_search and state.get("retrieved_sources"):
                 logger.info(
-                    "synthesize %s: targeted-news narrative-only (focused card dropped)",
+                    "synthesize %s: %s narrative-only (focused card dropped)",
                     ticker,
+                    intent,
                 )
                 return {"focused": None, "confidence": confidence}
             prompt = build_focused_prompt(
@@ -2484,27 +2501,27 @@ def build_graph(
                 except Exception:  # noqa: BLE001
                     prior_thesis_markdown = None
 
-        # QNT-226: targeted-news narrative-only path (synthesize set
-        # focused=None). No structured payload exists, so feed the gathered
-        # news report -- which already carries the folded RAG hits -- as the
-        # substrate the narrator speaks from. Without this the prompt would say
-        # "no structured payload -- speak from the prior turn" and the narrator
-        # would invent an answer with nothing to ground it. The runtime
-        # grounding check below runs against the same reports, so ADR-003
-        # numeric grounding still applies to the spoken answer. The guard
-        # mirrors the synthesize-side condition exactly (needs_news_search +
-        # retrieved_sources) so it only fires on the path synthesize dropped the
-        # card for -- never on a normal news run whose focused payload happened
-        # to render empty.
-        if (
-            intent == "news"
-            and not payload_markdown
-            and state.get("needs_news_search")
-            and state.get("retrieved_sources")
-        ):
-            news_report = (state.get("reports") or {}).get("news")
-            if news_report:
-                payload_markdown = str(news_report)
+        # QNT-226/276: narrative-only substrate. When synthesize dropped the
+        # focused card (search fired + hits, focused=None), no structured payload
+        # exists, so feed the gathered report -- which now LEADS with the folded
+        # RAG block -- as the substrate the narrator speaks from. Without this the
+        # prompt would say "no structured payload -- speak from the prior turn"
+        # and the narrator would invent an answer with nothing to ground it.
+        # news -> reports["news"]; fundamental (earnings) -> reports["fundamental"].
+        # The guards mirror the synthesize-side drop condition exactly so this
+        # only fires on the path synthesize dropped the card for. The runtime
+        # grounding check below runs against the same reports, so ADR-003 numeric
+        # grounding still applies to the spoken answer.
+        dropped_focus_report: str | None = None
+        if not payload_markdown and state.get("retrieved_sources"):
+            if intent == "news" and state.get("needs_news_search"):
+                dropped_focus_report = "news"
+            elif intent == "fundamental" and state.get("needs_earnings_search"):
+                dropped_focus_report = "fundamental"
+        if dropped_focus_report is not None:
+            report_body = (state.get("reports") or {}).get(dropped_focus_report)
+            if report_body:
+                payload_markdown = str(report_body)
 
         prompt = build_narrate_prompt(
             intent=str(intent),

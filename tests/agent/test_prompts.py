@@ -114,8 +114,32 @@ def test_system_prompt_encourages_news_citation_when_relevant() -> None:
     # force a positive bullet onto a negative headline.
     assert "supports or challenges" in text
     # The opt-out is named explicitly so a thesis on a ticker with off-topic
-    # headlines can still skip news without the LLM padding to comply.
-    assert "headlines are off-topic" in text
+    # headlines can still skip news without the LLM padding to comply. QNT-276
+    # scoped this license to the generic digest only (wording: "all of them are
+    # off-topic"), so the off-topic carve-out no longer covers retrieved hits.
+    assert "off-topic" in text
+
+
+def test_synthesis_prompt_foregrounds_retrieved_evidence() -> None:
+    """QNT-276 AC2: when a folded retrieved-evidence block is present, the
+    synthesis prompt must treat it as primary evidence to cite -- and the
+    "omission is fine" license must NOT cover it.
+
+    The rule keys on the exact heading text the graph fold helpers render
+    (``RETRIEVED_NEWS_HEADING`` / ``RETRIEVED_EARNINGS_HEADING``), so both
+    constants must appear verbatim in the prompt or the rule would silently
+    point at a block name that never gets emitted. Pinned to stop the demotion
+    the ticket fixed from re-creeping into the prompt.
+    """
+    from agent.prompts import RETRIEVED_EARNINGS_HEADING, RETRIEVED_NEWS_HEADING
+
+    text = SYSTEM_PROMPT
+    assert "Retrieved evidence is primary" in text
+    # Heading constants are named verbatim so the rule and the fold stay in sync.
+    assert RETRIEVED_NEWS_HEADING in text
+    assert RETRIEVED_EARNINGS_HEADING in text
+    # The omission license is explicitly carved away from retrieved hits.
+    assert 'does NOT extend to a "matching your question" block' in text
 
 
 def test_system_prompt_requires_verbatim_numbers() -> None:
