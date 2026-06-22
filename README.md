@@ -158,6 +158,20 @@ in [`docs/architecture/system-overview.md`](docs/architecture/system-overview.md
 The agent is a controllable graph, not a single prompt — routing, retrieval, and
 evaluation are each first-class.
 
+```mermaid
+flowchart TD
+    classify --> router{route}
+    router -->|ambiguous ask| clarify
+    router -->|greeting / warm follow-up| synthesize
+    router -->|broad exploratory| explore_supervisor
+    router -->|analytical request| plan
+    plan --> gather --> synthesize
+    explore_supervisor --> synthesize
+    clarify --> narrate
+    synthesize --> narrate
+    narrate --> END
+```
+
 - **Intent routing.** `classify` sorts each question into one of 9 response
   shapes (thesis, quick-fact, comparison, fundamental, technical, news,
   conversational, follow-up, exploration) with a heuristic-first, LLM-fallback
