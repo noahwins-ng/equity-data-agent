@@ -132,6 +132,14 @@ HISTORY_FIELDS = (
     "deepeval_context_recall",
     "deepeval_geval",
     "deepeval_n",
+    # QNT-277: RAG-impact behavioral eval aggregate, written on a single
+    # eval_type="rag_impact" row per run. rag_impact_pass_rate is the fraction of
+    # gated fixtures (positives + negative-controls that actually fired) whose
+    # retrieved-only fact reached (positive) / stayed out of (negative) the answer
+    # text; rag_impact_n is that gated-fixture count. Blank on every other
+    # eval_type's rows.
+    "rag_impact_pass_rate",
+    "rag_impact_n",
 )
 
 

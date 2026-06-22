@@ -353,6 +353,51 @@ uv run python -m agent.evals.deepeval_eval --only NVDA --no-record
 uv run pytest -m deepeval -v                               # the pytest cases (live test skips w/o stack)
 ```
 
+### (i) RAG impact eval — `rag_impact_eval.py` + `goldens/rag_impact.yaml` (QNT-277)
+
+Evals (e)–(h) score retrieval (recall@k / MRR / nDCG) and generation (RAGAS /
+G-Eval) **in isolation**. None catches the failure mode "search fired, retrieved a
+relevant hit, and the answer ignored it" — the exact gap that let the synthesis
+demotion (QNT-276) go unnoticed while every component eval stayed green. This is
+the **end-to-end contribution** eval: does a retrieved-only fact actually REACH
+the answer?
+
+**Stub the tools, key on the answer text.** Each fixture compiles the graph with
+`build_graph` dependency injection: the report tools return a canned digest that
+OMITS the planted fact, and `search_news_tool` / `search_earnings_tool` return a
+fixture hit carrying a **coined** proper noun (a name the model can't memorise or
+paraphrase). The assertion is on the user-facing ANSWER TEXT — does the coined
+entity appear? — not on `retrieved_sources` shape or fold rendering. That contract
+survives the QNT-276 refactor, so the only way a fixture flips RED→GREEN is a
+genuine behavior change. Because search is stubbed, the eval touches **neither
+Qdrant NOR Cohere** — the only model calls are the agent's own classify +
+synthesize/narrate on the Groq free tier. Runs off the per-PR hot path
+(`workflow_dispatch` / local), like DeepEval, with zero rerank-quota cost. The
+offline fixture validation (`tests/agent/evals/test_rag_impact_yaml.py`) DOES run
+in the unit sweep.
+
+**Eval-first ordering (Option A).** This ships FIRST as a RED baseline that proves
+the gap on pre-QNT-276 behavior; QNT-276 then lands and flips it GREEN. A
+`negative_control` (search returns `"[]"`) asserts the answer does NOT fabricate
+the coined entity. A positive whose search never fired is reported as `misrouted`
+(an intent-routing axis owned by evals (e)/(g)) and kept out of the pass-rate.
+
+**Recorded alongside the other eval rows.** Each run appends one
+`eval_type="rag_impact"` row to `history.csv` (`rag_impact_pass_rate` /
+`rag_impact_n`), same `git_sha` + `prompt_version` stamping as every other type.
+
+**First recorded baseline** (run `2441f9bf`, sha `f1d419c`, 2026-06-23, clean
+window, 8 fixtures): `rag_impact_pass_rate` **0.875** (7/8 gated) — the one FAIL is
+`msft-guidance-earnings`, where the retrieved earnings fact is dropped from the
+answer (the earnings→fundamental synthesis path demotes it). That stable failure
+is the evidence the gap is real; QNT-276 should flip it to 1.0.
+
+```bash
+uv run python -m agent.evals.rag_impact_eval                  # full run + record (needs LiteLLM)
+uv run python -m agent.evals.rag_impact_eval --only nvda-antitrust-news
+uv run python -m agent.evals.rag_impact_eval --no-history
+```
+
 ## Clean-window re-run for the new ticker universe (QNT-255)
 
 QNT-237 swapped the universe (V/JPM/UNH -> MU/AMD/INTC). Its AC5 eval passed the

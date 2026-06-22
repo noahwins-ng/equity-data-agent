@@ -1,0 +1,94 @@
+# RAG impact eval fixtures (QNT-277).
+#
+# Each fixture proves whether a RETRIEVED-ONLY fact reaches the agent's final
+# answer when semantic search fires. The harness (agent.evals.rag_impact_eval)
+# stubs the report tools (canned digest WITHOUT the planted fact) and the search
+# tools (a fixture hit CARRYING the planted fact) via build_graph injection, so
+# the eval consumes zero Cohere/Qdrant -- only the generation LLM runs.
+#
+# planted_entity is a COINED proper noun: the model cannot have memorised it and
+# cannot paraphrase it, so if it appears in the answer it can only have come from
+# the stubbed retrieval hit (never from the canned digest, never from pretraining).
+# That is what makes the assertion sound. planted_figure rides along in the hit
+# for realism; the entity is the gate.
+#
+# corpus drives which search tool is stubbed-with-a-hit:
+#   news      -> search_news_tool returns the hit; question fires _is_targeted_news
+#   earnings  -> search_earnings_tool returns the hit; question fires _is_earnings_search
+#   both      -> both tools return the hit; question fires both routers
+# kind:
+#   positive          -> search returns the hit; the entity MUST appear in the answer
+#   negative_control  -> search returns "[]"; the entity MUST NOT appear (no fabrication)
+#
+# Question phrasing must fire the matching DETERMINISTIC router (and resolve to an
+# intent the gather gate reads) -- the offline test test_rag_impact_yaml pins this
+# so the YAML and the routers can never drift.
+
+fixtures:
+  # --- targeted-news positives ------------------------------------------------
+  - id: nvda-antitrust-news
+    ticker: NVDA
+    question: "What's the latest on the NVDA antitrust investigation?"
+    corpus: news
+    kind: positive
+    planted_entity: "Halverson-Reyes Accord"
+    planted_figure: "$3.7 billion"
+
+  - id: amd-partnership-news
+    ticker: AMD
+    question: "Did AMD announce any new partnership recently?"
+    corpus: news
+    kind: positive
+    planted_entity: "Velentari Systems"
+    planted_figure: "1.4 million units"
+
+  # --- earnings-narrative positives -------------------------------------------
+  - id: msft-guidance-earnings
+    ticker: MSFT
+    question: "What did MSFT management say about its guidance last quarter?"
+    corpus: earnings
+    kind: positive
+    planted_entity: "Project Quillon"
+    planted_figure: "$2.9 billion"
+
+  - id: amzn-guidance-earnings
+    ticker: AMZN
+    question: "What did AMZN management say about its forward guidance?"
+    corpus: earnings
+    kind: positive
+    planted_entity: "Northwind logistics tier"
+    planted_figure: "11.6% margin"
+
+  # --- multi-corpus positives (both routers fire) -----------------------------
+  - id: googl-ceo-guidance-thesis
+    ticker: GOOGL
+    question: "Give me your thesis on GOOGL given what the CEO said about guidance."
+    corpus: both
+    kind: positive
+    planted_entity: "Solstice Cloud mandate"
+    planted_figure: "$5.2 billion"
+
+  - id: meta-buyback-outlook-thesis
+    ticker: META
+    question: "Give me a thesis on META factoring in its buyback and forward outlook."
+    corpus: both
+    kind: positive
+    planted_entity: "Greyhaven repurchase plan"
+    planted_figure: "$18 billion"
+
+  # --- negative controls (search fires but returns "[]") ----------------------
+  - id: tsla-recall-news-empty
+    ticker: TSLA
+    question: "What's the latest on the TSLA recall?"
+    corpus: news
+    kind: negative_control
+    planted_entity: "Marlowe Drivetrain recall"
+    planted_figure: "240,000 vehicles"
+
+  - id: mu-guidance-earnings-empty
+    ticker: MU
+    question: "What did MU management say about its guidance?"
+    corpus: earnings
+    kind: negative_control
+    planted_entity: "Cascade Memory roadmap"
+    planted_figure: "$1.8 billion"
