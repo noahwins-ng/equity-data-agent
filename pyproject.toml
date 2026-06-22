@@ -13,12 +13,12 @@ members = [
 
 [dependency-groups]
 dev = [
-    "ruff>=0.15.12",
-    "pyright>=1.1.409",
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.24.0",
+    "ruff>=0.15.18",
+    "pyright>=1.1.410",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
     # QNT-160 — security scanners; pinned versions so CI and local parity.
-    "pip-audit>=2.7.3",
+    "pip-audit>=2.10.1",
     "bandit>=1.8.0",
     # QNT-261: deterministic IR metrics (recall@k / MRR / nDCG) for the retrieval
     # eval. DEV-ONLY on purpose: the eval harness (agent.evals.retrieval_eval)
