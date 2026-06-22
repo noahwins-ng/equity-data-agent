@@ -54,6 +54,8 @@ How to do common tasks. Operational runbooks.
 - [ops-runbook.md](guides/ops-runbook.md) — Failure-mode catalog: symptoms, diagnosis, response, prevention (check here first when prod breaks)
 - [vercel-deploy.md](guides/vercel-deploy.md) — Phase 6 deploy runbook: Cloudflare named-tunnel ingress + Vercel project link + CORS allowlist edit
 - [uptime-monitoring.md](guides/uptime-monitoring.md) — UptimeRobot probe + Healthchecks.io heartbeat setup against the named-tunnel API URL
+- [ticker-lifecycle.md](guides/ticker-lifecycle.md) — How to add/remove a ticker: the four registry structures + backfill surfaces + eval-golden sweep
+- [load-test-baseline.md](guides/load-test-baseline.md) — Endpoint latency baseline capture (`scripts/load_test_baseline.py`)
 
 ### [retros/](retros/)
 End-of-phase retrospectives. What shipped, what was hard, lessons learned.
@@ -67,6 +69,7 @@ End-of-phase retrospectives. What shipped, what was hard, lessons learned.
 - [phase-4-asset-check-audit.md](retros/phase-4-asset-check-audit.md) — Asset-check composite-key aggregation audit (QNT-122 follow-up)
 - [phase-5-agent-layer.md](retros/phase-5-agent-layer.md) — Agent layer: LangGraph 3-node graph, LiteLLM routing, Langfuse tracing, hallucination eval harness
 - [phase-6-frontend.md](retros/phase-6-frontend.md) — Frontend: Next.js + TradingView Lightweight Charts + SSE chat panel + Vercel deploy via Cloudflare quick tunnel
+- [phase-7-observability-polish.md](retros/phase-7-observability-polish.md) — Observability & resilience: Dozzle/Prometheus/Grafana, alert fan-in, retry policy, load-test baseline
 
 ### [design/](design/)
 Canonical visual references for the Phase 6 frontend (TERMINAL/NINE mock + iteration history).
