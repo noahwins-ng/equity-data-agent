@@ -1,18 +1,21 @@
-# RAG multi-corpus routing golden set (QNT-263).
+# RAG multi-corpus routing golden set (QNT-263; semantic since QNT-280).
 #
-# One deterministic layer: route_search_corpora(question) must equal the
-# fixture's ``expected_corpora`` -- the set of RAG corpora a question should
-# reach. This is the senior multi-corpus-routing signal: a query about a named
-# news event reaches the news corpus, a query about management framing /
-# guidance reaches the 8-K earnings corpus, a query that spans both reaches
-# both, and a generic / single-metric / off-domain ask reaches neither (the
-# canned digests carry it).
+# The composed corpus set must equal the fixture's ``expected_corpora`` -- the
+# set of RAG corpora a question should reach. This is the senior
+# multi-corpus-routing signal: a query about a named news event or competitive
+# topic reaches the news corpus, a query about management framing / guidance
+# reaches the 8-K earnings corpus, a query that spans both reaches both, and a
+# generic / single-metric / off-domain ask reaches neither (the canned digests
+# carry it).
 #
-# The router is DETERMINISTIC (agent.intent.route_search_corpora, composed of
-# _is_targeted_news + _is_earnings_search), so a fixture whose phrasing
-# disagrees with its expected_corpora is a CURATION bug, not a model miss --
-# test_routing_yaml pins the two together, the same contract
-# test_news_search_yaml enforces for the news flag.
+# QNT-280 made the trigger SEMANTIC: the corpora are composed from the classify
+# LLM's needs_news_search / needs_earnings_search flags (OR-ed with the keyword
+# floor), so routing_eval is now LIVE and scores the model. A fixture's
+# expected_corpora is the label the live classifier must reproduce; the topical /
+# competitive positives (e.g. nvda-datacenter-switching) are the ones the old
+# keyword gates could not reach and are the load-bearing tests of the new path.
+# The offline test_routing_yaml only pins structure + keyword SOUNDNESS (a
+# keyword-floor hit implies the fixture should fire), not full accuracy.
 #
 # corpora vocabulary: "news" (equity_news) | "earnings" (equity_earnings).
 # An empty list means neither corpus fires.
@@ -56,6 +59,21 @@ fixtures:
   - id: meta-layoffs
     ticker: META
     question: "Any headlines on META about layoffs?"
+    expected_corpora: [news]
+
+  # QNT-280: topical / competitive phrasings the old keyword gate MISSED. These
+  # carry no _TARGETED_NEWS_TOKENS word but name a specific market/competitive
+  # angle a directly-relevant headline would answer -- the semantic flag must
+  # fire news on them. nvda-datacenter-switching is the live miss from the ticket
+  # (corpus headline "Nvidia Overtakes Rivals in Data Center Switching Market").
+  - id: nvda-datacenter-switching
+    ticker: NVDA
+    question: "What's the latest on Nvidia in the data center switching / networking market?"
+    expected_corpora: [news]
+
+  - id: amd-server-cpu-share
+    ticker: AMD
+    question: "How is AMD doing against Intel in the server CPU market lately?"
     expected_corpora: [news]
 
   # --- earnings-only: management narrative / guidance wants the 8-K corpus ---

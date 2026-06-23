@@ -269,7 +269,9 @@ def test_fresh_intent_trims_assembled_prompt_history(monkeypatch: Any) -> None:
     monkeypatch.setattr(graph_module, "get_llm", lambda *a, **kw: stub)
     monkeypatch.setattr("agent.intent.get_llm", lambda *a, **kw: stub)
     monkeypatch.setattr(
-        graph_module, "classify_intent_with_source", lambda _q, **_: ("thesis", "heuristic", False)
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("thesis", "heuristic", False, False),
     )
     graph = build_graph(_tools())
     graph.invoke(
@@ -292,7 +294,9 @@ def test_fresh_intent_trims_assembled_prompt_history(monkeypatch: Any) -> None:
     monkeypatch.setattr(graph_module, "get_llm", lambda *a, **kw: stub2)
     monkeypatch.setattr("agent.intent.get_llm", lambda *a, **kw: stub2)
     monkeypatch.setattr(
-        graph_module, "classify_intent_with_source", lambda _q, **_: ("followup", "heuristic", True)
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("followup", "heuristic", True, False),
     )
     graph2 = build_graph(_tools())
     graph2.invoke(

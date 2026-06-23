@@ -502,7 +502,7 @@ def test_with_source_heuristic_path() -> None:
     """A heuristic-matched question returns source='heuristic'."""
     from agent.intent import classify_intent_with_source
 
-    intent, source, _flag = classify_intent_with_source("What's the RSI?")
+    intent, source, _flag, _earn = classify_intent_with_source("What's the RSI?")
     assert intent == "quick_fact"
     assert source == "heuristic"
 
@@ -512,7 +512,7 @@ def test_with_source_llm_path(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_llm_pipeline(monkeypatch, IntentDecision(intent="thesis"))
     from agent.intent import classify_intent_with_source
 
-    intent, source, _flag = classify_intent_with_source("Tell me about INTC")
+    intent, source, _flag, _earn = classify_intent_with_source("Tell me about INTC")
     assert intent == "thesis"
     assert source == "llm"
 
@@ -522,7 +522,7 @@ def test_with_source_fallback_path_on_llm_exception(monkeypatch: pytest.MonkeyPa
     _patch_llm_pipeline(monkeypatch, None, invoke_raises=RuntimeError("timeout"))
     from agent.intent import classify_intent_with_source
 
-    intent, source, _flag = classify_intent_with_source("Tell me about INTC")
+    intent, source, _flag, _earn = classify_intent_with_source("Tell me about INTC")
     assert intent == "thesis"
     assert source == "fallback"
 
@@ -532,7 +532,7 @@ def test_with_source_fallback_path_on_unexpected_shape(monkeypatch: pytest.Monke
     _patch_llm_pipeline(monkeypatch, {"parsed": None, "parsing_error": "x"})
     from agent.intent import classify_intent_with_source
 
-    intent, source, _flag = classify_intent_with_source("Tell me about INTC")
+    intent, source, _flag, _earn = classify_intent_with_source("Tell me about INTC")
     assert intent == "thesis"
     assert source == "fallback"
 
@@ -543,59 +543,128 @@ def test_with_source_llm_include_raw_dict(monkeypatch: pytest.MonkeyPatch) -> No
     _patch_llm_pipeline(monkeypatch, {"parsed": decision, "raw": "..."})
     from agent.intent import classify_intent_with_source
 
-    intent, source, _flag = classify_intent_with_source("Tell me about INTC")
+    intent, source, _flag, _earn = classify_intent_with_source("Tell me about INTC")
     assert intent == "quick_fact"
     assert source == "llm"
 
 
-# ─── QNT-222 follow-up: needs_news_search signal ─────────────────────────────
+# ─── QNT-280: semantic needs_news_search / needs_earnings_search flags ────────
 
 
-def test_needs_news_search_deterministic_on_llm_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The LLM picks shape, but RAG routing is deterministic."""
+def test_needs_news_search_honours_llm_flag_on_llm_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QNT-280: the LLM's semantic flag is the primary trigger on the llm path."""
     _patch_llm_pipeline(monkeypatch, IntentDecision(intent="quick_fact", needs_news_search=True))
     from agent.intent import classify_intent_with_source
 
-    intent, source, needs_news_search = classify_intent_with_source(
+    intent, source, needs_news_search, _earn = classify_intent_with_source(
         "what did the CEO say about the buyback?"
     )
     assert (intent, source) == ("quick_fact", "llm")
     assert needs_news_search is True
 
 
-def test_needs_news_search_ignores_llm_true_for_generic_news(
+def test_needs_news_search_semantic_flag_catches_topical_phrasing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Generic news overview must stay non-RAG even if the LLM flag drifts."""
-    _patch_llm_pipeline(monkeypatch, IntentDecision(intent="news", needs_news_search=True))
-    from agent.intent import classify_intent_with_source
+    """The load-bearing QNT-280 case: a topical/competitive ask that carries NO
+    keyword token (_is_targeted_news is False) still fires because the LLM's
+    semantic flag is True. This is the exact prod miss the ticket fixes."""
+    from agent.intent import _is_targeted_news, classify_intent_with_source
 
-    _intent, _source, needs_news_search = classify_intent_with_source("what's the news on AAPL?")
+    question = "What's the latest on Nvidia in the data center switching / networking market?"
+    # Precondition: the keyword floor genuinely cannot reach this phrasing.
+    assert _is_targeted_news(question) is False
+    _patch_llm_pipeline(monkeypatch, IntentDecision(intent="news", needs_news_search=True))
+
+    intent, source, needs_news_search, _earn = classify_intent_with_source(question)
+    assert (intent, source) == ("news", "llm")
+    assert needs_news_search is True
+
+
+def test_needs_news_search_generic_ask_stays_off_when_both_signals_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-280 generic-suppression WIRING pin (offline regression anchor).
+
+    Under the new contract the LLM owns the generic-ask judgment (it is prompted
+    to return False for "what's the news on AAPL?"); the keyword floor is also
+    False there. This pins that when BOTH signals are False the wiring fires
+    nothing -- the OR must not invent a True. (The model's live judgment on
+    generics is guarded separately by routing_eval's false-positive hard-gate;
+    the old "keyword overrides LLM True" suppression was deliberately removed by
+    QNT-280, so we assert the model-trusting wiring, not a keyword override.)"""
+    from agent.intent import _is_targeted_news, classify_intent_with_source
+
+    question = "what's the news on AAPL?"
+    assert _is_targeted_news(question) is False  # floor stays off on a generic ask
+    _patch_llm_pipeline(monkeypatch, IntentDecision(intent="news", needs_news_search=False))
+
+    intent, source, needs_news_search, _earn = classify_intent_with_source(question)
+    assert (intent, source) == ("news", "llm")
     assert needs_news_search is False
 
 
-def test_needs_news_search_targeted_keyword_overrides_llm_false(
+def test_needs_news_search_keyword_floor_rescues_llm_false(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Specific-topic news phrasing should RAG even if the LLM flag misses it."""
+    """QNT-280: the keyword decider is demoted to a recall FLOOR -- an obvious
+    named event ("collaboration") the small model overlooks still fires via OR."""
     _patch_llm_pipeline(monkeypatch, IntentDecision(intent="news", needs_news_search=False))
     from agent.intent import classify_intent_with_source
 
-    intent, source, needs_news_search = classify_intent_with_source(
+    intent, source, needs_news_search, _earn = classify_intent_with_source(
         "any news on NVDA collaboration with Nokia?"
     )
     assert (intent, source) == ("news", "llm")
     assert needs_news_search is True
 
 
-def test_needs_news_search_keyword_fallback_on_heuristic_path() -> None:
-    """When the heuristic short-circuits (no LLM), the keyword net carries the
+def test_needs_news_search_keyword_floor_on_heuristic_path() -> None:
+    """When the heuristic short-circuits (no LLM), the keyword floor carries the
     signal -- "any catalysts" is a heuristic news hit AND a targeted token."""
     from agent.intent import classify_intent_with_source
 
-    intent, source, needs_news_search = classify_intent_with_source("any catalysts for NVDA?")
+    intent, source, needs_news_search, _earn = classify_intent_with_source(
+        "any catalysts for NVDA?"
+    )
     assert source == "heuristic"
     assert needs_news_search is True
+
+
+def test_needs_earnings_search_honours_llm_flag_on_llm_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-280: needs_earnings_search is carried by the same semantic classify
+    call. A narrative ask phrased without a keyword token still fires via the LLM
+    flag (keyword floor here is False)."""
+    from agent.intent import _is_earnings_search, classify_intent_with_source
+
+    question = "How did the leadership team characterise the quarter on the call?"
+    assert _is_earnings_search(question) is False
+    _patch_llm_pipeline(
+        monkeypatch, IntentDecision(intent="fundamental", needs_earnings_search=True)
+    )
+
+    intent, source, _news, needs_earnings_search = classify_intent_with_source(question)
+    assert (intent, source) == ("fundamental", "llm")
+    assert needs_earnings_search is True
+
+
+def test_needs_earnings_search_keyword_floor_rescues_llm_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The earnings keyword decider is the recall floor: "guidance" fires even
+    when the LLM flag is False."""
+    _patch_llm_pipeline(
+        monkeypatch, IntentDecision(intent="fundamental", needs_earnings_search=False)
+    )
+    from agent.intent import classify_intent_with_source
+
+    _intent, source, _news, needs_earnings_search = classify_intent_with_source(
+        "what did management say about guidance?"
+    )
+    assert source == "llm"
+    assert needs_earnings_search is True
 
 
 def test_is_targeted_news_distinguishes_targeted_from_generic() -> None:
@@ -638,15 +707,17 @@ def test_is_earnings_search_fires_on_narrative_asks() -> None:
     assert _is_earnings_search("what are the misguidedness issues?") is False
 
 
-def test_route_search_corpora_news_earnings_both_neither() -> None:
+def test_route_search_corpora_composes_the_two_flags() -> None:
+    """QNT-280: route_search_corpora is a pure OR over the two resolved flags
+    (the runtime + eval share this one composition point), not a re-derivation
+    from the question text."""
     from agent.intent import route_search_corpora
 
-    # news-only: a named event with no earnings-narrative signal.
-    assert route_search_corpora("any litigation on NVDA?") == ("news",)
-    # earnings-only: management framing / guidance with no named news event.
-    assert route_search_corpora("what was NVDA's outlook for the quarter?") == ("earnings",)
-    # both: a named-executive news event AND a guidance ask -> ordered news,earnings.
-    assert route_search_corpora("what did the CEO say about guidance?") == ("news", "earnings")
-    # neither: generic / single-metric -> canned digests carry it.
-    assert route_search_corpora("what's the news on AAPL?") == ()
-    assert route_search_corpora("what's MSFT's P/E?") == ()
+    # news-only.
+    assert route_search_corpora(True, False) == ("news",)
+    # earnings-only.
+    assert route_search_corpora(False, True) == ("earnings",)
+    # both -> ordered news,earnings.
+    assert route_search_corpora(True, True) == ("news", "earnings")
+    # neither -> canned digests carry it.
+    assert route_search_corpora(False, False) == ()
