@@ -1,10 +1,12 @@
 # RAG news-search golden set (QNT-231).
 #
 # Two layers per fixture (see agent.evals.news_search_eval):
-#   * Flag layer  -- classify_intent_with_source(question).needs_news_search
-#     must equal expected_news_search. NB this flag is DETERMINISTIC
-#     (_is_targeted_news, QNT-229), so curated positives/negatives are a
-#     keyword-routing contract, not a model-judgment measurement.
+#   * Flag layer  -- the needs_news_search from classify_intent_with_source(question)
+#     must equal expected_news_search. QNT-280 made this flag SEMANTIC: it is the
+#     classify LLM's judgment OR-ed with the _is_targeted_news keyword floor, so
+#     this measures the live model. The topical positive (nvda-datacenter-switching)
+#     carries no keyword token and only fires via the semantic path -- it is the
+#     load-bearing test of QNT-280.
 #   * Retrieval layer (positives only) -- search_news(ticker, question) must
 #     return at least one hit whose headline or body contains one of
 #     ``expected_terms``. STRUCTURAL relevance, never a frozen headline, so
@@ -99,6 +101,17 @@ fixtures:
     question: "Any news about Micron's memory pricing or demand?"
     expected_news_search: true
     expected_terms: [pricing, demand, dram, nand, memory, hbm]
+
+  # QNT-280: topical / competitive phrasing the keyword gate MISSED (no
+  # _TARGETED_NEWS_TOKENS word). The live miss from the ticket -- the corpus
+  # holds "Nvidia Overtakes Rivals in Data Center Switching Market" but
+  # _is_targeted_news returned False, so the agent served a generic digest. Only
+  # the semantic flag fires this; it is the load-bearing positive for QNT-280.
+  - id: nvda-datacenter-switching
+    ticker: NVDA
+    question: "What's the latest on Nvidia in the data center switching / networking market?"
+    expected_news_search: true
+    expected_terms: [switching, networking, "data center", ethernet, spectrum, infiniband]
 
   # --- negatives: generic / off-domain asks that must NOT fire the search ---
   - id: aapl-generic-news

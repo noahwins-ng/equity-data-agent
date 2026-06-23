@@ -57,7 +57,6 @@ from agent.intent import (
     _EXPLORATION_TRIGGERS,
     ClassifierSource,
     Intent,
-    _is_earnings_search,
     classify_intent_with_source,
     extract_tickers,
     has_comparison_phrase,
@@ -388,8 +387,10 @@ class AgentState(TypedDict):
     # ran or it returned nothing. Set by gather_node, read by the SSE endpoint
     # (gated on gather having run so a followup turn doesn't re-emit prior hits).
     retrieved_sources: NotRequired[list[dict[str, str]]]
-    # QNT-263: deterministic earnings-corpus routing signal. Set by classify_node
-    # via agent.intent._is_earnings_search (mirrors needs_news_search). When set
+    # QNT-263 / QNT-280: earnings-corpus routing signal. Set by classify_node
+    # from the classify LLM's semantic ``needs_earnings_search`` flag (mirrors
+    # needs_news_search; _is_earnings_search keyword decider is the recall
+    # floor). When set
     # and the intent reads the fundamental report (_EARNINGS_SEARCH_INTENTS),
     # gather fires search_earnings over the equity_earnings corpus and folds the
     # hits into reports["fundamental"], tagging each retrieved source corpus=
@@ -1439,7 +1440,12 @@ def build_graph(
         # signal for checkpoints created before ``messages`` existed.
         history, has_prior_turn = _prior_turn_context(state, question)
         try:
-            intent, classifier_source, needs_news_search = classify_intent_with_source(
+            (
+                intent,
+                classifier_source,
+                needs_news_search,
+                needs_earnings_search,
+            ) = classify_intent_with_source(
                 question,
                 config=config,
                 has_prior_turn=has_prior_turn,
@@ -1450,6 +1456,7 @@ def build_graph(
             intent = "thesis"
             classifier_source = "fallback"
             needs_news_search = False
+            needs_earnings_search = False
         question_tickers = extract_tickers(question)
         if (
             has_comparison_phrase(question)
@@ -1461,11 +1468,12 @@ def build_graph(
         if _should_route_exploration(intent, question, has_prior_turn=has_prior_turn):
             intent = "exploration"
         logger.info(
-            "classify %s: intent=%s source=%s needs_news_search=%s",
+            "classify %s: intent=%s source=%s needs_news_search=%s needs_earnings_search=%s",
             ticker,
             intent,
             classifier_source,
             needs_news_search,
+            needs_earnings_search,
         )
         # QNT-212: heuristic ambiguity check on the resolved intent. Drives
         # the conditional edge below: a non-None ambiguity_kind routes to
@@ -1517,10 +1525,11 @@ def build_graph(
             "classifier_source": classifier_source,
             "ambiguity_kind": ambiguity_kind,
             "needs_news_search": needs_news_search,
-            # QNT-263: deterministic earnings-corpus routing, computed from the
-            # real question independent of the (possibly stubbed) intent LLM —
-            # mirrors how needs_news_search is a pure _is_targeted_news call.
-            "needs_earnings_search": _is_earnings_search(question),
+            # QNT-263 / QNT-280: earnings-corpus routing. The trigger is now the
+            # classify LLM's semantic ``needs_earnings_search`` flag (with the
+            # _is_earnings_search keyword decider demoted to a recall floor),
+            # resolved alongside the intent in classify_intent_with_source.
+            "needs_earnings_search": needs_earnings_search,
             "messages": _append_user_message(history, question),
         }
 

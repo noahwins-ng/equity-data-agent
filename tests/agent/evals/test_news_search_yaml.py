@@ -48,15 +48,16 @@ def test_positives_carry_expected_terms() -> None:
             assert not f.expected_terms, f"{f.id}: negative must not carry expected_terms"
 
 
-def test_fixture_phrasing_matches_deterministic_router() -> None:
-    """The flag is deterministic (_is_targeted_news, QNT-229), so a fixture
-    whose phrasing disagrees with its expected_news_search is a curation bug,
-    not a model miss. Pin it here so the YAML and the router can't drift -- this
-    is the offline half of the AC2 flag contract (the live run only re-confirms
-    it and exercises the intent-label LLM path)."""
+def test_keyword_floor_is_sound() -> None:
+    """QNT-280: the flag is now SEMANTIC; the keyword decider (_is_targeted_news)
+    is demoted to a recall FLOOR scored live by news_search_eval. Offline we can
+    only assert the floor is SOUND: a keyword hit implies the fixture is a
+    positive. It may UNDER-fire -- the topical positive nvda-datacenter-switching
+    carries no token and needs the live LLM -- but it must never fire on a
+    negative (that would be a generic false positive, the gated direction)."""
     for f in load_news_search_fixtures():
-        actual = _is_targeted_news(f.question)
-        assert actual == f.expected_news_search, (
-            f"{f.id}: _is_targeted_news({f.question!r})={actual} "
-            f"but expected_news_search={f.expected_news_search}"
-        )
+        if _is_targeted_news(f.question):
+            assert f.expected_news_search, (
+                f"{f.id}: keyword floor fired but expected_news_search=False -- "
+                "the floor must never fire a negative"
+            )

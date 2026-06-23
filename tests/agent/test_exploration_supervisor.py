@@ -93,7 +93,7 @@ def _patch_intent(monkeypatch: pytest.MonkeyPatch, intent: str = "thesis") -> No
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda *_args, **_kwargs: (intent, "heuristic", False),
+        lambda *_args, **_kwargs: (intent, "heuristic", False, False),
     )
 
 

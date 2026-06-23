@@ -1,10 +1,15 @@
-"""Offline validation + correctness for goldens/routing.yaml (QNT-263 AC3).
+"""Offline validation + keyword-soundness for goldens/routing.yaml.
 
-Mirrors test_news_search_yaml: the multi-corpus router is deterministic
-(agent.intent.route_search_corpora), so these run in the default unit sweep --
-no tunnel, no Qdrant, no LiteLLM. The standalone scorecard
-(agent.evals.routing_eval) is the PR artifact; this file pins the invariants
-the YAML and the router can't be allowed to drift apart on.
+QNT-280 made the routing decision SEMANTIC (the classify LLM's flags), so full
+accuracy is scored by the LIVE standalone runner (agent.evals.routing_eval),
+not here. These offline tests run in the default unit sweep -- no tunnel, no
+Qdrant, no LiteLLM -- and pin only what holds without the model:
+
+* structure (ids unique, tickers in registry, per-class coverage floors);
+* keyword SOUNDNESS -- the demoted keyword floor (_is_targeted_news /
+  _is_earnings_search) may UNDER-fire vs the label (topical positives need the
+  LLM), but it must never fire a corpus a fixture says should stay quiet. A
+  keyword-floor hit on a "neither" / wrong-corpus fixture is a curation bug.
 """
 
 from __future__ import annotations
@@ -14,11 +19,9 @@ from agent.evals.routing_eval import (
     MIN_EARNINGS_ONLY,
     MIN_NEITHER,
     MIN_NEWS_ONLY,
-    is_failing,
     load_routing_fixtures,
-    run_all,
 )
-from agent.intent import route_search_corpora
+from agent.intent import _is_earnings_search, _is_targeted_news, route_search_corpora
 from shared.tickers import TICKERS
 
 
@@ -48,23 +51,18 @@ def test_class_coverage_floors() -> None:
     assert counts["neither"] >= MIN_NEITHER
 
 
-def test_router_matches_expected_corpora() -> None:
-    """The router is deterministic, so a fixture whose phrasing disagrees with
-    its expected_corpora is a curation bug. This is the offline half of the AC3
-    routing contract -- the standalone scorecard only re-confirms it."""
+def test_keyword_floor_is_sound() -> None:
+    """The demoted keyword floor must be SOUND: whatever it fires must be a
+    subset of the fixture's expected_corpora. It may under-fire (topical
+    positives like nvda-datacenter-switching need the live LLM and are scored by
+    routing_eval), but a floor hit on a corpus the label does not list -- worst
+    of all on a 'neither' fixture -- is a curation bug. This is the offline,
+    model-free half of the routing contract."""
     for f in load_routing_fixtures():
-        actual = frozenset(route_search_corpora(f.question))
-        assert actual == f.expected_corpora, (
-            f"{f.id}: route_search_corpora({f.question!r})={sorted(actual)} "
-            f"but expected_corpora={sorted(f.expected_corpora)}"
+        floor = frozenset(
+            route_search_corpora(_is_targeted_news(f.question), _is_earnings_search(f.question))
         )
-
-
-def test_run_all_passes_the_gate() -> None:
-    """The full set must route cleanly -- the gate the standalone runner enforces."""
-    report = run_all()
-    assert not is_failing(report), "routing eval has misrouted fixtures:\n" + "\n".join(
-        f"  {o.fixture.id}: expected={sorted(o.fixture.expected_corpora)} "
-        f"actual={sorted(o.actual_corpora)}"
-        for o in report.misses
-    )
+        assert floor <= f.expected_corpora, (
+            f"{f.id}: keyword floor fired {sorted(floor)} but expected_corpora="
+            f"{sorted(f.expected_corpora)} -- the floor must never over-fire"
+        )

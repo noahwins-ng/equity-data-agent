@@ -6,21 +6,22 @@ parsing) with mocked LLMs, but nothing measured whether the *firing decision*
 and the *retrieval* are correct against the live system. This harness adds two
 measured layers over a curated golden set (``goldens/news_search.yaml``):
 
-* **Flag layer** -- ``classify_intent_with_source(question).needs_news_search``
-  must equal the fixture's ``expected_news_search``. The dangerous direction is
-  a FALSE POSITIVE on a generic ask: the targeted-news path drops the focused
-  card (QNT-226 narrative-only shape), so firing RAG on "what's the news on
-  AAPL?" degrades the whole answer. That is the only hard gate here.
+* **Flag layer** -- the ``needs_news_search`` returned by
+  ``classify_intent_with_source(question)`` must equal the fixture's
+  ``expected_news_search``. The dangerous direction is a FALSE POSITIVE on a
+  generic ask: the targeted-news path drops the focused card (QNT-226
+  narrative-only shape), so firing RAG on "what's the news on AAPL?" degrades
+  the whole answer. That is the hard gate here.
 
-  IMPORTANT -- the flag is DETERMINISTIC. ``classify_intent_with_source``
-  returns ``_is_targeted_news(question)`` regardless of the heuristic/LLM path
-  (QNT-229 moved the product boundary into code; the LLM's
-  ``IntentDecision.needs_news_search`` field is guidance/back-compat only).
-  So "flag accuracy" is a keyword-routing contract that does NOT drift with the
-  model. We still call the real public entrypoint -- it fires the live LLM for
-  the *intent label* on heuristic-abstain cases, so this is a genuine
-  live-classifier run, and the test would catch a regression if the flag were
-  ever re-coupled to the LLM field.
+  IMPORTANT -- QNT-280 made the flag SEMANTIC. ``classify_intent_with_source``
+  now returns the classify LLM's ``needs_news_search`` OR-ed with the
+  ``_is_targeted_news`` keyword floor (the keyword decider was demoted from the
+  sole gate to a recall floor). So "flag accuracy" measures the live small model
+  on the heuristic-abstain cases -- it WILL move with the model, which is the
+  point: topical/competitive phrasings ("the latest on Nvidia in the data center
+  switching market") that no keyword token covers now fire via the LLM. A
+  positive fixture that the keyword floor cannot reach is the load-bearing test
+  of the new semantic path.
 
 * **Retrieval layer** (positives only) -- ``search_news(ticker, question)``
   must return at least one hit whose headline or body contains one of the
@@ -191,7 +192,9 @@ def load_news_search_fixtures(
 def evaluate_flag(fixture: NewsSearchFixture) -> FlagOutcome:
     """Run the live classifier and capture the needs_news_search flag."""
     started = time.perf_counter()
-    intent, source, needs_news_search = classify_intent_with_source(fixture.question)
+    intent, source, needs_news_search, _needs_earnings_search = classify_intent_with_source(
+        fixture.question
+    )
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     return FlagOutcome(
         fixture=fixture,
@@ -370,7 +373,7 @@ def summarise(report: NewsSearchReport) -> str:
     negatives = [o for o in flags if not o.fixture.expected_news_search]
     abstained = sum(1 for o in negatives if not o.actual_news_search)
     lines += [
-        "FLAG LAYER (deterministic _is_targeted_news; live LLM fires for the intent label only)",
+        "FLAG LAYER (semantic needs_news_search from the live classify LLM, OR keyword floor)",
         f"  flag_accuracy: {correct}/{total} ({report.flag_accuracy:.0%})  "
         f"negatives_abstained: {abstained}/{len(negatives)}  "
         f"false_positives: {len(report.false_positives)}  "

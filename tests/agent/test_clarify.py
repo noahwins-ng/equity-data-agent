@@ -321,7 +321,7 @@ def test_clarify_narrates_even_when_classified_conversational(
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda *a, **k: ("conversational", "llm", False),
+        lambda *a, **k: ("conversational", "llm", False, False),
     )
     events: list[tuple[str, dict[str, object]]] = []
     graph = build_graph(_default_tools(), event_emitter=lambda e, d: events.append((e, dict(d))))
@@ -368,7 +368,7 @@ def test_comparison_phrase_one_ticker_uses_url_context_without_llm_override(
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda _q, **_: ("conversational", "heuristic", False),
+        lambda _q, **_: ("conversational", "heuristic", False, False),
     )
     monkeypatch.setattr(graph_module, "get_llm", lambda *a, **kw: stub)
 

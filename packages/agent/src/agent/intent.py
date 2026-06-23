@@ -121,20 +121,42 @@ class IntentDecision(BaseModel):
     needs_news_search: bool = Field(
         default=False,
         description=(
-            "Set True ONLY when the question asks about a SPECIFIC named news "
-            "event, development, or entity -- e.g. litigation or a lawsuit, a "
-            "regulatory probe / antitrust action, what an executive (CEO/CFO) "
-            "said, a buyback or dividend change, a recall, a partnership / deal "
-            "/ collaboration / acquisition, a product launch, or a specific "
-            "guidance change. "
+            "Set True when the question is TARGETED -- it asks about a specific "
+            "named news event, development, entity, or competitive/market topic, "
+            "rather than a generic overview. Examples that ARE targeted: "
+            "litigation or a lawsuit, a regulatory probe / antitrust action, "
+            "what an executive (CEO/CFO) said, a buyback or dividend change, a "
+            "recall, a partnership / deal / collaboration / acquisition, a "
+            "product launch, a specific guidance change, OR a competitive / "
+            "market-segment angle such as 'the latest on Nvidia in the data "
+            "center switching market' or 'how is AMD doing against Intel in "
+            "server CPUs'. The targeting can be topical, not just a single named "
+            "event -- if a specific story or angle would answer the question "
+            "better than a generic digest, set True. "
             "This is independent of the 'intent' field above: a targeted news "
             "ask can be phrased as a quick_fact ('what did the CEO say about "
             "the buyback?') or a thesis ('is NVDA a buy given the lawsuit?') -- "
-            "still set True. Set False for a GENERIC news ask ('what's the news "
-            "on AAPL?', 'any headlines on META?', 'how's sentiment?') and for "
-            "any question not about a specific recent event. True triggers a "
-            "semantic news search over the headline archive; a generic news ask "
-            "does not need it."
+            "still set True. Set False ONLY for a GENERIC, topic-less news ask "
+            "('what's the news on AAPL?', 'any headlines on META?', 'how's "
+            "sentiment?') and for any question not about recent developments. "
+            "True triggers a semantic news search over the headline archive; a "
+            "generic news ask does not need it."
+        ),
+    )
+    needs_earnings_search: bool = Field(
+        default=False,
+        description=(
+            "Set True when the question asks about the MANAGEMENT NARRATIVE from "
+            "an earnings release or call -- forward guidance / outlook, what "
+            "management said about the quarter, margin or demand commentary, how "
+            "management framed the results, or anything quoting / paraphrasing "
+            "the earnings-call language. This is the qualitative 8-K narrative, "
+            "NOT the raw numbers: a bare metric ask ('what's the EPS?', "
+            "'what's the P/E?', 'what was revenue?') flows through the "
+            "fundamental report and does NOT need it. Independent of the "
+            "'intent' field: 'what did the CEO say about guidance?' is "
+            "intent=quick_fact but needs_earnings_search=True. True triggers a "
+            "semantic search over the earnings-release archive."
         ),
     )
 
@@ -372,10 +394,14 @@ _EXPLORATION_TRIGGERS: tuple[str, ...] = (
 )
 
 
-# QNT-222 follow-up + QNT-229 follow-up: deterministic semantic-news-search
-# routing. Generic news asks use the canned overview; specific-event/topic asks
-# use RAG. The classifier still carries a ``needs_news_search`` field for model
-# guidance/back-compat, but code owns the product boundary.
+# QNT-280: keyword recall FLOOR for the news search trigger. The product
+# decision now lives in the classify LLM's ``needs_news_search`` flag (semantic,
+# catches topical/competitive phrasings the token list misses). This token
+# matcher is demoted to a fallback floor: it fires on obvious named events the
+# small model might overlook (``needs_news_search OR _is_targeted_news``) and is
+# the sole signal on the heuristic short-circuit path where no LLM ran. It is
+# tuned to NOT fire on a generic ask ("news on AAPL"), so OR-ing it can only add
+# recall on targeted asks, never introduce a generic false positive.
 _TARGETED_NEWS_TOKENS: tuple[str, ...] = (
     "litigation",
     "lawsuit",
@@ -475,11 +501,14 @@ def _has_specific_news_qualifier(question: str) -> bool:
 
 
 def _is_targeted_news(question: str) -> bool:
-    """Return True when a question should use semantic news search.
+    """Return True when a question's wording obviously names a targeted event.
 
-    This is deterministic product routing, not model reasoning. A generic news
-    overview ("latest news on NVDA") stays on the canned digest. A specific
-    event/entity/topic ("latest news on NVDA with SK Hynix") uses RAG.
+    QNT-280: this is the keyword recall FLOOR, not the primary decider. The
+    classify LLM's ``needs_news_search`` flag owns the product boundary (it
+    catches topical/competitive phrasings this token list cannot); this matcher
+    only adds recall on obvious named events and is the fallback on the
+    heuristic short-circuit path. Tuned to stay False on a generic overview
+    ("latest news on NVDA") so OR-ing it never fires a generic ask.
     """
     text = question.lower()
     return _matches_any(text, _TARGETED_NEWS_TOKENS) is not None or _has_specific_news_qualifier(
@@ -487,11 +516,14 @@ def _is_targeted_news(question: str) -> bool:
     )
 
 
-# QNT-263: deterministic earnings-corpus routing. The second RAG corpus
-# (equity_earnings) holds 8-K Item 2.02 narrative -- management framing,
-# guidance language, quarterly highlights. A question that asks about that
-# narrative ("what did management say about guidance?", "NVDA's outlook for the
-# quarter") should reach the earnings corpus; the quantitative numbers
+# QNT-263 / QNT-280: keyword recall FLOOR for the earnings-corpus trigger. The
+# second RAG corpus (equity_earnings) holds 8-K Item 2.02 narrative --
+# management framing, guidance language, quarterly highlights. As with
+# _is_targeted_news, the primary decider is now the classify LLM's
+# ``needs_earnings_search`` flag; this token matcher is the fallback floor
+# (OR-ed under the flag, sole signal on the heuristic path). A question about
+# that narrative ("what did management say about guidance?", "NVDA's outlook for
+# the quarter") reaches the earnings corpus; the quantitative numbers
 # (revenue/EPS/margins) already flow through the fundamental report and are NOT
 # RAG material. Tokens carry "guidance"/"outlook"/"management"/"earnings call"
 # signal -- broad phrasings like a bare "earnings" (which usually wants the
@@ -520,37 +552,39 @@ _EARNINGS_SEARCH_TOKENS: tuple[str, ...] = (
 
 
 def _is_earnings_search(question: str) -> bool:
-    """Return True when a question should use semantic earnings-release search.
+    """Return True when a question's wording obviously names earnings narrative.
 
-    Deterministic product routing, mirroring :func:`_is_targeted_news`: a
-    narrative earnings ask (management framing, guidance, outlook) reaches the
-    equity_earnings corpus. Independent of intent -- the gather node gates the
-    actual fetch to the intents whose synthesis reads the fundamental report.
+    QNT-280: keyword recall FLOOR mirroring :func:`_is_targeted_news`. The
+    classify LLM's ``needs_earnings_search`` flag is the primary decider; this
+    matcher adds recall on obvious narrative asks (management framing, guidance,
+    outlook) and is the fallback on the heuristic path. Independent of intent --
+    the gather node gates the actual fetch to the intents whose synthesis reads
+    the fundamental report.
     """
     return _matches_any(question.lower(), _EARNINGS_SEARCH_TOKENS) is not None
 
 
-def route_search_corpora(question: str) -> tuple[str, ...]:
-    """Return which RAG corpora a question should reach: news and/or earnings.
+def route_search_corpora(needs_news_search: bool, needs_earnings_search: bool) -> tuple[str, ...]:
+    """Compose the two search-trigger flags into the ordered set of RAG corpora.
 
-    QNT-263 multi-corpus routing. Composes the two deterministic single-corpus
-    routers (:func:`_is_targeted_news`, :func:`_is_earnings_search`) into the
-    ordered set of corpora to search. ``()`` means neither fires (the canned
-    digests carry the answer); ``("news", "earnings")`` means a query that
-    spans both ("what did the CEO say about guidance?" -- a named-executive
-    news event AND a guidance ask).
+    QNT-263 multi-corpus routing; QNT-280 made the flags semantic. ``()`` means
+    neither fires (the canned digests carry the answer); ``("news", "earnings")``
+    means a query that spans both ("what did the CEO say about guidance?" -- a
+    named-executive news event AND a guidance ask).
 
-    This MUST stay a pure OR of the per-corpus deciders the runtime reads
-    (``_is_targeted_news`` -> news, ``_is_earnings_search`` -> earnings): the
-    gather node gates each corpus on the SAME decider this composes, and the
-    routing eval (goldens/routing.yaml) scores this function. That is what makes
-    "what the eval scores == what the agent does" hold -- do NOT add routing
-    logic here that the gather node won't see.
+    This MUST stay a pure OR over the SAME two booleans the runtime writes to
+    state (``needs_news_search`` -> news, ``needs_earnings_search`` -> earnings,
+    both resolved by :func:`classify_intent_with_source`): the gather node gates
+    each corpus on those exact flags, and the routing eval composes this function
+    over the live flags. That is what makes "what the eval scores == what the
+    agent does" hold -- do NOT add routing logic here that the gather node won't
+    see, and do NOT re-derive the flags from the raw question text here (that
+    would re-introduce the keyword-gate drift QNT-280 removed).
     """
     corpora: list[str] = []
-    if _is_targeted_news(question):
+    if needs_news_search:
         corpora.append("news")
-    if _is_earnings_search(question):
+    if needs_earnings_search:
         corpora.append("earnings")
     return tuple(corpora)
 
@@ -813,18 +847,32 @@ ambiguous equity questions should NOT route here. Pick "fundamental", \
 domain; an open-ended "should I buy NVDA?" still routes to "thesis" even \
 though the answer happens to lean on fundamentals.
 
-Separately, set the boolean 'needs_news_search' True when the question asks \
-about a SPECIFIC named news event, development, or entity -- litigation / a \
+Separately, set the boolean 'needs_news_search' True when the question is \
+TARGETED -- it asks about a specific named news event, development, entity, or \
+competitive/market topic, rather than a generic overview: litigation / a \
 lawsuit, a regulatory probe or antitrust action, what an executive said, a \
 buyback or dividend change, a recall, a partnership / deal / collaboration / \
-acquisition, a product launch, or a specific guidance change. This includes \
-generic-news phrasing that names a specific topic or entity, such as "any news \
-on NVDA collaboration with Nokia". This is independent of the \
-intent label: "what did the CEO say about the buyback?" is intent=quick_fact \
-but needs_news_search=True; "is NVDA a buy given the lawsuit?" is intent=thesis \
-but needs_news_search=True. Set it False for a generic news ask ("what's the \
-news on AAPL?", "any headlines?", "how's sentiment?") and for anything not \
-about a specific recent event.
+acquisition, a product launch, a specific guidance change, OR a competitive / \
+market-segment angle such as "the latest on Nvidia in the data center \
+switching market" or "how is AMD doing against Intel in server CPUs". The \
+targeting can be topical, not just a single named event -- if a specific story \
+or angle would answer the question better than a generic digest, set True. \
+This is independent of the intent label: "what did the CEO say about the \
+buyback?" is intent=quick_fact but needs_news_search=True; "is NVDA a buy given \
+the lawsuit?" is intent=thesis but needs_news_search=True. Set it False ONLY \
+for a generic, topic-less news ask ("what's the news on AAPL?", "any \
+headlines?", "how's sentiment?") and for anything not about recent developments.
+
+Separately, set the boolean 'needs_earnings_search' True when the question \
+asks about the MANAGEMENT NARRATIVE from an earnings release or call -- forward \
+guidance / outlook, what management said about the quarter, margin or demand \
+commentary, how management framed the results, or anything quoting the \
+earnings-call language. This is the qualitative narrative, NOT the raw numbers: \
+a bare metric ask ("what's the EPS?", "what's the P/E?", "what was revenue?") \
+flows through the fundamental report and does NOT need it. Independent of the \
+intent label: "what did the CEO say about guidance?" is intent=quick_fact but \
+needs_earnings_search=True. A question can set BOTH flags ("what did the CEO \
+say about guidance?" -- a named-executive event AND a guidance ask).
 
 Recent conversation (for follow-up detection only; do not use it to pick \
 tools, compute values, or infer a ticker that the user changed):
@@ -840,8 +888,8 @@ def classify_intent_with_source(
     config: RunnableConfig | None = None,
     has_prior_turn: bool = False,
     history: Sequence[ConversationMessage] | None = None,
-) -> tuple[Intent, ClassifierSource, bool]:
-    """Return ``(intent, source, needs_news_search)`` for ``question``.
+) -> tuple[Intent, ClassifierSource, bool, bool]:
+    """Return ``(intent, source, needs_news_search, needs_earnings_search)``.
 
     ``source`` identifies which code path resolved the intent:
     - ``"heuristic"`` — keyword matcher decided without an LLM call
@@ -849,10 +897,18 @@ def classify_intent_with_source(
     - ``"fallback"`` — LLM call failed/timed out or returned unexpected shape;
       biased to ``"thesis"`` as the safe default
 
-    QNT-222 follow-up: ``needs_news_search`` says whether to fire semantic news
-    search (search_news / RAG), independent of the intent label. The retrieval
-    decision is deterministic via ``_is_targeted_news`` so broad overview asks
-    and specific-topic asks do not drift with model judgment.
+    QNT-280: the two search-trigger flags (``needs_news_search`` /
+    ``needs_earnings_search``) are now SEMANTIC -- carried by the classify LLM's
+    structured output, which catches topical/competitive phrasings the old
+    keyword gates missed (e.g. "the latest on Nvidia in the data center
+    switching market"). The deterministic keyword deciders (``_is_targeted_news``
+    / ``_is_earnings_search``) are demoted to a recall FLOOR: OR-ed under the LLM
+    flag on the ``llm`` path (so an obvious named event the small model overlooks
+    still fires) and the sole signal on the ``heuristic`` short-circuit and
+    ``fallback`` paths (where no usable LLM judgment exists). Both flags are
+    independent of the intent label -- a targeted ask can be quick_fact or
+    thesis. The keyword floor is tuned to stay False on generic asks, so OR-ing
+    it can only add recall on targeted asks, never fire a generic one.
 
     QNT-181: ``config`` carries the LangGraph CallbackHandler so the
     LLM-fallback path's generation observation nests under the parent trace.
@@ -861,11 +917,15 @@ def classify_intent_with_source(
     the followup/ambiguity arm. The heuristic still handles obvious
     continuation phrasing without an LLM call.
     """
+    # Keyword floor -- the fallback signal, also OR-ed under the LLM flag below.
+    floor_news = _is_targeted_news(question)
+    floor_earnings = _is_earnings_search(question)
+
     has_context = has_prior_turn or bool(history)
     heuristic = _heuristic_intent(question, has_prior_turn=has_context)
     if heuristic is not None:
         logger.info("classify intent=%s via=heuristic question=%r", heuristic, question[:80])
-        return heuristic, "heuristic", _is_targeted_news(question)
+        return heuristic, "heuristic", floor_news, floor_earnings
 
     # QNT-220 (#7): the classifier is a small structured call -- tier it to the
     # fast/small alias rather than the 70b synthesis model.
@@ -882,7 +942,7 @@ def classify_intent_with_source(
         )
     except Exception as exc:  # noqa: BLE001 — bias to thesis on any failure
         logger.warning("classify llm failed, defaulting to thesis: %s", exc)
-        return "thesis", "fallback", _is_targeted_news(question)
+        return "thesis", "fallback", floor_news, floor_earnings
 
     decision: IntentDecision | None = None
     if isinstance(response, IntentDecision):
@@ -892,16 +952,18 @@ def classify_intent_with_source(
         if isinstance(parsed, IntentDecision):
             decision = parsed
     if decision is not None:
-        needs_news_search = _is_targeted_news(question)
+        needs_news_search = decision.needs_news_search or floor_news
+        needs_earnings_search = decision.needs_earnings_search or floor_earnings
         logger.info(
-            "classify intent=%s needs_news_search=%s via=llm question=%r",
+            "classify intent=%s needs_news_search=%s needs_earnings_search=%s via=llm question=%r",
             decision.intent,
             needs_news_search,
+            needs_earnings_search,
             question[:80],
         )
-        return decision.intent, "llm", needs_news_search
+        return decision.intent, "llm", needs_news_search, needs_earnings_search
     logger.warning("classify llm returned unexpected shape, defaulting to thesis")
-    return "thesis", "fallback", _is_targeted_news(question)
+    return "thesis", "fallback", floor_news, floor_earnings
 
 
 def classify_intent(
@@ -917,7 +979,7 @@ def classify_intent(
     only need the intent. Use ``classify_intent_with_source`` when the
     classifier path (heuristic / llm / fallback) also matters.
     """
-    intent, _, _ = classify_intent_with_source(
+    intent, _, _, _ = classify_intent_with_source(
         question,
         config=config,
         has_prior_turn=has_prior_turn,
