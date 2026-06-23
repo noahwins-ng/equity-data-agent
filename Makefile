@@ -190,8 +190,12 @@ sops-rotate-keys: ## Re-encrypt .env.sops under current .sops.yaml recipients (a
 
 # ─── Quality ──────────────────────────────────────────────────
 
-test: ## Run unit tests (no infrastructure required)
-	uv run pytest -m "not integration" || [ $$? -eq 5 ]
+test: ## Run unit + deterministic eval tests (no infrastructure required)
+	# Excludes `integration` (needs `make tunnel`) and `deepeval` (the live
+	# LLM-judged RAGAS/G-Eval suite -- QNT-264 -- which makes real model calls
+	# and is off the per-PR path). Mirrors ci.yml's offline gate. The `eval`
+	# marker stays IN: it's deterministic, LLM-free, no network.
+	uv run pytest -m "not integration and not deepeval" || [ $$? -eq 5 ]
 
 test-integration: ## Run integration tests (requires: make tunnel)
 	uv run pytest -m integration -v

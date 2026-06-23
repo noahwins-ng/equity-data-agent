@@ -16,7 +16,7 @@ Run these checks and report pass/fail for each:
 - `uv run ruff check .` (lint)
 - `uv run ruff format --check .` (format)
 - `uv run pyright` (type check)
-- `uv run pytest` (tests)
+- `make test` (tests) — the offline gate (`pytest -m "not integration and not deepeval"`), mirroring ci.yml. Do NOT use bare `uv run pytest`: it collects the `deepeval` live LLM-judged suite, which makes real model calls (multi-minute hang + quota burn) instead of skipping. Integration tests are excluded here; run `make test-integration` only with `make tunnel` up.
 
 ### Step 2: Acceptance Criteria
 1. Fetch the issue from Linear using the provided identifier
@@ -94,7 +94,7 @@ Post a comment on the Linear issue. The comment is a permanent audit artifact, s
 * `uv run ruff check .` → <result>
 * `uv run ruff format --check .` → <result>
 * `uv run pyright` → <result>
-* `uv run pytest` → <result>
+* `make test` → <result>
 
 **Acceptance Criteria:**
 - [X] AC1 — <text>. [code AC — verified in <file:line> / pinned by <test::name>]
