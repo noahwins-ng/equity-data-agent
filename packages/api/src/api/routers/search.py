@@ -65,6 +65,25 @@ _SCROLL_PAGE = 256
 _RELEVANCE_GAP = 0.08
 _MIN_SCORE = 0.30
 
+# QNT-279: rerank-score floor for the hybrid/rerank branch. That branch skips
+# ``_apply_relevance_filter`` (its cosine-scale gap trim does not apply to RRF /
+# rerank scores), but rerank ORDERING is not THRESHOLDING: when every first-stage
+# candidate is weak, the cross-encoder still emits the best-of-weak. On a broad
+# earnings ask that never surfaces guidance chunks, that means 8-K boilerplate
+# ("About NVIDIA", rerank ~0.26-0.33) gets surfaced as RETRIEVED SOURCES, looking
+# like real evidence (QNT-276 prod finding). So we drop any reranked hit below a
+# per-corpus floor; when all candidates fall below it the result is empty and the
+# caller answers from its canned report (the correct outcome for a broad ask).
+#
+# Calibrated against the QNT-276 measurement: weak boilerplate scored 0.26-0.33,
+# strong guidance 0.75-0.84. 0.50 sits cleanly between the two clusters, well
+# clear of both. Earnings is the binding corpus (8-K boilerplate crowds the
+# fused set); news rerank scores tend to run higher, so its floor is a
+# conservative degenerate-query guard — not a clean-window-calibrated cut — and
+# is set low enough that it should not bind on real news queries (AC2).
+_EARNINGS_RERANK_FLOOR = 0.50
+_NEWS_RERANK_FLOOR = 0.30
+
 
 def _apply_relevance_filter(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Drop hits that fall a relevance gap below the top match.
@@ -163,6 +182,7 @@ def _hybrid_search_collection(
     collection: str,
     text_fn: Callable[[dict[str, Any]], str],
     row_fn: Callable[[dict[str, Any], float | None], dict[str, Any]],
+    rerank_floor: float,
 ) -> list[dict[str, Any]]:
     """Dense + BM25 RRF fusion (QNT-262) with an optional Cohere rerank layer,
     parametrised by corpus so news (``equity_news``) and earnings
@@ -173,8 +193,10 @@ def _hybrid_search_collection(
     configured, a cross-encoder reorders the fused candidate set for precision.
     Falls back to ``[]`` on any Qdrant transient — same degraded contract as the
     dense path. The cosine relevance-gap trim (QNT-226) is dense-only and does
-    not apply here: fusion + rerank ordering (and BM25 zero-score exclusion) do
-    the trimming, and RRF scores are not on the cosine scale that trim assumes.
+    not apply here (RRF scores are not on the cosine scale that trim assumes);
+    instead, when the cross-encoder runs, ``rerank_floor`` (QNT-279) drops hits
+    it scored below the per-corpus floor, so a best-of-weak candidate set returns
+    empty rather than surfacing low-relevance boilerplate as retrieved evidence.
     """
     import httpx
     from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
@@ -216,6 +238,7 @@ def _hybrid_search_collection(
 
     order = candidate_ids
     rerank_scores: dict[str, float] = {}
+    reranked_applied = False
     if rerank and settings.COHERE_API_KEY:
         docs = {doc_id: corpus_text.get(doc_id, "") for doc_id in candidate_ids}
         reranked = cohere_rerank(
@@ -228,6 +251,16 @@ def _hybrid_search_collection(
         if reranked is not None:
             order = [doc_id for doc_id, _ in reranked]
             rerank_scores = dict(reranked)
+            reranked_applied = True
+
+    # QNT-279: rerank-score floor. Only when the cross-encoder actually ran (we
+    # then have comparable rerank scores) do we drop best-of-weak hits below the
+    # per-corpus floor. If every candidate falls below it, `order` empties and
+    # the endpoint returns [] — the caller falls back to its canned report rather
+    # than surfacing low-relevance boilerplate as retrieved evidence. The fused /
+    # dense-fallback path (no key, or rerank declined) keeps its prior behaviour.
+    if reranked_applied:
+        order = [doc_id for doc_id in order if rerank_scores.get(doc_id, 0.0) >= rerank_floor]
 
     rows: list[dict[str, Any]] = []
     for doc_id in order[:limit]:
@@ -252,6 +285,7 @@ def _hybrid_search(query: str, ticker: str, limit: int, rerank: bool) -> list[di
         collection=COLLECTION,
         text_fn=_bm25_text,
         row_fn=_row_from_payload,
+        rerank_floor=_NEWS_RERANK_FLOOR,
     )
 
 
@@ -406,6 +440,7 @@ def _earnings_hybrid_search(
         collection=EARNINGS_COLLECTION,
         text_fn=_earnings_bm25_text,
         row_fn=_earnings_row_from_payload,
+        rerank_floor=_EARNINGS_RERANK_FLOOR,
     )
 
 
