@@ -24,8 +24,9 @@ import os
 
 import pytest
 from agent.evals import deepeval_eval as de
-from agent.evals.golden_set import HISTORY_FIELDS
+from agent.evals.golden_set import HISTORY_FIELDS, run_record
 from agent.llm import JUDGE_ALIAS
+from shared.tickers import TICKERS
 
 pytestmark = pytest.mark.deepeval
 
@@ -114,6 +115,46 @@ def test_history_append_blanks_nan_axis(tmp_path) -> None:
     assert row["deepeval_n"] == "4"
 
 
+# --- recall golden set (QNT-275; offline, no stack) -----------------------------
+
+
+def test_recall_goldens_meet_size_floor() -> None:
+    """AC1/AC2: the recall set is >=50 records so a clean-window baseline clears
+    the deepeval_n>=50 floor even after a few provider-error skips -- the same
+    statistical floor the retrieval eval enforces (a 50-record set reliably
+    catches a >5% regression)."""
+    records = de.load_recall_goldens()
+    assert len(records) >= 50, f"recall set has {len(records)} records, need >=50"
+
+
+def test_recall_goldens_cover_every_ticker() -> None:
+    """Every in-scope ticker appears, so a per-ticker recall regression can't hide
+    behind an unrepresented symbol."""
+    covered = {r.ticker for r in de.load_recall_goldens()}
+    assert covered == set(TICKERS), f"missing tickers: {set(TICKERS) - covered}"
+
+
+def test_recall_reference_maps_onto_expected_output() -> None:
+    """The recall_reference must land on reference_thesis so the existing
+    build_test_case feeds it as DeepEval's expected_output unchanged -- a non-empty
+    reference is what ContextualRecallMetric attributes against the context."""
+    records = de.load_recall_goldens()
+    assert all(r.reference_thesis.strip() for r in records)
+    # Distinct from the structured goldens: this set is loaded from its own file.
+    assert de.RECALL_GOLDENS_PATH.name == "deepeval_recall.yaml"
+
+
+def test_recall_goldens_reject_unknown_ticker(tmp_path) -> None:
+    """A malformed edit (bad ticker) fails loudly rather than silently judging
+    fewer records."""
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(
+        "recall:\n  - id: x\n    ticker: ZZZZ\n    question: q\n    recall_reference: r\n"
+    )
+    with pytest.raises(ValueError, match="unknown ticker"):
+        de.load_recall_goldens(bad)
+
+
 # --- live judged case (needs the dev stack + a clean window) --------------------
 
 
@@ -126,25 +167,27 @@ def test_live_deepeval_sample_judged() -> None:
     deselects it -- so a decorator would fire two ``httpx.get`` probes on every
     per-PR unit run. In the body it only runs when this test is actually selected.
 
+    Runs the RECALL golden set (QNT-275), not the structured questions.yaml: the
+    references here are attributable to the gathered reports, so context_recall is
+    meaningful rather than the 0.29 shape-reference artifact (the n=20 partial
+    baseline measured context_recall 1.0 across every clean record).
+
     Soft by default, like the golden judge (``EVAL_MIN_JUDGE`` off until history
     earns a trustworthy number): the metric scores are a recorded signal, and the
     suite asserts the things that ARE contracts -- every RAGAS axis produced a
-    real score, and the deterministic number-grounding layer ran additively
-    (AC4). The threshold gate via DeepEval's canonical ``assert_test`` is opt-in
-    behind ``DEEPEVAL_ENFORCE_THRESHOLDS`` -- enable it once a clean >=50-record
-    baseline re-derives the floors (the first n=4 baseline showed context_recall
-    is structurally low on focused-query goldens whose synthesized reference is
-    broader than the raw report context, so the design-doc 0.8 floor doesn't fit
-    yet -- same calibration discipline as the retrieval gate floors)."""
+    real score, and the deterministic number-grounding layer ran additively. The
+    threshold gate via DeepEval's canonical ``assert_test`` is opt-in behind
+    ``DEEPEVAL_ENFORCE_THRESHOLDS`` -- QNT-275 enables it once a clean >=50-record
+    baseline re-derives the floors (THRESHOLDS). That baseline is gated on the
+    Cerebras free-tier daily token budget, which caps a fixed-judge run at ~20
+    judged records/day, so AC2/AC3/AC4 land as a follow-up (see THRESHOLDS)."""
     if not de.stack_reachable():
         pytest.skip(
             "dev stack unreachable (need make dev-litellm / dev-api / tunnel) -- "
             "live DeepEval judging skipped, not failed"
         )
 
-    from agent.evals.golden_set import load_goldens, run_record
-
-    record = load_goldens()[0]
+    record = de.load_recall_goldens()[0]
     outcome = run_record(record)
     if outcome.provider_error or not outcome.thesis:
         pytest.skip("provider error / empty thesis -- contaminated window, re-run")
@@ -153,7 +196,7 @@ def test_live_deepeval_sample_judged() -> None:
     metrics = de.build_metrics(judge)
     case = de.score_outcome(outcome, metrics)
 
-    # AC4: the deterministic number-grounding faithfulness layer coexists.
+    # The deterministic number-grounding faithfulness layer coexists.
     assert isinstance(case.grounding_ok, bool)
     # Every RAGAS axis produced a real (non-NaN) score on a clean window.
     for name in de.THRESHOLDS:

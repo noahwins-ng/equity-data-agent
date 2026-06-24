@@ -103,8 +103,22 @@ DEFAULT_SAMPLE = int(os.environ.get("DEEPEVAL_SAMPLE", "4"))
 # faithfulness/context-precision/context-recall > 0.8, answer-relevancy > 0.75,
 # G-Eval > 0.7. These are NOT a per-PR gate (this suite is off the hot path);
 # they're the assert floors the nightly/dispatch run surfaces a regression
-# against. Re-derive against a recorded baseline once history.csv accrues runs,
-# the same way the retrieval gate floors are anchored to a measured baseline.
+# against.
+#
+# QNT-275 status -- floors NOT yet re-derived; enforcement still opt-in. The
+# recall-appropriate golden set (deepeval_recall.yaml) is in place and the
+# context_recall artifact is FIXED: against the shape-references it read 0.29
+# (run 20260621T042449Z-b07f37, n=4); against the recall references it read
+# context_recall mean 1.000 / min 1.000, faithfulness 0.980, context_precision
+# 0.900 across the first 20 clean records of a baseline sweep. The full >=50-record
+# baseline (AC2) did NOT complete: the fixed bench judge
+# (bench-cerebras-gptoss120b, no fallback by design) exhausts the Cerebras
+# free-tier daily token budget at ~20 judged records, so a >=50 run needs a
+# higher-budget judge or multi-day batching. Until that baseline lands, these
+# stay at the design-doc aspirations and the assert_test gate stays opt-in
+# (DEEPEVAL_ENFORCE_THRESHOLDS). Follow-up (AC2/AC3/AC4): run the >=50 sweep on a
+# clean window, set floors ~0.10-0.15 below the measured means (the retrieval-eval
+# discipline), and flip enforcement on.
 THRESHOLDS: dict[str, float] = {
     "faithfulness": 0.8,
     "answer_relevancy": 0.75,
