@@ -1,0 +1,619 @@
+# Recall-appropriate golden set for the DeepEval LLM-judged suite (QNT-275).
+#
+# WHY THIS FILE EXISTS (separate from questions.yaml)
+# ---------------------------------------------------
+# The structured golden set (questions.yaml) hand-writes each `reference_thesis`
+# as a description of the answer SHAPE -- "the Technical aspect carries a TREND
+# label", "Verdict is Overweight / Neutral / Underweight", "supports cite the
+# P/E". Those are meta-instructions about how a good answer is STRUCTURED, not
+# factual claims about the security that a retrieved report chunk supports. The
+# DeepEval ContextualRecallMetric splits the reference into statements and checks
+# whether each is attributable to the retrieval context (the gathered reports);
+# a shape statement like "Verdict is Overweight / Neutral / Underweight" maps to
+# no report chunk, so recall reads structurally low (the n=4 baseline measured
+# context_recall 0.29 -- run 20260621T042449Z-b07f37-deepeval). That is a
+# measurement-design artifact, NOT a retrieval bug (QNT-275 context).
+#
+# This file fixes the metric by authoring each `recall_reference` as the FACTS
+# the gathered reports actually carry, in declarative form -- every statement is
+# attributable to a section the report renders (see the report templates under
+# packages/api/src/api/templates/). So context_recall measures the real thing:
+# did retrieval surface the report content a faithful answer needs?
+#
+# DRIFT-ROBUST BY DESIGN. The live reports roll daily (RSI, P/E, headlines all
+# change), so references DO NOT pin exact daily values -- they name the report
+# fields a faithful answer draws on (RSI value + bucket, the TREND label, the
+# trailing P/E, the recent headlines). A statement like "the technical report
+# carries the RSI-14 reading and its overbought / neutral / oversold bucket" is
+# attributable whatever today's number is, and stays independent ground truth
+# (authored a priori, not derived from the run's context -- deriving from context
+# would make recall trivially ~1 and measure nothing).
+#
+# SCOPE. Only data-driven intents that GATHER reports (thesis / focused /
+# quick_fact / comparison). Off-domain conversational records (weather, coding,
+# capability asks) gather no reports, so context_recall is undefined for them --
+# they belong to the structured/dialogue evals, not this retrieval-recall one.
+#
+# Record shape:
+#   - id: short-slug                 # stable identifier; appears in history.csv
+#     ticker: NVDA                    # must be in shared.tickers.TICKERS
+#     question: "..."                 # what the user asks
+#     expected_tools: [technical]     # documents intent; deepeval doesn't gate on it
+#     recall_reference: |             # the FACTS the gathered reports carry,
+#       ...                           # declarative + drift-robust + attributable
+
+recall:
+  # ---- technical reads ---------------------------------------------------
+  - id: nvda-technical
+    ticker: NVDA
+    question: "Is NVDA overbought right now? Walk me through the technical setup."
+    expected_tools: [technical]
+    recall_reference: |
+      NVDA's technical report carries the most recent daily closing price and
+      its change, the RSI-14 momentum reading with its overbought / neutral /
+      oversold classification, and the MACD(12/26/9) reading relative to its
+      signal line. It states the daily TREND label (Uptrend, Sideways, or
+      Downtrend) derived from the close versus the SMA-50, the SMA-20 versus the
+      SMA-50, and the recent close slope, and reports how far the close sits
+      above or below the SMA-50 and SMA-20. The same momentum and trend readings
+      are repeated on the weekly and monthly timeframes.
+
+  - id: aapl-technical
+    ticker: AAPL
+    question: "Where is AAPL on the price chart -- is the trend intact?"
+    expected_tools: [technical]
+    recall_reference: |
+      AAPL's technical report carries the most recent daily close and its
+      change, the RSI-14 reading with its overbought / neutral / oversold
+      bucket, the MACD(12/26/9) posture relative to its signal line, and the
+      daily TREND label (Uptrend / Sideways / Downtrend) with the SMA-50 and
+      SMA-20 alignment that produced it. The weekly and monthly timeframes
+      repeat the same momentum and trend readings.
+
+  - id: googl-technical
+    ticker: GOOGL
+    question: "How is GOOGL trending technically over the recent window?"
+    expected_tools: [technical]
+    recall_reference: |
+      GOOGL's technical report carries the recent daily close, the RSI-14
+      reading and its overbought / neutral / oversold bucket, the MACD(12/26/9)
+      posture relative to its signal line, and the daily TREND label
+      (Uptrend / Sideways / Downtrend) drawn from the close versus SMA-50, the
+      SMA-20 versus SMA-50, and the close slope. The weekly and monthly
+      timeframes carry the same readings.
+
+  - id: tsla-technical
+    ticker: TSLA
+    question: "Is TSLA breaking out or breaking down on the charts?"
+    expected_tools: [technical]
+    recall_reference: |
+      TSLA's technical report carries the recent daily close and its change, the
+      RSI-14 reading with its overbought / neutral / oversold bucket, the
+      MACD(12/26/9) posture relative to its signal line, and the daily TREND
+      label (Uptrend / Sideways / Downtrend) with the SMA-50 / SMA-20 alignment
+      behind it. It reports how far the close sits above or below the SMA-50,
+      and repeats the momentum and trend readings weekly and monthly.
+
+  - id: msft-technical-analysis
+    ticker: MSFT
+    question: "Give me a technical read on MSFT -- what do the indicators say?"
+    expected_tools: [company, technical]
+    recall_reference: |
+      MSFT's technical report carries the RSI-14 reading and its overbought /
+      neutral / oversold bucket, the MACD(12/26/9) posture relative to its
+      signal line, the daily TREND label (Uptrend / Sideways / Downtrend), and
+      the close relative to the SMA-50 and SMA-20. The company report carries
+      MSFT's business segments and the latest P/E in its context-now block, the
+      qualitative grounding a focused technical read leans on.
+
+  - id: googl-technical-deepdive
+    ticker: GOOGL
+    question: "Give me a detailed technical analysis on GOOGL -- trend, momentum, and chart setup."
+    expected_tools: [company, technical]
+    recall_reference: |
+      GOOGL's technical report carries the daily TREND label
+      (Uptrend / Sideways / Downtrend), the RSI-14 reading with its bucket, the
+      MACD(12/26/9) posture relative to its signal line, and the close versus
+      the SMA-50 and SMA-20, repeated across the daily / weekly / monthly
+      timeframes. The company report supplies GOOGL's business segments and
+      context-now grounding.
+
+  - id: amzn-technical
+    ticker: AMZN
+    question: "What does AMZN's chart look like -- is momentum building?"
+    expected_tools: [technical]
+    recall_reference: |
+      AMZN's technical report carries the recent daily close, the RSI-14 reading
+      and its overbought / neutral / oversold bucket, the MACD(12/26/9) posture
+      relative to its signal line, and the daily TREND label
+      (Uptrend / Sideways / Downtrend) with the SMA-50 / SMA-20 alignment behind
+      it. The weekly and monthly timeframes repeat the momentum and trend
+      readings.
+
+  - id: mu-technical
+    ticker: MU
+    question: "How is MU setting up technically -- trend and momentum?"
+    expected_tools: [technical]
+    recall_reference: |
+      MU's technical report carries the recent daily close, the RSI-14 reading
+      with its overbought / neutral / oversold bucket, the MACD(12/26/9) posture
+      relative to its signal line, and the daily TREND label
+      (Uptrend / Sideways / Downtrend) drawn from the close versus SMA-50, the
+      SMA-20 versus SMA-50, and the close slope, repeated weekly and monthly.
+
+  - id: amd-technical-read
+    ticker: AMD
+    question: "Give me a technical read on AMD -- where do the indicators stand?"
+    expected_tools: [technical]
+    recall_reference: |
+      AMD's technical report carries the recent daily close and its change, the
+      RSI-14 reading and its overbought / neutral / oversold bucket, the
+      MACD(12/26/9) posture relative to its signal line, and the daily TREND
+      label (Uptrend / Sideways / Downtrend) with the SMA-50 and SMA-20
+      alignment behind it, repeated across the weekly and monthly timeframes.
+
+  - id: intc-technical-analysis
+    ticker: INTC
+    question: "Give me a technical analysis of INTC -- chart setup and indicators."
+    expected_tools: [company, technical]
+    recall_reference: |
+      INTC's technical report carries the daily TREND label
+      (Uptrend / Sideways / Downtrend), the RSI-14 reading with its bucket, the
+      MACD(12/26/9) posture relative to its signal line, and the close relative
+      to the SMA-50 and SMA-20, across the daily / weekly / monthly timeframes.
+      The company report supplies INTC's business segments and context-now
+      grounding.
+
+  - id: meta-technical
+    ticker: META
+    question: "What's META's technical picture -- trend and momentum?"
+    expected_tools: [technical]
+    recall_reference: |
+      META's technical report carries the recent daily close, the RSI-14 reading
+      and its overbought / neutral / oversold bucket, the MACD(12/26/9) posture
+      relative to its signal line, and the daily TREND label
+      (Uptrend / Sideways / Downtrend) with the SMA-50 / SMA-20 alignment behind
+      it, repeated weekly and monthly.
+
+  # ---- fundamental reads -------------------------------------------------
+  - id: nvda-fundamental
+    ticker: NVDA
+    question: "What does NVDA's most recent fundamental picture look like?"
+    expected_tools: [fundamental]
+    recall_reference: |
+      NVDA's fundamental report carries the trailing P/E, Price/Book, and
+      Price/Sales valuation multiples, the latest EPS, year-over-year revenue
+      growth, the profitability margins, and the cash-and-leverage posture,
+      reported across the quarterly, annual, and TTM scopes. It places the P/E
+      against the sector-median peer context where coverage allows.
+
+  - id: aapl-fundamental
+    ticker: AAPL
+    question: "How is AAPL valued relative to its earnings?"
+    expected_tools: [fundamental]
+    recall_reference: |
+      AAPL's fundamental report carries the trailing P/E and the latest EPS
+      alongside Price/Book and Price/Sales, year-over-year revenue growth, and
+      the profitability margins across the quarterly, annual, and TTM scopes,
+      with the P/E set against the sector-median peer context where coverage
+      allows.
+
+  - id: amzn-fundamental
+    ticker: AMZN
+    question: "What's the fundamental case for AMZN at the moment?"
+    expected_tools: [fundamental]
+    recall_reference: |
+      AMZN's fundamental report carries the latest revenue and its
+      year-over-year growth, the EPS, the trailing P/E with Price/Book and
+      Price/Sales, the profitability margins, and the cash-and-leverage posture,
+      reported across the quarterly, annual, and TTM scopes.
+
+  - id: mu-fundamental
+    ticker: MU
+    question: "How is MU valued versus its latest earnings?"
+    expected_tools: [fundamental]
+    recall_reference: |
+      MU's fundamental report carries the trailing P/E and the latest EPS with
+      the earnings-surprise direction, Price/Book and Price/Sales, year-over-year
+      revenue growth, and the margins across the quarterly, annual, and TTM
+      scopes, with the P/E set against the sector-median peer context where
+      coverage allows.
+
+  - id: amd-fundamental
+    ticker: AMD
+    question: "What is AMD's current fundamental health?"
+    expected_tools: [fundamental]
+    recall_reference: |
+      AMD's fundamental report carries the latest revenue and its year-over-year
+      growth, the EPS, the trailing P/E with Price/Book and Price/Sales, the
+      profitability margins, and the cash-and-leverage posture across the
+      quarterly, annual, and TTM scopes.
+
+  - id: msft-fundamental
+    ticker: MSFT
+    question: "How is MSFT valued on its fundamentals right now?"
+    expected_tools: [fundamental]
+    recall_reference: |
+      MSFT's fundamental report carries the trailing P/E, Price/Book, and
+      Price/Sales valuation multiples, the latest EPS, year-over-year revenue
+      growth, the profitability margins, and the cash-and-leverage posture
+      across the quarterly, annual, and TTM scopes, with the P/E placed against
+      the sector-median peer context where coverage allows.
+
+  - id: googl-fundamental
+    ticker: GOOGL
+    question: "Break down GOOGL's fundamentals -- how is it valued?"
+    expected_tools: [fundamental]
+    recall_reference: |
+      GOOGL's fundamental report carries the trailing P/E, Price/Book, and
+      Price/Sales multiples, the latest EPS, year-over-year revenue growth, the
+      profitability margins, and the cash-and-leverage posture across the
+      quarterly, annual, and TTM scopes, with the P/E set against the
+      sector-median peer context where coverage allows.
+
+  - id: meta-fundamental-read
+    ticker: META
+    question: "What's META's fundamental valuation picture?"
+    expected_tools: [fundamental]
+    recall_reference: |
+      META's fundamental report carries the trailing P/E and the latest EPS,
+      Price/Book and Price/Sales, year-over-year revenue growth, the
+      profitability margins, and the cash-and-leverage posture across the
+      quarterly, annual, and TTM scopes, with the P/E placed against the
+      sector-median peer context where coverage allows.
+
+  - id: tsla-fundamental
+    ticker: TSLA
+    question: "How is TSLA valued on its fundamentals?"
+    expected_tools: [fundamental]
+    recall_reference: |
+      TSLA's fundamental report carries the trailing P/E, Price/Book, and
+      Price/Sales multiples, the latest EPS, year-over-year revenue growth, the
+      profitability margins, and the cash-and-leverage posture across the
+      quarterly, annual, and TTM scopes, with the P/E set against the
+      sector-median peer context where coverage allows.
+
+  - id: intc-fundamental
+    ticker: INTC
+    question: "What's INTC's fundamental health -- valuation and earnings?"
+    expected_tools: [fundamental]
+    recall_reference: |
+      INTC's fundamental report carries the trailing P/E and the latest EPS with
+      the earnings-surprise direction, Price/Book and Price/Sales, year-over-year
+      revenue growth, the profitability margins, and the cash-and-leverage
+      posture across the quarterly, annual, and TTM scopes.
+
+  - id: aapl-fundamental-analysis
+    ticker: AAPL
+    question: "Walk me through AAPL's fundamentals -- how is the business valued?"
+    expected_tools: [company, fundamental]
+    recall_reference: |
+      AAPL's fundamental report carries the trailing P/E against its own-history
+      and peer context, the latest EPS, year-over-year revenue growth, and the
+      profitability margins across the quarterly, annual, and TTM scopes. The
+      company report supplies AAPL's business segments and key risks, the
+      qualitative grounding a focused fundamental read leans on.
+
+  - id: mu-fundamental-deepdive
+    ticker: MU
+    question: "Walk me through MU's fundamentals -- valuation deep dive."
+    expected_tools: [company, fundamental]
+    recall_reference: |
+      MU's fundamental report carries the trailing P/E, the latest EPS, the
+      revenue and its year-over-year growth, and the net-margin posture across
+      the quarterly, annual, and TTM scopes. The company report supplies MU's
+      business segments and key risks for the qualitative grounding.
+
+  - id: amzn-fundamental-analysis
+    ticker: AMZN
+    question: "Break down AMZN's fundamentals -- what does the earnings picture look like?"
+    expected_tools: [company, fundamental]
+    recall_reference: |
+      AMZN's fundamental report carries the latest revenue and its year-over-year
+      growth, the EPS, the trailing P/E, and the profitability margins across the
+      quarterly, annual, and TTM scopes. The company report supplies AMZN's
+      AWS / retail segment context and key risks.
+
+  # ---- news reads --------------------------------------------------------
+  - id: msft-news
+    ticker: MSFT
+    question: "What's the recent news flow around MSFT?"
+    expected_tools: [news]
+    recall_reference: |
+      MSFT's news report carries the recent headlines for the company and the
+      sources behind them. A faithful answer surfaces the material headlines and
+      the running story they describe without inventing details beyond what the
+      report lists.
+
+  - id: meta-news
+    ticker: META
+    question: "What's driving recent META headlines?"
+    expected_tools: [news]
+    recall_reference: |
+      META's news report carries the recent headlines and their sources. A
+      faithful answer reads the material headlines straight from the report and
+      summarises the running story without manufacturing detail beyond what is
+      listed.
+
+  - id: tsla-news
+    ticker: TSLA
+    question: "What's the recent news flow around TSLA?"
+    expected_tools: [news]
+    recall_reference: |
+      TSLA's news report carries the recent headlines for the company and the
+      sources behind them. A faithful answer surfaces the material headlines and
+      the running story without inventing details the report does not list.
+
+  - id: intc-news
+    ticker: INTC
+    question: "What's the latest news on INTC -- any notable headlines?"
+    expected_tools: [news]
+    recall_reference: |
+      INTC's news report carries the recent headlines (upgrades, analyst calls,
+      foundry or product developments, positive or negative as the report shows)
+      and their sources. A faithful answer reads those headlines straight from
+      the report without manufacturing a narrative.
+
+  - id: nvda-news
+    ticker: NVDA
+    question: "What's the recent news flow around NVDA?"
+    expected_tools: [news]
+    recall_reference: |
+      NVDA's news report carries the recent headlines and their sources. A
+      faithful answer surfaces the material headlines and the running story they
+      describe without inventing details beyond what the report lists.
+
+  - id: aapl-news
+    ticker: AAPL
+    question: "Any notable AAPL headlines lately?"
+    expected_tools: [news]
+    recall_reference: |
+      AAPL's news report carries the recent headlines for the company and the
+      sources behind them. A faithful answer reads the material headlines from
+      the report and summarises the running story without adding detail the
+      report does not list.
+
+  - id: googl-news
+    ticker: GOOGL
+    question: "What's in the recent news for GOOGL?"
+    expected_tools: [news]
+    recall_reference: |
+      GOOGL's news report carries the recent headlines and their sources. A
+      faithful answer surfaces the material headlines and the story they
+      describe without inventing details beyond what is listed.
+
+  - id: amzn-news
+    ticker: AMZN
+    question: "What's the recent news around AMZN?"
+    expected_tools: [news]
+    recall_reference: |
+      AMZN's news report carries the recent headlines for the company and the
+      sources behind them. A faithful answer reads the material headlines
+      straight from the report without manufacturing a narrative.
+
+  - id: amd-news
+    ticker: AMD
+    question: "Any recent AMD headlines worth knowing?"
+    expected_tools: [news]
+    recall_reference: |
+      AMD's news report carries the recent headlines and their sources. A
+      faithful answer surfaces the material headlines and the running story
+      without inventing detail the report does not list.
+
+  - id: mu-news
+    ticker: MU
+    question: "What's the latest news on MU?"
+    expected_tools: [news]
+    recall_reference: |
+      MU's news report carries the recent headlines for the company and the
+      sources behind them. A faithful answer reads the material headlines from
+      the report and summarises the running story without adding unlisted
+      detail.
+
+  - id: tsla-news-sentiment
+    ticker: TSLA
+    question: "What's the news on TSLA -- any notable headlines?"
+    expected_tools: [company, news]
+    recall_reference: |
+      TSLA's news report carries the recent headlines and their sources, the
+      running development story and any positive or negative catalysts it lists.
+      The company report supplies TSLA's business context. A faithful answer
+      reads the headlines and catalysts straight from the news report.
+
+  - id: intc-news-sentiment
+    ticker: INTC
+    question: "What's the news on INTC -- recent headlines and catalysts?"
+    expected_tools: [company, news]
+    recall_reference: |
+      INTC's news report carries the recent headlines and their sources, the
+      running development story and any positive or negative catalysts. The
+      company report supplies INTC's business context. A faithful answer reads
+      the headlines and catalysts straight from the news report.
+
+  - id: meta-news-sentiment
+    ticker: META
+    question: "What's the news on META right now -- anything worth flagging?"
+    expected_tools: [company, news]
+    recall_reference: |
+      META's news report carries the recent headlines and their sources, the
+      running development story and any positive or negative catalysts it lists.
+      The company report supplies META's segment context. A faithful answer
+      reads the headlines and catalysts straight from the news report.
+
+  # ---- quick facts -------------------------------------------------------
+  - id: nvda-quickfact-rsi
+    ticker: NVDA
+    question: "What's NVDA's RSI right now?"
+    expected_tools: [technical]
+    recall_reference: |
+      NVDA's technical report states the current RSI-14 value and its
+      overbought / neutral / oversold bucket. A faithful answer reports that
+      value and bucket from the technical report.
+
+  - id: aapl-quickfact-pe
+    ticker: AAPL
+    question: "What's AAPL's P/E ratio?"
+    expected_tools: [fundamental]
+    recall_reference: |
+      AAPL's fundamental report states the trailing P/E multiple. A faithful
+      answer reports that value and whether it sits rich, in-line, or
+      compressed against the report's own context.
+
+  - id: mu-quickfact-eps
+    ticker: MU
+    question: "What's MU's latest EPS?"
+    expected_tools: [fundamental]
+    recall_reference: |
+      MU's fundamental report states the most recently reported EPS and the
+      earnings-surprise direction (beat or miss). A faithful answer reports that
+      EPS figure and the surprise direction from the report.
+
+  - id: msft-quickfact-close
+    ticker: MSFT
+    question: "What is MSFT's most recent closing price?"
+    expected_tools: [technical]
+    recall_reference: |
+      MSFT's technical report states the most recent daily closing price and its
+      change. A faithful answer reports that closing price and the daily move
+      from the technical report.
+
+  - id: nvda-quickfact-macd
+    ticker: NVDA
+    question: "Where is NVDA's MACD right now?"
+    expected_tools: [technical]
+    recall_reference: |
+      NVDA's technical report states the MACD(12/26/9) value and whether it sits
+      above or below its signal line. A faithful answer reports that MACD reading
+      and its posture relative to the signal line from the technical report.
+
+  - id: amd-quickfact-rsi
+    ticker: AMD
+    question: "What's AMD's RSI reading?"
+    expected_tools: [technical]
+    recall_reference: |
+      AMD's technical report states the current RSI-14 value and its
+      overbought / neutral / oversold bucket. A faithful answer reports that
+      value and bucket from the technical report.
+
+  - id: googl-quickfact-pe
+    ticker: GOOGL
+    question: "What's GOOGL's P/E?"
+    expected_tools: [fundamental]
+    recall_reference: |
+      GOOGL's fundamental report states the trailing P/E multiple. A faithful
+      answer reports that value and whether it reads rich, in-line, or
+      compressed against the report's own context.
+
+  - id: amzn-quickfact-revenue
+    ticker: AMZN
+    question: "What was AMZN's latest revenue?"
+    expected_tools: [fundamental]
+    recall_reference: |
+      AMZN's fundamental report states the latest revenue and its year-over-year
+      growth. A faithful answer reports that revenue figure and the growth
+      direction from the fundamental report.
+
+  # ---- combined theses ---------------------------------------------------
+  - id: googl-combined
+    ticker: GOOGL
+    question: "Give me a balanced thesis on GOOGL -- fundamentals plus technicals."
+    expected_tools: [technical, fundamental]
+    recall_reference: |
+      GOOGL's gathered reports carry the fundamental valuation (trailing P/E,
+      EPS, year-over-year revenue) and the technical readings (RSI-14 bucket,
+      MACD posture, the daily TREND label and SMA alignment). A faithful thesis
+      grounds the fundamental and technical aspects in the values each report
+      supplies.
+
+  - id: amd-combined
+    ticker: AMD
+    question: "Give me a balanced thesis on AMD right now."
+    expected_tools: [technical, fundamental]
+    recall_reference: |
+      AMD's gathered reports carry the fundamental valuation (trailing P/E, EPS,
+      revenue and its year-over-year growth) and the technical readings (RSI-14
+      bucket, MACD posture, daily TREND label, SMA alignment). A faithful thesis
+      grounds each aspect in the values its report supplies.
+
+  - id: meta-combined
+    ticker: META
+    question: "Should I be cautious about META based on the latest data?"
+    expected_tools: [technical, fundamental, news]
+    recall_reference: |
+      META's gathered reports carry the fundamental valuation (trailing P/E, EPS,
+      revenue), the technical readings (RSI-14 bucket, MACD posture, daily TREND
+      label), and the recent news headlines with their sources. A faithful thesis
+      triangulates the three, grounding each in the values and headlines its
+      report supplies.
+
+  - id: amzn-verdict-shape
+    ticker: AMZN
+    question: "Give me a thesis on AMZN -- what's the right trade action here?"
+    expected_tools: [technical, fundamental]
+    recall_reference: |
+      AMZN's gathered reports carry the fundamental valuation (trailing P/E, EPS,
+      revenue) and the technical readings (RSI-14 bucket, MACD posture, daily
+      TREND label, SMA alignment). A faithful thesis grounds the fundamental and
+      technical aspects in the values each report supplies.
+
+  - id: nvda-momentum-thesis
+    ticker: NVDA
+    question: "Give me a balanced thesis on NVDA -- is the technical momentum supporting further upside?"
+    expected_tools: [technical]
+    recall_reference: |
+      NVDA's technical report carries the RSI-14 reading and its bucket, the
+      current and prior-session momentum direction, the MACD posture relative to
+      its signal line, and the daily TREND label with SMA alignment. A faithful
+      thesis grounds the momentum read in those values, naming the directional
+      move rather than only the current bucket.
+
+  # ---- comparisons -------------------------------------------------------
+  - id: nvda-vs-aapl-fundamental
+    ticker: NVDA
+    question: "Compare NVDA vs AAPL on valuation and fundamentals."
+    expected_tools: [fundamental]
+    recall_reference: |
+      The comparison gathers each ticker's fundamental report. NVDA's and AAPL's
+      reports each carry that ticker's trailing P/E, latest EPS, and revenue. A
+      faithful comparison contrasts the two using only the valuation values each
+      ticker's own report supplies.
+
+  - id: amzn-meta-fundamental
+    ticker: AMZN
+    question: "Compare AMZN vs META -- which has the stronger fundamental case?"
+    expected_tools: [fundamental]
+    recall_reference: |
+      The comparison gathers each ticker's fundamental report. AMZN's and META's
+      reports each carry that ticker's trailing P/E, latest EPS, and revenue with
+      its year-over-year growth. A faithful comparison contrasts the two using
+      only the values each ticker's own report supplies.
+
+  - id: tsla-amd-technical
+    ticker: TSLA
+    question: "Compare TSLA vs AMD on technical momentum -- who has the stronger chart setup?"
+    expected_tools: [technical]
+    recall_reference: |
+      The comparison gathers each ticker's technical report. TSLA's and AMD's
+      reports each carry that ticker's RSI-14 bucket, MACD posture, daily TREND
+      label, and SMA alignment. A faithful comparison contrasts the momentum
+      postures using only the readings each ticker's own report supplies.
+
+  - id: nvda-msft-technical
+    ticker: NVDA
+    question: "Compare NVDA vs MSFT on technical momentum."
+    expected_tools: [technical]
+    recall_reference: |
+      The comparison gathers each ticker's technical report. NVDA's and MSFT's
+      reports each carry that ticker's RSI-14 bucket, MACD posture, and daily
+      TREND label. A faithful comparison contrasts the momentum readings using
+      only what each ticker's own report supplies.
+
+  - id: aapl-vs-googl-fundamental
+    ticker: AAPL
+    question: "Compare AAPL vs GOOGL on valuation."
+    expected_tools: [fundamental]
+    recall_reference: |
+      The comparison gathers each ticker's fundamental report. AAPL's and GOOGL's
+      reports each carry that ticker's trailing P/E, latest EPS, and revenue. A
+      faithful comparison contrasts the valuations using only the multiples each
+      ticker's own report supplies.

@@ -66,21 +66,33 @@ from pathlib import Path  # noqa: E402
 from typing import Any, cast  # noqa: E402
 
 import httpx  # noqa: E402
+import yaml  # noqa: E402
 from shared.config import settings  # noqa: E402
+from shared.tickers import TICKERS  # noqa: E402
 
 from agent.evals.golden_set import (  # noqa: E402
     HISTORY_FIELDS,
     HISTORY_PATH,
     EvalOutcome,
+    GoldenRecord,
     _git_sha,
     _prompt_version,
-    load_goldens,
     run_record,
 )
 from agent.evals.hallucination import check as check_hallucination  # noqa: E402
 from agent.llm import JUDGE_ALIAS, get_judge_llm  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+# QNT-275: the recall-appropriate golden set. Distinct from questions.yaml (the
+# structured-eval goldens whose reference_thesis describes the answer SHAPE):
+# here each ``recall_reference`` states the FACTS the gathered reports carry, so
+# every reference statement is attributable to a retrieved report chunk and
+# ContextualRecallMetric measures retrieval completeness rather than the 0.29
+# structural artifact the shape-references produced. See the file header for the
+# full rationale. The set is sized >=50 so a clean-window baseline is
+# statistically meaningful (the same 50-record floor as the retrieval eval).
+RECALL_GOLDENS_PATH = Path(__file__).parent / "goldens" / "deepeval_recall.yaml"
 
 # Number of golden records sampled per run -- the budget lever (AC2). Each record
 # costs ~8-12 judge calls across the five metrics, so the default keeps a run
@@ -227,6 +239,56 @@ def build_metrics(judge: Any) -> dict[str, Any]:
     }
 
 
+def load_recall_goldens(path: Path = RECALL_GOLDENS_PATH) -> list[GoldenRecord]:
+    """Parse the recall golden set into ``GoldenRecord``s (QNT-275).
+
+    Each ``recall_reference`` is mapped onto ``reference_thesis`` so the existing
+    :func:`build_test_case` picks it up as DeepEval's ``expected_output`` with no
+    other change -- the recall reference IS the ground-truth answer the
+    ContextualRecallMetric attributes against the gathered reports. ``run_record``
+    runs the real agent and captures the retrieval context, exactly as for the
+    structured goldens; only the reference differs.
+
+    Validates ticker membership, unique ids, and required-field presence so the
+    set fails loudly on a malformed edit rather than silently judging fewer
+    records.
+    """
+    raw = yaml.safe_load(path.read_text())
+    rows = raw.get("recall") if isinstance(raw, dict) else None
+    if not isinstance(rows, list):
+        raise ValueError(f"{path}: missing top-level `recall` list")
+
+    records: list[GoldenRecord] = []
+    seen: set[str] = set()
+    for entry in rows:
+        if not isinstance(entry, dict):
+            raise ValueError(f"{path}: each record must be a mapping, got {type(entry)}")
+        try:
+            rec_id = str(entry["id"])
+            ticker = str(entry["ticker"])
+            question = str(entry["question"])
+            reference = str(entry["recall_reference"]).strip()
+        except KeyError as exc:
+            raise ValueError(f"{path}: record missing field {exc}") from exc
+        if rec_id in seen:
+            raise ValueError(f"{path}: duplicate record id {rec_id!r}")
+        if ticker not in TICKERS:
+            raise ValueError(f"{path}: record {rec_id!r} references unknown ticker {ticker!r}")
+        if not reference:
+            raise ValueError(f"{path}: record {rec_id!r} has an empty recall_reference")
+        seen.add(rec_id)
+        records.append(
+            GoldenRecord(
+                id=rec_id,
+                ticker=ticker,
+                question=question,
+                expected_tools=tuple(str(t) for t in entry.get("expected_tools", [])),
+                reference_thesis=reference,
+            )
+        )
+    return records
+
+
 def build_test_case(outcome: EvalOutcome) -> Any:
     """Map an agent run onto a DeepEval ``LLMTestCase``.
 
@@ -327,8 +389,13 @@ def run_sample(
     ``only`` filters to one ticker; ``sample`` caps the record count (the budget
     lever). Provider-error records (Groq quota / timeout) are skipped -- they
     carry no thesis to judge. Returns one :class:`DeepEvalCase` per scored record.
+
+    Reads the recall-appropriate golden set (QNT-275), NOT the structured
+    questions.yaml: the references here are attributable to the gathered reports,
+    so context_recall measures retrieval completeness instead of the shape-
+    reference artifact.
     """
-    records = load_goldens()
+    records = load_recall_goldens()
     if only is not None:
         wanted = only.upper()
         records = [r for r in records if r.ticker == wanted]
@@ -444,6 +511,7 @@ __all__ = [
     "DEFAULT_SAMPLE",
     "GEVAL_CRITERIA",
     "GEVAL_NAME",
+    "RECALL_GOLDENS_PATH",
     "THRESHOLDS",
     "DeepEvalCase",
     "LiteLLMJudge",
@@ -451,6 +519,7 @@ __all__ = [
     "append_deepeval_history",
     "build_metrics",
     "build_test_case",
+    "load_recall_goldens",
     "precheck_environment",
     "run_sample",
     "score_outcome",
