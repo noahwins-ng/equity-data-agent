@@ -591,3 +591,97 @@ def test_earnings_hybrid_without_ticker_falls_back_to_dense(
     r = client.get("/api/v1/search/earnings", params={"query": "guidance", "hybrid": True})
     assert r.status_code == 200
     assert fake.scroll_calls == 0
+
+
+# --- QNT-279: rerank-score floor on the hybrid/rerank branch ---------------------
+
+
+def test_earnings_rerank_floor_drops_weak_keeps_strong(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The binding QNT-276 case: a guidance chunk reranks strong (~0.78, above the
+    # 0.50 earnings floor) while 8-K boilerplate reranks weak (~0.31, below it).
+    # The floor keeps the guidance hit and drops the boilerplate so the agent
+    # never folds best-of-weak boilerplate as retrieved earnings evidence.
+    monkeypatch.setattr(search_module.settings, "COHERE_API_KEY", "test-key", raising=False)
+    guidance = _earnings_point(1, "Outlook", text="Management guided Q2 revenue to a record.")
+    boiler = _earnings_point(2, "About NVIDIA", text="NVIDIA is the world leader in AI.")
+    fake = _FakeClient(
+        _FakeQueryResponse(points=[guidance, boiler]), scroll_points=[guidance, boiler]
+    )
+    _install_fake(monkeypatch, fake)
+
+    scores = {"1": 0.78, "2": 0.31}
+
+    def _fake_rerank(query, documents, *, api_key, model, top_n):  # type: ignore[no-untyped-def]
+        ordered = sorted(documents, key=lambda d: -scores[d])
+        return [(doc_id, scores[doc_id]) for doc_id in ordered]
+
+    monkeypatch.setattr(search_module, "cohere_rerank", _fake_rerank)
+
+    r = client.get(
+        "/api/v1/search/earnings",
+        params={"query": "guidance outlook", "ticker": "NVDA", "hybrid": True, "rerank": True},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert [row["section"] for row in body] == ["Outlook"]
+    assert body[0]["score"] == 0.78
+
+
+def test_earnings_rerank_floor_all_weak_returns_empty(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The broad-fundamentals ask: the first stage never surfaces guidance, so
+    # rerank can only reorder boilerplate (all ~0.26-0.33, below the 0.50 floor).
+    # Every candidate falls below the floor -> [] so the agent answers from the
+    # canned fundamental report instead of surfacing About-NVIDIA boilerplate.
+    monkeypatch.setattr(search_module.settings, "COHERE_API_KEY", "test-key", raising=False)
+    corpus = [_earnings_point(1, "About NVIDIA"), _earnings_point(2, "Non-GAAP measures")]
+    fake = _FakeClient(_FakeQueryResponse(points=corpus), scroll_points=corpus)
+    _install_fake(monkeypatch, fake)
+
+    scores = {"1": 0.33, "2": 0.26}
+
+    def _fake_rerank(query, documents, *, api_key, model, top_n):  # type: ignore[no-untyped-def]
+        ordered = sorted(documents, key=lambda d: -scores[d])
+        return [(doc_id, scores[doc_id]) for doc_id in ordered]
+
+    monkeypatch.setattr(search_module, "cohere_rerank", _fake_rerank)
+
+    r = client.get(
+        "/api/v1/search/earnings",
+        params={"query": "fundamentals", "ticker": "NVDA", "hybrid": True, "rerank": True},
+    )
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_news_rerank_floor_is_conservative(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # News rerank scores run higher; the news floor (0.30) is a degenerate-query
+    # guard, not a calibrated cut. A real news hit at 0.41 survives the news floor
+    # but would have been dropped by the stricter 0.50 earnings floor -- pinning
+    # that the floor is genuinely per-corpus and the news path stays unaffected.
+    monkeypatch.setattr(search_module.settings, "COHERE_API_KEY", "test-key", raising=False)
+    corpus = [_point(111, "NVDA inks SK Hynix HBM supply deal"), _point(222, "chip demand")]
+    fake = _FakeClient(_FakeQueryResponse(points=corpus), scroll_points=corpus)
+    _install_fake(monkeypatch, fake)
+
+    scores = {"111": 0.41, "222": 0.12}
+
+    def _fake_rerank(query, documents, *, api_key, model, top_n):  # type: ignore[no-untyped-def]
+        ordered = sorted(documents, key=lambda d: -scores[d])
+        return [(doc_id, scores[doc_id]) for doc_id in ordered]
+
+    monkeypatch.setattr(search_module, "cohere_rerank", _fake_rerank)
+
+    r = client.get(
+        "/api/v1/search/news",
+        params={"query": "SK Hynix supply", "ticker": "NVDA", "hybrid": True, "rerank": True},
+    )
+    assert r.status_code == 200
+    headlines = [row["headline"] for row in r.json()]
+    # 0.41 hit kept (above news 0.30 floor), 0.12 hit dropped.
+    assert headlines == ["NVDA inks SK Hynix HBM supply deal"]
