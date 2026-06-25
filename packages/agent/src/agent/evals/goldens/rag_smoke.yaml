@@ -1,0 +1,111 @@
+# Live end-to-end RAG smoke fixtures (QNT-278).
+#
+# Hand-picked phrasings -- broad AND narrow -- run through the WHOLE chain
+# against the REAL Qdrant + Cohere (nothing stubbed) by agent.evals.rag_smoke_eval.
+# This is the harness that would have caught BOTH the QNT-276 demotion (retrieved
+# fact dropped from the answer) and the QNT-279 boilerplate leak (best-of-weak
+# 8-K "About <co>" surfaced as a source) before prod -- the seam the isolated
+# component evals (IR / DeepEval / stubbed rag_impact) cannot see.
+#
+# Two kinds split the assertion:
+#   relevant          -> a NARROW ask. The top hit must clear the per-corpus rerank
+#                        floor (QNT-279) and a DISTINCTIVE term derived from it (a
+#                        coined figure / proper noun, never a generic word the
+#                        canned report also carries) must reach the final answer
+#                        (QNT-276). Runs the full graph.
+#   boilerplate_guard -> a BROAD ask. NO surfaced hit may sit below the floor. An
+#                        empty result is the CORRECT outcome (the caller answers
+#                        from its canned report); a sub-floor hit surfaced as a
+#                        source is the bug. Retrieval-only (no graph).
+#
+# corpus picks the search tool (news -> search_news, earnings -> search_earnings),
+# both hybrid + rerank. The grounding term is derived from the LIVE top hit at run
+# time, NOT frozen here, so the rolling 7-day news window can't stale the fixture.
+#
+# A `relevant` fixture's query MUST fire the matching deterministic router so the
+# graph actually retrieves (news -> _is_targeted_news, earnings -> _is_earnings_
+# search); the offline test test_rag_smoke_yaml pins this. `boilerplate_guard`
+# queries call the search tool directly, so they need not route -- they only need
+# to be broad enough to surface best-of-weak boilerplate on a pre-QNT-279 build.
+#
+# AC4 calibration note: the queries below are a sound starter set; running the
+# smoke set on a clean live window (the AC4 step) confirms each `relevant` query
+# actually surfaces a >=floor hit (not EMPTY) and may add `expected_section` to a
+# fixture once the live earnings section taxonomy is confirmed.
+
+fixtures:
+  # --- news: narrow asks (top hit must be relevant AND reach the answer) -------
+  - id: nvda-antitrust-news
+    ticker: NVDA
+    query: "What's the latest on the NVDA antitrust investigation?"
+    corpus: news
+    kind: relevant
+
+  - id: amd-partnership-news
+    ticker: AMD
+    query: "Did AMD announce any new partnership or deal recently?"
+    corpus: news
+    kind: relevant
+
+  - id: meta-buyback-news
+    ticker: META
+    query: "Any news on META's buyback program?"
+    corpus: news
+    kind: relevant
+
+  - id: tsla-recall-news
+    ticker: TSLA
+    query: "What's the latest on the TSLA recall?"
+    corpus: news
+    kind: relevant
+
+  # --- news: broad asks (no sub-floor hit may surface as a source) -------------
+  - id: nvda-broad-strategy-news-guard
+    ticker: NVDA
+    query: "general thoughts on long-term corporate strategy and positioning"
+    corpus: news
+    kind: boilerplate_guard
+
+  - id: amzn-broad-strategy-news-guard
+    ticker: AMZN
+    query: "general background and corporate philosophy"
+    corpus: news
+    kind: boilerplate_guard
+
+  # --- earnings: narrow asks (guidance narrative must surface AND reach answer) -
+  - id: nvda-guidance-earnings
+    ticker: NVDA
+    query: "What did NVDA management say about its forward guidance?"
+    corpus: earnings
+    kind: relevant
+
+  - id: amd-outlook-earnings
+    ticker: AMD
+    query: "What was AMD's outlook in its latest earnings release?"
+    corpus: earnings
+    kind: relevant
+
+  - id: msft-guidance-earnings
+    ticker: MSFT
+    query: "What guidance did MSFT management give for the coming quarter?"
+    corpus: earnings
+    kind: relevant
+
+  - id: googl-guidance-earnings
+    ticker: GOOGL
+    query: "What did GOOGL management say about guidance and outlook?"
+    corpus: earnings
+    kind: relevant
+
+  # --- earnings: broad asks (the binding QNT-279 case: 8-K "About <co>" leak) --
+  - id: nvda-broad-corporate-earnings-guard
+    ticker: NVDA
+    query: "company background and general corporate information"
+    corpus: earnings
+    kind: boilerplate_guard
+
+  - id: msft-broad-corporate-earnings-guard
+    ticker: MSFT
+    query: "general corporate overview and background information"
+    corpus: earnings
+    kind: boilerplate_guard

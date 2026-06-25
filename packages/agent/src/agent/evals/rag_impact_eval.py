@@ -87,6 +87,19 @@ _KINDS = ("positive", "negative_control")
 # timeout -- the Groq-throttle signature. Mirrors golden_set / news_search_eval.
 CONTAMINATION_LATENCY_MS = int(settings.LLM_REQUEST_TIMEOUT * 1000)
 
+# QNT-278: the FAST-degraded floor. Throttling has two signatures, not one. The
+# slow one (above) is a call that ran to its timeout. The fast one is Groq
+# returning a truncated, low-effort completion in a fraction of a healthy
+# generation -- which silently drops a planted entity that a full generation
+# would have quoted (the msft-guidance-earnings flake: ~1.4s degraded vs ~6.6s
+# isolated/healthy). Without a low floor, a fast-degraded run reports a
+# "trustworthy" 7/8 instead of being flagged. Calibrated empirically: healthy
+# positives run several seconds (~6.6s observed), the degraded one ~1.4s; 2500ms
+# sits well clear of the healthy band and above the degraded one. Restricted to
+# POSITIVES (a negative control's no-fabrication answer is legitimately short and
+# quick -- flagging it would be a false alarm).
+CONTAMINATION_FAST_LATENCY_MS = 2500
+
 
 @dataclass(frozen=True)
 class RagImpactFixture:
@@ -519,15 +532,42 @@ def run_all(
 
 
 def contamination_warning(report: RagImpactReport) -> str | None:
-    """Flag a run contaminated by Groq throttling (latency signal)."""
+    """Flag a run contaminated by Groq throttling (latency signal).
+
+    Throttling shows up two ways. SLOW: a call ran to its timeout ceiling.
+    FAST (QNT-278): Groq returned a truncated, low-effort completion in a
+    fraction of a healthy generation, which silently drops a planted entity a
+    full generation would have quoted -- turning a contaminated run into a false
+    7/8 rather than a flagged one. The fast floor is scoped to gated POSITIVES
+    (where the dropped-entity risk lives); a negative control's short answer is
+    legitimately quick.
+    """
     slow = [o for o in report.outcomes if o.elapsed_ms >= CONTAMINATION_LATENCY_MS]
-    if not slow:
+    fast = [
+        o
+        for o in report.outcomes
+        if o.status in ("pass", "fail")
+        and o.fixture.kind == "positive"
+        and o.elapsed_ms <= CONTAMINATION_FAST_LATENCY_MS
+    ]
+    if not slow and not fast:
         return None
+    parts: list[str] = []
+    if slow:
+        parts.append(
+            f"{len(slow)} fixture(s) over the {CONTAMINATION_LATENCY_MS}ms "
+            "timeout-ceiling floor (slow-throttle): "
+            + ", ".join(f"{o.fixture.id}={o.elapsed_ms}ms" for o in slow)
+        )
+    if fast:
+        parts.append(
+            f"{len(fast)} positive(s) under the {CONTAMINATION_FAST_LATENCY_MS}ms "
+            "fast-degraded floor (truncated completion likely dropped the planted "
+            "entity): " + ", ".join(f"{o.fixture.id}={o.elapsed_ms}ms" for o in fast)
+        )
     return (
-        f"CONTAMINATED RUN -- do not trust this aggregate. {len(slow)} fixture(s) "
-        f"over the {CONTAMINATION_LATENCY_MS}ms timeout-ceiling floor (likely Groq "
-        "throttling): "
-        + ", ".join(f"{o.fixture.id}={o.elapsed_ms}ms" for o in slow)
+        "CONTAMINATED RUN -- do not trust this aggregate. "
+        + "; ".join(parts)
         + ". Re-run on a clean rate-limit window before publishing baseline numbers."
     )
 
@@ -666,6 +706,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 __all__ = [
+    "CONTAMINATION_FAST_LATENCY_MS",
     "CONTAMINATION_LATENCY_MS",
     "MIN_EARNINGS_POSITIVES",
     "MIN_MULTI_POSITIVES",

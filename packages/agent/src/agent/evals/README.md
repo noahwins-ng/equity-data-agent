@@ -398,6 +398,68 @@ uv run python -m agent.evals.rag_impact_eval --only nvda-antitrust-news
 uv run python -m agent.evals.rag_impact_eval --no-history
 ```
 
+**Trustworthiness (QNT-278).** `contamination_warning` now flags BOTH throttle
+signatures: the slow one (a call ran to its timeout ceiling) and the FAST one (a
+gated positive completed under `CONTAMINATION_FAST_LATENCY_MS` ~2.5s — Groq
+returned a truncated completion that silently drops the planted entity, the
+`msft-guidance-earnings` in-sweep flake). The msft fixture was reframed to
+must-quote ("which named initiative did MSFT management tie its guidance to?") so
+a short generation cannot answer without the coined entity, matching amzn's
+robustness.
+
+### (j) Live end-to-end RAG smoke — `rag_smoke_eval.py` + `goldens/rag_smoke.yaml` (QNT-278)
+
+Evals (e)–(i) each score ONE layer: IR scores retrieval, DeepEval scores
+generation, and rag_impact (i) **stubs** search so it tests fold→prompt→answer but
+by construction cannot see retrieve→rerank. That seam is exactly where the QNT-276
+demotion AND the QNT-279 boilerplate leak lived — every component eval green, the
+end-to-end contribution wrong, the first real check a human in the prod UI. This
+harness runs hand-picked queries through the **WHOLE chain against the real Qdrant
++ Cohere** (nothing stubbed) and asserts what the isolated evals cannot:
+
+* **surfaced-source relevance** (the QNT-279 axis) against the per-corpus rerank
+  floor it ASSERTS against (`RERANK_FLOORS`, mirroring `api/routers/search.py`).
+  `relevant` fixtures (narrow asks) require the top hit to clear the floor;
+  `boilerplate_guard` fixtures (broad asks) require NO surfaced hit below it — an
+  empty result is the correct broad-ask outcome.
+* **the retrieved fact reaches the answer** (the QNT-276 axis) — a distinctive
+  term DERIVED from the live top hit (a coined figure / proper noun, never a
+  generic word the canned report carries) must appear in the answer. Deriving it
+  from the live hit keeps the assertion sound against the rolling news window.
+
+On a **pre-QNT-279 build** the `boilerplate_guard` rows FAIL (sub-floor 8-K "About
+&lt;co&gt;" surfaces); the floor flips them GREEN — the demonstration that the
+harness catches the seam bug (AC4). Off the per-PR hot path (run on demand, never
+collected by pytest), like `news_search_eval`; offline fixture validation
+(`tests/agent/evals/test_rag_smoke_yaml.py`) DOES run in the unit sweep.
+
+**Clean-window discipline (Cohere).** Each fixture fires one Cohere rerank call;
+the trial tier rate-limits per minute and a DECLINED rerank silently falls back to
+the floorless fused path (the QNT-279 floor only applies when the cross-encoder
+ran), surfacing sub-floor boilerplate that reads as a guard FAIL on a contaminated
+window. `run_all` spaces the fixtures (`--delay`, default 6s) to keep rerank under
+the limit; `contamination_warning` flags throttled GRAPH rows (a retrieval-only
+row has no generation-latency signal and is never flagged).
+
+**First recorded demonstration** (QNT-278, 2026-06-25, `--retrieval-only`,
+12 fixtures, spaced): the harness catches the seam bug exactly as designed.
+* **post-QNT-279** (floor on, `main`): **11/11** gated PASS, both earnings
+  `boilerplate_guard` rows empty (the floor drops the 8-K "About &lt;co&gt;"
+  best-of-weak). `googl-guidance-earnings` returned EMPTY (a recall gap in that
+  corpus slice — ungated, not a failure).
+* **pre-QNT-279** (floor reverted to 0.0): **5 FAIL** — all four
+  `boilerplate_guard` rows surface sub-floor boilerplate as sources (news
+  0.036–0.059, earnings 0.076–0.152; all below their 0.30 / 0.50 floors) and the
+  exit code flips to 1. That RED→GREEN swing is the proof the harness would have
+  caught the QNT-279 leak before prod.
+
+```bash
+uv run python -m agent.evals.rag_smoke_eval                   # full chain (needs stack + Cohere)
+uv run python -m agent.evals.rag_smoke_eval --retrieval-only  # rerank-floor axis only, no Groq
+uv run python -m agent.evals.rag_smoke_eval --only nvda-guidance-earnings
+uv run python -m agent.evals.rag_smoke_eval --delay 0         # no spacing (single --only / clean window)
+```
+
 ## Clean-window re-run for the new ticker universe (QNT-255)
 
 QNT-237 swapped the universe (V/JPM/UNH -> MU/AMD/INTC). Its AC5 eval passed the

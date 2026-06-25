@@ -43,9 +43,17 @@ fixtures:
     planted_figure: "1.4 million units"
 
   # --- earnings-narrative positives -------------------------------------------
+  # QNT-278: must-quote framing. The earlier "what did management say about its
+  # guidance?" let a short/degraded generation answer with the figure alone and
+  # drop the coined entity (the in-sweep flake). Asking which named initiative
+  # management tied the guidance to forces the proper noun into any responsive
+  # answer -- the entity is the ONLY way to name the thing, so a short answer
+  # cannot satisfy the question without quoting it (matching amzn's robustness).
+  # The entity still appears nowhere in the question, so its presence in the
+  # answer can still only have come from the stubbed retrieval hit.
   - id: msft-guidance-earnings
     ticker: MSFT
-    question: "What did MSFT management say about its guidance last quarter?"
+    question: "Which named initiative did MSFT management tie its guidance to last quarter?"
     corpus: earnings
     kind: positive
     planted_entity: "Project Quillon"
