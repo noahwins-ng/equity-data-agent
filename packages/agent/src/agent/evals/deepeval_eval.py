@@ -17,13 +17,14 @@ Why off the per-PR hot path:
     the deterministic one (``tests/agent/evals/test_retrieval_eval.py``, QNT-261).
 
 Judge routing + budget (AC2):
-    The judge is the SAME free model the dialogue judge already pins
-    (``JUDGE_ALIAS`` = ``equity-agent/bench-cerebras-gptoss120b`` ->
-    ``cerebras/gpt-oss-120b``), reached through the LiteLLM proxy via
-    :func:`agent.llm.get_judge_llm` -- no new provider key. Gated to a SAMPLE
-    (``DEEPEVAL_SAMPLE``, default 4 records) on a clean window: each case costs
-    ~8-12 judge calls across the five metrics, so a 4-record run is ~32-48 calls
-    -- comfortably inside the free tier when the window is clean. Metrics run
+    The judge is ``DEEPEVAL_JUDGE_ALIAS`` (``equity-agent/bench-deepseek-v4-flash``
+    -> DeepSeek V4 Flash on OpenRouter, ADR-023), reached through the LiteLLM
+    proxy via :func:`agent.llm.get_judge_llm`. This is a deliberate PAID judge
+    (needs ``OPENROUTER_API_KEY``): each case costs ~8-12 judge calls across the
+    five metrics (~27k tokens/record), so a >=50-record baseline would wall on the
+    free-tier judge's ~1M-token/day ceiling -- the paid judge has no such ceiling
+    (~$0.18 for a full run) and is a better RAGAS verdict model. The dialogue /
+    golden judge stays on the free ``JUDGE_ALIAS``. Metrics run
     ``async_mode=False`` so calls serialise rather than burst the rate limit.
 
 Coexistence (AC4):
@@ -151,12 +152,13 @@ GEVAL_CRITERIA = (
 
 
 class LiteLLMJudge:
-    """DeepEval custom judge backed by the LiteLLM proxy + the pinned free model.
+    """DeepEval custom judge backed by the LiteLLM proxy + the pinned DeepSeek model.
 
-    Wraps :func:`agent.llm.get_judge_llm` (``JUDGE_ALIAS`` -> ``cerebras/
-    gpt-oss-120b``, the SAME fixed judge the dialogue eval uses) so DeepEval's
-    RAGAS metrics route through the existing proxy with no new provider key
-    (AC2). ``generate`` accepts DeepEval's optional ``schema`` kwarg: when
+    Wraps :func:`agent.llm.get_judge_llm` pinned to ``DEEPEVAL_JUDGE_ALIAS``
+    (``equity-agent/bench-deepseek-v4-flash`` -> DeepSeek V4 Flash on OpenRouter,
+    ADR-023 -- a paid judge that removes the free-tier daily token ceiling; the
+    dialogue / golden judge stays on the free ``JUDGE_ALIAS``). ``generate``
+    accepts DeepEval's optional ``schema`` kwarg: when
     present we use LangChain ``with_structured_output`` so the metric gets a
     typed instance back (DeepEval's ``generate_with_schema`` fast path);
     otherwise we return the raw string and DeepEval parses the JSON itself.
