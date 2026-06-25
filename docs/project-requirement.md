@@ -985,6 +985,14 @@ Additional eval layers:
 - LLM-judged generation eval (QNT-264): DeepEval RAGAS set + custom G-Eval, run
   off the per-PR hot path via `.github/workflows/llm-eval.yml`
   (nightly / `workflow_dispatch`), thresholds SOFT by default.
+  - Recall-appropriate goldens + enforcement (QNT-275): a dedicated recall golden
+    set (`goldens/deepeval_recall.yaml`) whose references are attributable to the
+    gathered reports, so `context_recall` is meaningful (it was a 0.29 artifact on
+    the shape-references). Floors re-derived against a measured baseline, then
+    enforcement flipped on. **Baseline floor is n>=20, not n>=50** — each judged
+    record costs ~48k judge-tokens and the free-tier daily budget caps a fixed
+    judge at ~20 records/window, so the design-doc "50-200" target (calibrated for
+    the LLM-FREE deterministic evals) is budget-infeasible here (ADR-023).
 
 README-level model benchmark tables should be updated only when the benchmark
 set or production default changes.

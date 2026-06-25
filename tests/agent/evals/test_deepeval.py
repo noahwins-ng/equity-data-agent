@@ -119,12 +119,12 @@ def test_history_append_blanks_nan_axis(tmp_path) -> None:
 
 
 def test_recall_goldens_meet_size_floor() -> None:
-    """AC1/AC2: the recall set is >=50 records so a clean-window baseline clears
-    the deepeval_n>=50 floor even after a few provider-error skips -- the same
-    statistical floor the retrieval eval enforces (a 50-record set reliably
-    catches a >5% regression)."""
+    """AC1/AC2: the recall set has enough records to sample the n>=20 baseline
+    (rescoped from >=50, ADR-023 -- a judged record costs ~48k tokens and the
+    free-tier daily budget caps a fixed judge at ~20 records/window). The set is
+    intentionally larger (55) for full ticker + intent coverage and headroom."""
     records = de.load_recall_goldens()
-    assert len(records) >= 50, f"recall set has {len(records)} records, need >=50"
+    assert len(records) >= 20, f"recall set has {len(records)} records, need >=20"
 
 
 def test_recall_goldens_cover_every_ticker() -> None:
@@ -177,10 +177,10 @@ def test_live_deepeval_sample_judged() -> None:
     suite asserts the things that ARE contracts -- every RAGAS axis produced a
     real score, and the deterministic number-grounding layer ran additively. The
     threshold gate via DeepEval's canonical ``assert_test`` is opt-in behind
-    ``DEEPEVAL_ENFORCE_THRESHOLDS`` -- QNT-275 enables it once a clean >=50-record
-    baseline re-derives the floors (THRESHOLDS). That baseline is gated on the
-    Cerebras free-tier daily token budget, which caps a fixed-judge run at ~20
-    judged records/day, so AC2/AC3/AC4 land as a follow-up (see THRESHOLDS)."""
+    ``DEEPEVAL_ENFORCE_THRESHOLDS`` -- QNT-275 enables it once a clean n>=20
+    baseline re-derives the floors (THRESHOLDS). The baseline is n>=20 (rescoped
+    from >=50, ADR-023) because the Cerebras free-tier daily token budget caps a
+    fixed-judge run at ~20 judged records/window."""
     if not de.stack_reachable():
         pytest.skip(
             "dev stack unreachable (need make dev-litellm / dev-api / tunnel) -- "
