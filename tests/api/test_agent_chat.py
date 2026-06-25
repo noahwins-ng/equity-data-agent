@@ -1637,6 +1637,131 @@ def test_retrieved_sources_suppressed_when_gather_skipped(
     assert "retrieved_sources" not in events
 
 
+# ─── QNT-281: citations_count on the narrative-only path ────────────────────
+
+
+@pytest.mark.parametrize("intent", ["news", "fundamental", "technical"])
+def test_narrative_only_path_counts_retrieved_sources_as_citations(
+    intent: str, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QNT-281 AC1: on the narrative-only path (focused card dropped,
+    focused=None) the answer is grounded in the surfaced retrieved sources.
+    The done-event footer must report N citations (one per surfaced source),
+    not 0. Parametrized across all three intents the branch covers, since the
+    focused card can be dropped on any of them."""
+    sources = [
+        {
+            "headline": "NVDA strikes Micron HBM4 supply deal",
+            "source": "Reuters",
+            "date": "2026-06-01",
+            "url": "https://ex.com/a",
+        },
+        {
+            "headline": "Analysts lift NVDA targets on deal",
+            "source": "Bloomberg",
+            "date": "2026-06-02",
+            "url": "https://ex.com/b",
+        },
+        {
+            "headline": "Micron confirms multi-year terms",
+            "source": "WSJ",
+            "date": "2026-06-03",
+            "url": "https://ex.com/c",
+        },
+    ]
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
+        graph = MagicMock()
+        graph.invoke.return_value = {
+            "ticker": "NVDA",
+            "intent": intent,
+            "plan": ["company", "news"],
+            "reports": {"company": "stub", "news": "stub"},
+            "errors": {},
+            "thesis": None,
+            "quick_fact": None,
+            "comparison": None,
+            "conversational": None,
+            "focused": None,
+            "narrative": "NVDA inked an HBM4 supply deal with Micron.",
+            "retrieved_sources": sources,
+            "confidence": 1.0,
+            "intent_path": ["classify", "plan", "gather", "synthesize", "narrate"],
+        }
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    r = client.post(
+        "/api/v1/agent/chat",
+        json={"ticker": "NVDA", "message": "any partnership or deal news for NVDA?"},
+    )
+    frames = _parse_sse(r.text)
+    done_data = frames[-1][1]
+    assert frames[-1][0] == "done"
+    assert done_data["citations_count"] == len(sources) == 3
+
+
+def test_focused_card_with_sources_does_not_double_count(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QNT-281 AC2 guard: when a focused card AND retrieved sources both exist,
+    the count comes from the focused card alone (the focused branch owns the
+    card-present case) -- the surfaced sources are NOT added on top."""
+    from agent.focused import FocusedAnalysis, FocusedValue
+
+    focused = FocusedAnalysis(
+        focus="news",
+        summary="Deal momentum is constructive (source: news).",
+        key_points=["Multi-year supply terms (source: news)"],
+        cited_values=[FocusedValue(label="Deal", value="HBM4", source="news")],
+    )
+    # Three surfaced sources -- if they were double-counted the total would
+    # jump by 3 above the focused-card citation count.
+    sources = [
+        {"headline": "h1", "source": "Reuters", "date": "2026-06-01", "url": "https://ex.com/a"},
+        {"headline": "h2", "source": "Bloomberg", "date": "2026-06-02", "url": "https://ex.com/b"},
+        {"headline": "h3", "source": "WSJ", "date": "2026-06-03", "url": "https://ex.com/c"},
+    ]
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
+        graph = MagicMock()
+        graph.invoke.return_value = {
+            "ticker": "NVDA",
+            "intent": "news",
+            "plan": ["company", "news"],
+            "reports": {"company": "stub", "news": "stub"},
+            "errors": {},
+            "thesis": None,
+            "quick_fact": None,
+            "comparison": None,
+            "conversational": None,
+            "focused": focused,
+            "narrative": "NVDA inked an HBM4 supply deal with Micron.",
+            "retrieved_sources": sources,
+            "confidence": 1.0,
+            "intent_path": ["classify", "plan", "gather", "synthesize", "narrate"],
+        }
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    r = client.post(
+        "/api/v1/agent/chat",
+        json={"ticker": "NVDA", "message": "news on the NVDA Micron deal?"},
+    )
+    frames = _parse_sse(r.text)
+    done_data = frames[-1][1]
+    assert frames[-1][0] == "done"
+    # Focused count = 1 structured cited_value + 2 inline (source: …) parens = 3.
+    # The 3 surfaced sources must NOT be added on top.
+    from api.routers.agent_chat import _count_focused_citations
+
+    assert done_data["citations_count"] == _count_focused_citations(focused)
+
+
 # ─── QNT-220 follow-up: exploration-scan SSE wiring ─────────────────────────
 
 
