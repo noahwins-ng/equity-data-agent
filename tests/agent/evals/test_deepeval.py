@@ -122,12 +122,12 @@ def test_history_append_blanks_nan_axis(tmp_path) -> None:
 
 
 def test_recall_goldens_meet_size_floor() -> None:
-    """AC1/AC2: the recall set has enough records to sample the n>=20 baseline
-    (rescoped from >=50, ADR-023 -- a judged record costs ~48k tokens and the
-    free-tier daily budget caps a fixed judge at ~20 records/window). The set is
-    intentionally larger (55) for full ticker + intent coverage and headroom."""
+    """AC1/AC2: the recall set is >=50 records (the design-doc baseline floor, the
+    same statistical floor the retrieval eval enforces). The DeepEval judge runs
+    on a paid OpenRouter model so a >=50 run isn't free-tier-token-bound (ADR-024).
+    The 55-record set gives full ticker + intent coverage with headroom."""
     records = de.load_recall_goldens()
-    assert len(records) >= 20, f"recall set has {len(records)} records, need >=20"
+    assert len(records) >= 50, f"recall set has {len(records)} records, need >=50"
 
 
 def test_recall_goldens_cover_every_ticker() -> None:
@@ -172,18 +172,16 @@ def test_live_deepeval_sample_judged() -> None:
 
     Runs the RECALL golden set (QNT-275), not the structured questions.yaml: the
     references here are attributable to the gathered reports, so context_recall is
-    meaningful rather than the 0.29 shape-reference artifact (the n=20 partial
-    baseline measured context_recall 1.0 across every clean record).
+    meaningful rather than the 0.29 shape-reference artifact.
 
     Soft by default, like the golden judge (``EVAL_MIN_JUDGE`` off until history
     earns a trustworthy number): the metric scores are a recorded signal, and the
     suite asserts the things that ARE contracts -- every RAGAS axis produced a
     real score, and the deterministic number-grounding layer ran additively. The
     threshold gate via DeepEval's canonical ``assert_test`` is opt-in behind
-    ``DEEPEVAL_ENFORCE_THRESHOLDS`` -- QNT-275 enables it once a clean n>=20
-    baseline re-derives the floors (THRESHOLDS). The baseline is n>=20 (rescoped
-    from >=50, ADR-023) because the Cerebras free-tier daily token budget caps a
-    fixed-judge run at ~20 judged records/window."""
+    ``DEEPEVAL_ENFORCE_THRESHOLDS`` -- QNT-275 enables it once a clean >=50-record
+    baseline re-derives the floors (THRESHOLDS). The judge runs on a paid
+    OpenRouter model (ADR-024), so the >=50 baseline isn't free-tier-token-bound."""
     if not de.stack_reachable():
         pytest.skip(
             "dev stack unreachable (need make dev-litellm / dev-api / tunnel) -- "

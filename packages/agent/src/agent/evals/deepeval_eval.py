@@ -90,11 +90,10 @@ logger = logging.getLogger(__name__)
 # every reference statement is attributable to a retrieved report chunk and
 # ContextualRecallMetric measures retrieval completeness rather than the 0.29
 # structural artifact the shape-references produced. See the file header for the
-# full rationale. The set holds 55 records (full ticker + intent coverage +
-# headroom); the recorded baseline samples n>=20 -- rescoped from >=50 because a
-# judged record costs ~48k tokens and the free-tier daily budget caps a fixed
-# judge at ~20 records/window (ADR-023). The LLM-free retrieval eval's 50-floor
-# does not transfer to a token-budgeted judged eval.
+# full rationale. The set holds 55 records (full ticker + intent coverage); the
+# recorded baseline samples >=50 (the design-doc floor). The DeepEval judge runs
+# on a paid OpenRouter model (DEEPEVAL_JUDGE_ALIAS) so a >=50 run isn't bound by
+# free-tier daily token ceilings (ADR-024).
 RECALL_GOLDENS_PATH = Path(__file__).parent / "goldens" / "deepeval_recall.yaml"
 
 # Number of golden records sampled per run -- the budget lever (AC2). Each record
@@ -108,16 +107,15 @@ DEFAULT_SAMPLE = int(os.environ.get("DEEPEVAL_SAMPLE", "4"))
 # they're the assert floors the nightly/dispatch run surfaces a regression
 # against.
 #
-# QNT-275 status -- floors being re-derived against an n>=20 baseline (rescoped
-# from >=50, ADR-023: ~48k judge-tokens/record vs a ~1M/day free-tier budget caps
-# a fixed judge at ~20 records/window). The recall-appropriate golden set
+# QNT-275 status -- floors being re-derived against a >=50-record baseline on the
+# paid OpenRouter judge (DEEPEVAL_JUDGE_ALIAS, ADR-024), which removes the
+# free-tier daily token ceiling. The recall-appropriate golden set
 # (deepeval_recall.yaml) is in place and the context_recall artifact is FIXED:
 # against the shape-references it read 0.29 (run 20260621T042449Z-b07f37, n=4);
-# against the recall references it read context_recall mean 1.000 / min 1.000,
-# faithfulness 0.980, context_precision 0.900 across 20 clean records. Until the
-# n>=20 baseline is recorded, these stay at the design-doc aspirations and the
+# against the recall references it reads materially higher. Until the >=50
+# baseline is recorded, these stay at the design-doc aspirations and the
 # assert_test gate stays opt-in (DEEPEVAL_ENFORCE_THRESHOLDS). Final step
-# (AC2/AC3/AC4): record the n>=20 sweep, set floors ~0.10-0.15 below the measured
+# (AC2/AC3/AC4): record the >=50 sweep, set floors ~0.10-0.15 below the measured
 # means (the retrieval-eval discipline), and flip enforcement on.
 THRESHOLDS: dict[str, float] = {
     "faithfulness": 0.8,

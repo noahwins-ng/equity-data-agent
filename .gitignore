@@ -61,5 +61,3 @@ audit-*.png
 .agents
 AGENTS.md
 CLAUDE.md
-# QNT-275: durable per-record DeepEval baseline accumulator (multi-window batching)
-packages/agent/src/agent/evals/.deepeval_baseline_accum.json

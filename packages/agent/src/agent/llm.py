@@ -91,11 +91,11 @@ _RESOLVED_MODEL_BY_ALIAS: dict[str, str] = {
 JUDGE_ALIAS = "equity-agent/bench-cerebras-gptoss120b"
 
 # QNT-275 / ADR-024: the DeepEval RAGAS suite's judge. A judged record fires ~12
-# judge calls, so on a free-tier judge the daily token ceiling caps a run at ~20
-# records (ADR-023). This paid OpenRouter alias (DeepSeek V4 Flash) has no such
-# ceiling -- a >=50-record baseline runs in one window for ~$0.18 -- so the
-# DeepEval suite pins THIS judge while the dialogue / golden evals stay on the
-# free ``JUDGE_ALIAS`` above. Reach it via ``get_judge_llm(model_alias=...)``.
+# judge calls, so a free-tier judge's daily token ceiling caps a run at ~20-35
+# records. This paid OpenRouter alias (DeepSeek V4 Flash) has no such ceiling --
+# a >=50-record baseline runs in one window for ~$0.18 -- so the DeepEval suite
+# pins THIS judge while the dialogue / golden evals stay on the free
+# ``JUDGE_ALIAS`` above. Reach it via ``get_judge_llm(model_alias=...)``.
 DEEPEVAL_JUDGE_ALIAS = "equity-agent/bench-deepseek-v4-flash"
 
 # QNT-129 bench harness override. When set, every ``get_llm()`` call returns a
