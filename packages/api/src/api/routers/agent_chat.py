@@ -1221,9 +1221,21 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                 quick_fact if isinstance(quick_fact, QuickFactAnswer) else None
             )
         elif intent in {"fundamental", "technical", "news"}:
-            citations_count = _count_focused_citations(
-                focused if isinstance(focused, FocusedAnalysis) else None
-            )
+            if isinstance(focused, FocusedAnalysis):
+                citations_count = _count_focused_citations(focused)
+            elif retrieved_sources and "gather" in intent_path:
+                # QNT-281: narrative-only path -- the focused card was dropped
+                # (focused=None) and narrate owns the answer grounded in the
+                # surfaced retrieved sources. Count each surfaced source as one
+                # citation so the footer reflects the grounding. Mirrors the
+                # exact gate the retrieved_sources event is emitted under
+                # (line ~1207), so the count always matches what the panel
+                # shows. The ``focused`` branch above already owns the
+                # card-present case, so the two never both fire -> no
+                # double-count when a card and sources coexist.
+                citations_count = len(retrieved_sources)
+            else:
+                citations_count = 0
         elif intent == "exploration":
             citations_count = _count_exploration_citations(
                 exploration if isinstance(exploration, ExplorationAnswer) else None
