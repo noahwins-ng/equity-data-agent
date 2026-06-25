@@ -43,7 +43,7 @@ Architecture Decision Records (ADRs). Read these to understand **why** we chose 
 - [020-equity-analyst-voice.md](decisions/020-equity-analyst-voice.md)
 - [021-synthesis-model-and-tail-routing.md](decisions/021-synthesis-model-and-tail-routing.md)
 - [022-decline-dbt-adoption-at-current-scale.md](decisions/022-decline-dbt-adoption-at-current-scale.md)
-- [024-openrouter-deepseek-judge-for-deepeval.md](decisions/024-openrouter-deepseek-judge-for-deepeval.md)
+- [023-openrouter-deepseek-judge-for-deepeval.md](decisions/023-openrouter-deepseek-judge-for-deepeval.md)
 
 ### [guides/](guides/)
 How to do common tasks. Operational runbooks.

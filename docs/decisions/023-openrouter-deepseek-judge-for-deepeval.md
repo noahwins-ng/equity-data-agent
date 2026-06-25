@@ -1,4 +1,4 @@
-# ADR-024: Paid OpenRouter (DeepSeek V4 Flash) judge for the DeepEval RAGAS suite
+# ADR-023: Paid OpenRouter (DeepSeek V4 Flash) judge for the DeepEval RAGAS suite
 
 **Date**: 2026-06-25
 **Status**: Accepted

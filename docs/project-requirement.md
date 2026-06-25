@@ -992,7 +992,7 @@ Additional eval layers:
     enforcement flipped on against a **>=50-record** baseline (the design-doc
     floor). The DeepEval judge runs on a paid OpenRouter model (DeepSeek V4 Flash)
     so the judged baseline isn't bound by free-tier daily token ceilings — a full
-    >=50 run costs ~$0.18 and stays off the hot path (ADR-024). The dialogue /
+    >=50 run costs ~$0.18 and stays off the hot path (ADR-023). The dialogue /
     golden judge stays on the free model.
 
 README-level model benchmark tables should be updated only when the benchmark

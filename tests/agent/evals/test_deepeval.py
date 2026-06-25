@@ -77,7 +77,7 @@ def test_history_schema_has_deepeval_columns() -> None:
 
 
 def test_judge_routes_through_pinned_deepeval_alias() -> None:
-    """AC2 / ADR-024: the DeepEval judge is the pinned DeepSeek bench alias on
+    """AC2 / ADR-023: the DeepEval judge is the pinned DeepSeek bench alias on
     OpenRouter (a deliberate paid judge -- removes the free-tier token ceiling so
     a >=50-record baseline runs in one window), NOT the free dialogue judge."""
     got = de.LiteLLMJudge.get_model_name(de.LiteLLMJudge.__new__(de.LiteLLMJudge))
@@ -124,7 +124,7 @@ def test_history_append_blanks_nan_axis(tmp_path) -> None:
 def test_recall_goldens_meet_size_floor() -> None:
     """AC1/AC2: the recall set is >=50 records (the design-doc baseline floor, the
     same statistical floor the retrieval eval enforces). The DeepEval judge runs
-    on a paid OpenRouter model so a >=50 run isn't free-tier-token-bound (ADR-024).
+    on a paid OpenRouter model so a >=50 run isn't free-tier-token-bound (ADR-023).
     The 55-record set gives full ticker + intent coverage with headroom."""
     records = de.load_recall_goldens()
     assert len(records) >= 50, f"recall set has {len(records)} records, need >=50"
@@ -181,7 +181,7 @@ def test_live_deepeval_sample_judged() -> None:
     threshold gate via DeepEval's canonical ``assert_test`` is opt-in behind
     ``DEEPEVAL_ENFORCE_THRESHOLDS`` -- QNT-275 enables it once a clean >=50-record
     baseline re-derives the floors (THRESHOLDS). The judge runs on a paid
-    OpenRouter model (ADR-024), so the >=50 baseline isn't free-tier-token-bound."""
+    OpenRouter model (ADR-023), so the >=50 baseline isn't free-tier-token-bound."""
     if not de.stack_reachable():
         pytest.skip(
             "dev stack unreachable (need make dev-litellm / dev-api / tunnel) -- "

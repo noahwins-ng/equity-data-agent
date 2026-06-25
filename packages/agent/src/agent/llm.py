@@ -90,7 +90,7 @@ _RESOLVED_MODEL_BY_ALIAS: dict[str, str] = {
 # (``dialogue_judge.JUDGE_MODEL_ALIAS``).
 JUDGE_ALIAS = "equity-agent/bench-cerebras-gptoss120b"
 
-# QNT-275 / ADR-024: the DeepEval RAGAS suite's judge. A judged record fires ~12
+# QNT-275 / ADR-023: the DeepEval RAGAS suite's judge. A judged record fires ~12
 # judge calls, so a free-tier judge's daily token ceiling caps a run at ~20-35
 # records. This paid OpenRouter alias (DeepSeek V4 Flash) has no such ceiling --
 # a >=50-record baseline runs in one window for ~$0.18 -- so the DeepEval suite

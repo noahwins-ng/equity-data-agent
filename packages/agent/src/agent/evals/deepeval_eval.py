@@ -93,7 +93,7 @@ logger = logging.getLogger(__name__)
 # full rationale. The set holds 55 records (full ticker + intent coverage); the
 # recorded baseline samples >=50 (the design-doc floor). The DeepEval judge runs
 # on a paid OpenRouter model (DEEPEVAL_JUDGE_ALIAS) so a >=50 run isn't bound by
-# free-tier daily token ceilings (ADR-024).
+# free-tier daily token ceilings (ADR-023).
 RECALL_GOLDENS_PATH = Path(__file__).parent / "goldens" / "deepeval_recall.yaml"
 
 # Number of golden records sampled per run -- the budget lever (AC2). Each record
@@ -108,7 +108,7 @@ DEFAULT_SAMPLE = int(os.environ.get("DEEPEVAL_SAMPLE", "4"))
 # against.
 #
 # QNT-275 status -- floors being re-derived against a >=50-record baseline on the
-# paid OpenRouter judge (DEEPEVAL_JUDGE_ALIAS, ADR-024), which removes the
+# paid OpenRouter judge (DEEPEVAL_JUDGE_ALIAS, ADR-023), which removes the
 # free-tier daily token ceiling. The recall-appropriate golden set
 # (deepeval_recall.yaml) is in place and the context_recall artifact is FIXED:
 # against the shape-references it read 0.29 (run 20260621T042449Z-b07f37, n=4);
