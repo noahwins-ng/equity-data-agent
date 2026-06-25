@@ -80,7 +80,7 @@ from agent.evals.golden_set import (  # noqa: E402
     run_record,
 )
 from agent.evals.hallucination import check as check_hallucination  # noqa: E402
-from agent.llm import JUDGE_ALIAS, get_judge_llm  # noqa: E402
+from agent.llm import DEEPEVAL_JUDGE_ALIAS, get_judge_llm  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +157,7 @@ class LiteLLMJudge:
     """
 
     def __init__(self) -> None:
-        self._llm = get_judge_llm()
+        self._llm = get_judge_llm(model_alias=DEEPEVAL_JUDGE_ALIAS)
 
     def load_model(self) -> Any:
         return self._llm
@@ -178,7 +178,7 @@ class LiteLLMJudge:
         return content if isinstance(content, str) else str(content)
 
     def get_model_name(self) -> str:
-        return JUDGE_ALIAS
+        return DEEPEVAL_JUDGE_ALIAS
 
     def supports_structured_outputs(self) -> bool:
         return True
@@ -479,7 +479,7 @@ def summarise(cases: list[DeepEvalCase], means: dict[str, float]) -> str:
     n = len(cases)
     grounding_ok = sum(1 for c in cases if c.grounding_ok)
     lines = [
-        f"DEEPEVAL GENERATION EVAL ({n} sampled records, judge={JUDGE_ALIAS}, LLM-judged)",
+        f"DEEPEVAL GENERATION EVAL ({n} sampled records, judge={DEEPEVAL_JUDGE_ALIAS}, LLM-judged)",
     ]
     for name in THRESHOLDS:
         value = means.get(name, float("nan"))

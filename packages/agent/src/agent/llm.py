@@ -90,6 +90,14 @@ _RESOLVED_MODEL_BY_ALIAS: dict[str, str] = {
 # (``dialogue_judge.JUDGE_MODEL_ALIAS``).
 JUDGE_ALIAS = "equity-agent/bench-cerebras-gptoss120b"
 
+# QNT-275 / ADR-024: the DeepEval RAGAS suite's judge. A judged record fires ~12
+# judge calls, so on a free-tier judge the daily token ceiling caps a run at ~20
+# records (ADR-023). This paid OpenRouter alias (DeepSeek V4 Flash) has no such
+# ceiling -- a >=50-record baseline runs in one window for ~$0.18 -- so the
+# DeepEval suite pins THIS judge while the dialogue / golden evals stay on the
+# free ``JUDGE_ALIAS`` above. Reach it via ``get_judge_llm(model_alias=...)``.
+DEEPEVAL_JUDGE_ALIAS = "equity-agent/bench-deepseek-v4-flash"
+
 # QNT-129 bench harness override. When set, every ``get_llm()`` call returns a
 # ChatOpenAI pointed at this alias instead of the provider lookup. Set via
 # ``set_model_override(...)`` from ``agent.evals.__main__ --model`` so one
@@ -434,8 +442,15 @@ def resolve_trace_model_tag(
     return "unverified-alias", False
 
 
-def get_judge_llm(temperature: float = 0.0) -> ChatOpenAI:
-    """Return a ChatOpenAI pinned to :data:`JUDGE_ALIAS` for LLM-as-judge scoring.
+def get_judge_llm(temperature: float = 0.0, model_alias: str | None = None) -> ChatOpenAI:
+    """Return a ChatOpenAI pinned to a judge alias for LLM-as-judge scoring.
+
+    Defaults to :data:`JUDGE_ALIAS` (the free bench-cerebras judge the dialogue /
+    golden evals use). ``model_alias`` overrides it for a suite that needs a
+    different judge -- the DeepEval RAGAS suite passes
+    :data:`DEEPEVAL_JUDGE_ALIAS` (the paid OpenRouter DeepSeek judge, QNT-275) so
+    its ~12-call/record budget isn't bound by the free-tier daily token ceiling,
+    WITHOUT moving the dialogue/golden judge off the free model.
 
     Deliberately bypasses both ``_MODEL_OVERRIDE`` and ``_TEMPERATURE_OVERRIDE``:
     the judge must NOT move when a bench sweep re-routes the agent-under-test
@@ -445,7 +460,7 @@ def get_judge_llm(temperature: float = 0.0) -> ChatOpenAI:
     budget context.
     """
     return ChatOpenAI(
-        model=JUDGE_ALIAS,
+        model=model_alias or JUDGE_ALIAS,
         base_url=settings.LITELLM_BASE_URL,
         api_key="litellm-proxy",  # pyright: ignore[reportArgumentType]  # proxy ignores; real keys server-side
         temperature=temperature,
@@ -521,6 +536,7 @@ def get_llm(temperature: float = 0.2, model_alias: str | None = None) -> ChatOpe
 
 __all__ = [
     "JUDGE_ALIAS",
+    "DEEPEVAL_JUDGE_ALIAS",
     "SMALL_NODE_ALIAS",
     "ServedModelInfo",
     "ServedModelTracker",

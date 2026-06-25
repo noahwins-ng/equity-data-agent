@@ -125,6 +125,21 @@ model_list:
       extra_headers:
         User-Agent: equity-data-agent-litellm/1.0
 
+  # QNT-275: paid OpenRouter judge for the DeepEval RAGAS suite. The free-tier
+  # judges have a ~1M-token/day ceiling that caps a fixed-judge run at ~20
+  # records (ADR-023); DeepSeek V4 Flash on OpenRouter removes it -- a >=50-record
+  # baseline runs in one clean window for ~$0.18 ($0.089/$0.224 per M in/out, 1M
+  # ctx, structured-outputs + seed-reproducible). reasoning_effort: low strips the
+  # CoT token sink (verdict tasks don't need it). Used ONLY by the DeepEval judge
+  # (agent.evals.deepeval_eval); the dialogue / golden judge stays on the free
+  # bench-cerebras alias above. Pinned for reproducible scores (ADR-024).
+  - model_name: equity-agent/bench-deepseek-v4-flash
+    litellm_params:
+      model: openrouter/deepseek/deepseek-v4-flash
+      api_key: os.environ/OPENROUTER_API_KEY
+      temperature: 0.0
+      reasoning_effort: low
+
   - model_name: equity-agent/bench-gptoss20b
     litellm_params:
       model: groq/openai/gpt-oss-20b

@@ -25,7 +25,7 @@ import os
 import pytest
 from agent.evals import deepeval_eval as de
 from agent.evals.golden_set import HISTORY_FIELDS, run_record
-from agent.llm import JUDGE_ALIAS
+from agent.llm import DEEPEVAL_JUDGE_ALIAS
 from shared.tickers import TICKERS
 
 pytestmark = pytest.mark.deepeval
@@ -76,10 +76,13 @@ def test_history_schema_has_deepeval_columns() -> None:
     assert "faithfulness" in HISTORY_FIELDS
 
 
-def test_judge_routes_through_litellm_free_alias() -> None:
-    """AC2: the judge is the pinned free LiteLLM alias, not a paid default."""
-    assert de.LiteLLMJudge.get_model_name(de.LiteLLMJudge.__new__(de.LiteLLMJudge)) == JUDGE_ALIAS
-    assert "bench" in JUDGE_ALIAS  # the free Cerebras bench judge
+def test_judge_routes_through_pinned_deepeval_alias() -> None:
+    """AC2 / ADR-024: the DeepEval judge is the pinned DeepSeek bench alias on
+    OpenRouter (a deliberate paid judge -- removes the free-tier token ceiling so
+    a >=50-record baseline runs in one window), NOT the free dialogue judge."""
+    got = de.LiteLLMJudge.get_model_name(de.LiteLLMJudge.__new__(de.LiteLLMJudge))
+    assert got == DEEPEVAL_JUDGE_ALIAS
+    assert "bench" in DEEPEVAL_JUDGE_ALIAS and "deepseek" in DEEPEVAL_JUDGE_ALIAS
 
 
 def test_aggregate_ignores_nan() -> None:
