@@ -17,13 +17,14 @@ Why off the per-PR hot path:
     the deterministic one (``tests/agent/evals/test_retrieval_eval.py``, QNT-261).
 
 Judge routing + budget (AC2):
-    The judge is the SAME free model the dialogue judge already pins
-    (``JUDGE_ALIAS`` = ``equity-agent/bench-cerebras-gptoss120b`` ->
-    ``cerebras/gpt-oss-120b``), reached through the LiteLLM proxy via
-    :func:`agent.llm.get_judge_llm` -- no new provider key. Gated to a SAMPLE
-    (``DEEPEVAL_SAMPLE``, default 4 records) on a clean window: each case costs
-    ~8-12 judge calls across the five metrics, so a 4-record run is ~32-48 calls
-    -- comfortably inside the free tier when the window is clean. Metrics run
+    The judge is ``DEEPEVAL_JUDGE_ALIAS`` (``equity-agent/bench-deepseek-v4-flash``
+    -> DeepSeek V4 Flash on OpenRouter, ADR-023), reached through the LiteLLM
+    proxy via :func:`agent.llm.get_judge_llm`. This is a deliberate PAID judge
+    (needs ``OPENROUTER_API_KEY``): each case costs ~8-12 judge calls across the
+    five metrics (~27k tokens/record), so a >=50-record baseline would wall on the
+    free-tier judge's ~1M-token/day ceiling -- the paid judge has no such ceiling
+    (~$0.18 for a full run) and is a better RAGAS verdict model. The dialogue /
+    golden judge stays on the free ``JUDGE_ALIAS``. Metrics run
     ``async_mode=False`` so calls serialise rather than burst the rate limit.
 
 Coexistence (AC4):
@@ -66,39 +67,74 @@ from pathlib import Path  # noqa: E402
 from typing import Any, cast  # noqa: E402
 
 import httpx  # noqa: E402
+import yaml  # noqa: E402
 from shared.config import settings  # noqa: E402
+from shared.tickers import TICKERS  # noqa: E402
 
 from agent.evals.golden_set import (  # noqa: E402
     HISTORY_FIELDS,
     HISTORY_PATH,
     EvalOutcome,
+    GoldenRecord,
     _git_sha,
     _prompt_version,
-    load_goldens,
     run_record,
 )
 from agent.evals.hallucination import check as check_hallucination  # noqa: E402
-from agent.llm import JUDGE_ALIAS, get_judge_llm  # noqa: E402
+from agent.llm import DEEPEVAL_JUDGE_ALIAS, get_judge_llm  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+# QNT-275: the recall-appropriate golden set. Distinct from questions.yaml (the
+# structured-eval goldens whose reference_thesis describes the answer SHAPE):
+# here each ``recall_reference`` states the FACTS the gathered reports carry, so
+# every reference statement is attributable to a retrieved report chunk and
+# ContextualRecallMetric measures retrieval completeness rather than the 0.29
+# structural artifact the shape-references produced. See the file header for the
+# full rationale. The set holds 55 records (full ticker + intent coverage); the
+# recorded baseline samples >=50 (the design-doc floor). The DeepEval judge runs
+# on a paid OpenRouter model (DEEPEVAL_JUDGE_ALIAS) so a >=50 run isn't bound by
+# free-tier daily token ceilings (ADR-023).
+RECALL_GOLDENS_PATH = Path(__file__).parent / "goldens" / "deepeval_recall.yaml"
 
 # Number of golden records sampled per run -- the budget lever (AC2). Each record
 # costs ~8-12 judge calls across the five metrics, so the default keeps a run
 # inside the free tier on a clean window. Override with --sample / DEEPEVAL_SAMPLE.
 DEFAULT_SAMPLE = int(os.environ.get("DEEPEVAL_SAMPLE", "4"))
 
-# Per-metric pass thresholds -- the design-doc calibration targets (Track 2.7):
-# faithfulness/context-precision/context-recall > 0.8, answer-relevancy > 0.75,
-# G-Eval > 0.7. These are NOT a per-PR gate (this suite is off the hot path);
-# they're the assert floors the nightly/dispatch run surfaces a regression
-# against. Re-derive against a recorded baseline once history.csv accrues runs,
-# the same way the retrieval gate floors are anchored to a measured baseline.
+# Per-metric pass floors -- RE-DERIVED against a measured baseline (QNT-275 AC3),
+# the same discipline as the retrieval gate's GATE_FLOORS: anchor ~0.10-0.13 below
+# the recorded means, NOT the design-doc aspirations (0.8/0.75/0.7).
+#
+# Baseline: run 20260625T072005Z-39fc33-deepeval, n=55 (the full deepeval_recall
+# set), judge = DEEPEVAL_JUDGE_ALIAS (DeepSeek V4 Flash on OpenRouter, ADR-023 --
+# a paid judge with no free-tier daily token ceiling, so all 55 records score in
+# one clean window). Recall references FIXED the context_recall artifact:
+# 0.29 (shape-references, n=4) -> 0.9667 (recall references, n=55).
+#
+#   axis               mean(n=55)   floor   margin
+#   faithfulness         0.8309     0.70    0.13
+#   answer_relevancy     0.8728     0.75    0.12
+#   context_precision    0.7029     0.60    0.10
+#   context_recall       0.9667     0.85    0.12
+#   geval                0.7800     0.65    0.13
+#
+# Caveat: the 5 comparison records hit agent-side Groq synthesis timeouts (the
+# heavy 9-12k-token comparison output exceeds the agent's timeout), degrading
+# their faithfulness/precision -- so the means (esp. precision 0.70) are
+# CONSERVATIVE. That makes the floors safe (fewer false positives), not inflated.
+#
+# Enforcement (AC4) is the AGGREGATE gate in main() (DEEPEVAL_ENFORCE_THRESHOLDS,
+# on by default): the manual/local run exits non-zero if any axis MEAN < floor.
+# The per-record pytest assert_test stays opt-in -- a single record's precision
+# can dip to ~0.5, so a one-record gate would false-fail. The aggregate passes on
+# this baseline by construction (every mean clears its floor).
 THRESHOLDS: dict[str, float] = {
-    "faithfulness": 0.8,
+    "faithfulness": 0.70,
     "answer_relevancy": 0.75,
-    "context_precision": 0.8,
-    "context_recall": 0.8,
-    "geval": 0.7,
+    "context_precision": 0.60,
+    "context_recall": 0.85,
+    "geval": 0.65,
 }
 
 # The custom G-Eval (AC1: "at least one custom G-Eval"). Domain-specialised and
@@ -116,12 +152,13 @@ GEVAL_CRITERIA = (
 
 
 class LiteLLMJudge:
-    """DeepEval custom judge backed by the LiteLLM proxy + the pinned free model.
+    """DeepEval custom judge backed by the LiteLLM proxy + the pinned DeepSeek model.
 
-    Wraps :func:`agent.llm.get_judge_llm` (``JUDGE_ALIAS`` -> ``cerebras/
-    gpt-oss-120b``, the SAME fixed judge the dialogue eval uses) so DeepEval's
-    RAGAS metrics route through the existing proxy with no new provider key
-    (AC2). ``generate`` accepts DeepEval's optional ``schema`` kwarg: when
+    Wraps :func:`agent.llm.get_judge_llm` pinned to ``DEEPEVAL_JUDGE_ALIAS``
+    (``equity-agent/bench-deepseek-v4-flash`` -> DeepSeek V4 Flash on OpenRouter,
+    ADR-023 -- a paid judge that removes the free-tier daily token ceiling; the
+    dialogue / golden judge stays on the free ``JUDGE_ALIAS``). ``generate``
+    accepts DeepEval's optional ``schema`` kwarg: when
     present we use LangChain ``with_structured_output`` so the metric gets a
     typed instance back (DeepEval's ``generate_with_schema`` fast path);
     otherwise we return the raw string and DeepEval parses the JSON itself.
@@ -131,7 +168,7 @@ class LiteLLMJudge:
     """
 
     def __init__(self) -> None:
-        self._llm = get_judge_llm()
+        self._llm = get_judge_llm(model_alias=DEEPEVAL_JUDGE_ALIAS)
 
     def load_model(self) -> Any:
         return self._llm
@@ -152,7 +189,7 @@ class LiteLLMJudge:
         return content if isinstance(content, str) else str(content)
 
     def get_model_name(self) -> str:
-        return JUDGE_ALIAS
+        return DEEPEVAL_JUDGE_ALIAS
 
     def supports_structured_outputs(self) -> bool:
         return True
@@ -225,6 +262,56 @@ def build_metrics(judge: Any) -> dict[str, Any]:
             async_mode=False,
         ),
     }
+
+
+def load_recall_goldens(path: Path = RECALL_GOLDENS_PATH) -> list[GoldenRecord]:
+    """Parse the recall golden set into ``GoldenRecord``s (QNT-275).
+
+    Each ``recall_reference`` is mapped onto ``reference_thesis`` so the existing
+    :func:`build_test_case` picks it up as DeepEval's ``expected_output`` with no
+    other change -- the recall reference IS the ground-truth answer the
+    ContextualRecallMetric attributes against the gathered reports. ``run_record``
+    runs the real agent and captures the retrieval context, exactly as for the
+    structured goldens; only the reference differs.
+
+    Validates ticker membership, unique ids, and required-field presence so the
+    set fails loudly on a malformed edit rather than silently judging fewer
+    records.
+    """
+    raw = yaml.safe_load(path.read_text())
+    rows = raw.get("recall") if isinstance(raw, dict) else None
+    if not isinstance(rows, list):
+        raise ValueError(f"{path}: missing top-level `recall` list")
+
+    records: list[GoldenRecord] = []
+    seen: set[str] = set()
+    for entry in rows:
+        if not isinstance(entry, dict):
+            raise ValueError(f"{path}: each record must be a mapping, got {type(entry)}")
+        try:
+            rec_id = str(entry["id"])
+            ticker = str(entry["ticker"])
+            question = str(entry["question"])
+            reference = str(entry["recall_reference"]).strip()
+        except KeyError as exc:
+            raise ValueError(f"{path}: record missing field {exc}") from exc
+        if rec_id in seen:
+            raise ValueError(f"{path}: duplicate record id {rec_id!r}")
+        if ticker not in TICKERS:
+            raise ValueError(f"{path}: record {rec_id!r} references unknown ticker {ticker!r}")
+        if not reference:
+            raise ValueError(f"{path}: record {rec_id!r} has an empty recall_reference")
+        seen.add(rec_id)
+        records.append(
+            GoldenRecord(
+                id=rec_id,
+                ticker=ticker,
+                question=question,
+                expected_tools=tuple(str(t) for t in entry.get("expected_tools", [])),
+                reference_thesis=reference,
+            )
+        )
+    return records
 
 
 def build_test_case(outcome: EvalOutcome) -> Any:
@@ -327,8 +414,13 @@ def run_sample(
     ``only`` filters to one ticker; ``sample`` caps the record count (the budget
     lever). Provider-error records (Groq quota / timeout) are skipped -- they
     carry no thesis to judge. Returns one :class:`DeepEvalCase` per scored record.
+
+    Reads the recall-appropriate golden set (QNT-275), NOT the structured
+    questions.yaml: the references here are attributable to the gathered reports,
+    so context_recall measures retrieval completeness instead of the shape-
+    reference artifact.
     """
-    records = load_goldens()
+    records = load_recall_goldens()
     if only is not None:
         wanted = only.upper()
         records = [r for r in records if r.ticker == wanted]
@@ -393,12 +485,39 @@ def append_deepeval_history(
     return rid
 
 
+def enforcement_enabled() -> bool:
+    """Whether the aggregate threshold gate is active (QNT-275 AC4).
+
+    ON by default now that the floors are re-derived against a measured baseline
+    (THRESHOLDS); set ``DEEPEVAL_ENFORCE_THRESHOLDS=0`` to downgrade to a soft
+    signal on a window you suspect is rate-limit / timeout contaminated.
+    """
+    return os.environ.get("DEEPEVAL_ENFORCE_THRESHOLDS", "1") != "0"
+
+
+def gate_failures(means: dict[str, float]) -> list[str]:
+    """Axes whose aggregate mean fell below its floor -- empty == pass (AC4).
+
+    Gates on the AGGREGATE mean, not a single record: a lone record's
+    context_precision can dip to ~0.5 (LLM-judge variance), so a per-record gate
+    would false-fail. A NaN mean (every measurement on that axis failed) is a
+    failure -- a blanked axis can't clear a floor.
+    """
+    failures: list[str] = []
+    for name, floor in THRESHOLDS.items():
+        value = means.get(name, float("nan"))
+        if not (value >= floor):  # also True when value is NaN
+            shown = "n/a" if value != value else round(value, 4)
+            failures.append(f"{name}={shown} < floor {floor}")
+    return failures
+
+
 def summarise(cases: list[DeepEvalCase], means: dict[str, float]) -> str:
     """Human-readable scorecard + threshold verdict for stdout / the README."""
     n = len(cases)
     grounding_ok = sum(1 for c in cases if c.grounding_ok)
     lines = [
-        f"DEEPEVAL GENERATION EVAL ({n} sampled records, judge={JUDGE_ALIAS}, LLM-judged)",
+        f"DEEPEVAL GENERATION EVAL ({n} sampled records, judge={DEEPEVAL_JUDGE_ALIAS}, LLM-judged)",
     ]
     for name in THRESHOLDS:
         value = means.get(name, float("nan"))
@@ -437,6 +556,19 @@ def main(argv: list[str] | None = None) -> int:
         rid = f"{timestamp}-{uuid.uuid4().hex[:6]}-deepeval"
         append_deepeval_history(means, n_cases=len(cases), run_id=rid)
         print(f"\nrecorded run_id: {rid}")
+
+    # AC4: the manual/local run is a real pass/fail gate on the aggregate. ON by
+    # default (DEEPEVAL_ENFORCE_THRESHOLDS); a regression below any re-derived
+    # floor exits non-zero. Set =0 to downgrade to a soft signal on a contaminated
+    # window. Still NOT a per-PR gate (the suite is off the hot path).
+    failures = gate_failures(means)
+    if failures and enforcement_enabled():
+        print(
+            "\nGATE: FAIL -- aggregate below floor (set DEEPEVAL_ENFORCE_THRESHOLDS=0 "
+            "to downgrade to soft signal):\n  " + "\n  ".join(failures),
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 
@@ -444,6 +576,7 @@ __all__ = [
     "DEFAULT_SAMPLE",
     "GEVAL_CRITERIA",
     "GEVAL_NAME",
+    "RECALL_GOLDENS_PATH",
     "THRESHOLDS",
     "DeepEvalCase",
     "LiteLLMJudge",
@@ -451,6 +584,9 @@ __all__ = [
     "append_deepeval_history",
     "build_metrics",
     "build_test_case",
+    "enforcement_enabled",
+    "gate_failures",
+    "load_recall_goldens",
     "precheck_environment",
     "run_sample",
     "score_outcome",

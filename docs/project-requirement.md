@@ -985,6 +985,15 @@ Additional eval layers:
 - LLM-judged generation eval (QNT-264): DeepEval RAGAS set + custom G-Eval, run
   off the per-PR hot path via `.github/workflows/llm-eval.yml`
   (nightly / `workflow_dispatch`), thresholds SOFT by default.
+  - Recall-appropriate goldens + enforcement (QNT-275): a dedicated recall golden
+    set (`goldens/deepeval_recall.yaml`) whose references are attributable to the
+    gathered reports, so `context_recall` is meaningful (it was a 0.29 artifact on
+    the shape-references). Floors re-derived against a measured baseline, then
+    enforcement flipped on against a **>=50-record** baseline (the design-doc
+    floor). The DeepEval judge runs on a paid OpenRouter model (DeepSeek V4 Flash)
+    so the judged baseline isn't bound by free-tier daily token ceilings — a full
+    >=50 run costs ~$0.18 and stays off the hot path (ADR-023). The dialogue /
+    golden judge stays on the free model.
 
 README-level model benchmark tables should be updated only when the benchmark
 set or production default changes.
