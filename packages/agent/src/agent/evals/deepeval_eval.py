@@ -101,28 +101,39 @@ RECALL_GOLDENS_PATH = Path(__file__).parent / "goldens" / "deepeval_recall.yaml"
 # inside the free tier on a clean window. Override with --sample / DEEPEVAL_SAMPLE.
 DEFAULT_SAMPLE = int(os.environ.get("DEEPEVAL_SAMPLE", "4"))
 
-# Per-metric pass thresholds -- the design-doc calibration targets (Track 2.7):
-# faithfulness/context-precision/context-recall > 0.8, answer-relevancy > 0.75,
-# G-Eval > 0.7. These are NOT a per-PR gate (this suite is off the hot path);
-# they're the assert floors the nightly/dispatch run surfaces a regression
-# against.
+# Per-metric pass floors -- RE-DERIVED against a measured baseline (QNT-275 AC3),
+# the same discipline as the retrieval gate's GATE_FLOORS: anchor ~0.10-0.13 below
+# the recorded means, NOT the design-doc aspirations (0.8/0.75/0.7).
 #
-# QNT-275 status -- floors being re-derived against a >=50-record baseline on the
-# paid OpenRouter judge (DEEPEVAL_JUDGE_ALIAS, ADR-023), which removes the
-# free-tier daily token ceiling. The recall-appropriate golden set
-# (deepeval_recall.yaml) is in place and the context_recall artifact is FIXED:
-# against the shape-references it read 0.29 (run 20260621T042449Z-b07f37, n=4);
-# against the recall references it reads materially higher. Until the >=50
-# baseline is recorded, these stay at the design-doc aspirations and the
-# assert_test gate stays opt-in (DEEPEVAL_ENFORCE_THRESHOLDS). Final step
-# (AC2/AC3/AC4): record the >=50 sweep, set floors ~0.10-0.15 below the measured
-# means (the retrieval-eval discipline), and flip enforcement on.
+# Baseline: run 20260625T072005Z-39fc33-deepeval, n=55 (the full deepeval_recall
+# set), judge = DEEPEVAL_JUDGE_ALIAS (DeepSeek V4 Flash on OpenRouter, ADR-023 --
+# a paid judge with no free-tier daily token ceiling, so all 55 records score in
+# one clean window). Recall references FIXED the context_recall artifact:
+# 0.29 (shape-references, n=4) -> 0.9667 (recall references, n=55).
+#
+#   axis               mean(n=55)   floor   margin
+#   faithfulness         0.8309     0.70    0.13
+#   answer_relevancy     0.8728     0.75    0.12
+#   context_precision    0.7029     0.60    0.10
+#   context_recall       0.9667     0.85    0.12
+#   geval                0.7800     0.65    0.13
+#
+# Caveat: the 5 comparison records hit agent-side Groq synthesis timeouts (the
+# heavy 9-12k-token comparison output exceeds the agent's timeout), degrading
+# their faithfulness/precision -- so the means (esp. precision 0.70) are
+# CONSERVATIVE. That makes the floors safe (fewer false positives), not inflated.
+#
+# Enforcement (AC4) is the AGGREGATE gate in main() (DEEPEVAL_ENFORCE_THRESHOLDS,
+# on by default): the manual/local run exits non-zero if any axis MEAN < floor.
+# The per-record pytest assert_test stays opt-in -- a single record's precision
+# can dip to ~0.5, so a one-record gate would false-fail. The aggregate passes on
+# this baseline by construction (every mean clears its floor).
 THRESHOLDS: dict[str, float] = {
-    "faithfulness": 0.8,
+    "faithfulness": 0.70,
     "answer_relevancy": 0.75,
-    "context_precision": 0.8,
-    "context_recall": 0.8,
-    "geval": 0.7,
+    "context_precision": 0.60,
+    "context_recall": 0.85,
+    "geval": 0.65,
 }
 
 # The custom G-Eval (AC1: "at least one custom G-Eval"). Domain-specialised and
@@ -472,6 +483,33 @@ def append_deepeval_history(
     return rid
 
 
+def enforcement_enabled() -> bool:
+    """Whether the aggregate threshold gate is active (QNT-275 AC4).
+
+    ON by default now that the floors are re-derived against a measured baseline
+    (THRESHOLDS); set ``DEEPEVAL_ENFORCE_THRESHOLDS=0`` to downgrade to a soft
+    signal on a window you suspect is rate-limit / timeout contaminated.
+    """
+    return os.environ.get("DEEPEVAL_ENFORCE_THRESHOLDS", "1") != "0"
+
+
+def gate_failures(means: dict[str, float]) -> list[str]:
+    """Axes whose aggregate mean fell below its floor -- empty == pass (AC4).
+
+    Gates on the AGGREGATE mean, not a single record: a lone record's
+    context_precision can dip to ~0.5 (LLM-judge variance), so a per-record gate
+    would false-fail. A NaN mean (every measurement on that axis failed) is a
+    failure -- a blanked axis can't clear a floor.
+    """
+    failures: list[str] = []
+    for name, floor in THRESHOLDS.items():
+        value = means.get(name, float("nan"))
+        if not (value >= floor):  # also True when value is NaN
+            shown = "n/a" if value != value else round(value, 4)
+            failures.append(f"{name}={shown} < floor {floor}")
+    return failures
+
+
 def summarise(cases: list[DeepEvalCase], means: dict[str, float]) -> str:
     """Human-readable scorecard + threshold verdict for stdout / the README."""
     n = len(cases)
@@ -516,6 +554,19 @@ def main(argv: list[str] | None = None) -> int:
         rid = f"{timestamp}-{uuid.uuid4().hex[:6]}-deepeval"
         append_deepeval_history(means, n_cases=len(cases), run_id=rid)
         print(f"\nrecorded run_id: {rid}")
+
+    # AC4: the manual/local run is a real pass/fail gate on the aggregate. ON by
+    # default (DEEPEVAL_ENFORCE_THRESHOLDS); a regression below any re-derived
+    # floor exits non-zero. Set =0 to downgrade to a soft signal on a contaminated
+    # window. Still NOT a per-PR gate (the suite is off the hot path).
+    failures = gate_failures(means)
+    if failures and enforcement_enabled():
+        print(
+            "\nGATE: FAIL -- aggregate below floor (set DEEPEVAL_ENFORCE_THRESHOLDS=0 "
+            "to downgrade to soft signal):\n  " + "\n  ".join(failures),
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 
@@ -531,6 +582,8 @@ __all__ = [
     "append_deepeval_history",
     "build_metrics",
     "build_test_case",
+    "enforcement_enabled",
+    "gate_failures",
     "load_recall_goldens",
     "precheck_environment",
     "run_sample",

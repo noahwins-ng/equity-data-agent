@@ -20,8 +20,6 @@ Two layers:
 
 from __future__ import annotations
 
-import os
-
 import pytest
 from agent.evals import deepeval_eval as de
 from agent.evals.golden_set import HISTORY_FIELDS, run_record
@@ -118,6 +116,51 @@ def test_history_append_blanks_nan_axis(tmp_path) -> None:
     assert row["deepeval_n"] == "4"
 
 
+# --- AC3/AC4: re-derived floors + aggregate gate (offline) ----------------------
+
+# The recorded baseline means (run 20260625T072005Z-39fc33-deepeval, n=55, judge
+# DeepSeek V4 Flash) the floors were derived from. Pinning them here turns a future
+# THRESHOLDS edit that crosses the measured baseline into a red test.
+_BASELINE_MEANS = {
+    "faithfulness": 0.8309,
+    "answer_relevancy": 0.8728,
+    "context_precision": 0.7029,
+    "context_recall": 0.9667,
+    "geval": 0.7800,
+}
+
+
+def test_floors_were_rederived_below_baseline() -> None:
+    """AC3: every floor sits below its measured-baseline mean (a regression
+    tripwire, not an unreachable aspiration) with real margin (~0.05-0.15)."""
+    for name, mean in _BASELINE_MEANS.items():
+        floor = de.THRESHOLDS[name]
+        assert floor < mean, f"{name} floor {floor} >= baseline mean {mean}"
+        assert mean - floor <= 0.2, f"{name} floor {floor} too far below mean {mean}"
+
+
+def test_aggregate_gate_passes_on_baseline() -> None:
+    """AC4: the recorded baseline clears every floor -- the enforcement gate is a
+    real pass on the calibration run, not a gate nothing can satisfy."""
+    assert de.gate_failures(_BASELINE_MEANS) == []
+
+
+def test_aggregate_gate_catches_regression() -> None:
+    """AC4: a mean below a floor (or a NaN/blanked axis) is reported as a failure."""
+    bad = {**_BASELINE_MEANS, "context_recall": 0.50}
+    failures = de.gate_failures(bad)
+    assert any("context_recall" in f for f in failures)
+    assert de.gate_failures({**_BASELINE_MEANS, "geval": float("nan")})
+
+
+def test_enforcement_on_by_default(monkeypatch) -> None:
+    """AC4: enforcement is ON by default (floors are trustworthy), opt-out via =0."""
+    monkeypatch.delenv("DEEPEVAL_ENFORCE_THRESHOLDS", raising=False)
+    assert de.enforcement_enabled() is True
+    monkeypatch.setenv("DEEPEVAL_ENFORCE_THRESHOLDS", "0")
+    assert de.enforcement_enabled() is False
+
+
 # --- recall golden set (QNT-275; offline, no stack) -----------------------------
 
 
@@ -203,9 +246,8 @@ def test_live_deepeval_sample_judged() -> None:
     for name in de.THRESHOLDS:
         score = case.scores.get(name, float("nan"))
         assert score == score, f"metric {name} did not produce a score"
-
-    # Opt-in hard gate: DeepEval's canonical pytest-native ``assert_test``.
-    if os.environ.get("DEEPEVAL_ENFORCE_THRESHOLDS"):
-        from deepeval import assert_test
-
-        assert_test(de.build_test_case(outcome), list(metrics.values()))
+    # AC4 enforcement is the AGGREGATE gate (de.gate_failures in the CLI main),
+    # NOT a per-record assert_test here: a single record's context_precision can
+    # dip to ~0.5 (LLM-judge variance) and would false-fail the floor, so this
+    # smoke test asserts only that the judged path PRODUCES scores. The real
+    # pass/fail runs over the >=50-record mean via `python -m agent.evals.deepeval_eval`.
