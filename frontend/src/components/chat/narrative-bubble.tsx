@@ -11,7 +11,7 @@ export function NarrativeBubble({ text }: { text: string }) {
   if (!text.trim()) return null;
   return (
     <div className="rounded border border-zinc-800 bg-zinc-900/40 px-3 py-2">
-      <ProseBlock text={text} />
+      <ProseBlock text={text} rich />
     </div>
   );
 }

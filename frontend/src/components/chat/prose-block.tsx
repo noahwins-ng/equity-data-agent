@@ -3,49 +3,64 @@
 // The synthesis prompt produces inline citations like `(source: technical)`
 // and free-text values inside the prose. The chat-panel design wants
 // "value · source · date" chips. We surface the citation as a chip rendered
-// in monospaced muted style; the prose author chooses how dense to be.
-// Falls back gracefully when no chip-shaped tokens are present.
+// in monospaced muted style.
+//
+// QNT-285: the narrate bubble opts into a BLUF shape via `rich` — a **bold**
+// call, a blank line, synthesis prose, and an optional "Watch:" line. Without
+// `rich` (every other card) the output is unchanged: one <p>, chips only, no
+// bold, newlines collapsed — keeping the change scoped to the narrate bubble
+// and avoiding a block element inside the inline contexts those callers use.
 
-const CHIP_PATTERN = /\(source:\s*([A-Za-z|\s]+)\)/g;
+import { type ProseSegment, parseInlineChips, parseProse } from "./prose-parse";
 
-type ProseSegment = { type: "text"; text: string } | { type: "chip"; text: string };
-
-function splitProseIntoSegments(text: string): ProseSegment[] {
-  if (!text) return [];
-  const segments: ProseSegment[] = [];
-  let lastIdx = 0;
-  for (const match of text.matchAll(CHIP_PATTERN)) {
-    const matchStart = match.index ?? 0;
-    if (matchStart > lastIdx) {
-      segments.push({ type: "text", text: text.slice(lastIdx, matchStart) });
-    }
-    segments.push({ type: "chip", text: match[1].trim() });
-    lastIdx = matchStart + match[0].length;
+function renderSegment(seg: ProseSegment, key: number) {
+  if (seg.type === "chip") {
+    return (
+      <span
+        key={key}
+        className="mx-0.5 inline-block rounded border border-zinc-700 bg-zinc-900 px-1 py-px font-mono text-[10px] uppercase tracking-wide text-zinc-400"
+        title="cited source"
+      >
+        {seg.text}
+      </span>
+    );
   }
-  if (lastIdx < text.length) {
-    segments.push({ type: "text", text: text.slice(lastIdx) });
+  if (seg.type === "bold") {
+    return (
+      <strong key={key} className="font-semibold text-zinc-100">
+        {seg.text}
+      </strong>
+    );
   }
-  return segments;
+  return <span key={key}>{seg.text}</span>;
 }
 
-export function ProseBlock({ text }: { text: string }) {
+export function ProseBlock({ text, rich = false }: { text: string; rich?: boolean }) {
   if (!text.trim()) return null;
-  const segments = splitProseIntoSegments(text);
+
+  if (!rich) {
+    const segments = parseInlineChips(text);
+    return (
+      <p className="text-xs leading-relaxed text-zinc-200">
+        {segments.map((seg, i) => renderSegment(seg, i))}
+      </p>
+    );
+  }
+
+  const blocks = parseProse(text);
+  if (blocks.length === 0) return null;
   return (
-    <p className="text-xs leading-relaxed text-zinc-200">
-      {segments.map((seg, i) =>
-        seg.type === "chip" ? (
-          <span
-            key={i}
-            className="mx-0.5 inline-block rounded border border-zinc-700 bg-zinc-900 px-1 py-px font-mono text-[10px] uppercase tracking-wide text-zinc-400"
-            title="cited source"
-          >
-            {seg.text}
-          </span>
-        ) : (
-          <span key={i}>{seg.text}</span>
-        ),
-      )}
-    </p>
+    <div className="space-y-2">
+      {blocks.map((lines, bi) => (
+        <p key={bi} className="text-xs leading-relaxed text-zinc-200">
+          {lines.map((segments, li) => (
+            <span key={li}>
+              {li > 0 && <br />}
+              {segments.map((seg, si) => renderSegment(seg, si))}
+            </span>
+          ))}
+        </p>
+      ))}
+    </div>
   );
 }

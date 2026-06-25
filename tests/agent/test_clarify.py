@@ -516,10 +516,11 @@ def test_clarify_prompt_offers_url_context_ticker() -> None:
 
 @pytest.mark.parametrize(
     "intent",
-    ["thesis", "comparison", "followup", "fundamental", "technical", "news"],
+    ["thesis", "comparison", "followup", "news"],
 )
-def test_narrate_prompt_non_clarify_keeps_probe_close(intent: str) -> None:
-    """Substantive narrations get the forward-looking probe close."""
+def test_narrate_prompt_forward_intents_offer_optional_watch(intent: str) -> None:
+    """QNT-285: forward-looking narrations carry the optional catalyst-gated
+    Watch close (replacing the old always-on probe close)."""
     from agent.prompts.system import build_narrate_prompt
 
     msgs = build_narrate_prompt(
@@ -530,20 +531,33 @@ def test_narrate_prompt_non_clarify_keeps_probe_close(intent: str) -> None:
         is_clarify=False,
     )
     rendered = "\n".join(str(getattr(m, "content", m)) for m in msgs)
-    assert "Close with one concrete forward-looking" in rendered
-    assert "must not end in a question mark" not in rendered
+    assert 'begins "Watch:"' in rendered
+    # The close is explicitly optional, not forced -- this is the de-bloat lever.
+    assert "is optional" in rendered
 
 
-def test_narrate_prompt_exploration_excludes_probe_close() -> None:
-    """Exploration owns broad discovery and intentionally skips the forced close."""
+@pytest.mark.parametrize("intent", ["exploration", "technical", "fundamental"])
+def test_narrate_prompt_excludes_watch_close(intent: str) -> None:
+    """QNT-285: exploration (broad discovery) and single-lens technical /
+    fundamental (call + one driver) get no Watch close at all."""
     from agent.prompts.system import build_narrate_prompt
 
     msgs = build_narrate_prompt(
-        intent="exploration",
+        intent=intent,
         ticker="NVDA",
-        question="what's interesting about NVDA?",
+        question="what's the read on NVDA?",
         payload_markdown="Interesting setup.",
         is_clarify=False,
     )
     rendered = "\n".join(str(getattr(m, "content", m)) for m in msgs)
-    assert "Close with one concrete forward-looking" not in rendered
+    assert 'begins "Watch:"' not in rendered
+
+
+def test_narrate_prompt_uses_bluf_structure() -> None:
+    """QNT-285 AC1: the narrate prompt instructs a bold lead call + synthesis
+    prose (not a single bloated paragraph)."""
+    from agent.prompts.system import NARRATE_SYSTEM_PROMPT
+
+    assert "BLUF" in NARRATE_SYSTEM_PROMPT
+    assert "double asterisks" in NARRATE_SYSTEM_PROMPT
+    assert "Synthesise, do not list" in NARRATE_SYSTEM_PROMPT
