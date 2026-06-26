@@ -66,9 +66,16 @@ export function ThesisCard({
                 <span>Answer groundedness</span>
                 <span>{confidencePct}%</span>
               </div>
+              {/* QNT-286: filled in zinc, not sky. `sky` is the reserved
+                  "SPY benchmark" hue (the SPY price-chart line + chip and the
+                  focused-read accent); a groundedness meter has nothing to do
+                  with the benchmark, so borrowing sky here was a semantic
+                  collision. Neutral zinc reads as a plain quality gauge.
+                  (Brand-vs-gain emerald overlap was reviewed and kept: green
+                  == "up" is a terminal convention a green brand reinforces.) */}
               <div className="h-1 w-full overflow-hidden rounded bg-zinc-800">
                 <div
-                  className="h-full bg-sky-500"
+                  className="h-full bg-zinc-400"
                   style={{ width: `${confidencePct}%` }}
                 />
               </div>
