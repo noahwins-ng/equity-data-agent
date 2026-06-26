@@ -104,7 +104,7 @@ export default async function Home() {
   const hasMovers = gainers.length > 0 || losers.length > 0;
 
   return (
-    <div className="mx-auto flex h-full w-full max-w-3xl flex-col justify-center gap-10 p-6 md:p-10">
+    <div className="mx-auto flex h-full w-full max-w-3xl flex-col justify-start gap-10 p-6 pt-12 md:p-10 md:pt-20">
       <header className="space-y-2">
         <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">
           Market overview

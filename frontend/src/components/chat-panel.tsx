@@ -205,10 +205,42 @@ function EmptyState({
   onSuggestion: (q: string) => void;
 }) {
   if (!ticker) {
+    // QNT-286: the landing (no-ticker) rail used to be a single centred line,
+    // which read as an empty third of the screen on first load. Fill it with a
+    // real empty-state — what the analyst is and what it can do — so the panel
+    // looks intentional before any click. The capability list is illustrative,
+    // not clickable: the composer is disabled until a ticker is picked, so the
+    // closing line is the actionable cue. Mirrors the ticker EmptyState below.
     return (
-      <div className="flex h-full items-center justify-center px-6 text-center">
-        <p className="text-xs text-zinc-500">
-          Pick a ticker from the watchlist to start a research session.
+      <div className="flex h-full flex-col justify-center gap-4 px-4 py-6">
+        <div className="space-y-1">
+          <p className="text-sm font-medium text-zinc-200">Research analyst</p>
+          <p className="text-xs leading-relaxed text-zinc-500">
+            An agent that reads pre-computed reports across the portfolio and
+            synthesises an investment thesis — fundamentals, technicals, and
+            news — with every claim cited to its source.
+          </p>
+        </div>
+        <div className="space-y-1.5">
+          <p className="font-mono text-[10px] uppercase tracking-wider text-zinc-600">
+            What you can ask
+          </p>
+          <ul className="space-y-1 text-xs text-zinc-400">
+            {[
+              "A balanced thesis with an Overweight / Neutral / Underweight call",
+              "A focused read on the technicals",
+              "A walk through the fundamentals",
+              "The latest news and how it lands",
+            ].map((line) => (
+              <li key={line} className="flex gap-2">
+                <span className="select-none text-zinc-600">·</span>
+                <span className="min-w-0 flex-1">{line}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <p className="font-mono text-[10px] uppercase tracking-wider text-zinc-600">
+          Pick a ticker from the watchlist to begin
         </p>
       </div>
     );

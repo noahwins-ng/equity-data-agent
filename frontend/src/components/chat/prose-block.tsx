@@ -15,10 +15,16 @@ import { type ProseSegment, parseInlineChips, parseProse } from "./prose-parse";
 
 function renderSegment(seg: ProseSegment, key: number) {
   if (seg.type === "chip") {
+    // QNT-286: borderless. The bordered pill read as a "ransom-note"
+    // interruption when it landed mid-sentence every few lines across the
+    // synthesis prose. Dropping the box/border/fill is what de-noises it — the
+    // citation recedes into the prose instead of boxing out of it. Tone holds
+    // at zinc-400 / 10px so the supplementary label still clears WCAG AA
+    // contrast (a dimmer/smaller tier fell below 4.5:1 on the card grounds).
     return (
       <span
         key={key}
-        className="mx-0.5 inline-block rounded border border-zinc-700 bg-zinc-900 px-1 py-px font-mono text-[10px] uppercase tracking-wide text-zinc-400"
+        className="mx-0.5 font-mono text-[10px] uppercase tracking-wide text-zinc-400"
         title="cited source"
       >
         {seg.text}
