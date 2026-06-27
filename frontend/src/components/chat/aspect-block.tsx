@@ -3,6 +3,7 @@
 import type { AspectLabel, AspectView } from "@/lib/api";
 
 import { ProseBlock } from "./prose-block";
+import type { DedupeState } from "./prose-parse";
 
 // Per-aspect label chip palette. Premium / Uptrend = green; Discounted /
 // Downtrend = red; Inline / Sideways = zinc; null label = no chip rendered.
@@ -29,6 +30,14 @@ function aspectWasFetched(aspect: AspectView): boolean {
 
 export function AspectBlock({ title, aspect }: { title: string; aspect: AspectView }) {
   if (!aspectWasFetched(aspect)) return null;
+  // QNT-287: one de-dup carrier shared across this aspect's summary + bullets.
+  // An aspect is single-source by construction (the News aspect cites news,
+  // etc.) and the header already names it, so the inline chip repeats on every
+  // line. Threading one carrier through the summary then each support/challenge
+  // ProseBlock — which render in order — collapses it to a single chip. The
+  // carrier is recreated on every AspectBlock render, so the threading stays
+  // deterministic across re-renders.
+  const dedupe: DedupeState = { last: null };
   return (
     <div>
       <div className="mb-1 flex items-baseline gap-2">
@@ -43,14 +52,14 @@ export function AspectBlock({ title, aspect }: { title: string; aspect: AspectVi
           </span>
         )}
       </div>
-      <ProseBlock text={aspect.summary} />
+      <ProseBlock text={aspect.summary} dedupe={dedupe} />
       {aspect.supports.length > 0 && (
         <ul className="mt-1 space-y-0.5 text-xs text-zinc-200">
           {aspect.supports.map((point, i) => (
             <li key={`s-${i}`} className="flex gap-1">
               <span className="text-emerald-500">+</span>
               <span className="min-w-0 flex-1">
-                <ProseBlock text={point} />
+                <ProseBlock text={point} dedupe={dedupe} />
               </span>
             </li>
           ))}
@@ -62,7 +71,7 @@ export function AspectBlock({ title, aspect }: { title: string; aspect: AspectVi
             <li key={`c-${i}`} className="flex gap-1">
               <span className="text-amber-500">·</span>
               <span className="min-w-0 flex-1">
-                <ProseBlock text={point} />
+                <ProseBlock text={point} dedupe={dedupe} />
               </span>
             </li>
           ))}

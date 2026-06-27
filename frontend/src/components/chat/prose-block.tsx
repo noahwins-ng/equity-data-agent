@@ -11,7 +11,7 @@
 // bold, newlines collapsed — keeping the change scoped to the narrate bubble
 // and avoiding a block element inside the inline contexts those callers use.
 
-import { type ProseSegment, parseInlineChips, parseProse } from "./prose-parse";
+import { type DedupeState, type ProseSegment, parseInlineChips, parseProse } from "./prose-parse";
 
 function renderSegment(seg: ProseSegment, key: number) {
   if (seg.type === "chip") {
@@ -41,11 +41,24 @@ function renderSegment(seg: ProseSegment, key: number) {
   return <span key={key}>{seg.text}</span>;
 }
 
-export function ProseBlock({ text, rich = false }: { text: string; rich?: boolean }) {
+// QNT-287: `dedupe` is an optional shared carrier. AspectBlock passes one
+// across its summary + bullet ProseBlocks so a single-source aspect de-dups to
+// one chip; every other caller omits it and de-dups within its own text. Only
+// the non-rich path threads it — the rich (narrate) bubble is a single
+// ProseBlock whose parseProse already de-dups across its own paragraphs.
+export function ProseBlock({
+  text,
+  rich = false,
+  dedupe,
+}: {
+  text: string;
+  rich?: boolean;
+  dedupe?: DedupeState;
+}) {
   if (!text.trim()) return null;
 
   if (!rich) {
-    const segments = parseInlineChips(text);
+    const segments = parseInlineChips(text, dedupe);
     return (
       <p className="text-xs leading-relaxed text-zinc-200">
         {segments.map((seg, i) => renderSegment(seg, i))}

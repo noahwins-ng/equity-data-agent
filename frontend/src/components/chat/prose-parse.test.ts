@@ -8,7 +8,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { parseInlineChips, parseProse } from "./prose-parse.ts";
+import { type DedupeState, parseInlineChips, parseProse } from "./prose-parse.ts";
+
+const chipTexts = (segs: { type: string; text: string }[]) =>
+  segs.filter((s) => s.type === "chip").map((s) => s.text);
 
 test("empty / whitespace text parses to no blocks", () => {
   assert.deepEqual(parseProse(""), []);
@@ -83,4 +86,65 @@ test("bold and chip coexist across a realistic BLUF take", () => {
   assert.equal(blocks[1].length, 2);
   const chipCount = blocks[1][0].filter((s) => s.type === "chip").length;
   assert.equal(chipCount, 2);
+});
+
+// ─── QNT-287: consecutive same-source de-duplication ──────────────────────
+
+test("consecutive same-source chips collapse to the first (parseInlineChips)", () => {
+  const segs = parseInlineChips(
+    "Earnings beat (source: news). Buyback announced (source: news). Guidance raised (source: news).",
+  );
+  assert.deepEqual(chipTexts(segs), ["news"], "only the first NEWS chip survives");
+});
+
+test("a source transition still shows every chip (no over-collapsing)", () => {
+  const segs = parseInlineChips(
+    "Cheap (source: fundamental), trending up (source: technical), and well covered (source: fundamental).",
+  );
+  assert.deepEqual(chipTexts(segs), ["fundamental", "technical", "fundamental"]);
+});
+
+test("de-dup is case/whitespace-insensitive on the source name", () => {
+  const segs = parseInlineChips("a (source: News) b (source: news ) c (source:  NEWS )");
+  assert.deepEqual(chipTexts(segs), ["News"]);
+});
+
+test("dropping a duplicate chip leaves no orphan space or double space", () => {
+  // The 2nd `(source: news)` is dropped; its preceding text (". Again ") must
+  // lose the trailing space so the tail doesn't read ". Again ." Rendering
+  // chips as their text models the real inline adjacency.
+  const segs = parseInlineChips("First (source: news). Again (source: news).");
+  const rendered = segs.map((s) => s.text).join("");
+  assert.equal(rendered, "First news. Again.");
+});
+
+test("back-to-back same-source chips collapse with no intervening text", () => {
+  // The 2nd chip's preceding segment is the 1st chip (not text), so the trim is
+  // correctly skipped and nothing crashes — the duplicate just drops.
+  const segs = parseInlineChips("Cited twice (source: news)(source: news) here.");
+  assert.deepEqual(chipTexts(segs), ["news"]);
+  assert.equal(
+    segs.map((s) => s.text).join(""),
+    "Cited twice news here.",
+  );
+});
+
+test("de-dup spans paragraphs in the synthesis bubble (parseProse)", () => {
+  const text =
+    "Valuation is rich (source: fundamental).\n\nMargins are contracting (source: fundamental).";
+  const blocks = parseProse(text);
+  const allChips = blocks.flatMap((b) => b.flatMap((line) => chipTexts(line)));
+  assert.deepEqual(allChips, ["fundamental"], "the second-paragraph repeat collapses");
+});
+
+test("a shared carrier de-dups across calls (the AspectBlock summary+bullets case)", () => {
+  // AspectBlock threads ONE carrier through its summary then each bullet, which
+  // render in order — so a single-source aspect shows one chip total.
+  const carrier: DedupeState = { last: null };
+  const summary = parseInlineChips("Mixed sentiment in the headlines (source: news).", carrier);
+  const bullet1 = parseInlineChips("Wedbush sees opportunity (source: news).", carrier);
+  const bullet2 = parseInlineChips("Stock down 25% YTD (source: news).", carrier);
+  assert.deepEqual(chipTexts(summary), ["news"], "summary keeps the first chip");
+  assert.deepEqual(chipTexts(bullet1), [], "same-source bullet drops its chip");
+  assert.deepEqual(chipTexts(bullet2), [], "and the next one too");
 });
