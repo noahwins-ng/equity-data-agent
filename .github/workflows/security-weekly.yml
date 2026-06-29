@@ -39,7 +39,7 @@ jobs:
           - grafana/grafana:11.3.0
           - python:3.12-slim
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Slugify image name
         id: slug
