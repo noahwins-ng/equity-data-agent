@@ -50,6 +50,19 @@ class TestExtractNumbers:
         text = "## 1. Overview\n## 2. Technical\nThe RSI is 72.5."
         assert extract_numbers(text) == frozenset({"72.5"})
 
+    def test_citation_anchor_id_is_not_a_number(self) -> None:
+        # QNT-301: an anchored retrieved-source citation "(source: news R1)" glues
+        # the id digit to the "R", so the left-boundary lookbehind rejects it --
+        # the anchor id must never read as a numeric claim (which would flag a
+        # clean answer as hallucinated). Docstring's "letters, not digits" note
+        # now covers the R-prefixed id form too.
+        assert extract_numbers("Buyback expanded (source: news R1).") == frozenset()
+        # The bare bracketed form the narrate voice emits ("...deal [R2]...") is
+        # equally safe -- the digit is still glued to the R.
+        assert extract_numbers("The Firmus deal expanded reach [R2].") == frozenset()
+        # And the anchor doesn't swallow or taint a real number beside it.
+        assert extract_numbers("RSI is 72.5 (source: technical R2).") == frozenset({"72.5"})
+
 
 class TestPeriodIdiom:
     """Time-window labels ("5-year low", "52-week high") are not numeric claims.

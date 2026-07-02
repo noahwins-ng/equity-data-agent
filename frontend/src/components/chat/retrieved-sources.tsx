@@ -21,26 +21,49 @@ export function RetrievedSources({ sources }: { sources: RetrievedSource[] }) {
       </h3>
       <ul className="space-y-0.5">
         {sources.map((src, i) => (
-          <li key={`${src.url || src.headline}-${i}`}>
+          <li
+            // QNT-301: `data-source-id` is the jump target an anchored inline
+            // citation (`(source: news R1)`) scrolls to; `scroll-mt-2` keeps the
+            // row off the top edge when centred, and `rounded` lets the flash
+            // ring wrap the whole row.
+            key={`${src.url || src.headline}-${i}`}
+            data-source-id={src.id}
+            tabIndex={-1}
+            className="scroll-mt-2 rounded transition"
+          >
             {src.url ? (
               <a
                 href={src.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="group flex flex-col rounded px-1 py-1 transition hover:bg-zinc-900 focus-visible:bg-zinc-900 focus-visible:outline-none"
+                className="group flex items-baseline gap-1.5 rounded px-1 py-1 transition hover:bg-zinc-900 focus-visible:bg-zinc-900 focus-visible:outline-none"
               >
-                <span className="text-xs text-zinc-200 group-hover:text-emerald-300">
-                  {src.headline}
-                </span>
-                <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">
-                  {[src.source, src.date].filter(Boolean).join(" · ")}
+                {src.id && (
+                  <span className="mt-px shrink-0 font-mono text-[10px] uppercase tracking-wider text-emerald-400/80">
+                    {src.id}
+                  </span>
+                )}
+                <span className="flex min-w-0 flex-col">
+                  <span className="text-xs text-zinc-200 group-hover:text-emerald-300">
+                    {src.headline}
+                  </span>
+                  <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+                    {[src.source, src.date].filter(Boolean).join(" · ")}
+                  </span>
                 </span>
               </a>
             ) : (
-              <div className="flex flex-col px-1 py-1">
-                <span className="text-xs text-zinc-200">{src.headline}</span>
-                <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">
-                  {[src.source, src.date].filter(Boolean).join(" · ")}
+              <div className="flex items-baseline gap-1.5 px-1 py-1">
+                {src.id && (
+                  <span className="mt-px shrink-0 font-mono text-[10px] uppercase tracking-wider text-emerald-400/80">
+                    {src.id}
+                  </span>
+                )}
+                <span className="flex min-w-0 flex-col">
+                  <span className="text-xs text-zinc-200">{src.headline}</span>
+                  <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+                    {[src.source, src.date].filter(Boolean).join(" · ")}
+                  </span>
                 </span>
               </div>
             )}

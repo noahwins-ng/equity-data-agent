@@ -1067,7 +1067,7 @@ def _truncate_body(body: str, max_chars: int = _NEWS_BODY_MAX_CHARS) -> str:
     return f"{cut}..."
 
 
-def _format_search_hits(raw: str) -> str:
+def _format_search_hits(raw: str, start_id: int = 1) -> str:
     """QNT-222/225: render ``search_news`` JSON rows into a news-report-shaped block.
 
     ``search_news`` returns ``json.dumps([{headline, source, date, score, url,
@@ -1080,6 +1080,14 @@ def _format_search_hits(raw: str) -> str:
     reads the story, not just the title -- empty for points embedded before
     QNT-225 until they roll out of the 7-day window. Returns ``""`` when there
     is nothing usable so the caller can skip the merge entirely.
+
+    QNT-301: each kept bullet is stamped with a stable ``[Rn]`` tag (n counts
+    from ``start_id`` in retrieved_sources order) so the synthesis can anchor a
+    claim to a specific retrieved row -- ``(source: news R1)``. The digit is
+    glued to the ``R`` so the hallucination detector's left-boundary lookbehind
+    never reads it as a numeric claim (see :mod:`agent.evals.hallucination`).
+    The tag stays aligned with :func:`_parse_search_sources` because both iterate
+    the same rows with the same skip logic and the same ``start_id``.
     """
     try:
         rows = json.loads(raw)
@@ -1088,25 +1096,33 @@ def _format_search_hits(raw: str) -> str:
     if not isinstance(rows, list) or not rows:
         return ""
     lines: list[str] = []
+    idx = start_id
     for row in rows:
         if not isinstance(row, dict):
             continue
-        headline = str(row.get("headline", "")).strip()
+        # QNT-301: use the same ``or ""`` extraction as _parse_search_sources so a
+        # null/missing headline is skipped IDENTICALLY here and there. ``row.get(k,
+        # "")`` returns None for an explicit JSON null (default only fires on an
+        # absent key), and ``str(None)`` is the truthy "None" -- which would keep a
+        # row the parser skips, drifting every subsequent [Rn] tag out of sync with
+        # its source id.
+        headline = str(row.get("headline") or "").strip()
         if not headline:
             continue
-        date = str(row.get("date", "")).strip()
-        source = str(row.get("source", "")).strip()
+        date = str(row.get("date") or "").strip()
+        source = str(row.get("source") or "").strip()
         meta = ", ".join(part for part in (source, date) if part)
-        lines.append(f"- {headline}" + (f" ({meta})" if meta else ""))
+        lines.append(f"- [R{idx}] {headline}" + (f" ({meta})" if meta else ""))
         body = _truncate_body(str(row.get("body", "")))
         if body:
             lines.append(f"  {body}")
+        idx += 1
     if not lines:
         return ""
     return f"## {RETRIEVED_NEWS_HEADING}\n" + "\n".join(lines)
 
 
-def _parse_search_sources(raw: str) -> list[dict[str, str]]:
+def _parse_search_sources(raw: str, start_id: int = 1) -> list[dict[str, str]]:
     """QNT-226: extract ``{headline, source, date, url}`` rows from ``search_news`` JSON.
 
     Mirrors :func:`_format_search_hits` parsing but keeps the structured fields
@@ -1114,6 +1130,10 @@ def _parse_search_sources(raw: str) -> list[dict[str, str]]:
     provenance list. ``search_news`` returns ``"[]"`` on every degraded path, so
     a bad/empty payload yields ``[]`` and the caller surfaces no sources. Rows
     with no headline are skipped (nothing to render).
+
+    QNT-301: each row carries the same ``id`` (``R{n}``, from ``start_id``) the
+    folded block stamps on its matching bullet, so a claim citing ``(source:
+    news R1)`` links to this row in the frontend provenance list.
     """
     try:
         rows = json.loads(raw)
@@ -1122,6 +1142,7 @@ def _parse_search_sources(raw: str) -> list[dict[str, str]]:
     if not isinstance(rows, list):
         return []
     sources: list[dict[str, str]] = []
+    idx = start_id
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -1130,6 +1151,9 @@ def _parse_search_sources(raw: str) -> list[dict[str, str]]:
             continue
         sources.append(
             {
+                # QNT-301: stable claim-anchor id, aligned with the [Rn] tag in
+                # the folded prompt block.
+                "id": f"R{idx}",
                 "headline": headline,
                 "source": str(row.get("source") or "").strip(),
                 "date": str(row.get("date") or "").strip(),
@@ -1139,10 +1163,11 @@ def _parse_search_sources(raw: str) -> list[dict[str, str]]:
                 "corpus": "news",
             }
         )
+        idx += 1
     return sources
 
 
-def _format_earnings_hits(raw: str) -> str:
+def _format_earnings_hits(raw: str, start_id: int = 1) -> str:
     """QNT-263: render ``search_earnings`` JSON rows into a report-shaped block.
 
     ``search_earnings`` returns ``json.dumps([{title, section, date, score, url,
@@ -1151,6 +1176,11 @@ def _format_earnings_hits(raw: str) -> str:
     text indented under it, mirroring :func:`_format_search_hits` so the block
     folds cleanly into the fundamental report the synthesis already consumes.
     Returns ``""`` when there is nothing usable so the caller can skip the merge.
+
+    QNT-301: each kept bullet carries a ``[Rn]`` tag (from ``start_id``) aligned
+    with :func:`_parse_earnings_sources` -- see :func:`_format_search_hits`. The
+    earnings fold runs after the news fold, so ``start_id`` is offset past the
+    news hits and the combined retrieved_sources list stays ``R1..Rn`` gap-free.
     """
     try:
         rows = json.loads(raw)
@@ -1159,28 +1189,33 @@ def _format_earnings_hits(raw: str) -> str:
     if not isinstance(rows, list) or not rows:
         return ""
     lines: list[str] = []
+    idx = start_id
     for row in rows:
         if not isinstance(row, dict):
             continue
-        title = str(row.get("title", "")).strip()
-        section = str(row.get("section", "")).strip()
+        # QNT-301: ``or ""`` extraction mirrors _parse_earnings_sources so a
+        # null/missing title+section is skipped identically -- otherwise
+        # ``str(None)`` ("None") keeps a row the parser drops and drifts the ids.
+        title = str(row.get("title") or "").strip()
+        section = str(row.get("section") or "").strip()
         if not title and not section:
             continue
-        date = str(row.get("date", "")).strip()
+        date = str(row.get("date") or "").strip()
         head = title or section
         meta = ", ".join(part for part in (section if title else "", date) if part)
-        lines.append(f"- {head}" + (f" ({meta})" if meta else ""))
+        lines.append(f"- [R{idx}] {head}" + (f" ({meta})" if meta else ""))
         # QNT-276: earnings preserves close to the full ~900-char chunk (vs the
         # 280-char news budget) so the 8-K guidance paragraph reaches the LLM.
         text = _truncate_body(str(row.get("text", "")), _EARNINGS_BODY_MAX_CHARS)
         if text:
             lines.append(f"  {text}")
+        idx += 1
     if not lines:
         return ""
     return f"## {RETRIEVED_EARNINGS_HEADING}\n" + "\n".join(lines)
 
 
-def _parse_earnings_sources(raw: str) -> list[dict[str, str]]:
+def _parse_earnings_sources(raw: str, start_id: int = 1) -> list[dict[str, str]]:
     """QNT-263: extract corpus-tagged provenance rows from ``search_earnings`` JSON.
 
     Mirrors :func:`_parse_search_sources` but maps the earnings-chunk shape onto
@@ -1189,6 +1224,10 @@ def _parse_earnings_sources(raw: str) -> list[dict[str, str]]:
     tags ``corpus="earnings"`` so the frontend can label which corpus a cited
     hit came from (AC2). ``search_earnings`` degrades to ``"[]"``, so a bad/empty
     payload yields ``[]``.
+
+    QNT-301: carries the same ``id`` (``R{n}``, from ``start_id``) the folded
+    earnings block stamps, so a claim citing ``(source: fundamental R3)`` links
+    to this row.
     """
     try:
         rows = json.loads(raw)
@@ -1197,6 +1236,7 @@ def _parse_earnings_sources(raw: str) -> list[dict[str, str]]:
     if not isinstance(rows, list):
         return []
     sources: list[dict[str, str]] = []
+    idx = start_id
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -1207,6 +1247,7 @@ def _parse_earnings_sources(raw: str) -> list[dict[str, str]]:
             continue
         sources.append(
             {
+                "id": f"R{idx}",
                 "headline": headline,
                 "source": section if title else "8-K earnings release",
                 "date": str(row.get("date") or "").strip(),
@@ -1214,6 +1255,7 @@ def _parse_earnings_sources(raw: str) -> list[dict[str, str]]:
                 "corpus": "earnings",
             }
         )
+        idx += 1
     return sources
 
 
@@ -1239,7 +1281,7 @@ def _strip_retrieved_block(text: str | None, heading: str) -> str:
 
 
 def _fold_news_hits(
-    reports: dict[str, str], raw: str
+    reports: dict[str, str], raw: str, start_id: int = 1
 ) -> tuple[dict[str, str], list[dict[str, str]]]:
     """Fold ``search_news`` JSON hits into ``reports["news"]``.
 
@@ -1248,28 +1290,31 @@ def _fold_news_hits(
     key -- see :func:`_strip_retrieved_block` -- so chained followups can't
     duplicate the retrieved section (AC2). Returns ``reports`` unchanged and
     ``[]`` sources when there is nothing usable to fold.
+
+    QNT-301: ``start_id`` seeds the ``[Rn]`` claim-anchor ids; news folds first
+    (``start_id=1``), earnings offsets past the news hit count.
     """
-    hits = _format_search_hits(raw)
+    hits = _format_search_hits(raw, start_id)
     if not hits:
         return reports, []
     base = _strip_retrieved_block(reports.get("news"), RETRIEVED_NEWS_HEADING)
     updated = {**reports, "news": f"{hits}\n\n{base}" if base else hits}
-    return updated, _parse_search_sources(raw)
+    return updated, _parse_search_sources(raw, start_id)
 
 
 def _fold_earnings_hits(
-    reports: dict[str, str], raw: str
+    reports: dict[str, str], raw: str, start_id: int = 1
 ) -> tuple[dict[str, str], list[dict[str, str]]]:
     """Fold ``search_earnings`` JSON hits into ``reports["fundamental"]``.
 
     Sibling of :func:`_fold_news_hits` for the equity_earnings corpus.
     """
-    hits = _format_earnings_hits(raw)
+    hits = _format_earnings_hits(raw, start_id)
     if not hits:
         return reports, []
     base = _strip_retrieved_block(reports.get("fundamental"), RETRIEVED_EARNINGS_HEADING)
     updated = {**reports, "fundamental": f"{hits}\n\n{base}" if base else hits}
-    return updated, _parse_earnings_sources(raw)
+    return updated, _parse_earnings_sources(raw, start_id)
 
 
 def _coerce_thesis(response: object) -> Thesis | None:
@@ -2180,7 +2225,11 @@ def build_graph(
                         "gather %s: followup search_earnings failed: %s (continuing)", ticker, exc
                     )
                     raw = "[]"
-                reports, earnings_sources = _fold_earnings_hits(reports, raw)
+                # QNT-301: offset the earnings ids past the news hits already in
+                # retrieved_sources so the combined list stays R1..Rn gap-free.
+                reports, earnings_sources = _fold_earnings_hits(
+                    reports, raw, len(retrieved_sources) + 1
+                )
                 if earnings_sources:
                     retrieved_sources += earnings_sources
                     logger.info(
@@ -2332,7 +2381,11 @@ def build_graph(
                 raw = "[]"
             # QNT-276: retrieved earnings excerpts LEAD, canned fundamental
             # digest follows -- same foregrounding as the news fold above.
-            reports, earnings_sources = _fold_earnings_hits(reports, raw)
+            # QNT-301: earnings ids continue past the news hits (retrieved_sources
+            # holds only news at this point) so the combined list is R1..Rn.
+            reports, earnings_sources = _fold_earnings_hits(
+                reports, raw, len(retrieved_sources) + 1
+            )
             if earnings_sources:
                 retrieved_sources = retrieved_sources + earnings_sources
                 logger.info(

@@ -832,6 +832,38 @@ def test_count_citations_matches_source_pattern() -> None:
     assert chat_module._count_citations(thesis) == 4
 
 
+def test_count_citations_accepts_anchored_id_form() -> None:
+    """QNT-301: a claim grounded in a specific retrieved hit anchors its source
+    row id -- ``(source: news R1)`` / ``(source: fundamental R3)``. The counter
+    must treat an anchored citation as one cited claim, same as a canned one, so
+    the id tail cannot silently drop a citation from ``citations_count``."""
+    thesis = Thesis(
+        company=AspectView(label=None, summary="Business context.", supports=[], challenges=[]),
+        fundamental=AspectView(
+            label="Premium",
+            summary="Premium multiple",
+            supports=["Guidance raised (source: fundamental R3)"],  # anchored
+            challenges=[],
+        ),
+        technical=AspectView(
+            label="Uptrend",
+            summary="Uptrend",
+            supports=["RSI firm (source: technical)"],  # canned, id-less
+            challenges=[],
+        ),
+        news=AspectView(
+            label=None,
+            summary="Recent flow",
+            supports=["Buyback expanded (source: news R1)"],  # anchored
+            challenges=[],
+        ),
+        verdict="Neutral",
+        verdict_rationale="Premium plus Uptrend (source: technical).",  # canned
+    )
+    # 2 anchored (news R1, fundamental R3) + 2 canned (technical x2) = 4.
+    assert chat_module._count_citations(thesis) == 4
+
+
 def test_message_length_capped_at_validation_layer(client: TestClient) -> None:
     """Defensive cap on user message — Pydantic 422s a 5000-char prompt."""
     big = "x" * 5000

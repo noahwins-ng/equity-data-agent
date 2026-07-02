@@ -87,13 +87,15 @@ emitter failure + stubbed test graphs that bypass synthesize). The panel's
                     classifier); the panel renders a verdict-free, multi-lens
                     scan card and skips the thesis card.
 
-``retrieved_sources`` — ``{sources: [{headline, source, date, url, corpus}, ...]}``
+``retrieved_sources`` — ``{sources: [{id, headline, source, date, url, corpus}, ...]}``
                     emitted (QNT-226) when the agent's semantic search surfaced
                     hits this turn. Each source carries ``corpus`` (QNT-263:
                     ``"news"`` or ``"earnings"``) so the panel labels which
-                    corpus a citation came from. The panel renders a compact
-                    clickable provenance list. Only fires when ``gather`` ran
-                    (a followup turn reuses hydrated state and re-emits nothing).
+                    corpus a citation came from, and ``id`` (QNT-301: ``"R1"``,
+                    ``"R2"``, ... in list order) the claim-anchored inline
+                    citation ``(source: news R1)`` links to. The panel renders a
+                    compact clickable provenance list. Only fires when ``gather``
+                    ran (a followup turn reuses hydrated state and re-emits nothing).
 
 ``intent``        — ``{intent}`` one-shot event emitted right after the
                     classify node decides which shape will be produced
@@ -362,7 +364,11 @@ def _sse(event: str, data: dict[str, Any]) -> str:
 # ``(source: technical|fundamental)``, or ``(Publisher, Date)`` for news.
 # We count ``(source: …)`` as the canonical "cited claim" because the prompt
 # enforces that shape across the four sections.
-_CITATION_PATTERN = re.compile(r"\(source:\s*[A-Za-z|\s]+\)")
+# QNT-301: a claim grounded in a specific retrieved hit anchors an id after the
+# source name -- ``(source: news R1)`` / ``(source: fundamental R3)``. The
+# optional ``R\d+`` tail lets the counter treat an anchored citation as one
+# cited claim, same as a plain canned citation.
+_CITATION_PATTERN = re.compile(r"\(source:\s*[A-Za-z|\s]+(?:\s+R\d+)?\)")
 
 
 def _count_citations(thesis: Thesis | None) -> int:
