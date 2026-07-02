@@ -151,6 +151,27 @@ def test_exploration_route_emits_one_stable_intent(
     assert intent_events == [{"intent": "exploration"}]
 
 
+def test_explore_supervisor_emits_plan_rationale_via_event_emitter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-298: the exploration-scan rationale is deterministic (zero LLM
+    calls) but still surfaces over the same ``plan_rationale`` SSE event
+    plan_node uses for the thesis path."""
+    _patch_intent(monkeypatch, "thesis")
+    _patch_llm(monkeypatch, _SynthLLM())
+    tools = _tools()
+    events: list[tuple[str, dict[str, object]]] = []
+
+    result = build_graph(
+        tools, event_emitter=lambda name, payload: events.append((name, payload))
+    ).invoke({"ticker": "AAPL", "question": "What's interesting about AAPL this week?"})
+
+    assert result["intent"] == "exploration"
+    rationale_events = [payload for name, payload in events if name == "plan_rationale"]
+    assert rationale_events, f"explore_supervisor_node must emit plan_rationale; got {events}"
+    assert rationale_events[0] == {"text": result["plan_rationale"]}
+
+
 def test_news_led_exploration_routes_and_gathers_two_lenses(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

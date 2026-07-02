@@ -20,6 +20,7 @@ import { NarrativeBubble } from "./narrative-bubble";
 import { ProseBlock } from "./prose-block";
 import { QuickFactCard } from "./quick-fact-card";
 import { RetrievedSources } from "./retrieved-sources";
+import { SuggestionButton } from "./suggestion-button";
 import { ThesisCard } from "./thesis-card";
 import { ToolCallRow } from "./tool-call-row";
 import type { ChatRun } from "./types";
@@ -93,6 +94,15 @@ export const RunBlock = memo(function RunBlock({
         </div>
         <p className="text-xs text-zinc-100">{run.prompt}</p>
       </div>
+
+      {/* QNT-298: plan_rationale status line -- the plan's analyst-voice
+        reasoning, streamed as soon as it resolves (ahead of or alongside the
+        tool rows below). Fills the classify -> plan -> gather -> synthesize
+        dead air with a real sentence instead of a bare spinner; replaced by
+        the structured card once it lands. */}
+      {run.planRationale && !hasCard && (
+        <p className="font-mono text-[11px] italic text-zinc-500">{run.planRationale}</p>
+      )}
 
       {/* Tool-call rows */}
       {run.toolRows.length > 0 && (
@@ -191,6 +201,25 @@ export const RunBlock = memo(function RunBlock({
         ask the focused-news card is dropped, so this clickable list is the
         structured surface showing which articles grounded the spoken answer. */}
       <RetrievedSources sources={run.retrievedSources} />
+
+      {/* QNT-298: follow-up chips under the landed analytical card — the
+        continuation the conversational/clarify cards already offered via
+        their own suggestions. Only present once ``done`` lands (server
+        gates on the card actually rendering, not just the intent label). */}
+      {run.stats?.suggestions && run.stats.suggestions.length > 0 && (
+        <div>
+          <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+            You could ask
+          </div>
+          <ul className="space-y-1">
+            {run.stats.suggestions.map((s, i) => (
+              <li key={i}>
+                <SuggestionButton text={s} onClick={() => onSuggestion(s)} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {showGroundingWarning && (
         <div

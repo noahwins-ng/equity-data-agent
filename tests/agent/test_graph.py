@@ -1337,6 +1337,91 @@ def test_build_graph_without_event_emitter_remains_no_op(
     assert isinstance(result["thesis"], Thesis)
 
 
+# ─── QNT-298: plan_node / explore_supervisor_node emit plan_rationale ──────
+
+
+def test_plan_node_emits_plan_rationale_via_event_emitter(stub_llm: _StructuredLLM) -> None:
+    """QNT-298: plan_node streams the thesis-plan rationale over SSE as soon
+    as it resolves -- BEFORE gather's tool calls fire -- so the panel can
+    fill the classify->plan->gather->synthesize dead air with a real
+    sentence instead of a generic spinner."""
+    emitted: list[tuple[str, dict[str, object]]] = []
+
+    def emit(event: str, data: dict[str, object]) -> None:
+        emitted.append((event, dict(data)))
+
+    graph = build_graph({name: _mock_tool(name) for name in REPORT_TOOLS}, event_emitter=emit)
+    result = _run(graph)
+
+    rationale_calls = [(e, d) for e, d in emitted if e == "plan_rationale"]
+    assert rationale_calls, f"plan_node must emit ('plan_rationale', ...); got {emitted}"
+    assert rationale_calls[0][1] == {"text": "Balanced thesis, so all reports are relevant."}
+    assert result["plan_rationale"] == "Balanced thesis, so all reports are relevant."
+
+
+def test_plan_node_skips_emit_when_rationale_is_none(stub_llm: _StructuredLLM) -> None:
+    """quick_fact plans carry no rationale (comma-list planner, not the
+    structured ThesisPlan) -- no event should fire, not an empty string."""
+    stub_llm.invoke.return_value = AIMessage(content="technical")
+    quick = QuickFactAnswer(
+        answer="RSI sits at 62 (source: technical).", cited_value="62", source="technical"
+    )
+    stub_llm.structured_invoke.return_value = quick
+    emitted: list[tuple[str, dict[str, object]]] = []
+
+    def emit(event: str, data: dict[str, object]) -> None:
+        emitted.append((event, dict(data)))
+
+    graph = build_graph(
+        {"technical": MagicMock(return_value="## technical\nRSI 62\n")}, event_emitter=emit
+    )
+    result = graph.invoke(
+        {"ticker": "NVDA", "question": "What's NVDA's RSI right now?"},
+    )
+
+    assert result["intent"] == "quick_fact"
+    assert result.get("plan_rationale") is None
+    assert not [e for e, _ in emitted if e == "plan_rationale"]
+
+
+def test_plan_node_swallows_event_emitter_exceptions_for_rationale(
+    stub_llm: _StructuredLLM,
+) -> None:
+    """A misbehaving event_emitter must not crash the graph (same contract
+    as classify_node's intent emission, see test_classify_node_swallows_
+    event_emitter_exceptions)."""
+
+    def broken_emit(_event: str, _data: dict[str, object]) -> None:
+        raise RuntimeError("Event loop is closed")
+
+    graph = build_graph(
+        {name: _mock_tool(name) for name in REPORT_TOOLS}, event_emitter=broken_emit
+    )
+    result = _run(graph)
+    assert result["plan_rationale"] == "Balanced thesis, so all reports are relevant."
+
+
+def test_plan_rationale_emission_fires_zero_extra_llm_calls(stub_llm: _StructuredLLM) -> None:
+    """AC4: streaming plan_rationale over SSE is a pure string re-emit of a
+    value the plan-LLM call already produced -- it must not fire any
+    additional LLM call. Pins the exact same call counts a thesis run makes
+    with no event_emitter (see test_full_flow_produces_thesis_and_confidence):
+    one structured plan call, one structured synthesize call, zero raw
+    ``invoke`` calls (classify short-circuits via the heuristic)."""
+    emitted: list[tuple[str, dict[str, object]]] = []
+
+    def emit(event: str, data: dict[str, object]) -> None:
+        emitted.append((event, dict(data)))
+
+    graph = build_graph({name: _mock_tool(name) for name in REPORT_TOOLS}, event_emitter=emit)
+    _run(graph)
+
+    assert [e for e, _ in emitted if e == "plan_rationale"], "rationale event never fired"
+    assert stub_llm.invoke.call_count == 0
+    assert stub_llm.plan_invoke.call_count == 1
+    assert stub_llm.structured_invoke.call_count == 1
+
+
 def test_conversational_answer_rejects_digits_in_answer() -> None:
     """QNT-156 guardrail: ``ConversationalAnswer.has_numeric_claims`` flags
     any digit so the hallucination scorer can treat numbers in
@@ -1451,6 +1536,22 @@ def test_every_intent_literal_has_a_fully_populated_policy() -> None:
                 f"{intent!r} suggestion_hint {policy.suggestion_hint!r} not in "
                 f"suggestion bank labels {bank_labels}"
             )
+        # QNT-298: followup_templates is a tuple of (target_intent, template)
+        # pairs or None. Every template must carry a ``{ticker}`` and/or
+        # ``{partner}`` slot (the comparison shape's second entry names only
+        # the partner) so a filled chip always names a resolved ticker.
+        assert policy.followup_templates is None or isinstance(policy.followup_templates, tuple), (
+            intent
+        )
+        if policy.followup_templates is not None:
+            assert policy.followup_templates, f"{intent!r} followup_templates is an empty tuple"
+            for target_intent, template in policy.followup_templates:
+                assert target_intent in intents, (
+                    f"{intent!r} followup_templates target {target_intent!r} is not an Intent"
+                )
+                assert "{ticker}" in template or "{partner}" in template, (
+                    f"{intent!r} followup_templates entry names no ticker slot: {template!r}"
+                )
 
 
 # ─── QNT-176: focused-analysis intents ──────────────────────────────────────

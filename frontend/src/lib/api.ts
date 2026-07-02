@@ -286,6 +286,15 @@ export type NarrativeChunkEvent = {
   delta: string;
 };
 
+// QNT-298: the thesis planner's (or exploration's) analyst-voice rationale
+// sentence, streamed as soon as the plan resolves -- BEFORE gather's tool
+// calls land for a fresh thesis, right after them for exploration (which
+// gathers inline in one node). Absent turns (quick_fact/focused/comparison
+// plans carry no rationale) emit nothing.
+export type PlanRationaleEvent = {
+  text: string;
+};
+
 // QNT-208 v2: final verdict is a closed three-state set.
 export type Verdict = "Overweight" | "Neutral" | "Underweight";
 
@@ -492,6 +501,12 @@ export type DoneEvent = {
   // QNT-209: echoed by the backend for confirmation. Null when the request
   // omitted thread_id (ephemeral path).
   thread_id?: string | null;
+  // QNT-298: 2-3 deterministic follow-up chips under the landed analytical
+  // card (thesis / quick_fact / comparison / focused / exploration). Empty
+  // for conversational/followup turns and for any turn whose card failed to
+  // land (synthesize-failure conversational fallback carries its own
+  // suggestions instead).
+  suggestions?: string[];
 };
 
 export type ChatErrorEvent = {

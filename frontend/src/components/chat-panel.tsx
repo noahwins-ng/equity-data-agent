@@ -42,6 +42,7 @@ import {
   type IntentEvent,
   type LeanComparisonPayload,
   type NarrativeChunkEvent,
+  type PlanRationaleEvent,
   type ProseChunkEvent,
   type QuickFactPayload,
   type RetrievedSourcesEvent,
@@ -460,6 +461,7 @@ export function ChatPanel() {
           toolRows: [],
           proseChunks: [],
           narrative: "",
+          planRationale: null,
           thesis: null,
           quickFact: null,
           comparison: null,
@@ -491,6 +493,7 @@ export function ChatPanel() {
         toolRows: [],
         proseChunks: [],
         narrative: "",
+        planRationale: null,
         thesis: null,
         quickFact: null,
         comparison: null,
@@ -549,6 +552,9 @@ export function ChatPanel() {
               ...r,
               narrative: r.narrative + ev.delta,
             }));
+          } else if (event === "plan_rationale") {
+            const ev = data as PlanRationaleEvent;
+            updateRun(id, (r) => ({ ...r, planRationale: ev.text }));
           } else if (event === "intent") {
             const ev = data as IntentEvent;
             updateRun(id, (r) => ({ ...r, intent: ev.intent }));

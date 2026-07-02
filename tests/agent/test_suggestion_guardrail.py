@@ -22,7 +22,8 @@ from agent.conversational import (
     domain_redirect,
     is_answerable_suggestion,
 )
-from agent.graph import _detect_ambiguity
+from agent.graph import _COMPARISON_PARTNER, INTENT_POLICIES, _detect_ambiguity
+from agent.graph import analytical_followup_suggestions as followups
 from agent.intent import Intent, extract_tickers
 from shared.tickers import TICKERS
 
@@ -176,3 +177,62 @@ def test_starter_suggestion_does_not_route_to_clarify(label: str, question: str)
     intent = _LABEL_TO_INTENT[label]
     ambiguity = _detect_ambiguity(intent, question, has_prior_turn=False)
     assert ambiguity is None, f"{label} suggestion routed to clarify: {question!r}"
+
+
+# ─── QNT-298: analytical follow-up chips ───────────────────────────────────
+
+_ANALYTICAL_INTENTS: list[Intent] = [
+    intent for intent, policy in INTENT_POLICIES.items() if policy.followup_templates
+]
+
+
+def test_comparison_partner_map_covers_every_ticker() -> None:
+    """Every covered ticker has a distinct, covered partner pick, so a
+    single-ticker intent's "Compare X vs Y" chip always names two covered
+    symbols with zero LLM calls."""
+    assert set(_COMPARISON_PARTNER) == set(TICKERS)
+    for ticker, partner in _COMPARISON_PARTNER.items():
+        assert partner in TICKERS
+        assert partner != ticker
+
+
+@pytest.mark.parametrize("intent", _ANALYTICAL_INTENTS)
+@pytest.mark.parametrize("ticker", TICKERS)
+def test_analytical_followups_are_answerable_and_non_clarify(intent: Intent, ticker: str) -> None:
+    """AC1: analytical turns carry 2-3 deterministic follow-up chips; every
+    chip names a covered ticker, avoids out-of-scope phrasing, and — per the
+    shape a click on it would classify as — does not route to clarify.
+    """
+    templates = INTENT_POLICIES[intent].followup_templates
+    assert templates
+    chips = followups(intent, ticker)
+    assert len(chips) == len(templates), (
+        f"a malformed template dropped a chip for {intent!r}/{ticker!r}: {chips!r}"
+    )
+    for (target_intent, _template), chip in zip(templates, chips, strict=True):
+        assert is_answerable_suggestion(chip), chip
+        ambiguity = _detect_ambiguity(target_intent, chip, has_prior_turn=False)
+        assert ambiguity is None, f"{chip!r} (target={target_intent!r}) routed to clarify"
+
+
+def test_analytical_followups_count_is_two_or_three() -> None:
+    """AC1: the panel renders 2-3 chips per landed analytical card."""
+    for intent in _ANALYTICAL_INTENTS:
+        chips = followups(intent, "NVDA")
+        assert 2 <= len(chips) <= 3, f"{intent!r} produced {len(chips)} chips: {chips!r}"
+
+
+def test_comparison_followups_name_both_compared_tickers() -> None:
+    """The comparison shape's chips use the two tickers the user actually
+    compared, not the static partner map (which is for single-ticker
+    intents only)."""
+    chips = followups("comparison", "NVDA", comparison_tickers=["NVDA", "AMD"])
+    assert chips == ["Full thesis on NVDA?", "Full thesis on AMD?"]
+
+
+def test_conversational_and_followup_carry_no_chips() -> None:
+    """These intents render no fresh analytical card to follow up on --
+    conversational already ships its own suggestions on the answer payload,
+    followup reuses the prior turn's card verbatim."""
+    assert followups("conversational", "NVDA") == []
+    assert followups("followup", "NVDA") == []
