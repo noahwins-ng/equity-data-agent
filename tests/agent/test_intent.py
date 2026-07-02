@@ -502,7 +502,7 @@ def test_with_source_heuristic_path() -> None:
     """A heuristic-matched question returns source='heuristic'."""
     from agent.intent import classify_intent_with_source
 
-    intent, source, _flag, _earn = classify_intent_with_source("What's the RSI?")
+    intent, source, _flag, _earn, _query = classify_intent_with_source("What's the RSI?")
     assert intent == "quick_fact"
     assert source == "heuristic"
 
@@ -512,7 +512,7 @@ def test_with_source_llm_path(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_llm_pipeline(monkeypatch, IntentDecision(intent="thesis"))
     from agent.intent import classify_intent_with_source
 
-    intent, source, _flag, _earn = classify_intent_with_source("Tell me about INTC")
+    intent, source, _flag, _earn, _query = classify_intent_with_source("Tell me about INTC")
     assert intent == "thesis"
     assert source == "llm"
 
@@ -522,7 +522,7 @@ def test_with_source_fallback_path_on_llm_exception(monkeypatch: pytest.MonkeyPa
     _patch_llm_pipeline(monkeypatch, None, invoke_raises=RuntimeError("timeout"))
     from agent.intent import classify_intent_with_source
 
-    intent, source, _flag, _earn = classify_intent_with_source("Tell me about INTC")
+    intent, source, _flag, _earn, _query = classify_intent_with_source("Tell me about INTC")
     assert intent == "thesis"
     assert source == "fallback"
 
@@ -532,7 +532,7 @@ def test_with_source_fallback_path_on_unexpected_shape(monkeypatch: pytest.Monke
     _patch_llm_pipeline(monkeypatch, {"parsed": None, "parsing_error": "x"})
     from agent.intent import classify_intent_with_source
 
-    intent, source, _flag, _earn = classify_intent_with_source("Tell me about INTC")
+    intent, source, _flag, _earn, _query = classify_intent_with_source("Tell me about INTC")
     assert intent == "thesis"
     assert source == "fallback"
 
@@ -543,7 +543,7 @@ def test_with_source_llm_include_raw_dict(monkeypatch: pytest.MonkeyPatch) -> No
     _patch_llm_pipeline(monkeypatch, {"parsed": decision, "raw": "..."})
     from agent.intent import classify_intent_with_source
 
-    intent, source, _flag, _earn = classify_intent_with_source("Tell me about INTC")
+    intent, source, _flag, _earn, _query = classify_intent_with_source("Tell me about INTC")
     assert intent == "quick_fact"
     assert source == "llm"
 
@@ -556,7 +556,7 @@ def test_needs_news_search_honours_llm_flag_on_llm_path(monkeypatch: pytest.Monk
     _patch_llm_pipeline(monkeypatch, IntentDecision(intent="quick_fact", needs_news_search=True))
     from agent.intent import classify_intent_with_source
 
-    intent, source, needs_news_search, _earn = classify_intent_with_source(
+    intent, source, needs_news_search, _earn, _query = classify_intent_with_source(
         "what did the CEO say about the buyback?"
     )
     assert (intent, source) == ("quick_fact", "llm")
@@ -576,7 +576,7 @@ def test_needs_news_search_semantic_flag_catches_topical_phrasing(
     assert _is_targeted_news(question) is False
     _patch_llm_pipeline(monkeypatch, IntentDecision(intent="news", needs_news_search=True))
 
-    intent, source, needs_news_search, _earn = classify_intent_with_source(question)
+    intent, source, needs_news_search, _earn, _query = classify_intent_with_source(question)
     assert (intent, source) == ("news", "llm")
     assert needs_news_search is True
 
@@ -599,7 +599,7 @@ def test_needs_news_search_generic_ask_stays_off_when_both_signals_false(
     assert _is_targeted_news(question) is False  # floor stays off on a generic ask
     _patch_llm_pipeline(monkeypatch, IntentDecision(intent="news", needs_news_search=False))
 
-    intent, source, needs_news_search, _earn = classify_intent_with_source(question)
+    intent, source, needs_news_search, _earn, _query = classify_intent_with_source(question)
     assert (intent, source) == ("news", "llm")
     assert needs_news_search is False
 
@@ -612,7 +612,7 @@ def test_needs_news_search_keyword_floor_rescues_llm_false(
     _patch_llm_pipeline(monkeypatch, IntentDecision(intent="news", needs_news_search=False))
     from agent.intent import classify_intent_with_source
 
-    intent, source, needs_news_search, _earn = classify_intent_with_source(
+    intent, source, needs_news_search, _earn, _query = classify_intent_with_source(
         "any news on NVDA collaboration with Nokia?"
     )
     assert (intent, source) == ("news", "llm")
@@ -624,7 +624,7 @@ def test_needs_news_search_keyword_floor_on_heuristic_path() -> None:
     signal -- "any catalysts" is a heuristic news hit AND a targeted token."""
     from agent.intent import classify_intent_with_source
 
-    intent, source, needs_news_search, _earn = classify_intent_with_source(
+    intent, source, needs_news_search, _earn, _query = classify_intent_with_source(
         "any catalysts for NVDA?"
     )
     assert source == "heuristic"
@@ -645,7 +645,7 @@ def test_needs_earnings_search_honours_llm_flag_on_llm_path(
         monkeypatch, IntentDecision(intent="fundamental", needs_earnings_search=True)
     )
 
-    intent, source, _news, needs_earnings_search = classify_intent_with_source(question)
+    intent, source, _news, needs_earnings_search, _query = classify_intent_with_source(question)
     assert (intent, source) == ("fundamental", "llm")
     assert needs_earnings_search is True
 
@@ -660,7 +660,7 @@ def test_needs_earnings_search_keyword_floor_rescues_llm_false(
     )
     from agent.intent import classify_intent_with_source
 
-    _intent, source, _news, needs_earnings_search = classify_intent_with_source(
+    _intent, source, _news, needs_earnings_search, _query = classify_intent_with_source(
         "what did management say about guidance?"
     )
     assert source == "llm"
@@ -721,3 +721,127 @@ def test_route_search_corpora_composes_the_two_flags() -> None:
     assert route_search_corpora(True, True) == ("news", "earnings")
     # neither -> canned digests carry it.
     assert route_search_corpora(False, False) == ()
+
+
+# ─── QNT-289: search_query rewrite + guardrails ───────────────────────────────
+
+
+def test_sanitize_search_query_passes_a_clean_rewrite() -> None:
+    from agent.intent import sanitize_search_query
+
+    assert sanitize_search_query("NVDA buyback") == "NVDA buyback"
+    assert sanitize_search_query("  NVDA buyback  ") == "NVDA buyback"
+
+
+def test_sanitize_search_query_empty_or_blank_returns_empty() -> None:
+    from agent.intent import sanitize_search_query
+
+    assert sanitize_search_query("") == ""
+    assert sanitize_search_query("   ") == ""
+
+
+def test_sanitize_search_query_rejects_over_length_cap() -> None:
+    from agent.intent import _QUERY_MAX_LEN, sanitize_search_query
+
+    too_long = "NVDA buyback " + "x" * _QUERY_MAX_LEN
+    assert len(too_long) > _QUERY_MAX_LEN
+    assert sanitize_search_query(too_long) == ""
+
+
+def test_sanitize_search_query_allows_common_finance_acronyms() -> None:
+    """Tokens like CEO/SEC that ARE ticker-shaped (2-5 uppercase letters) but
+    are not tickers must not trip the hallucinated-entity guard."""
+    from agent.intent import sanitize_search_query
+
+    assert sanitize_search_query("NVDA CEO comments on the buyback") != ""
+    assert sanitize_search_query("AAPL SEC probe") != ""
+
+
+def test_sanitize_search_query_rejects_unknown_ticker() -> None:
+    """A ticker-shaped token outside shared.tickers.TICKERS (a hallucinated or
+    out-of-coverage entity) rejects the whole rewrite -- callers fall back to
+    the raw question rather than search on a ticker that isn't ours."""
+    from agent.intent import sanitize_search_query
+
+    assert sanitize_search_query("SMCI buyback") == ""
+    assert sanitize_search_query("TSM litigation update") == ""
+
+
+def test_with_source_search_query_empty_on_heuristic_path() -> None:
+    """The heuristic short-circuit never runs an LLM, so no rewrite exists."""
+    from agent.intent import classify_intent_with_source
+
+    _intent, source, _news, _earn, search_query = classify_intent_with_source("What's the RSI?")
+    assert source == "heuristic"
+    assert search_query == ""
+
+
+def test_with_source_search_query_empty_on_fallback_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An LLM failure biases to thesis AND carries no rewrite."""
+    _patch_llm_pipeline(monkeypatch, None, invoke_raises=RuntimeError("timeout"))
+    from agent.intent import classify_intent_with_source
+
+    _intent, source, _news, _earn, search_query = classify_intent_with_source("Tell me about INTC")
+    assert source == "fallback"
+    assert search_query == ""
+
+
+def test_with_source_search_query_carries_llm_rewrite(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The LLM path threads a clean rewrite through, sanitized."""
+    _patch_llm_pipeline(
+        monkeypatch,
+        IntentDecision(
+            intent="quick_fact",
+            needs_news_search=True,
+            search_query="NVDA buyback",
+        ),
+    )
+    from agent.intent import classify_intent_with_source
+
+    _intent, source, _news, _earn, search_query = classify_intent_with_source(
+        "what about the buyback?"
+    )
+    assert source == "llm"
+    assert search_query == "NVDA buyback"
+
+
+def test_with_source_search_query_rejected_hallucinated_ticker_falls_back_to_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rewrite naming a ticker outside TICKERS is rejected -- the caller
+    (gather) falls back to the raw question, never regressing cold-turn
+    retrieval."""
+    _patch_llm_pipeline(
+        monkeypatch,
+        IntentDecision(
+            intent="quick_fact",
+            needs_news_search=True,
+            search_query="SMCI buyback",
+        ),
+    )
+    from agent.intent import classify_intent_with_source
+
+    _intent, source, _news, _earn, search_query = classify_intent_with_source(
+        "what about the buyback?"
+    )
+    assert source == "llm"
+    assert search_query == ""
+
+
+def test_classify_prompt_carves_out_search_query_from_the_history_ban() -> None:
+    """Regression pin (review finding, QNT-289): the prompt's blanket "do not
+    use history to infer a ticker" disclaimer predates search_query and would
+    contradict it word-for-word if left unqualified -- the same LLM call sees
+    both instructions, and a contradiction here is exactly the kind of thing
+    that degrades silently with a model swap. Pin that the carve-out survives
+    any future edit to either instruction."""
+    from agent.intent import _CLASSIFY_PROMPT
+
+    assert "search_query" in _CLASSIFY_PROMPT
+    # The history disclaimer must explicitly exempt search_query from the
+    # "don't use history" rule, not just describe search_query elsewhere.
+    disclaimer_start = _CLASSIFY_PROMPT.index("Recent conversation")
+    disclaimer = _CLASSIFY_PROMPT[disclaimer_start : disclaimer_start + 300]
+    assert "search_query" in disclaimer

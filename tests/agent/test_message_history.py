@@ -271,7 +271,7 @@ def test_fresh_intent_trims_assembled_prompt_history(monkeypatch: Any) -> None:
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda _q, **_: ("thesis", "heuristic", False, False),
+        lambda _q, **_: ("thesis", "heuristic", False, False, ""),
     )
     graph = build_graph(_tools())
     graph.invoke(
@@ -296,7 +296,7 @@ def test_fresh_intent_trims_assembled_prompt_history(monkeypatch: Any) -> None:
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda _q, **_: ("followup", "heuristic", True, False),
+        lambda _q, **_: ("followup", "heuristic", True, False, ""),
     )
     graph2 = build_graph(_tools())
     graph2.invoke(

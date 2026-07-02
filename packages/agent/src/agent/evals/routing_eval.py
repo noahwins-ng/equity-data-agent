@@ -187,8 +187,8 @@ def evaluate(fixture: RoutingFixture) -> RoutingOutcome:
     -- the runtime path, so the score reflects what the agent actually fires.
     """
     started = time.perf_counter()
-    intent, source, needs_news_search, needs_earnings_search = classify_intent_with_source(
-        fixture.question
+    intent, source, needs_news_search, needs_earnings_search, _search_query = (
+        classify_intent_with_source(fixture.question)
     )
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     return RoutingOutcome(

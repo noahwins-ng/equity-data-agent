@@ -83,7 +83,7 @@ def _patch(monkeypatch: pytest.MonkeyPatch, intent: str) -> None:
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda *_a, **_k: (intent, "heuristic", False, False),
+        lambda *_a, **_k: (intent, "heuristic", False, False, ""),
     )
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_k: _LLM())
 
