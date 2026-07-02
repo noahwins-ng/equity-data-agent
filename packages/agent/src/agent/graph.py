@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from langchain_core.exceptions import OutputParserException
@@ -205,20 +206,168 @@ EventEmitter = Callable[[str, dict[str, object]], None]
 # grounding.
 
 # News is optional — Qdrant or the news ingest can be down without invalidating
-# the thesis. Technical & fundamental are load-bearing.
+# the thesis. Technical & fundamental are load-bearing. This is a TOOL-level
+# property (keyed by report name, not by intent), so it stays outside
+# ``IntentPolicy`` / ``INTENT_POLICIES`` below.
 OPTIONAL_TOOLS: frozenset[str] = frozenset({"news"})
+
+# QNT-232 #13: fresh analytical asks (thesis / quick_fact / focused /
+# comparison / exploration) stand on the reports they just gathered and
+# rarely need deep history; only continuations (followup / conversational)
+# genuinely lean on it. See ``IntentPolicy.history_budget``.
+_FRESH_ANALYTICAL_HISTORY_TURNS = 3
+
+
+@dataclass(frozen=True)
+class IntentPolicy:
+    """Declarative per-intent routing policy (QNT-288).
+
+    Consolidates behaviour that used to live in six-plus parallel frozensets
+    which had to be kept mutually consistent by hand -- QNT-263 caught one
+    drift where ``quick_fact`` was missing from the earnings-search set. One
+    ``IntentPolicy`` exists per ``Intent`` literal member, held in
+    ``INTENT_POLICIES``; the legacy frozensets/dicts below are DERIVED views
+    over this table rather than hand-maintained.
+    """
+
+    # Report family plan_node deterministically narrows to for a
+    # focused-analysis intent (fundamental/technical/news). News is the
+    # report family for the news focus even though it is in
+    # ``OPTIONAL_TOOLS`` -- if news is down, synthesize falls back to a
+    # domain redirect like any other empty-reports failure. None for intents
+    # that plan differently (LLM-driven narrow/over-fetch, all-tools, or no
+    # plan at all).
+    focused_report: str | None
+    # Which RAG corpora this intent's synthesis can consume a retrieved hit
+    # from -- gates gather_node's search_news / search_earnings calls.
+    rag_corpora: frozenset[Literal["news", "earnings"]]
+    # Max prior turns injected into this intent's synthesize/narrate prompt prefix.
+    history_budget: int
+    # Which company-report variant plan/gather swaps into the 'company' slot.
+    company_variant: Literal["compact", "full"]
+    # Whether classify's ambiguity gate requires a named ticker (or a
+    # hydrated prior turn) before this intent can proceed unclarified.
+    requires_ticker: bool
+    # Whether classify routes this intent straight to synthesize, skipping
+    # plan + gather.
+    short_circuit: bool
+    # Label fed to domain_redirect's suggestion picker when this intent's
+    # synthesis fails and falls back to a conversational redirect. Must
+    # match a label in agent.conversational._SUGGESTION_BANK. None for
+    # intents that never reach the fallback redirect narratively or have no
+    # failure-path bias to set.
+    suggestion_hint: str | None
+
+
+# QNT-288: single source of truth for per-intent routing behaviour. A
+# meta-test in test_graph.py asserts every ``Intent`` literal member has an
+# entry here with all fields populated, so a future intent cannot ship
+# half-configured the way the QNT-263 quick_fact/earnings-search miss did.
+INTENT_POLICIES: dict[Intent, IntentPolicy] = {
+    "thesis": IntentPolicy(
+        focused_report=None,
+        rag_corpora=frozenset({"news", "earnings"}),
+        history_budget=_FRESH_ANALYTICAL_HISTORY_TURNS,
+        company_variant="compact",
+        requires_ticker=True,
+        short_circuit=False,
+        suggestion_hint="thesis",
+    ),
+    "quick_fact": IntentPolicy(
+        focused_report=None,
+        rag_corpora=frozenset({"news", "earnings"}),
+        history_budget=_FRESH_ANALYTICAL_HISTORY_TURNS,
+        company_variant="full",
+        requires_ticker=True,
+        short_circuit=False,
+        # No bank label for "quick_fact" itself -- most single-metric asks
+        # are technical (RSI, MACD, price), so failures bias there.
+        suggestion_hint="technical",
+    ),
+    "comparison": IntentPolicy(
+        focused_report=None,
+        rag_corpora=frozenset(),
+        history_budget=_FRESH_ANALYTICAL_HISTORY_TURNS,
+        company_variant="compact",
+        requires_ticker=False,  # its own multi-ticker ambiguity check governs this
+        short_circuit=False,
+        suggestion_hint="comparison",
+    ),
+    "conversational": IntentPolicy(
+        focused_report=None,
+        rag_corpora=frozenset(),
+        history_budget=HISTORY_TURN_LIMIT,
+        company_variant="full",
+        requires_ticker=False,
+        short_circuit=True,
+        # Conversational IS the fallback redirect -- this hint is unreachable.
+        suggestion_hint=None,
+    ),
+    "fundamental": IntentPolicy(
+        focused_report="fundamental",
+        rag_corpora=frozenset({"earnings"}),
+        history_budget=_FRESH_ANALYTICAL_HISTORY_TURNS,
+        company_variant="full",
+        requires_ticker=True,
+        short_circuit=False,
+        suggestion_hint="fundamental",
+    ),
+    "technical": IntentPolicy(
+        focused_report="technical",
+        rag_corpora=frozenset(),
+        history_budget=_FRESH_ANALYTICAL_HISTORY_TURNS,
+        company_variant="full",
+        requires_ticker=True,
+        short_circuit=False,
+        suggestion_hint="technical",
+    ),
+    "news": IntentPolicy(
+        focused_report="news",
+        rag_corpora=frozenset({"news"}),
+        history_budget=_FRESH_ANALYTICAL_HISTORY_TURNS,
+        company_variant="full",
+        requires_ticker=True,
+        short_circuit=False,
+        suggestion_hint="news",
+    ),
+    "followup": IntentPolicy(
+        focused_report=None,
+        # QNT-290: a warm-thread pivot to a new targeted event sets the same
+        # search flags as a cold turn; both corpora fold onto the
+        # checkpointer-hydrated reports.
+        rag_corpora=frozenset({"news", "earnings"}),
+        history_budget=HISTORY_TURN_LIMIT,
+        company_variant="full",
+        requires_ticker=False,  # its own has_prior_turn guard governs this
+        short_circuit=True,
+        # narrate owns the spoken response on this path; no bias to set.
+        suggestion_hint=None,
+    ),
+    "exploration": IntentPolicy(
+        focused_report=None,
+        rag_corpora=frozenset(),
+        history_budget=_FRESH_ANALYTICAL_HISTORY_TURNS,
+        company_variant="compact",
+        requires_ticker=False,
+        short_circuit=False,
+        # QNT-220 follow-up: a failed broad scan biases toward thesis suggestions.
+        suggestion_hint="thesis",
+    ),
+}
+
+# --- Derived views (QNT-288) -------------------------------------------------
+# Same shape callers relied on pre-refactor, but computed from
+# INTENT_POLICIES instead of hand-maintained -- fixing an intent's behaviour
+# means editing ONE entry above, not auditing every one of these.
 
 # QNT-176: focused-analysis intent → matching report family. The plan node
 # narrows to ``["company", <report>]`` for these intents (company grounds
-# qualitative business context per QNT-175; the matching report carries
-# the numbers). News is the report family for the news focus
-# even though it is in OPTIONAL_TOOLS — if news is down the synthesize
-# node falls back to a domain redirect, same as any other empty-reports
-# failure.
+# qualitative business context per QNT-175; the matching report carries the
+# numbers).
 _FOCUSED_REPORT: dict[Intent, str] = {
-    "fundamental": "fundamental",
-    "technical": "technical",
-    "news": "news",
+    intent: policy.focused_report
+    for intent, policy in INTENT_POLICIES.items()
+    if policy.focused_report is not None
 }
 
 # QNT-222 follow-up: intents whose synthesis consumes the news report, so a
@@ -227,28 +376,16 @@ _FOCUSED_REPORT: dict[Intent, str] = {
 # but fundamental/technical focused reads are forbidden from citing news
 # (FOCUSED_SYSTEM_PROMPT rule 3), so firing search there would be a wasted
 # Qdrant call. Gate the RAG fetch to the intents that can use it.
-# QNT-290: ``followup`` is included -- a warm-thread pivot to a new targeted
-# event ("and what did the CEO say about it?") sets the same flag and the
-# followup prompt renders every ``reports`` key, same as quick_fact/thesis.
-_NEWS_SEARCH_INTENTS: frozenset[Intent] = frozenset({"news", "quick_fact", "thesis", "followup"})
+_NEWS_SEARCH_INTENTS: frozenset[Intent] = frozenset(
+    intent for intent, policy in INTENT_POLICIES.items() if "news" in policy.rag_corpora
+)
 
 # QNT-263: intents whose synthesis consumes the fundamental report, so an
-# earnings-release hit (folded into ``reports["fundamental"]``) actually reaches
-# the prompt. The earnings narrative is management framing + guidance -- a
-# fundamental-flavoured read -- so it belongs with the fundamental slot. This is
-# the earnings analogue of _NEWS_SEARCH_INTENTS: fire the RAG fetch only where
-# the synthesis can use it. ``quick_fact`` is included (QNT-263 follow-up) for
-# the same reason it sits in _NEWS_SEARCH_INTENTS -- ``build_quick_fact_prompt``
-# renders every ``reports`` key and the quick-fact citation vocabulary already
-# allows ``(source: fundamental)``, so a natural single-fact earnings ask ("what
-# did management say about guidance?", which classifies as quick_fact) reaches
-# the 8-K corpus instead of only the news headlines. ``news`` stays EXCLUDED: a
-# focused news read is forbidden from citing the fundamental report
-# (FOCUSED_SYSTEM_PROMPT rule 3), so firing there would be a wasted Qdrant call;
-# ``technical`` likewise never gathers fundamental. ``followup`` is included
-# (QNT-290) for the same warm-thread-pivot reason as _NEWS_SEARCH_INTENTS above.
+# earnings-release hit (folded into ``reports["fundamental"]``) actually
+# reaches the prompt. The earnings narrative is management framing + guidance
+# -- a fundamental-flavoured read -- so it belongs with the fundamental slot.
 _EARNINGS_SEARCH_INTENTS: frozenset[Intent] = frozenset(
-    {"fundamental", "thesis", "quick_fact", "followup"}
+    intent for intent, policy in INTENT_POLICIES.items() if "earnings" in policy.rag_corpora
 )
 
 _MAX_TOOL_ATTEMPTS = 2  # first try + one retry
@@ -284,7 +421,7 @@ _EXPLORATION_NAMED_LENS_TERMS: tuple[str, ...] = (
 # answer non-fabricated. With no ticker AND no prior turn we route to
 # clarify rather than ship a thesis built on a placeholder.
 _TICKER_REQUIRING_INTENTS: frozenset[Intent] = frozenset(
-    {"thesis", "quick_fact", "fundamental", "technical", "news"}
+    intent for intent, policy in INTENT_POLICIES.items() if policy.requires_ticker
 )
 
 # QNT-212: short-circuit intents skip plan + gather and route classify
@@ -296,14 +433,18 @@ _TICKER_REQUIRING_INTENTS: frozenset[Intent] = frozenset(
 # ``_followup_fires_search``). Membership here still governs the pure
 # no-tools-needed case (both search flags False) and every other reader of
 # this set (e.g. ``_should_route_exploration``).
-_SHORT_CIRCUIT_INTENTS: frozenset[Intent] = frozenset({"conversational", "followup"})
+_SHORT_CIRCUIT_INTENTS: frozenset[Intent] = frozenset(
+    intent for intent, policy in INTENT_POLICIES.items() if policy.short_circuit
+)
 
 # QNT-220 (#8): intents that force-include the company report (QNT-175) and so
 # get the compact company variant when one is supplied. Focused
 # fundamental/technical/news asks keep the full report. Exploration (QNT-220
 # follow-up) is a hot path whose non-news-led plan includes company, so it
 # inherits the compact variant to preserve the lever #8 token savings.
-_COMPACT_COMPANY_INTENTS: frozenset[Intent] = frozenset({"thesis", "comparison", "exploration"})
+_COMPACT_COMPANY_INTENTS: frozenset[Intent] = frozenset(
+    intent for intent, policy in INTENT_POLICIES.items() if policy.company_variant == "compact"
+)
 
 AmbiguityKind = Literal["needs_second_ticker", "needs_ticker", "needs_prior_turn"]
 
@@ -1225,21 +1366,25 @@ def _followup_is_metric_ask(question: str) -> bool:
     return _matches_any(question.lower(), _QUICK_FACT_TOKENS) is not None
 
 
-# QNT-232 #13: per-intent history budget. v4's post-ship analysis (QNT-216)
-# named conversation-history injection the primary driver of synthesize
-# input-token growth (+1,132 tokens/thesis turn). HISTORY_TURN_LIMIT applies
-# identically to every intent, but a fresh analytical ask (thesis / quick_fact /
-# focused / comparison / exploration) stands on the reports it just gathered and
-# rarely needs ten prior turns; only continuations (followup / conversational /
-# clarify) genuinely lean on depth. Fresh asks get the trimmed budget; the
-# continuation intents keep the full HISTORY_TURN_LIMIT.
-_FRESH_ANALYTICAL_HISTORY_TURNS = 3
-_DEEP_HISTORY_INTENTS: frozenset[str] = frozenset({"followup", "conversational", "clarify"})
+# "clarify" is not an ``Intent`` literal member -- it is defensive belt-and-
+# braces for ``_history_budget``'s public str contract (see
+# test_message_history.py::test_history_budget_is_intent_aware), not a value
+# any live ``AgentState['intent']`` ever holds. Kept outside INTENT_POLICIES
+# for that reason rather than added as a fake Intent entry.
+_DEEP_HISTORY_EXTRA: frozenset[str] = frozenset({"clarify"})
 
 
 def _history_budget(intent: str) -> int:
-    """Max prior turns to inject into a node's prompt prefix for ``intent``."""
-    if intent in _DEEP_HISTORY_INTENTS:
+    """Max prior turns to inject into a node's prompt prefix for ``intent``.
+
+    QNT-288: reads ``IntentPolicy.history_budget`` from ``INTENT_POLICIES``
+    for a live ``Intent``; falls back to the deep budget for
+    ``_DEEP_HISTORY_EXTRA`` and the fresh-analytical budget otherwise.
+    """
+    policy = INTENT_POLICIES.get(intent)  # type: ignore[arg-type]
+    if policy is not None:
+        return policy.history_budget
+    if intent in _DEEP_HISTORY_EXTRA:
         return HISTORY_TURN_LIMIT
     return _FRESH_ANALYTICAL_HISTORY_TURNS
 
@@ -1400,38 +1545,14 @@ def _append_assistant_message(
 def _hint_from_intent(intent: Intent) -> str | None:
     """Bucket the intent into a hint label for ``domain_redirect``.
 
+    QNT-288: reads ``IntentPolicy.suggestion_hint`` from ``INTENT_POLICIES``.
     The redirect's suggestion picker uses the hint to bias toward questions
     matching the user's evident shape. Hints must match a label in
     :data:`agent.conversational._SUGGESTION_BANK` — the bank is keyed by
     report-type / shape (``technical``, ``fundamental``, ``news``,
-    ``thesis``, ``comparison``), not by intent name. A bare ``"quick_fact"``
-    hint silently degrades because the bank has no such label, so we map
-    quick_fact -> ``"technical"`` (where most single-metric asks live —
-    RSI, MACD, current price). The conversational intent never invokes
-    the fallback (it IS the redirect path), so a None return for it is
-    unreachable rather than just harmless.
+    ``thesis``, ``comparison``), not by intent name.
     """
-    if intent == "thesis":
-        return "thesis"
-    if intent == "quick_fact":
-        return "technical"
-    if intent == "comparison":
-        return "comparison"
-    # QNT-176: focused intents map to the matching suggestion-bank label
-    # so a synthesize-failure redirect biases toward the same domain the
-    # user originally asked about (e.g. failed news → news
-    # suggestions, not a random thesis pitch).
-    if intent == "fundamental":
-        return "fundamental"
-    if intent == "technical":
-        return "technical"
-    if intent == "news":
-        return "news"
-    # QNT-220 follow-up: a failed exploration scan is broad by nature, so bias
-    # the fallback redirect toward the thesis suggestion bank.
-    if intent == "exploration":
-        return "thesis"
-    return None
+    return INTENT_POLICIES[intent].suggestion_hint
 
 
 def build_graph(
@@ -3003,6 +3124,7 @@ def build_graph(
 
 
 __all__ = [
+    "INTENT_POLICIES",
     "OPTIONAL_TOOLS",
     "REPORT_TOOLS",
     "AgentState",
@@ -3013,6 +3135,7 @@ __all__ = [
     "ExplorationAnswer",
     "FocusedAnalysis",
     "Intent",
+    "IntentPolicy",
     "QuickFactAnswer",
     "ReportToolName",
     "Thesis",
