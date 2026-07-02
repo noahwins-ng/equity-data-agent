@@ -15,16 +15,18 @@ import { type DedupeState, type ProseSegment, parseInlineChips, parseProse } fro
 
 function renderSegment(seg: ProseSegment, key: number) {
   if (seg.type === "chip") {
-    // QNT-286: borderless. The bordered pill read as a "ransom-note"
-    // interruption when it landed mid-sentence every few lines across the
-    // synthesis prose. Dropping the box/border/fill is what de-noises it — the
-    // citation recedes into the prose instead of boxing out of it. Tone holds
-    // at zinc-400 / 10px so the supplementary label still clears WCAG AA
-    // contrast (a dimmer/smaller tier fell below 4.5:1 on the card grounds).
+    // QNT-295: a subtle boxed pill, restored. QNT-286 went borderless to kill
+    // the "ransom-note" repetition, but with the box gone the label read as
+    // unstyled noise. QNT-287 fixed the actual cause (repetition — now one chip
+    // per source-run), so the box is viable again and looks intentional. Kept
+    // deliberately quieter than the tone-coloured classification badges
+    // (VERDICT / ASPECT_LABEL): a muted zinc border (700/60) + faint fill so a
+    // source citation reads as secondary to a classification label. Tone holds
+    // at zinc-400 / 10px for WCAG AA.
     return (
       <span
         key={key}
-        className="mx-0.5 font-mono text-[10px] uppercase tracking-wide text-zinc-400"
+        className="mx-0.5 inline-block rounded border border-zinc-700/60 bg-zinc-900/50 px-1 py-px font-mono text-[10px] uppercase tracking-wide text-zinc-400"
         title="cited source"
       >
         {seg.text}
