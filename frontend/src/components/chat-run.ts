@@ -182,3 +182,25 @@ export function bindToolResult<
       : row,
   );
 }
+
+// ─── QNT-299: degraded-tool note ───────────────────────────────────────────
+//
+// `degraded_tools` on the done event carries bare report-tool names that
+// either hit a required-tool error or (news) were silently dropped after
+// retry exhaustion this turn. Mirrors the backend's `_TOOL_LABELS` mapping
+// (agent_chat.py) so the copy the user sees matches the tool-call rows they
+// already watched stream in — never the raw error internals.
+const DEGRADED_TOOL_LABELS: Record<string, string> = {
+  company: "Company",
+  technical: "Technicals",
+  fundamental: "Fundamentals",
+  news: "News",
+  comparison_metrics: "Comparison metrics",
+};
+
+// Returns null when nothing degraded (the clean-turn case renders no note).
+export function degradedToolsNote(degradedTools: string[]): string | null {
+  if (degradedTools.length === 0) return null;
+  const labels = degradedTools.map((name) => DEGRADED_TOOL_LABELS[name] ?? name);
+  return `${labels.join(", ")} unavailable this turn.`;
+}

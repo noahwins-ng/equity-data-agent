@@ -34,7 +34,7 @@ from fastapi import HTTPException
 from shared.tickers import TICKER_METADATA, TICKERS
 
 from api.clickhouse import get_client
-from api.formatters import format_ratio, format_signed_pct
+from api.formatters import format_as_of_footer, format_ratio, format_signed_pct
 
 _INDICATOR_COLUMNS = (
     "rsi_14",
@@ -349,4 +349,5 @@ def build_technical_report(ticker: str) -> str:
     for label, _, _, _ in _TIMEFRAMES:
         lines.extend(_render_section(label, rows_by_label[label]))
         lines.append("")
+    lines.append(format_as_of_footer(as_of))
     return "\n".join(lines).rstrip() + "\n"

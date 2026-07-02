@@ -11,6 +11,7 @@ See QNT-69 (report template design) and QNT-87 (|EPS| < $0.10 → P/E = N/M).
 from __future__ import annotations
 
 import math
+from datetime import date
 
 
 def _is_missing(value: float | None) -> bool:
@@ -87,7 +88,22 @@ def pe_na_reason(eps: float | None) -> str:
     return "data unavailable"
 
 
+def format_as_of_footer(value: date | None) -> str:
+    """Machine-parseable as-of date line, appended to every report body.
+
+    Distinct from each report's human-readable "As of ..." header prose
+    (which varies in wording per report kind) -- this single fixed-format
+    line lets any consumer (the agent's freshness read, tests) pull a
+    report's data date with one regex instead of parsing per-kind header
+    prose (QNT-299).
+    """
+    if value is None:
+        return "AS_OF: N/M (no dated data available)"
+    return f"AS_OF: {value.isoformat()}"
+
+
 __all__ = [
+    "format_as_of_footer",
     "format_currency",
     "format_pct",
     "format_ratio",

@@ -27,6 +27,7 @@ from fastapi import HTTPException
 from shared.tickers import TICKER_METADATA, TICKERS
 
 from api.clickhouse import get_client
+from api.formatters import format_as_of_footer
 from api.templates.fundamental import _multiple_label
 from api.templates.technical import _trend_label
 
@@ -176,7 +177,16 @@ def build_company_report(ticker: str, profile: str = "full") -> str:
     if profile == "compact":
         # Numbers (CONTEXT NOW) verbatim + business + risks; drop the
         # competitor / watch lists the thesis rarely quotes.
-        return "\n".join([*header, "", "## KEY RISKS", *_format_bullets(risks)])
+        return "\n".join(
+            [
+                *header,
+                "",
+                "## KEY RISKS",
+                *_format_bullets(risks),
+                "",
+                format_as_of_footer(date.fromisoformat(today)),
+            ]
+        )
 
     lines = [
         *header,
@@ -189,5 +199,7 @@ def build_company_report(ticker: str, profile: str = "full") -> str:
         "",
         "## WATCH",
         *_format_bullets(watch),
+        "",
+        format_as_of_footer(date.fromisoformat(today)),
     ]
     return "\n".join(lines)

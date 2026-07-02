@@ -9,7 +9,7 @@
 
 import { memo } from "react";
 
-import { hasAnswerSurface, isComposing, showCardProse } from "../chat-run";
+import { degradedToolsNote, hasAnswerSurface, isComposing, showCardProse } from "../chat-run";
 import { ComparisonCard } from "./comparison-card";
 import { ComposingBubble } from "./composing-bubble";
 import { ConversationalCard } from "./conversational-card";
@@ -39,6 +39,13 @@ export const RunBlock = memo(function RunBlock({
       ? Math.max(0, Math.min(100, Math.round(run.stats.grounding_rate * 100)))
       : null;
   const showGroundingWarning = groundingPct !== null && groundingPct < 100;
+  // QNT-299: degraded-tool note -- one muted line when a required tool
+  // errored or an optional tool (news) was silently dropped this turn.
+  const degradedNote = degradedToolsNote(run.stats?.degraded_tools ?? []);
+  // QNT-299: data as-of -- the staleness bottleneck across this turn's
+  // gathered reports. Absent when no gathered report carried a footer
+  // (conversational/followup turns that fired no tools, stubbed graphs).
+  const dataAsOf = run.stats?.data_as_of ?? null;
   // Hide free-form prose when the run produced any structured card —
   // each card renders its own prose with chips. Only show standalone
   // prose when the run is mid-stream and no card has arrived yet.
@@ -229,6 +236,20 @@ export const RunBlock = memo(function RunBlock({
           Some numbers in this answer were not found in the supplied reports.
           Groundedness: {groundingPct}%. Verify before relying on them.
         </div>
+      )}
+
+      {/* QNT-299: degraded-tool note -- surfaces a required-tool failure or a
+        silently-dropped optional tool (news) instead of leaving the gap
+        invisible. Generic per-report-kind copy only, never raw error text. */}
+      {degradedNote && (
+        <p className="font-mono text-[10px] italic text-zinc-500">{degradedNote}</p>
+      )}
+
+      {/* QNT-299: data as-of -- the staleness bottleneck across this turn's
+        gathered reports, so "may be stale" in the disclaimer below has a
+        concrete date attached. */}
+      {dataAsOf && (
+        <p className="font-mono text-[10px] italic text-zinc-500">Data as of {dataAsOf}</p>
       )}
 
       {/* Disclaimer footer (QNT-195) — shown once any result card is present.

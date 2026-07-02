@@ -2962,3 +2962,185 @@ def test_done_tools_count_zero_when_gather_skipped(
     done = frames[-1][1]
     assert "gather" not in done["intent_path"]
     assert done["tools_count"] == 0
+
+
+# ─── QNT-299: warm-thread trust affordances (context anchor / degraded tools /
+# data as-of) on the done event ──────────────────────────────────────────────
+
+
+def test_done_analysis_ticker_reflects_rebase(
+    client: TestClient,
+    _path_stub_factory: Any,
+) -> None:
+    """AC1: a rebase turn ("compare to AAPL" on the NVDA page) resolves to a
+    different analysis_ticker than the page ticker -- the done event carries
+    the ticker the agent actually anchored to, not the request ticker."""
+    _path_stub_factory(
+        intent="thesis",
+        intent_path=["classify", "plan", "gather", "synthesize", "narrate"],
+        analysis_ticker="AAPL",
+    )
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "compare to AAPL"})
+    done = _parse_sse(r.text)[-1][1]
+    assert done["analysis_ticker"] == "AAPL"
+
+
+def test_done_degraded_tools_flags_required_tool_error(
+    client: TestClient,
+    _path_stub_factory: Any,
+) -> None:
+    """AC2: a required-tool failure (technical) surfaces in degraded_tools."""
+    _path_stub_factory(
+        intent="thesis",
+        intent_path=["classify", "plan", "gather", "synthesize", "narrate"],
+        plan=["technical", "fundamental"],
+        reports={"fundamental": "## fundamental\nAS_OF: 2026-04-16\n"},
+        errors={"technical": "[error] timeout: upstream unavailable"},
+    )
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
+    done = _parse_sse(r.text)[-1][1]
+    assert done["degraded_tools"] == ["technical"]
+
+
+def test_done_degraded_tools_flags_silent_optional_drop(
+    client: TestClient,
+    _path_stub_factory: Any,
+) -> None:
+    """AC2: news (OPTIONAL_TOOLS) planned but absent from both reports and
+    errors -- the silent-drop contract -- still surfaces in degraded_tools so
+    the card can render "news unavailable this turn"."""
+    _path_stub_factory(
+        intent="thesis",
+        intent_path=["classify", "plan", "gather", "synthesize", "narrate"],
+        plan=["technical", "news"],
+        reports={"technical": "## technical\nAS_OF: 2026-04-16\n"},
+        errors={},
+    )
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
+    done = _parse_sse(r.text)[-1][1]
+    assert done["degraded_tools"] == ["news"]
+
+
+def test_done_degraded_tools_empty_on_clean_turn(
+    client: TestClient,
+    _path_stub_factory: Any,
+) -> None:
+    """AC2: a turn where every planned tool produced a report renders no
+    degraded note."""
+    _path_stub_factory(
+        intent="thesis",
+        intent_path=["classify", "plan", "gather", "synthesize", "narrate"],
+        plan=["technical", "news"],
+        reports={
+            "technical": "## technical\nAS_OF: 2026-04-16\n",
+            "news": "## news\nAS_OF: 2026-04-16\n",
+        },
+        errors={},
+    )
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
+    done = _parse_sse(r.text)[-1][1]
+    assert done["degraded_tools"] == []
+
+
+def test_done_data_as_of_takes_oldest_report_date(
+    client: TestClient,
+    _path_stub_factory: Any,
+) -> None:
+    """AC3: data_as_of is the OLDEST AS_OF footer across the gathered
+    reports -- the staleness bottleneck, not the freshest report's date."""
+    _path_stub_factory(
+        intent="thesis",
+        intent_path=["classify", "plan", "gather", "synthesize", "narrate"],
+        plan=["technical", "news"],
+        reports={
+            "technical": "## technical\nAS_OF: 2026-04-16\n",
+            "news": "## news\nAS_OF: 2026-03-01\n",
+        },
+    )
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
+    done = _parse_sse(r.text)[-1][1]
+    assert done["data_as_of"] == "2026-03-01"
+
+
+def test_done_data_as_of_none_without_footer(
+    client: TestClient,
+    _path_stub_factory: Any,
+) -> None:
+    """AC3: no gathered report carried a parseable AS_OF footer -> None,
+    never a fabricated date."""
+    _path_stub_factory(
+        intent="thesis",
+        intent_path=["classify", "plan", "gather", "synthesize", "narrate"],
+        plan=["technical"],
+        reports={"technical": "## technical\nno footer here\n"},
+    )
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
+    done = _parse_sse(r.text)[-1][1]
+    assert done["data_as_of"] is None
+
+
+def test_done_degraded_tools_ignores_stale_followup_errors(
+    client: TestClient,
+    _path_stub_factory: Any,
+) -> None:
+    """Regression (code-review catch): a followup's plan_node/gather_node
+    never touch ``errors`` (graph.py explicitly returns only
+    plan/reports/retrieved_sources there to avoid clobbering the
+    checkpointer-hydrated bundle), so a required-tool failure from an
+    EARLIER turn persists verbatim in ``state["errors"]`` on every later
+    followup. Without the followup gate, this would render a permanent
+    false "Technicals unavailable this turn" note long after the failure
+    resolved. A followup turn must never surface stale errors."""
+    _path_stub_factory(
+        intent="followup",
+        intent_path=["classify", "synthesize", "narrate"],
+        plan=[],
+        reports={"technical": "## technical\nAS_OF: 2026-04-16\n"},
+        errors={"technical": "[error] timeout: upstream unavailable"},
+    )
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "why?"})
+    done = _parse_sse(r.text)[-1][1]
+    assert done["degraded_tools"] == []
+
+
+def test_done_comparison_scans_both_tickers_for_as_of_and_degraded(
+    client: TestClient,
+    _path_stub_factory: Any,
+) -> None:
+    """Regression (code-review catch): a rich 2-ticker comparison's SSE-layer
+    ``reports`` local is only the PRIMARY compared ticker's bundle
+    (gather_node sets ``reports = reports_by_ticker[comparison_tickers[0]]``)
+    -- the secondary ticker's staleness and drops must still surface via
+    ``reports_by_ticker``, not go invisible."""
+    _path_stub_factory(
+        intent="comparison",
+        intent_path=["classify", "plan", "gather", "synthesize", "narrate"],
+        plan=["technical", "news"],
+        comparison_tickers=["AAPL", "NVDA"],
+        # SSE-layer ``reports`` mirrors the real gather_node output: primary
+        # (AAPL) only, fresher than the secondary and with no drop.
+        reports={
+            "technical": "## technical AAPL\nAS_OF: 2026-04-16\n",
+            "news": "## news AAPL\nAS_OF: 2026-04-16\n",
+        },
+        reports_by_ticker={
+            "AAPL": {
+                "technical": "## technical AAPL\nAS_OF: 2026-04-16\n",
+                "news": "## news AAPL\nAS_OF: 2026-04-16\n",
+            },
+            # Secondary (NVDA): older data AND news silently dropped.
+            "NVDA": {"technical": "## technical NVDA\nAS_OF: 2026-03-01\n"},
+        },
+    )
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "compare to AAPL"})
+    done = _parse_sse(r.text)[-1][1]
+    assert done["data_as_of"] == "2026-03-01"
+    assert done["degraded_tools"] == ["news"]
