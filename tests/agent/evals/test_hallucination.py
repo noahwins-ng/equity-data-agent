@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import pytest
-from agent.evals.hallucination import HallucinationResult, check, extract_numbers
+from agent.evals.hallucination import (
+    HallucinationResult,
+    _extract_scaled,
+    check,
+    extract_numbers,
+)
 
 
 class TestExtractNumbers:
@@ -167,6 +172,74 @@ class TestMagnitudeUnit:
         result = check(thesis, reports)
         assert not result.ok
         assert "2.5" in result.unsupported
+
+
+class TestScaleAwareGrounding:
+    """QNT-297: a claimed scale is checked against the report, so a misquoted
+    magnitude ("$5M" from a report's "$5B") is flagged rather than accepted.
+
+    Background: the QNT-255 unit-strip made "$5M" and "$5B" both canonicalise
+    to "5", collapsing scale. Comparing (mantissa, scale) pairs restores the
+    scale discipline WITHOUT reviving the QNT-255 false positive — a spelled-out
+    "$2.5 trillion" is folded to the same tag as a report's "$2.5T", and a bare
+    mantissa on either side never conflicts.
+    """
+
+    def test_wrong_scale_is_flagged(self) -> None:
+        # AC1: answer says millions, report only ever said billions.
+        result = check("Deal size was $5M (source: news).", ["Firmus $5B AI deal"])
+        assert not result.ok
+        assert "5" in result.unsupported
+
+    def test_spelled_trillion_matches_glued_report(self) -> None:
+        # AC1: "$2.5 trillion" (expanded) is supported by a report "$2.5T".
+        result = check("Market cap of $2.5 trillion (source: news).", ["Breaches $2.5T"])
+        assert result.ok
+        assert result.unsupported == ()
+
+    def test_spelled_billion_matches_glued_report(self) -> None:
+        # AC1: "$14 billion" is supported by a report "$14B".
+        result = check("A $14 billion AI push (source: news).", ["$14B AI Push"])
+        assert result.ok
+        assert result.unsupported == ()
+
+    def test_bare_mantissa_matches_any_report_scale(self) -> None:
+        # AC1: a bare "5" (no scale) is unchanged behaviour — supported by a
+        # report's "$5B". This is the QNT-255-preserving branch.
+        result = check("The figure was 5 (source: news).", ["valued at $5B"])
+        assert result.ok
+        assert result.unsupported == ()
+
+    def test_bare_report_mantissa_supports_any_claimed_scale(self) -> None:
+        # A report that wrote the mantissa bare (no unit) gives no evidence of
+        # a scale mismatch, so a claimed "$5M" is NOT flagged against it.
+        result = check("Deal size was $5M (source: news).", ["the figure was 5"])
+        assert result.ok
+        assert result.unsupported == ()
+
+    def test_matching_scale_is_supported(self) -> None:
+        result = check("A $5B round (source: news).", ["closed a $5B round"])
+        assert result.ok
+
+    def test_absent_value_still_flagged_regardless_of_scale(self) -> None:
+        # Defence: the scale layer is additive — a mantissa absent from every
+        # report is still flagged by the existing magnitude gate.
+        result = check("Worth $9B (source: news).", ["only ever mentions $5B"])
+        assert not result.ok
+        assert "9" in result.unsupported
+
+    def test_report_with_both_bare_and_scaled_does_not_conflict(self) -> None:
+        # If the corpus wrote the mantissa both bare and scaled, the bare form
+        # clears any claimed scale (no evidence of mismatch).
+        result = check("Deal was $5M (source: news).", ["a $5B deal", "roughly 5 units"])
+        assert result.ok
+
+    def test_extract_scaled_tags_units(self) -> None:
+        assert _extract_scaled("$5M") == frozenset({("5", "M")})
+        assert _extract_scaled("$2.5 trillion") == frozenset({("2.5", "T")})
+        assert _extract_scaled("$14 billion") == frozenset({("14", "B")})
+        assert _extract_scaled("20k units") == frozenset({("20", "K")})
+        assert _extract_scaled("the figure 5") == frozenset({("5", None)})
 
 
 class TestCheck:

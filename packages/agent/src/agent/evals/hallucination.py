@@ -20,12 +20,24 @@ Verbatim vs. value-equivalent:
     writing the bare mantissa. The report's ``$2.5T`` token did not extract a
     ``2.5`` (the right-boundary rejected the glued ``T``), so the grounded
     mantissa read as unsupported — a false positive that flagged clean
-    TSLA/META news answers (the QNT-255 clean-window finding). We now strip
-    the unit symmetrically, like ``%``. Blind spot: this collapses scale, so
-    ``$5M`` is accepted against a report ``$5B`` (both → ``5``); accepted for
-    the same reason as the sign / window blind spots below — a misquoted
-    scale is not arithmetic, and the per-section structure / LLM-as-judge
-    surface gross magnitude errors at a higher level.
+    TSLA/META news answers (the QNT-255 clean-window finding). ``_canonicalise``
+    strips the unit symmetrically (like ``%``) so both forms reduce to the bare
+    mantissa ``14`` for value-equality.
+
+    Scale-aware support (QNT-297): stripping the unit for value-equality would,
+    on its own, collapse SCALE — an answer's ``$5M`` counted as supported by a
+    report's ``$5B`` (both → ``5``). A misquoted scale is a wrong magnitude, not
+    idiom, and for a finance product it is the most screenshot-able numeric
+    error the agent could ship, so — unlike the sign / window blind spots below
+    — we do NOT accept it. ``check`` compares ``(mantissa, scale)`` pairs
+    (``_extract_scaled``): a spelled-out scale word immediately after a number
+    (``$2.5 trillion``) is folded onto the mantissa so it still matches a
+    report's ``$2.5T``, and a bare mantissa with no scale in either text
+    compares exactly as before. Only a *positive* conflict flags — the answer
+    says ``M`` while every report occurrence of that mantissa says ``B``. A
+    claimed bare mantissa still matches any report scale, and a report bare
+    mantissa (no glued unit) supports any claimed scale (no evidence of a
+    mismatch), so the QNT-255 clean-window fix is preserved.
 
 Sign-magnitude support (QNT-128):
     Reports format YoY changes with explicit signs (``Free cash flow:
@@ -64,6 +76,7 @@ False-positive risk:
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -115,6 +128,19 @@ _PERIOD_IDIOM_RE = re.compile(
 # the unit alternation inside _NUMBER_RE.
 _MAGNITUDE_UNIT_RE = re.compile(r"(?<=\d)(?:bn|tn|mn|[kmbt])$", re.IGNORECASE)
 
+# Canonical scale letter for every glued-unit form _NUMBER_RE can match
+# (QNT-297). Keys are lower-cased; two-letter forms come first so a matched
+# "bn"/"tn"/"mn" is never mis-read as a bare "b"/"t"/"m".
+_SCALE_MAP = {"k": "K", "m": "M", "mn": "M", "b": "B", "bn": "B", "t": "T", "tn": "T"}
+
+# Spelled-out scale word immediately after a number ("$2.5 trillion", "$14
+# billion"). Folded onto the mantissa as the glued single-letter suffix before
+# extraction so the answer's expanded form tags the same scale as a report's
+# compact "$2.5T". The (?<=\d) lookbehind ties the word to the preceding
+# number; trailing plural "s" is tolerated ("2.5 trillions").
+_SPELLED_SCALE_RE = re.compile(r"(?<=\d)\s+(thousand|million|billion|trillion)s?\b", re.IGNORECASE)
+_SPELLED_MAP = {"thousand": "K", "million": "M", "billion": "B", "trillion": "T"}
+
 
 @dataclass(frozen=True)
 class HallucinationResult:
@@ -153,6 +179,25 @@ def _strip_period_idiom(text: str) -> str:
     return _PERIOD_IDIOM_RE.sub(" ", text)
 
 
+def _glue_spelled_scale(text: str) -> str:
+    """Fold a spelled-out scale word onto the number before it (QNT-297).
+
+    ``$2.5 trillion`` → ``$2.5T``, ``$14 billion`` → ``$14B`` so the answer's
+    expanded form carries the same glued scale a report writes compactly. A
+    no-op for ``extract_numbers``' bare-value output (``$2.5T`` still
+    canonicalises to ``2.5``); it is what lets ``_extract_scaled`` tag the
+    scale ``T`` on the answer side.
+    """
+    return _SPELLED_SCALE_RE.sub(lambda m: _SPELLED_MAP[m.group(1).lower()], text)
+
+
+def _prepare(text: str) -> str:
+    """Shared pre-extraction pipeline: strip scaffold + window idiom, then
+    fold spelled-out scale words. Used by both ``extract_numbers`` and
+    ``_extract_scaled`` so the two see the same token stream."""
+    return _glue_spelled_scale(_strip_period_idiom(_strip_scaffold(text)))
+
+
 def _canonicalise(token: str) -> str:
     """Normalise a numeric token to its value form.
 
@@ -173,12 +218,37 @@ def _canonicalise(token: str) -> str:
         cleaned = cleaned[:-1]
     # A magnitude unit glued to the digits ($2.5T / $14B / 20k) is a scale
     # label, like %/$ — drop it so the report's "$14B" and a thesis's expanded
-    # "$14 billion" both reduce to "14". The (?<=\d) guard keeps it tied to a
-    # number. Blind spot: this also collapses scale, so a thesis "$5M" reads as
-    # supported by a report "$5B" (both → "5"); accepted like the sign /
-    # window blind spots above — a misquoted scale is not arithmetic.
+    # "$14 billion" both reduce to "14" for value-equality. The (?<=\d) guard
+    # keeps it tied to a number. This drops the scale from the bare value on
+    # purpose; the scale itself is recovered separately by _split_scale and
+    # checked for conflicts in ``check`` (QNT-297), so "$5M" is NOT accepted
+    # against a report "$5B".
     cleaned = _MAGNITUDE_UNIT_RE.sub("", cleaned)
     return cleaned.replace(",", "")
+
+
+def _split_scale(token: str) -> tuple[str, str | None]:
+    """Split a raw numeric token into ``(canonical_value, scale)`` (QNT-297).
+
+    ``canonical_value`` is the ``_canonicalise`` form (sign preserved, like
+    ``extract_numbers``); ``scale`` is the canonical letter for a glued
+    magnitude unit (``$2.5T`` → ``T``, ``$14B`` → ``B``, ``20k`` → ``K``) or
+    ``None`` when the token carried no unit. The unit is read off the ORIGINAL
+    token before ``_canonicalise`` strips it, so the two stay in sync.
+    """
+    unit = _MAGNITUDE_UNIT_RE.search(token)
+    scale = _SCALE_MAP[unit.group(0).lower()] if unit else None
+    return _canonicalise(token), scale
+
+
+def _extract_pairs(text: str) -> frozenset[tuple[str, str | None]]:
+    """Return the ``(canonical_value, scale)`` pairs in ``text`` in one pass.
+
+    The single extraction primitive: ``extract_numbers`` drops the scale and
+    ``_extract_scaled`` sign-strips the value, but both derive from this so
+    ``check`` runs ``_prepare`` + ``_NUMBER_RE`` once per text, not twice.
+    """
+    return frozenset(_split_scale(m) for m in _NUMBER_RE.findall(_prepare(text)))
 
 
 def extract_numbers(text: str) -> frozenset[str]:
@@ -188,8 +258,17 @@ def extract_numbers(text: str) -> frozenset[str]:
     print it. Idempotent under canonicalisation: ``extract_numbers(text) ==
     extract_numbers(canonicalise_string(text))``.
     """
-    stripped = _strip_period_idiom(_strip_scaffold(text))
-    return frozenset(_canonicalise(m) for m in _NUMBER_RE.findall(stripped))
+    return frozenset(value for value, _ in _extract_pairs(text))
+
+
+def _extract_scaled(text: str) -> frozenset[tuple[str, str | None]]:
+    """Return the ``(magnitude, scale)`` pairs in ``text`` (sign stripped).
+
+    Same token stream as ``extract_numbers``, but each token keeps its scale
+    tag instead of collapsing to the bare mantissa — the input to ``check``'s
+    scale-conflict rule.
+    """
+    return frozenset((_magnitude(value), scale) for value, scale in _extract_pairs(text))
 
 
 def _magnitude(token: str) -> str:
@@ -210,12 +289,45 @@ def check(thesis: str, reports: Iterable[str]) -> HallucinationResult:
     extraction so a number that appears in any report (regardless of which)
     is considered supported. Support is compared at the magnitude level
     (sign stripped) — see the module docstring for why.
+
+    On top of magnitude support, a claimed scale that positively conflicts
+    with the report is flagged (QNT-297): the answer says ``M`` while every
+    report occurrence of that mantissa says ``B``. A bare claimed mantissa, or
+    a report mantissa written bare (no glued unit), never conflicts — that
+    preserves the QNT-255 clean-window fix.
     """
-    thesis_nums = extract_numbers(thesis)
-    corpus = "\n".join(reports)
-    report_nums = extract_numbers(corpus)
-    report_magnitudes = frozenset(_magnitude(n) for n in report_nums)
-    unsupported = tuple(sorted(n for n in thesis_nums if _magnitude(n) not in report_magnitudes))
+    # One extraction pass per text; every view below is derived from the pairs.
+    thesis_pairs = _extract_pairs(thesis)
+    report_pairs = _extract_pairs("\n".join(reports))
+    thesis_nums = frozenset(value for value, _ in thesis_pairs)
+    report_nums = frozenset(value for value, _ in report_pairs)
+    report_magnitudes = frozenset(_magnitude(value) for value in report_nums)
+
+    # Scales each magnitude was written with (report) vs claimed (thesis).
+    report_scales: dict[str, set[str | None]] = defaultdict(set)
+    for value, scale in report_pairs:
+        report_scales[_magnitude(value)].add(scale)
+    claimed_scales: dict[str, set[str]] = defaultdict(set)
+    for value, scale in thesis_pairs:
+        if scale is not None:
+            claimed_scales[_magnitude(value)].add(scale)
+
+    unsupported_set: set[str] = set()
+    for n in thesis_nums:
+        magnitude = _magnitude(n)
+        if magnitude not in report_magnitudes:
+            unsupported_set.add(n)  # value absent from every report
+            continue
+        claimed = claimed_scales.get(magnitude)
+        if not claimed:
+            continue  # bare claim → any report scale supports (QNT-255)
+        report_scale_set = report_scales.get(magnitude, set())
+        if None in report_scale_set:
+            continue  # report wrote a bare number → no evidence of mismatch
+        if claimed & report_scale_set:
+            continue  # a claimed scale matches a report scale
+        unsupported_set.add(n)  # positive scale conflict (answer M, report B)
+    unsupported = tuple(sorted(unsupported_set))
     return HallucinationResult(
         ok=not unsupported,
         unsupported=unsupported,
