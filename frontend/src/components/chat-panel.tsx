@@ -95,6 +95,8 @@ function redactUnsupportedNumbers(text: string, unsupported: readonly string[] =
 
 function Composer({
   ticker,
+  contextTicker,
+  onContextChipClick,
   sources,
   disabled,
   value,
@@ -103,6 +105,11 @@ function Composer({
   focusKey,
 }: {
   ticker: string | null;
+  // QNT-299: the ticker the agent actually anchored the LAST turn to (may
+  // diverge from ``ticker``, the URL-page ticker, on a rebase). null before
+  // any turn has completed.
+  contextTicker: string | null;
+  onContextChipClick: () => void;
   sources: string[];
   disabled: boolean;
   value: string;
@@ -150,6 +157,21 @@ function Composer({
           <span className="rounded border border-zinc-800 bg-zinc-900/60 px-1.5 py-0.5 font-mono text-zinc-500">
             no ticker
           </span>
+        )}
+        {/* QNT-299: context-anchor chip -- what the agent resolved "it" to on
+          the last completed turn. Surfaces a mis-anchored followup (rebase to
+          a different ticker) BEFORE the answer arrives, instead of only after.
+          Click prefills a ticker-switch starter phrase -- cheapest useful
+          affordance, no ticker-picker UI. */}
+        {contextTicker && (
+          <button
+            type="button"
+            onClick={onContextChipClick}
+            title="Click to switch the conversation to a different ticker"
+            className="rounded border border-sky-700/40 bg-sky-900/20 px-1.5 py-0.5 font-mono text-sky-400 transition hover:bg-sky-900/40"
+          >
+            Context: {contextTicker}
+          </button>
         )}
       </div>
       <div className="flex items-end gap-2">
@@ -623,6 +645,21 @@ export function ChatPanel() {
 
   const isStreaming = runs.some((r) => r.status === "streaming");
 
+  // QNT-299: the context-anchor chip's source -- the most recent completed
+  // turn's resolved analysis_ticker, scanning back from the latest run so a
+  // still-streaming turn doesn't blank the chip before its own `done` lands.
+  const contextTicker = useMemo(() => {
+    for (let i = runs.length - 1; i >= 0; i--) {
+      const t = runs[i].stats?.analysis_ticker;
+      if (t) return t;
+    }
+    return null;
+  }, [runs]);
+
+  const handleContextChipClick = useCallback(() => {
+    prefillComposer("Switch to ");
+  }, [prefillComposer]);
+
   // QNT-247: announce the streamed answer of the most recent run to screen
   // readers through a debounced aria-live=polite region (frontend audit #2).
   // Only the latest run can be streaming; announcing its settled answer covers
@@ -678,6 +715,8 @@ export function ChatPanel() {
 
       <Composer
         ticker={ticker}
+        contextTicker={contextTicker}
+        onContextChipClick={handleContextChipClick}
         sources={sources}
         disabled={isStreaming}
         value={composerInput}

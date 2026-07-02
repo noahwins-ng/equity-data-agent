@@ -241,6 +241,89 @@ def _tool_label(name: str) -> str:
     return _TOOL_LABELS.get(name, name)
 
 
+# QNT-299: report templates append a uniform ``AS_OF: YYYY-MM-DD`` footer
+# (see api.formatters.format_as_of_footer) as the LAST line of the report
+# body. Anchored to the end of the body (rather than a bare search) so a
+# folded RAG hit or a headline snippet earlier in the body can never be
+# misread as the report's own footer -- only the literal trailing line counts.
+_AS_OF_PATTERN = re.compile(r"AS_OF: (\d{4}-\d{2}-\d{2})\s*$")
+
+
+def _report_bundles(
+    reports: dict[str, str], reports_by_ticker: dict[str, dict[str, str]]
+) -> list[dict[str, str]]:
+    """Return the report bundle(s) actually gathered this turn.
+
+    A comparison turn's ``reports`` (SSE-layer local) is only the PRIMARY
+    compared ticker's bundle (``gather_node`` sets it to
+    ``reports_by_ticker[comparison_tickers[0]]`` for the rich two-ticker
+    shape) -- the secondary ticker's reports live only in
+    ``reports_by_ticker``. Reading ``reports`` alone would make the as-of
+    date and degraded-tool note blind to the non-primary side. When
+    ``reports_by_ticker`` is populated (2-ticker rich comparison), return
+    every ticker's bundle; otherwise (every other intent, and the 3-4 way
+    lean comparison which never populates it) fall back to ``reports``.
+    """
+    if reports_by_ticker:
+        return list(reports_by_ticker.values())
+    return [reports]
+
+
+def _extract_data_as_of(bundles: list[dict[str, str]]) -> str | None:
+    """Return the OLDEST as-of date across every gathered report bundle.
+
+    The oldest (not newest) date is the staleness bottleneck for the answer
+    as a whole -- a thesis grounded in fresh technicals but week-old news is
+    only as fresh as the news; a comparison is only as fresh as its stalest
+    side. None when no report carried a parseable footer (a stubbed test
+    graph, or a comparison_metrics JSON blob that carries no footer line).
+    """
+    dates = [
+        m.group(1)
+        for bundle in bundles
+        for body in bundle.values()
+        if (m := _AS_OF_PATTERN.search(body))
+    ]
+    return min(dates) if dates else None
+
+
+def _degraded_tools(
+    intent: str,
+    plan: list[str],
+    bundles: list[dict[str, str]],
+    errors: dict[str, str],
+) -> list[str]:
+    """Bare tool names that degraded this turn: a required-tool error, or an
+    optional tool (news) silently dropped after retry exhaustion on any
+    gathered bundle.
+
+    ``errors`` here already excludes optional-tool failures (``_gather_reports``
+    never records them — see OPTIONAL_TOOLS contract), so every key is a
+    required-tool failure -- EXCEPT on a followup turn: ``plan_node`` and
+    ``gather_node`` deliberately never touch ``errors`` there (returning only
+    ``plan``/``reports``/``retrieved_sources``) so the checkpointer-hydrated
+    reports from the prior turn aren't clobbered. That means a followup's
+    ``errors`` is always carried over from whichever earlier turn last wrote
+    it, never this turn's own outcome (a followup literally cannot produce a
+    required-tool error -- its optional RAG search calls degrade to "[]" and
+    never populate ``errors``). Required-tool detection is skipped entirely
+    on followup so a transient failure two turns ago doesn't render a
+    permanent false "unavailable this turn" note. An optional tool that was
+    planned but produced no report and no error is the silent-drop case
+    QNT-299 makes visible; ``plan`` is unconditionally ``[]`` on followup, so
+    this half is naturally a no-op there already.
+    """
+    required_failed = (
+        {name.rsplit(".", 1)[-1] for name in errors} if intent != "followup" else set()
+    )
+    optional_dropped = {
+        name
+        for name in plan
+        if name in OPTIONAL_TOOLS and any(name not in bundle for bundle in bundles)
+    }
+    return sorted(required_failed | optional_dropped)
+
+
 def _summarise_report(name: str, body: str) -> str:
     """Short, real summary for the ``tool_result`` row.
 
@@ -1110,6 +1193,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
         grounding_rate = float(state.get("grounding_rate", 1.0)) if isinstance(state, dict) else 1.0
         errors = state.get("errors") or {} if isinstance(state, dict) else {}
         reports = state.get("reports") or {} if isinstance(state, dict) else {}
+        reports_by_ticker = state.get("reports_by_ticker") or {} if isinstance(state, dict) else {}
         plan = list(state.get("plan") or []) if isinstance(state, dict) else []
         supervisor_iterations = (
             int(state.get("supervisor_iterations", 0)) if isinstance(state, dict) else 0
@@ -1359,6 +1443,16 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
             else []
         )
 
+        # QNT-299: warm-thread trust affordances. ``resolved_ticker`` is the
+        # context-anchor chip's source (already resolved above for the
+        # suggestions gate). ``bundles`` covers every ticker gathered this
+        # turn (both sides of a rich 2-ticker comparison, not just the
+        # primary) so ``degraded_tools``/``data_as_of`` never go blind to the
+        # non-primary side.
+        report_bundles = _report_bundles(reports, reports_by_ticker)
+        degraded_tools = _degraded_tools(intent, plan, report_bundles, errors)
+        data_as_of = _extract_data_as_of(report_bundles)
+
         yield _sse(
             "done",
             {
@@ -1374,6 +1468,9 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                 "intent_path": intent_path,
                 "supervisor_iterations": supervisor_iterations,
                 "suggestions": suggestions,
+                "analysis_ticker": str(resolved_ticker),
+                "degraded_tools": degraded_tools,
+                "data_as_of": data_as_of,
             },
         )
     finally:

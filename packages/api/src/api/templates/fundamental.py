@@ -31,7 +31,13 @@ from fastapi import HTTPException
 from shared.tickers import TICKER_METADATA, TICKERS
 
 from api.clickhouse import get_client
-from api.formatters import format_pct, format_ratio, format_signed_pct, pe_na_reason
+from api.formatters import (
+    format_as_of_footer,
+    format_pct,
+    format_ratio,
+    format_signed_pct,
+    pe_na_reason,
+)
 
 # Canonical valuation/quality reference rates surfaced in the report body so
 # the agent quotes them from the corpus (ADR-012) instead of leaking the
@@ -597,4 +603,5 @@ def build_fundamental_report(ticker: str) -> str:
         lines.extend(_render_period_section(label, by_period[pt], peer_medians))
         lines.append("")
     lines.append(f"Data: latest available quarterly fundamentals as of {period_end.isoformat()}.")
+    lines.append(format_as_of_footer(period_end))
     return "\n".join(lines)

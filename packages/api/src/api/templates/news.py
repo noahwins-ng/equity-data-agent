@@ -19,6 +19,7 @@ from fastapi import HTTPException
 from shared.tickers import TICKER_METADATA, TICKERS
 
 from api.clickhouse import get_client
+from api.formatters import format_as_of_footer
 
 _MAX_HEADLINES = 20
 _LOOKBACK_DAYS = 14
@@ -82,6 +83,8 @@ def build_news_report(ticker: str) -> str:
                 "",
                 "## SOURCES",
                 "(no headlines in window)",
+                "",
+                format_as_of_footer(None),
             ]
         )
 
@@ -94,4 +97,10 @@ def build_news_report(ticker: str) -> str:
             lines.append(f"    {snippet}")
     lines.append("")
     lines.extend(_sources_section(rows))
+    lines.append("")
+    # QNT-299: the header's "As of {today}" is when the report was generated,
+    # not how stale the underlying headlines are. The footer uses the newest
+    # headline's own date -- rows are DESC by published_at, so rows[0] is it --
+    # so a freshness read reflects the actual data, not the query time.
+    lines.append(format_as_of_footer(rows[0]["published_at"].date()))
     return "\n".join(lines)

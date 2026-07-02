@@ -143,6 +143,8 @@ def test_technical_bullish_overbought_rendering(monkeypatch: pytest.MonkeyPatch)
     assert "### DAILY TREND" in report
     assert "Uptrend" in report
     assert "## SIGNAL" not in report
+    # QNT-299: machine-parseable as-of footer, uses the DAILY section's date.
+    assert report.rstrip().endswith("AS_OF: 2026-04-16")
 
 
 def test_technical_null_indicators_render_as_nm(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -585,6 +587,13 @@ def test_fundamental_static_data_disclaimer_present(
     assert "2025-12-31" in report
 
 
+def test_fundamental_as_of_footer(monkeypatch: pytest.MonkeyPatch) -> None:
+    # QNT-299: machine-parseable as-of footer, uses period_end.
+    _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, [_fund_row()])})
+    report = build_fundamental_report("NVDA")
+    assert report.rstrip().endswith("AS_OF: 2025-12-31")
+
+
 # ---------- fundamental AC2 (QNT-207) ----------
 
 
@@ -769,6 +778,14 @@ def test_news_renders_headlines_without_sentiment(monkeypatch: pytest.MonkeyPatc
     assert "## SOURCES" in report
     assert "finnhub: 1" in report
     assert "reuters: 1" in report
+    # QNT-299: as-of footer uses the newest headline's own date, not "today".
+    assert report.rstrip().endswith("AS_OF: 2026-04-16")
+
+
+def test_news_as_of_footer_nm_when_no_headlines(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_fake(monkeypatch, {"news_raw": _FakeResult(_NEWS_COLS, [])})
+    report = build_news_report("NVDA")
+    assert report.rstrip().endswith("AS_OF: N/M (no dated data available)")
 
 
 def test_news_lookback_and_cap_constants() -> None:
@@ -829,6 +846,8 @@ def test_company_report_renders_static_profile(monkeypatch: pytest.MonkeyPatch) 
     # Spot-check that real editorial content rendered, not just headers.
     assert "AMD" in report  # NVDA competitor
     assert "Data Center revenue growth" in report  # NVDA watch metric
+    # QNT-299: static profile is evergreen -- as-of footer is today's date.
+    assert report.rstrip().endswith(f"AS_OF: {date.today().isoformat()}")
 
 
 def test_company_report_unknown_ticker_404() -> None:

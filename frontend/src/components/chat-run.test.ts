@@ -13,6 +13,7 @@ import {
   announceableAnswer,
   bindToolResult,
   composingLabel,
+  degradedToolsNote,
   hasAnswerSurface,
   isComposing,
   showCardProse,
@@ -295,4 +296,25 @@ test("tool_result with no matching started_at binds nothing", () => {
   const rows: Row[] = [{ name: "technical", started_at: 100 }];
   const after = bindToolResult(rows, { name: "technical", started_at: 999, summary: "x" });
   assert.equal(after[0].result, undefined);
+});
+
+// ─── QNT-299: degradedToolsNote ─────────────────────────────────────────────
+
+test("degradedToolsNote is null on a clean turn", () => {
+  assert.equal(degradedToolsNote([]), null);
+});
+
+test("degradedToolsNote maps a known tool name to its friendly label", () => {
+  assert.equal(degradedToolsNote(["news"]), "News unavailable this turn.");
+});
+
+test("degradedToolsNote joins multiple degraded tools in one line", () => {
+  assert.equal(
+    degradedToolsNote(["technical", "news"]),
+    "Technicals, News unavailable this turn.",
+  );
+});
+
+test("degradedToolsNote falls back to the raw name for an unmapped tool", () => {
+  assert.equal(degradedToolsNote(["earnings_search"]), "earnings_search unavailable this turn.");
 });

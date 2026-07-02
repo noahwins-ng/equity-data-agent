@@ -507,6 +507,18 @@ export type DoneEvent = {
   // land (synthesize-failure conversational fallback carries its own
   // suggestions instead).
   suggestions?: string[];
+  // QNT-299: the ticker the agent actually resolved "it" to this turn --
+  // may differ from the page ticker on a rebase (e.g. "compare to AAPL"
+  // while on /ticker/NVDA). Source for the composer's context-anchor chip.
+  analysis_ticker?: string;
+  // QNT-299: bare report-tool names that degraded this turn -- a required
+  // tool error, or an optional tool (news) silently dropped after retry
+  // exhaustion. Empty when nothing degraded.
+  degraded_tools?: string[];
+  // QNT-299: the oldest AS_OF footer date among this turn's gathered
+  // reports (ISO "YYYY-MM-DD"), i.e. the staleness bottleneck for the
+  // answer. null/absent when no gathered report carried a parseable footer.
+  data_as_of?: string | null;
 };
 
 export type ChatErrorEvent = {
