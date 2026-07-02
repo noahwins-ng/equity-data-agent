@@ -54,6 +54,7 @@ from shared.tickers import TICKER_NAME_ALIASES, TICKERS
 
 from agent.llm import SMALL_NODE_ALIAS, get_llm
 from agent.prompts import SIMPLE_GREETING_INPUTS, ConversationMessage
+from agent.tools import _QUERY_MAX_LEN
 
 # Bare greetings (canonical set, incl. common typos) plus "help" -- a one-word
 # capability ask that, like a greeting, should short-circuit to conversational
@@ -157,6 +158,21 @@ class IntentDecision(BaseModel):
             "'intent' field: 'what did the CEO say about guidance?' is "
             "intent=quick_fact but needs_earnings_search=True. True triggers a "
             "semantic search over the earnings-release archive."
+        ),
+    )
+    search_query: str = Field(
+        default="",
+        description=(
+            "A self-contained retrieval query naming the ticker/entity and topic. "
+            "Produce this ONLY when needs_news_search or needs_earnings_search is "
+            "True; leave it empty ('') otherwise. On a warm thread, resolve "
+            "pronouns and ellipses from the conversation history so the query "
+            "stands alone without the transcript -- e.g. if the prior turn was "
+            "about NVDA and the user asks 'what about the buyback?', the query "
+            "should be 'NVDA buyback', not the bare 'the buyback'. For a cold "
+            "question that already names its subject, just restate the "
+            "ticker/entity and topic ('NVDA lawsuit' for 'what's the latest on "
+            "the NVDA lawsuit?')."
         ),
     )
 
@@ -689,6 +705,78 @@ def extract_tickers(text: str) -> list[str]:
     return seen
 
 
+# QNT-289: ticker-shaped token (2-5 uppercase letters) used by the
+# hallucinated-entity guard below. Common finance/business acronyms that are
+# NOT tickers are excluded so a legitimate rewrite like "NVDA CEO comments"
+# doesn't get rejected for naming "CEO".
+_TICKER_LIKE_RE = re.compile(r"(?<![A-Za-z])[A-Z]{2,5}(?![A-Za-z])")
+_NON_TICKER_ACRONYMS: frozenset[str] = frozenset(
+    {
+        "CEO",
+        "CFO",
+        "COO",
+        "CTO",
+        "IPO",
+        "SEC",
+        "FDA",
+        "GDP",
+        "EPS",
+        "ROI",
+        "ETF",
+        "USD",
+        "API",
+        "KPI",
+        "ESG",
+        "LLC",
+        "INC",
+        "LTD",
+        "SMA",
+        "RSI",
+        "MACD",
+        "US",
+        "UK",
+        "EU",
+        "AI",
+        "IT",
+        "HR",
+        "PR",
+        "YOY",
+        "QOQ",
+    }
+)
+
+
+def sanitize_search_query(search_query: str) -> str:
+    """Guardrail the classifier's rewritten retrieval query before use.
+
+    Returns the trimmed query when it passes both guards, or ``""`` when it
+    should be rejected. Callers fall back to the raw question on ``""`` --
+    the QNT-280 keyword-floor pattern: the fallback IS today's behaviour, so a
+    rejection can never regress cold-turn retrieval, only decline an upgrade.
+
+    * Length cap -- mirrors the tool-side ``_QUERY_MAX_LEN`` cap in
+      ``agent.tools`` (``search_news`` / ``search_earnings`` already degrade
+      to "[]" on an over-long query; rejecting here instead falls back to the
+      raw question rather than silently returning no hits).
+    * Hallucinated-entity guard -- a ticker-shaped token (2-5 uppercase
+      letters, excluding common finance acronyms) that is NOT in
+      ``shared.tickers.TICKERS`` means the model named a company outside our
+      coverage universe; reject rather than search on a ticker that isn't ours.
+    """
+    query = search_query.strip()
+    if not query:
+        return ""
+    if len(query) > _QUERY_MAX_LEN:
+        return ""
+    for match in _TICKER_LIKE_RE.finditer(query):
+        token = match.group(0)
+        if token in _NON_TICKER_ACRONYMS:
+            continue
+        if token not in _TICKERS_SET:
+            return ""
+    return query
+
+
 def _heuristic_intent(question: str, *, has_prior_turn: bool = False) -> Intent | None:
     """Cheap keyword classifier.
 
@@ -874,8 +962,18 @@ intent label: "what did the CEO say about guidance?" is intent=quick_fact but \
 needs_earnings_search=True. A question can set BOTH flags ("what did the CEO \
 say about guidance?" -- a named-executive event AND a guidance ask).
 
-Recent conversation (for follow-up detection only; do not use it to pick \
-tools, compute values, or infer a ticker that the user changed):
+Separately, when either search flag above is True, set 'search_query' to a \
+self-contained retrieval query naming the ticker/entity and topic -- this is \
+the ONE field allowed to pull a ticker/entity out of the conversation below. \
+If the question itself already names its subject ("is NVDA involved in a \
+lawsuit?"), just restate it ("NVDA lawsuit"). If the question is elliptical \
+and only makes sense given the prior turn ("what about the buyback?" after an \
+NVDA turn), resolve the missing ticker/entity from the conversation ("NVDA \
+buyback"). Leave 'search_query' as "" when neither search flag is True.
+
+Recent conversation (for follow-up detection and for resolving 'search_query' \
+as described above ONLY; do not use it to change the 'intent' label, pick \
+tools, compute values, or switch which ticker this turn analyzes):
 {history}
 
 Question: {question}
@@ -888,8 +986,9 @@ def classify_intent_with_source(
     config: RunnableConfig | None = None,
     has_prior_turn: bool = False,
     history: Sequence[ConversationMessage] | None = None,
-) -> tuple[Intent, ClassifierSource, bool, bool]:
-    """Return ``(intent, source, needs_news_search, needs_earnings_search)``.
+) -> tuple[Intent, ClassifierSource, bool, bool, str]:
+    """Return ``(intent, source, needs_news_search, needs_earnings_search,
+    search_query)``.
 
     ``source`` identifies which code path resolved the intent:
     - ``"heuristic"`` — keyword matcher decided without an LLM call
@@ -910,6 +1009,14 @@ def classify_intent_with_source(
     thesis. The keyword floor is tuned to stay False on generic asks, so OR-ing
     it can only add recall on targeted asks, never fire a generic one.
 
+    QNT-289: ``search_query`` is the classifier's self-contained retrieval
+    query (ticker/entity + topic, pronouns/ellipses resolved from history),
+    guardrailed by :func:`sanitize_search_query` (length cap + hallucinated-
+    entity rejection). ``""`` on the ``heuristic``/``fallback`` paths (no LLM
+    judgment ran) or when the LLM's rewrite was empty/rejected -- callers fall
+    back to the raw question, which is today's behaviour, so this can only add
+    recall, never regress it.
+
     QNT-181: ``config`` carries the LangGraph CallbackHandler so the
     LLM-fallback path's generation observation nests under the parent trace.
 
@@ -925,7 +1032,7 @@ def classify_intent_with_source(
     heuristic = _heuristic_intent(question, has_prior_turn=has_context)
     if heuristic is not None:
         logger.info("classify intent=%s via=heuristic question=%r", heuristic, question[:80])
-        return heuristic, "heuristic", floor_news, floor_earnings
+        return heuristic, "heuristic", floor_news, floor_earnings, ""
 
     # QNT-220 (#7): the classifier is a small structured call -- tier it to the
     # fast/small alias rather than the 70b synthesis model.
@@ -942,7 +1049,7 @@ def classify_intent_with_source(
         )
     except Exception as exc:  # noqa: BLE001 — bias to thesis on any failure
         logger.warning("classify llm failed, defaulting to thesis: %s", exc)
-        return "thesis", "fallback", floor_news, floor_earnings
+        return "thesis", "fallback", floor_news, floor_earnings, ""
 
     decision: IntentDecision | None = None
     if isinstance(response, IntentDecision):
@@ -954,16 +1061,19 @@ def classify_intent_with_source(
     if decision is not None:
         needs_news_search = decision.needs_news_search or floor_news
         needs_earnings_search = decision.needs_earnings_search or floor_earnings
+        search_query = sanitize_search_query(decision.search_query)
         logger.info(
-            "classify intent=%s needs_news_search=%s needs_earnings_search=%s via=llm question=%r",
+            "classify intent=%s needs_news_search=%s needs_earnings_search=%s "
+            "search_query=%r via=llm question=%r",
             decision.intent,
             needs_news_search,
             needs_earnings_search,
+            search_query,
             question[:80],
         )
-        return decision.intent, "llm", needs_news_search, needs_earnings_search
+        return decision.intent, "llm", needs_news_search, needs_earnings_search, search_query
     logger.warning("classify llm returned unexpected shape, defaulting to thesis")
-    return "thesis", "fallback", floor_news, floor_earnings
+    return "thesis", "fallback", floor_news, floor_earnings, ""
 
 
 def classify_intent(
@@ -979,7 +1089,7 @@ def classify_intent(
     only need the intent. Use ``classify_intent_with_source`` when the
     classifier path (heuristic / llm / fallback) also matters.
     """
-    intent, _, _, _ = classify_intent_with_source(
+    intent, _, _, _, _ = classify_intent_with_source(
         question,
         config=config,
         has_prior_turn=has_prior_turn,
@@ -999,5 +1109,6 @@ __all__ = [
     "extract_tickers",
     "has_comparison_phrase",
     "route_search_corpora",
+    "sanitize_search_query",
     "underspecified_gesture",
 ]

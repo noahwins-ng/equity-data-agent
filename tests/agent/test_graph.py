@@ -832,7 +832,7 @@ def test_classify_default_to_thesis_when_classify_intent_fails(
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda _q, **_: ("thesis", "fallback", False, False),
+        lambda _q, **_: ("thesis", "fallback", False, False, ""),
     )
     graph = build_graph({"technical": _mock_tool("tech")})
 
@@ -856,7 +856,7 @@ def test_quick_fact_intent_narrows_plan_prompt(
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda _q, **_: ("quick_fact", "heuristic", False, False),
+        lambda _q, **_: ("quick_fact", "heuristic", False, False, ""),
     )
     stub_llm.invoke.return_value = AIMessage(content="technical")
     graph = build_graph({"technical": _mock_tool("tech")})
@@ -927,7 +927,7 @@ def test_comparison_with_only_one_resolved_ticker_routes_to_clarify(
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda _q, **_: ("comparison", "heuristic", False, False),
+        lambda _q, **_: ("comparison", "heuristic", False, False, ""),
     )
     stub_llm.invoke.return_value = AIMessage(content="fundamental")
     # Clarify's with_structured_output(ConversationalAnswer) call resolves
@@ -1042,7 +1042,7 @@ def test_comparison_skips_when_one_ticker_has_no_reports(
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda _q, **_: ("comparison", "heuristic", False, False),
+        lambda _q, **_: ("comparison", "heuristic", False, False, ""),
     )
     stub_llm.invoke.return_value = AIMessage(content="fundamental")
 
@@ -1426,7 +1426,7 @@ def test_needs_news_search_routes_through_search_news_across_intents(
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda _q, **_: (intent, "llm", True, False),
+        lambda _q, **_: (intent, "llm", True, False, ""),
     )
     llm = _news_focused_llm()
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
@@ -1447,13 +1447,77 @@ def test_needs_news_search_routes_through_search_news_across_intents(
     assert "NVDA sued over chip patents" in result["reports"]["news"]
 
 
+def test_search_query_rewrite_is_used_over_the_raw_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-289: when classify_node resolves a non-empty search_query (the
+    warm-thread rewrite), gather queries search_news with the REWRITE, not the
+    bare/elliptical raw question."""
+    monkeypatch.setattr(
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("quick_fact", "llm", True, False, "NVDA buyback"),
+    )
+    llm = _news_focused_llm()
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+
+    question = "what about the buyback?"
+    search = _recording_search_news(
+        [{"headline": "NVDA announces buyback", "source": "Reuters", "date": "2026-06-01"}]
+    )
+    graph = build_graph(
+        {name: _mock_tool(name) for name in REPORT_TOOLS},
+        search_news_tool=search,
+    )
+    # Elliptical, tickerless follow-up -- needs prior-turn context (a seeded
+    # report) so classify_node's ambiguity gate doesn't route to clarify
+    # instead of gather.
+    graph.invoke(
+        {
+            "ticker": "NVDA",
+            "question": question,
+            "reports": {"news": "## news\nprior digest\n"},
+        }
+    )
+
+    search.assert_called_once_with("NVDA", "NVDA buyback")
+
+
+def test_empty_search_query_falls_back_to_raw_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-289: an empty/rejected rewrite falls back to the raw question --
+    the recall floor. This is the existing behaviour and must not regress."""
+    monkeypatch.setattr(
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("quick_fact", "llm", True, False, ""),
+    )
+    llm = _news_focused_llm()
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+
+    question = "what did the CEO say about the buyback on NVDA?"
+    search = _recording_search_news(
+        [{"headline": "NVDA sued over chip patents", "source": "Reuters", "date": "2026-06-01"}]
+    )
+    graph = build_graph(
+        {name: _mock_tool(name) for name in REPORT_TOOLS},
+        search_news_tool=search,
+    )
+    graph.invoke({"ticker": "NVDA", "question": question})
+
+    search.assert_called_once_with("NVDA", question)
+
+
 def test_generic_news_ask_does_not_call_search_news(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A generic news ask (classifier flag False) keeps the cheap canned report
     and never fires the semantic search path."""
     monkeypatch.setattr(
-        graph_module, "classify_intent_with_source", lambda _q, **_: ("news", "llm", False, False)
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("news", "llm", False, False, ""),
     )
     llm = _news_focused_llm()
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
@@ -1476,7 +1540,9 @@ def test_targeted_news_with_empty_hits_keeps_canned_report(
     """A flagged ask whose search returns no matches leaves the canned news
     digest intact rather than blanking it."""
     monkeypatch.setattr(
-        graph_module, "classify_intent_with_source", lambda _q, **_: ("news", "llm", True, False)
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("news", "llm", True, False, ""),
     )
     llm = _news_focused_llm()
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
@@ -1501,7 +1567,7 @@ def test_needs_news_search_skipped_for_focused_fundamental_intent(
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda _q, **_: ("fundamental", "llm", True, False),
+        lambda _q, **_: ("fundamental", "llm", True, False, ""),
     )
     search = MagicMock(return_value="[]")
     graph = build_graph(
@@ -1519,7 +1585,9 @@ def test_flag_false_never_calls_search_even_on_news_intent(
     """The flag is the sole trigger: a news intent with needs_news_search False
     stays on the canned digest."""
     monkeypatch.setattr(
-        graph_module, "classify_intent_with_source", lambda _q, **_: ("news", "llm", False, False)
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("news", "llm", False, False, ""),
     )
     llm = _news_focused_llm()
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
@@ -1542,7 +1610,9 @@ def test_targeted_news_drops_focused_card_and_surfaces_sources(
     the focused-card LLM call, narrate owns the spoken answer, and the retrieved
     hits are surfaced as ``retrieved_sources`` for the frontend provenance list."""
     monkeypatch.setattr(
-        graph_module, "classify_intent_with_source", lambda _q, **_: ("news", "llm", True, False)
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("news", "llm", True, False, ""),
     )
     # Structured channel returns a focused card -- it must NOT be consumed on
     # the narrative-only path (the assertion below pins that the call is skipped).
@@ -1590,7 +1660,9 @@ def test_broad_news_keeps_focused_card(monkeypatch: pytest.MonkeyPatch) -> None:
     from agent.focused import FocusedAnalysis
 
     monkeypatch.setattr(
-        graph_module, "classify_intent_with_source", lambda _q, **_: ("news", "llm", False, False)
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("news", "llm", False, False, ""),
     )
     llm = _news_focused_llm()
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
@@ -1616,7 +1688,9 @@ def test_targeted_news_empty_hits_keeps_focused_card(monkeypatch: pytest.MonkeyP
     from agent.focused import FocusedAnalysis
 
     monkeypatch.setattr(
-        graph_module, "classify_intent_with_source", lambda _q, **_: ("news", "llm", True, False)
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("news", "llm", True, False, ""),
     )
     llm = _news_focused_llm()
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
@@ -1694,7 +1768,9 @@ def test_needs_earnings_search_routes_through_search_earnings(
     earnings search, folds the release excerpt into the fundamental report, and
     surfaces corpus-tagged provenance."""
     monkeypatch.setattr(
-        graph_module, "classify_intent_with_source", lambda _q, **_: ("thesis", "llm", False, True)
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("thesis", "llm", False, True, ""),
     )
     # Names the ticker so the ask reaches gather (a tickerless analysis ask
     # routes to clarify, like the other search tests).
@@ -1726,7 +1802,7 @@ def test_quick_fact_earnings_ask_routes_through_search_earnings(
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda _q, **_: ("quick_fact", "llm", False, True),
+        lambda _q, **_: ("quick_fact", "llm", False, True, ""),
     )
     question = "what did NVDA management say about guidance in the latest earnings?"
     search_earnings = MagicMock(return_value=_earnings_rows())
@@ -1750,7 +1826,7 @@ def test_earnings_search_skipped_for_non_consuming_intent(
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda _q, **_: ("technical", "llm", False, True),
+        lambda _q, **_: ("technical", "llm", False, True, ""),
     )
     search_earnings = MagicMock(return_value=_earnings_rows())
     graph = build_graph(
@@ -1771,7 +1847,9 @@ def test_both_corpora_route_and_tag_distinct_provenance(
     """QNT-263: a query spanning a named news event AND an earnings ask reaches
     BOTH corpora, and the merged provenance keeps each hit's corpus tag."""
     monkeypatch.setattr(
-        graph_module, "classify_intent_with_source", lambda _q, **_: ("thesis", "llm", True, True)
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("thesis", "llm", True, True, ""),
     )
     question = "what did NVDA's CEO say about guidance?"
     search_news = _recording_search_news(
@@ -1909,7 +1987,9 @@ def test_news_fold_orders_retrieved_hits_ahead_of_canned_digest(
     canned digest, so the synthesis prompt never sees it demoted below the
     generic headlines."""
     monkeypatch.setattr(
-        graph_module, "classify_intent_with_source", lambda _q, **_: ("news", "llm", True, False)
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("news", "llm", True, False, ""),
     )
     llm = _news_focused_llm()
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
@@ -1938,7 +2018,9 @@ def test_earnings_fold_orders_retrieved_hits_ahead_of_canned_digest(
     ahead of the canned fundamental digest -- same foregrounding as the news
     fold."""
     monkeypatch.setattr(
-        graph_module, "classify_intent_with_source", lambda _q, **_: ("thesis", "llm", False, True)
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("thesis", "llm", False, True, ""),
     )
     search_earnings = MagicMock(return_value=_earnings_rows())
     graph = build_graph(
@@ -1965,7 +2047,7 @@ def test_targeted_earnings_drops_focused_card_and_surfaces_sources(
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda _q, **_: ("fundamental", "llm", False, True),
+        lambda _q, **_: ("fundamental", "llm", False, True, ""),
     )
     llm = _StructuredLLM()
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)

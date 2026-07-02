@@ -1,0 +1,263 @@
+# Contextual RAG query-rewrite golden set (QNT-289).
+#
+# Both RAG fire points (agent.graph gather node) used to pass the RAW user
+# question as the retrieval query. On a warm thread a targeted follow-up is
+# often elliptical ("what about the buyback?") -- the classify LLM correctly
+# sets needs_news_search/needs_earnings_search from history, but the bare
+# ellipsis carries no ticker or topic noun for Qdrant to match against. This
+# set scores the classifier's ``search_query`` field (see
+# ``agent.intent.IntentDecision.search_query`` and
+# ``agent.evals.search_query_eval``) across three fixture kinds:
+#
+# * "elliptical"    -- a warm-thread follow-up with seeded ``history`` and no
+#   ticker named in the question itself. The rewrite must resolve the ticker
+#   + topic from history so the query stands alone.
+# * "cold_targeted" -- a targeted ask with no history; the question already
+#   names its own ticker/topic, so the rewrite must NOT degrade it (still
+#   names both).
+# * "generic"       -- a generic ask (no targeted event, or no search-worthy
+#   intent at all). needs_search must stay False and no rewrite should fire.
+#
+# ``ticker_terms`` / ``topic_terms`` are ANY-OF alias lists (mirrors
+# ``anchor_terms`` in retrieval.yaml) -- the produced ``search_query`` must
+# contain at least one alias from EACH list, case-insensitively, for a
+# positive fixture. Negative (generic) fixtures carry neither list and must
+# produce an EMPTY search_query.
+#
+# NOTE: fixtures must reference only the current TICKERS set --
+# load_search_query_fixtures gates every ticker against shared.tickers.TICKERS,
+# the same way questions.yaml / news_search.yaml / routing.yaml do.
+
+fixtures:
+  # --- elliptical: warm-thread follow-ups with seeded history, no ticker in the
+  # question itself. The rewrite must resolve ticker + topic from history. ---
+  - id: nvda-buyback-followup
+    ticker: NVDA
+    kind: elliptical
+    history:
+      - role: user
+        content: "Give me a thesis on NVDA."
+      - role: assistant
+        content: "NVDA thesis: data center demand strong, valuation full, watch margins."
+    question: "what about the buyback?"
+    expected_needs_search: true
+    corpus: news
+    ticker_terms: [nvda, nvidia]
+    topic_terms: [buyback, repurchase]
+
+  - id: aapl-lawsuit-followup
+    ticker: AAPL
+    kind: elliptical
+    history:
+      - role: user
+        content: "Walk me through AAPL's setup."
+      - role: assistant
+        content: "AAPL technical setup: consolidating near resistance, RSI neutral."
+    question: "is there any update on the lawsuit?"
+    expected_needs_search: true
+    corpus: news
+    ticker_terms: [aapl, apple]
+    topic_terms: [lawsuit, litigation]
+
+  - id: tsla-recall-followup
+    ticker: TSLA
+    kind: elliptical
+    history:
+      - role: user
+        content: "What's TSLA's fundamental picture?"
+      - role: assistant
+        content: "TSLA fundamentals: margins compressed, delivery growth slowing."
+    question: "did they announce a recall?"
+    expected_needs_search: true
+    corpus: news
+    ticker_terms: [tsla, tesla]
+    topic_terms: [recall]
+
+  - id: googl-antitrust-followup
+    ticker: GOOGL
+    kind: elliptical
+    history:
+      - role: user
+        content: "Should I be cautious about GOOGL?"
+      - role: assistant
+        content: "GOOGL thesis: ad revenue steady, cloud growing, regulatory overhang."
+    question: "what's happening with the antitrust case?"
+    expected_needs_search: true
+    corpus: news
+    ticker_terms: [googl, google]
+    topic_terms: [antitrust]
+
+  - id: meta-layoffs-followup
+    ticker: META
+    kind: elliptical
+    history:
+      - role: user
+        content: "Give me the news read on META."
+      - role: assistant
+        content: "META news: Reality Labs losses continue, ad business resilient."
+    question: "any news on the layoffs?"
+    expected_needs_search: true
+    corpus: news
+    ticker_terms: [meta]
+    topic_terms: [layoff, layoffs]
+
+  - id: msft-partnership-followup
+    ticker: MSFT
+    kind: elliptical
+    history:
+      - role: user
+        content: "Give me a thesis on MSFT."
+      - role: assistant
+        content: "MSFT thesis: Azure growth durable, valuation stretched."
+    question: "what about the new partnership?"
+    expected_needs_search: true
+    corpus: news
+    ticker_terms: [msft, microsoft]
+    topic_terms: [partnership, collaboration, deal]
+
+  - id: amd-guidance-followup
+    ticker: AMD
+    kind: elliptical
+    history:
+      - role: user
+        content: "What's AMD's fundamental picture?"
+      - role: assistant
+        content: "AMD fundamentals: data center share gains, margins improving."
+    question: "what did they say about guidance?"
+    expected_needs_search: true
+    corpus: earnings
+    ticker_terms: [amd]
+    topic_terms: [guidance, outlook]
+
+  - id: intc-ceo-followup
+    ticker: INTC
+    kind: elliptical
+    history:
+      - role: user
+        content: "Give me a thesis on INTC."
+      - role: assistant
+        content: "INTC thesis: foundry turnaround underway, balance sheet stretched."
+    question: "what did the CEO say about it?"
+    expected_needs_search: true
+    corpus: news
+    ticker_terms: [intc, intel]
+    topic_terms: [ceo]
+
+  # --- cold_targeted: no history; the question already names its own
+  # ticker/topic. The rewrite must not degrade a question that's already
+  # self-contained. ---
+  - id: mu-buyback-cold
+    ticker: MU
+    kind: cold_targeted
+    history: []
+    question: "What did Micron say about its buyback program?"
+    expected_needs_search: true
+    corpus: news
+    ticker_terms: [mu, micron]
+    topic_terms: [buyback, repurchase]
+
+  - id: amzn-antitrust-cold
+    ticker: AMZN
+    kind: cold_targeted
+    history: []
+    question: "Is Amazon facing any antitrust scrutiny?"
+    expected_needs_search: true
+    corpus: news
+    ticker_terms: [amzn, amazon]
+    topic_terms: [antitrust]
+
+  - id: nvda-lawsuit-cold
+    ticker: NVDA
+    kind: cold_targeted
+    history: []
+    question: "Is NVDA involved in any patent lawsuit?"
+    expected_needs_search: true
+    corpus: news
+    ticker_terms: [nvda, nvidia]
+    topic_terms: [lawsuit, patent]
+
+  - id: aapl-guidance-cold
+    ticker: AAPL
+    kind: cold_targeted
+    history: []
+    question: "What did Apple's management say about guidance for next quarter?"
+    expected_needs_search: true
+    corpus: earnings
+    ticker_terms: [aapl, apple]
+    topic_terms: [guidance, outlook]
+
+  - id: msft-ceo-cold
+    ticker: MSFT
+    kind: cold_targeted
+    history: []
+    question: "What did Microsoft's CEO say about the cloud business?"
+    expected_needs_search: true
+    corpus: news
+    ticker_terms: [msft, microsoft]
+    topic_terms: [ceo]
+
+  - id: tsla-partnership-cold
+    ticker: TSLA
+    kind: cold_targeted
+    history: []
+    question: "Did Tesla announce a new partnership?"
+    expected_needs_search: true
+    corpus: news
+    ticker_terms: [tsla, tesla]
+    topic_terms: [partnership, deal]
+
+  # --- generic: no targeted event / no search-worthy intent. needs_search
+  # must stay False and no rewrite should fire. ---
+  - id: nvda-generic-news
+    ticker: NVDA
+    kind: generic
+    history: []
+    question: "What's the news on NVDA?"
+    expected_needs_search: false
+    ticker_terms: []
+    topic_terms: []
+
+  - id: aapl-generic-sentiment
+    ticker: AAPL
+    kind: generic
+    history: []
+    question: "How's sentiment on AAPL?"
+    expected_needs_search: false
+    ticker_terms: []
+    topic_terms: []
+
+  - id: msft-generic-headlines
+    ticker: MSFT
+    kind: generic
+    history: []
+    question: "Any headlines on MSFT?"
+    expected_needs_search: false
+    ticker_terms: []
+    topic_terms: []
+
+  - id: googl-quick-fact
+    ticker: GOOGL
+    kind: generic
+    history: []
+    question: "What's GOOGL's P/E?"
+    expected_needs_search: false
+    ticker_terms: []
+    topic_terms: []
+
+  - id: tsla-thesis-generic
+    ticker: TSLA
+    kind: generic
+    history: []
+    question: "Give me a thesis on TSLA."
+    expected_needs_search: false
+    ticker_terms: []
+    topic_terms: []
+
+  - id: amd-technical-generic
+    ticker: AMD
+    kind: generic
+    history: []
+    question: "How do the technicals look on AMD?"
+    expected_needs_search: false
+    ticker_terms: []
+    topic_terms: []

@@ -396,6 +396,15 @@ class AgentState(TypedDict):
     # hits into reports["fundamental"], tagging each retrieved source corpus=
     # "earnings" so provenance distinguishes the corpus a hit came from.
     needs_earnings_search: NotRequired[bool]
+    # QNT-289: self-contained retrieval query produced by the classify LLM
+    # alongside needs_news_search/needs_earnings_search -- resolves pronouns/
+    # ellipses from history ("what about the buyback?" -> "NVDA buyback") so a
+    # warm-thread targeted ask doesn't reach Qdrant as a bare, topic-less
+    # string. Guardrailed by intent.sanitize_search_query (length cap +
+    # hallucinated-entity rejection) before it lands in state. "" means no
+    # rewrite was produced/survived the guardrail; gather falls back to the
+    # raw question, which is today's behaviour, so this can only add recall.
+    search_query: NotRequired[str]
     # QNT-212: ordered list of node names actually visited this turn.
     # Each node writes the FULL accumulated list (not a single element with
     # a reducer) -- a reducer would also accumulate across turns out of the
@@ -1445,6 +1454,7 @@ def build_graph(
                 classifier_source,
                 needs_news_search,
                 needs_earnings_search,
+                search_query,
             ) = classify_intent_with_source(
                 question,
                 config=config,
@@ -1457,6 +1467,7 @@ def build_graph(
             classifier_source = "fallback"
             needs_news_search = False
             needs_earnings_search = False
+            search_query = ""
         question_tickers = extract_tickers(question)
         if (
             has_comparison_phrase(question)
@@ -1468,12 +1479,14 @@ def build_graph(
         if _should_route_exploration(intent, question, has_prior_turn=has_prior_turn):
             intent = "exploration"
         logger.info(
-            "classify %s: intent=%s source=%s needs_news_search=%s needs_earnings_search=%s",
+            "classify %s: intent=%s source=%s needs_news_search=%s needs_earnings_search=%s "
+            "search_query=%r",
             ticker,
             intent,
             classifier_source,
             needs_news_search,
             needs_earnings_search,
+            search_query,
         )
         # QNT-212: heuristic ambiguity check on the resolved intent. Drives
         # the conditional edge below: a non-None ambiguity_kind routes to
@@ -1530,6 +1543,9 @@ def build_graph(
             # _is_earnings_search keyword decider demoted to a recall floor),
             # resolved alongside the intent in classify_intent_with_source.
             "needs_earnings_search": needs_earnings_search,
+            # QNT-289: guardrailed self-contained retrieval query; "" ⇒ gather
+            # falls back to the raw question.
+            "search_query": search_query,
             "messages": _append_user_message(history, question),
         }
 
@@ -1779,6 +1795,12 @@ def build_graph(
         # digest. search_news never raises (it degrades to "[]"), but we guard
         # defensively so a wrapper bug can't crash gather.
         question = state.get("question", "")
+        # QNT-289: the classifier's self-contained rewrite (ticker/entity +
+        # topic, pronouns/ellipses resolved from history) is the query when it
+        # survived sanitize_search_query; "" falls back to the raw question --
+        # today's behaviour, so a warm-thread ellipsis can only gain recall,
+        # never lose it.
+        retrieval_query = state.get("search_query") or question
         retrieved_sources: list[dict[str, str]] = []
         if (
             state.get("needs_news_search")
@@ -1786,7 +1808,7 @@ def build_graph(
             and search_news_tool is not None
         ):
             try:
-                raw = search_news_tool(ticker, question)
+                raw = search_news_tool(ticker, retrieval_query)
             except Exception as exc:  # noqa: BLE001 — search is additive; never crash gather
                 logger.warning("gather %s: search_news failed: %s (continuing)", ticker, exc)
                 raw = "[]"
@@ -1822,7 +1844,7 @@ def build_graph(
             and search_earnings_tool is not None
         ):
             try:
-                raw = search_earnings_tool(ticker, question)
+                raw = search_earnings_tool(ticker, retrieval_query)
             except Exception as exc:  # noqa: BLE001 — search is additive; never crash gather
                 logger.warning("gather %s: search_earnings failed: %s (continuing)", ticker, exc)
                 raw = "[]"

@@ -102,7 +102,7 @@ def test_exploration_card_feeds_narrate_substrate(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda *_a, **_k: ("thesis", "heuristic", False, False),
+        lambda *_a, **_k: ("thesis", "heuristic", False, False, ""),
     )
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_k: llm)
     tools = {
@@ -125,7 +125,7 @@ def test_exploration_with_no_reports_falls_back(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda *_a, **_k: ("thesis", "heuristic", False, False),
+        lambda *_a, **_k: ("thesis", "heuristic", False, False, ""),
     )
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_k: _FallbackLLM())
     # Both lenses raise so _gather_reports returns empty -> synthesize fallback.

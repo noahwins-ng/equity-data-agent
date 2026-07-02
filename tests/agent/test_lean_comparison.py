@@ -73,7 +73,7 @@ def _as_comparison(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda _q, **_: ("comparison", "heuristic", False, False),
+        lambda _q, **_: ("comparison", "heuristic", False, False, ""),
     )
 
 
