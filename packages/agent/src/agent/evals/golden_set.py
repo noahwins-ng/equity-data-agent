@@ -140,6 +140,14 @@ HISTORY_FIELDS = (
     # eval_type's rows.
     "rag_impact_pass_rate",
     "rag_impact_n",
+    # QNT-302: advisory verdict-vs-labels tripwire, per structured-thesis row
+    # ("1"/"0"; blank on non-thesis rows and every run-level aggregate row).
+    # Appended at the END to preserve the append-only column order this ragged
+    # history.csv depends on -- older rows are positionally shorter, so a
+    # mid-list insert would misalign every column after it on read. The mean
+    # over structured rows is the observed mismatch rate that gates promoting
+    # the tripwire from advisory to normalization; it never gates the exit code.
+    "verdict_label_consistent",
 )
 
 
@@ -197,6 +205,10 @@ class EvalOutcome:
     # real contract result. Such rows are excluded from the exit gate and from
     # history.csv -- they measure free-tier capacity, not the agent code.
     provider_error: bool = False
+    # QNT-302: verdict-vs-labels consistency for structured-thesis outcomes.
+    # None for every non-thesis shape (quick_fact / comparison / focused / ...).
+    # Advisory only -- never folded into hallucination_ok or the exit gate.
+    verdict_label_consistent: bool | None = None
     # QNT-264: the flattened report strings the agent gathered for this record --
     # the retrieval CONTEXT the DeepEval RAGAS metrics score the thesis against
     # (faithfulness / context precision / recall). Empty on the provider-error
@@ -436,12 +448,20 @@ def run_record(record: GoldenRecord, *, llm_for_judge: Any | None = None) -> Eva
                 "Uptrend/Sideways/Downtrend)"
             )
 
+    # QNT-302: advisory verdict-vs-labels tripwire. Recorded per structured
+    # thesis so the golden run surfaces the observed mismatch rate; never gates
+    # the exit code (the Thesis model_validator already logs each mismatch).
+    verdict_label_consistent = (
+        thesis_obj.verdict_matches_labels() if isinstance(thesis_obj, Thesis) else None
+    )
+
     return EvalOutcome(
         record=record,
         thesis=thesis,
         actual_tools=tuple(recorder),
         hallucination_ok=hallucination_ok,
         hallucination_reason=hallucination_reason,
+        verdict_label_consistent=verdict_label_consistent,
         tool_call_ok=tresult.ok,
         tool_call_reason=tresult.reason(),
         judge_score=judge_score,
@@ -497,6 +517,11 @@ def append_history(
                     "cosine": outcome.cosine,
                     "tool_call_ok": "1" if outcome.tool_call_ok else "0",
                     "hallucination_ok": "1" if outcome.hallucination_ok else "0",
+                    "verdict_label_consistent": (
+                        ""
+                        if outcome.verdict_label_consistent is None
+                        else ("1" if outcome.verdict_label_consistent else "0")
+                    ),
                     "elapsed_ms": outcome.elapsed_ms,
                     "eval_type": "structured",
                     "dialogue_fixture_id": "",
@@ -570,6 +595,15 @@ def summarise(outcomes: list[EvalOutcome]) -> str:
     judged = [o.judge_score for o in outcomes if o.judge_score is not None]
     avg_cosine = round(sum(o.cosine for o in outcomes) / total, 3)
 
+    # QNT-302: advisory verdict-vs-labels tripwire aggregate over structured
+    # theses only (None on other shapes). Reported, never gated.
+    thesis_outcomes = [o for o in outcomes if o.verdict_label_consistent is not None]
+    if thesis_outcomes:
+        verdict_ok = sum(1 for o in thesis_outcomes if o.verdict_label_consistent)
+        verdict_summary = f"verdict_label_consistent: {verdict_ok}/{len(thesis_outcomes)}"
+    else:
+        verdict_summary = "verdict_label_consistent: n/a"
+
     if judged:
         avg_composite = round(sum(js.composite for js in judged) / len(judged), 2)
         avg_faithfulness = round(sum(js.faithfulness for js in judged) / len(judged), 2)
@@ -595,7 +629,8 @@ def summarise(outcomes: list[EvalOutcome]) -> str:
         f"tool_call_ok: {tools_ok}/{total}  "
         f"provider_failures: {provider_failures}/{total}  "
         f"avg_judge: {judge_summary}  "
-        f"avg_cosine: {avg_cosine}",
+        f"avg_cosine: {avg_cosine}  "
+        f"{verdict_summary}",
         "",
         "per-record:",
     ]

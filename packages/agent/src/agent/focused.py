@@ -32,11 +32,14 @@ Constraints carried over from QNT-67 / ADR-003:
 
 from __future__ import annotations
 
+import logging
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from agent.disclaimer import DISCLAIMER
+
+logger = logging.getLogger(__name__)
 
 # Same source enum as comparison.py / quick_fact.py — Pydantic validates the
 # Literal at structured-output parse time, and the LLM is told to cite
@@ -53,6 +56,16 @@ FocusKind = Literal["fundamental", "technical", "news"]
 # Fundamental: Premium | Inline | Discounted
 # Technical:   Uptrend | Sideways | Downtrend
 FocusedVerdict = Literal["Premium", "Inline", "Discounted", "Uptrend", "Sideways", "Downtrend"]
+
+# QNT-302: which verdict family each focus may carry. The merged FocusedVerdict
+# Literal (forced by Groq rejecting a two-branch anyOf) lets the schema accept
+# focus=technical + verdict=Premium; the model_validator below nulls the
+# cross-family case so the frontend never renders a semantically-wrong pill.
+_VERDICT_FAMILY: dict[FocusKind, frozenset[str]] = {
+    "fundamental": frozenset({"Premium", "Inline", "Discounted"}),
+    "technical": frozenset({"Uptrend", "Sideways", "Downtrend"}),
+    "news": frozenset(),
+}
 
 
 class FocusedValue(BaseModel):
@@ -158,6 +171,43 @@ class FocusedAnalysis(BaseModel):
             "focuses."
         ),
     )
+
+    @model_validator(mode="after")
+    def _normalize_focus_consistency(self) -> FocusedAnalysis:
+        """QNT-302: enforce the focus discriminator's contract in code.
+
+        NORMALIZE-never-raise: a verdict from the wrong family for the focus
+        (e.g. focus=technical + verdict=Premium) is nulled, and the news-only
+        fields are emptied on non-news focuses. Logs one warning per
+        normalization so drift is observable. Runs at LLM-parse time; the
+        synthesize node re-validates after re-asserting focus from intent so
+        the family check tracks the corrected focus.
+        """
+        allowed = _VERDICT_FAMILY[self.focus]
+        if self.verdict is not None and self.verdict not in allowed:
+            logger.warning(
+                "FocusedAnalysis: dropping %s verdict on %s focus (wrong family)",
+                self.verdict,
+                self.focus,
+            )
+            self.verdict = None
+        if self.focus != "news":
+            if self.existing_development is not None:
+                logger.warning(
+                    "FocusedAnalysis: clearing existing_development on %s focus", self.focus
+                )
+                self.existing_development = None
+            if self.positive_catalysts:
+                logger.warning(
+                    "FocusedAnalysis: clearing positive_catalysts on %s focus", self.focus
+                )
+                self.positive_catalysts = []
+            if self.negative_catalysts:
+                logger.warning(
+                    "FocusedAnalysis: clearing negative_catalysts on %s focus", self.focus
+                )
+                self.negative_catalysts = []
+        return self
 
     def to_markdown(self) -> str:
         """Re-render the structured analysis as markdown."""

@@ -17,7 +17,7 @@ def make_aspect(
     challenges: list[str] | None = None,
 ) -> AspectView:
     return AspectView(
-        label=label,
+        label=label,  # pyright: ignore[reportArgumentType]  # str normalized by field validator
         summary=summary,
         supports=supports or [],
         challenges=challenges or [],
