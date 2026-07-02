@@ -1740,6 +1740,116 @@ def test_parse_search_sources_extracts_fields_and_degrades() -> None:
     assert graph_module._parse_search_sources("[1, 2, 3]") == []
 
 
+# ─── QNT-290: followup turns fire RAG retrieval ──────────────────────────────
+
+
+def test_followup_with_needs_news_search_fires_search_and_folds_hits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC1: a followup turn where the classifier set needs_news_search fires
+    search_news (using the QNT-289 rewritten query) and folds the hit into the
+    prompt substrate (reports["news"]), even though followup never re-runs the
+    report plan (zero report-tool calls)."""
+    monkeypatch.setattr(
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("followup", "llm", True, False, "NVDA CEO buyback"),
+    )
+    search = _recording_search_news(
+        [{"headline": "NVDA CEO addresses buyback", "source": "Reuters", "date": "2026-06-01"}]
+    )
+    report_tools = {name: MagicMock(side_effect=_mock_tool(name)) for name in REPORT_TOOLS}
+    graph = build_graph(report_tools, search_news_tool=search)
+
+    result = graph.invoke(
+        {
+            "ticker": "NVDA",
+            "question": "and what did the CEO say about it?",
+            # Prior-turn anchor so the followup doesn't route to clarify.
+            "reports": {"news": "## news\nprior digest\n"},
+        }
+    )
+
+    search.assert_called_once_with("NVDA", "NVDA CEO buyback")
+    assert "NVDA CEO addresses buyback" in result["reports"]["news"]
+    # The report PLAN never re-runs on followup.
+    assert result["plan"] == []
+    assert sum(t.call_count for t in report_tools.values()) == 0
+    assert result["retrieved_sources"] == [
+        {
+            "headline": "NVDA CEO addresses buyback",
+            "source": "Reuters",
+            "date": "2026-06-01",
+            "url": "",
+            "corpus": "news",
+        }
+    ]
+    # QNT-290: a flagged followup now visits plan/gather for the RAG branch.
+    assert "gather" in result["intent_path"]
+
+
+def test_followup_without_search_flags_gathers_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC1: a followup turn with both search flags False gathers nothing --
+    zero report-tool calls, zero search calls, hydrated reports reused verbatim
+    (today's behaviour, unchanged)."""
+    monkeypatch.setattr(
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("followup", "llm", False, False, ""),
+    )
+    search = MagicMock(return_value="[]")
+    report_tools = {name: MagicMock(side_effect=_mock_tool(name)) for name in REPORT_TOOLS}
+    graph = build_graph(report_tools, search_news_tool=search)
+
+    result = graph.invoke(
+        {
+            "ticker": "NVDA",
+            "question": "why?",
+            "reports": {"news": "## news\nprior digest\n"},
+        }
+    )
+
+    search.assert_not_called()
+    assert sum(t.call_count for t in report_tools.values()) == 0
+    assert result["reports"] == {"news": "## news\nprior digest\n"}
+    assert not result.get("retrieved_sources")
+    # Pure followup keeps the QNT-212 short-circuit: no plan/gather visit.
+    assert "gather" not in result["intent_path"]
+
+
+def test_strip_retrieved_block_survives_embedded_blank_line_in_hit_body() -> None:
+    """AC2 regression: a chunk/body with an internal blank line (plausible raw
+    8-K filing prose) must not fool ``_strip_retrieved_block``'s boundary
+    heuristic into treating the hit's own text as the start of the original
+    report. ``_truncate_body`` collapses internal whitespace precisely so the
+    retrieved block can never contain a blank line -- verify that guarantee
+    holds end to end through ``_format_earnings_hits`` and the strip."""
+    raw = json.dumps(
+        [
+            {
+                "title": "NVDA Q1 FY26 earnings release",
+                "section": "guidance",
+                "date": "2026-05-28",
+                "text": (
+                    "Management guided Q2 revenue higher on data-center demand.\n\n"
+                    "The company also announced a new buyback authorization."
+                ),
+            }
+        ]
+    )
+    from agent.prompts import RETRIEVED_EARNINGS_HEADING
+
+    hits = graph_module._format_earnings_hits(raw)
+    assert "\n\n" not in hits  # the fold-boundary invariant the strip relies on
+    assert "buyback authorization" in hits  # nothing was silently dropped
+
+    folded = f"{hits}\n\n## FUNDAMENTAL REPORT\noriginal canned digest\n"
+    base = graph_module._strip_retrieved_block(folded, RETRIEVED_EARNINGS_HEADING)
+    assert base == "## FUNDAMENTAL REPORT\noriginal canned digest\n"
+
+
 # ─── QNT-263: multi-corpus routing (news + 8-K earnings) ─────────────────────
 
 

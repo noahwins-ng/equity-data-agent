@@ -120,7 +120,8 @@ flowchart TD
   classify --> router{"route decision"}
 
   router -->|"ambiguity_kind set"| clarify
-  router -->|"conversational or ordinary followup"| synthesize
+  router -->|"conversational, or followup w/o RAG flag"| synthesize
+  router -->|"followup w/ needs_news_search or needs_earnings_search"| plan
   router -->|"broad exploratory + anchored"| explore_supervisor
   router -->|"normal analytical request"| plan
 
@@ -137,6 +138,15 @@ flowchart TD
 - Ambiguous questions ask back without tools: `classify -> clarify -> narrate`.
 - Normal thesis, quick fact, comparison, and focused requests use the stable
   report pipeline: `classify -> plan -> gather -> synthesize -> narrate`.
+- **Flagged followup RAG retrieval** (QNT-290): a followup that pivots to a new
+  targeted event ("and what did the CEO say about it?") sets
+  `needs_news_search` / `needs_earnings_search` just like a cold turn. That
+  routes through `plan -> gather` too — `plan` still returns an empty plan
+  (the report bundle is never re-fetched), but `gather` fires
+  `search_news`/`search_earnings` with the QNT-289 rewritten query and folds
+  the hits onto the checkpointer-hydrated reports copy. A pure followup (both
+  flags False) keeps the cheap `classify -> synthesize -> narrate`
+  short-circuit with zero extra calls.
 - Broad exploratory prompts such as "what's interesting about AAPL this week?"
   or "what should I watch on AAPL next week?" route through
   `explore_supervisor`, which may inspect up to three existing report tools
@@ -175,7 +185,10 @@ client-side BM25, fused with Reciprocal Rank Fusion, then an **optional Cohere c
 rerank** on the fused set (gated on `settings.COHERE_API_KEY`). A query-relative relevance-gap
 filter drops weakly-matched tail results. The agent only fires search when the classifier sets
 the targeted `needs_news_search` / `needs_earnings_search` flags — ordinary report requests
-skip Qdrant entirely. Retrieval quality is guarded by a deterministic ir-measures eval
+skip Qdrant entirely. The flags are intent-independent (QNT-222/280), including on a **followup**
+turn (QNT-290): a warm-thread pivot to a new targeted event fires the same search, using the
+QNT-289 self-contained rewritten query, and folds the hit onto the checkpointer-hydrated report
+instead of a fresh fetch. Retrieval quality is guarded by a deterministic ir-measures eval
 (recall@k / MRR / nDCG, see LLM Routing → Eval harness).
 
 ## Public-API Contract & Abuse Controls (QNT-161 / ADR-017)

@@ -1637,6 +1637,74 @@ def test_retrieved_sources_suppressed_when_gather_skipped(
     assert "retrieved_sources" not in events
 
 
+# ─── QNT-290: retrieved_sources on a flagged followup turn ──────────────────
+
+
+def test_retrieved_sources_event_emitted_on_flagged_followup(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC3: a followup turn where the classifier flagged a targeted RAG need
+    now visits plan/gather (see ``_followup_fires_search``), so the SSE stream
+    surfaces THIS turn's retrieved_sources with correct corpus tags -- the
+    existing QNT-226 gate ("gather" in intent_path) naturally re-enables for a
+    flagged followup instead of only ever excluding it. ``tools_count`` also
+    reflects the corpus hit, not the full hydrated report bundle, and
+    ``citations_count`` counts the surfaced sources on this narrative-only
+    (quick_fact=None) path rather than reading a misleading 0 -- same QNT-281
+    fix as the focused-card-dropped case, applied to followup."""
+    sources = [
+        {
+            "headline": "NVDA CEO addresses buyback on earnings call",
+            "source": "Reuters",
+            "date": "2026-06-01",
+            "url": "https://ex.com/a",
+            "corpus": "news",
+        }
+    ]
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
+        graph = MagicMock()
+        graph.invoke.return_value = {
+            "ticker": "NVDA",
+            "intent": "followup",
+            "plan": [],
+            "reports": {"news": "stub"},
+            "errors": {},
+            "thesis": _stub_thesis(),
+            "quick_fact": None,
+            "focused": None,
+            "narrative": "The CEO addressed the buyback directly on the call.",
+            "retrieved_sources": sources,
+            "confidence": 1.0,
+            # QNT-290: a flagged followup now visits plan/gather for the RAG branch.
+            "intent_path": ["classify", "plan", "gather", "synthesize", "narrate"],
+        }
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    r = client.post(
+        "/api/v1/agent/chat",
+        json={
+            "ticker": "NVDA",
+            "message": "and what did the CEO say about it?",
+            "thread_id": "t-followup-rag",
+        },
+    )
+    frames = _parse_sse(r.text)
+    events = [name for name, _ in frames]
+
+    assert "retrieved_sources" in events
+    rs_data = next(data for name, data in frames if name == "retrieved_sources")
+    assert rs_data == {"sources": sources}
+    assert all(s["corpus"] == "news" for s in rs_data["sources"])
+
+    done_data = frames[-1][1]
+    assert done_data["tools_count"] == 1
+    assert done_data["citations_count"] == len(sources) == 1
+
+
 # ─── QNT-281: citations_count on the narrative-only path ────────────────────
 
 

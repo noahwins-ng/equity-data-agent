@@ -227,7 +227,10 @@ _FOCUSED_REPORT: dict[Intent, str] = {
 # but fundamental/technical focused reads are forbidden from citing news
 # (FOCUSED_SYSTEM_PROMPT rule 3), so firing search there would be a wasted
 # Qdrant call. Gate the RAG fetch to the intents that can use it.
-_NEWS_SEARCH_INTENTS: frozenset[Intent] = frozenset({"news", "quick_fact", "thesis"})
+# QNT-290: ``followup`` is included -- a warm-thread pivot to a new targeted
+# event ("and what did the CEO say about it?") sets the same flag and the
+# followup prompt renders every ``reports`` key, same as quick_fact/thesis.
+_NEWS_SEARCH_INTENTS: frozenset[Intent] = frozenset({"news", "quick_fact", "thesis", "followup"})
 
 # QNT-263: intents whose synthesis consumes the fundamental report, so an
 # earnings-release hit (folded into ``reports["fundamental"]``) actually reaches
@@ -242,8 +245,11 @@ _NEWS_SEARCH_INTENTS: frozenset[Intent] = frozenset({"news", "quick_fact", "thes
 # the 8-K corpus instead of only the news headlines. ``news`` stays EXCLUDED: a
 # focused news read is forbidden from citing the fundamental report
 # (FOCUSED_SYSTEM_PROMPT rule 3), so firing there would be a wasted Qdrant call;
-# ``technical`` likewise never gathers fundamental.
-_EARNINGS_SEARCH_INTENTS: frozenset[Intent] = frozenset({"fundamental", "thesis", "quick_fact"})
+# ``technical`` likewise never gathers fundamental. ``followup`` is included
+# (QNT-290) for the same warm-thread-pivot reason as _NEWS_SEARCH_INTENTS above.
+_EARNINGS_SEARCH_INTENTS: frozenset[Intent] = frozenset(
+    {"fundamental", "thesis", "quick_fact", "followup"}
+)
 
 _MAX_TOOL_ATTEMPTS = 2  # first try + one retry
 _EXPLORATION_EXCLUSIONS: tuple[str, ...] = (
@@ -283,7 +289,13 @@ _TICKER_REQUIRING_INTENTS: frozenset[Intent] = frozenset(
 
 # QNT-212: short-circuit intents skip plan + gather and route classify
 # directly to synthesize. Conversational has no tools to gather; followup
-# reuses the checkpointer-hydrated reports verbatim.
+# reuses the checkpointer-hydrated reports verbatim. QNT-290: this is the
+# cheap-path default for followup -- ``_classify_router`` special-cases
+# followup BEFORE consulting this set when the classifier flagged a
+# targeted RAG need, routing through plan/gather instead (see
+# ``_followup_fires_search``). Membership here still governs the pure
+# no-tools-needed case (both search flags False) and every other reader of
+# this set (e.g. ``_should_route_exploration``).
 _SHORT_CIRCUIT_INTENTS: frozenset[Intent] = frozenset({"conversational", "followup"})
 
 # QNT-220 (#8): intents that force-include the company report (QNT-175) and so
@@ -751,8 +763,16 @@ _EARNINGS_BODY_MAX_CHARS = 900
 
 
 def _truncate_body(body: str, max_chars: int = _NEWS_BODY_MAX_CHARS) -> str:
-    """Trim a folded hit's body to ``max_chars`` on a word boundary."""
-    body = body.strip()
+    """Trim a folded hit's body to ``max_chars`` on a word boundary.
+
+    QNT-290: collapses internal whitespace (including embedded blank lines --
+    plausible in raw 8-K filing prose, less so in a Finnhub summary) to a
+    single space. A retrieved block with an internal blank line would break
+    :func:`_strip_retrieved_block`'s boundary heuristic, which relies on the
+    first blank line marking the end of the retrieved section -- enforcing
+    "no blank line inside a hit" here is what makes that heuristic safe.
+    """
+    body = " ".join(body.split())
     if len(body) <= max_chars:
         return body
     cut = body[:max_chars].rsplit(" ", 1)[0].rstrip()
@@ -907,6 +927,61 @@ def _parse_earnings_sources(raw: str) -> list[dict[str, str]]:
             }
         )
     return sources
+
+
+def _strip_retrieved_block(text: str | None, heading: str) -> str:
+    """Remove a previously-folded ``## {heading}`` block from persisted report text.
+
+    QNT-290 AC2: a flagged followup folds onto the checkpointer-hydrated
+    ``reports`` dict, not a freshly-fetched one, so a prior turn's fold can
+    already be sitting at the front of the text. Without stripping it first,
+    each chained followup would stack a new retrieved block on top of the
+    last one instead of replacing it. The retrieved block is always folded
+    as the prefix (``f"{hits}\n\n{existing}"``) and never contains a blank
+    line internally (one bullet per hit, no separator row), so the first
+    blank line marks the boundary back to the original report text.
+    """
+    if not text:
+        return ""
+    marker = f"## {heading}\n"
+    if not text.startswith(marker):
+        return text
+    split_at = text.find("\n\n", len(marker))
+    return text[split_at + 2 :] if split_at != -1 else ""
+
+
+def _fold_news_hits(
+    reports: dict[str, str], raw: str
+) -> tuple[dict[str, str], list[dict[str, str]]]:
+    """Fold ``search_news`` JSON hits into ``reports["news"]``.
+
+    Shared by the cold-turn gather path and the QNT-290 followup RAG branch.
+    Replaces (not stacks onto) any block left by an earlier fold on the same
+    key -- see :func:`_strip_retrieved_block` -- so chained followups can't
+    duplicate the retrieved section (AC2). Returns ``reports`` unchanged and
+    ``[]`` sources when there is nothing usable to fold.
+    """
+    hits = _format_search_hits(raw)
+    if not hits:
+        return reports, []
+    base = _strip_retrieved_block(reports.get("news"), RETRIEVED_NEWS_HEADING)
+    updated = {**reports, "news": f"{hits}\n\n{base}" if base else hits}
+    return updated, _parse_search_sources(raw)
+
+
+def _fold_earnings_hits(
+    reports: dict[str, str], raw: str
+) -> tuple[dict[str, str], list[dict[str, str]]]:
+    """Fold ``search_earnings`` JSON hits into ``reports["fundamental"]``.
+
+    Sibling of :func:`_fold_news_hits` for the equity_earnings corpus.
+    """
+    hits = _format_earnings_hits(raw)
+    if not hits:
+        return reports, []
+    base = _strip_retrieved_block(reports.get("fundamental"), RETRIEVED_EARNINGS_HEADING)
+    updated = {**reports, "fundamental": f"{hits}\n\n{base}" if base else hits}
+    return updated, _parse_earnings_sources(raw)
 
 
 def _coerce_thesis(response: object) -> Thesis | None:
@@ -1431,6 +1506,39 @@ def build_graph(
             return {**tools, "company": compact_company_tool}
         return tools
 
+    def _followup_fires_news_search(state: AgentState) -> bool:
+        """QNT-290: True when a followup turn should fire ``search_news``.
+
+        Actually CALLED by both ``_classify_router`` (via
+        ``_followup_fires_search`` below, to decide whether to route the
+        turn through plan/gather at all) and ``gather_node`` (to decide
+        whether to fire this specific corpus) so the two can never drift
+        apart -- a prior version duplicated this condition inline in
+        ``gather_node``, which is exactly the kind of copy that silently goes
+        stale when one copy is edited and the other isn't.
+        """
+        return bool(
+            state.get("needs_news_search")
+            and "followup" in _NEWS_SEARCH_INTENTS
+            and search_news_tool is not None
+        )
+
+    def _followup_fires_earnings_search(state: AgentState) -> bool:
+        """QNT-290: sibling of :func:`_followup_fires_news_search` for the
+        equity_earnings corpus."""
+        return bool(
+            state.get("needs_earnings_search")
+            and "followup" in _EARNINGS_SEARCH_INTENTS
+            and search_earnings_tool is not None
+        )
+
+    def _followup_fires_search(state: AgentState) -> bool:
+        """QNT-290: True when a followup turn should visit plan/gather for RAG
+        at all (either corpus). Used by ``_classify_router``'s routing
+        decision; ``gather_node`` calls the two corpus-specific predicates
+        above directly to pick which search(es) to actually fire."""
+        return _followup_fires_news_search(state) or _followup_fires_earnings_search(state)
+
     def classify_node(state: AgentState, config: RunnableConfig) -> dict[str, object]:
         # QNT-181: nodes accept ``config`` so the LangGraph CallbackHandler
         # propagates to inner ``llm.invoke(prompt, config=config)`` calls.
@@ -1703,12 +1811,66 @@ def build_graph(
         intent = state.get("intent", "thesis")
         plan = state.get("plan", [])
 
-        # QNT-209: followup keeps the hydrated reports verbatim. Return an
-        # empty dict so TypedDict merge leaves ``reports`` and
-        # ``reports_by_ticker`` untouched (AC4: zero tool calls).
+        # QNT-209/290: followup keeps the hydrated reports verbatim by
+        # default -- the report PLAN never re-runs on followup (plan_node
+        # returns an empty plan above), so there is no ``_gather_reports``
+        # call here either way. When the classifier flagged a targeted RAG
+        # need on THIS turn (a warm-thread pivot to a new event), fold fresh
+        # search hits onto the hydrated reports copy instead of a no-op --
+        # this branch is only reached at all when ``_followup_fires_search``
+        # already said yes (``_classify_router``), so the two predicate
+        # calls below are just picking which corpus/corpora to actually call.
         if intent == "followup":
-            logger.info("gather %s: skipped (followup)", ticker)
-            return {}
+            question = state.get("question", "")
+            # QNT-289: the classifier's self-contained rewrite is the query
+            # when it survived sanitize_search_query; "" falls back to the
+            # raw (possibly elliptical) question.
+            retrieval_query = state.get("search_query") or question
+            reports = dict(state.get("reports") or {})
+            retrieved_sources: list[dict[str, str]] = []
+
+            if _followup_fires_news_search(state) and search_news_tool is not None:
+                try:
+                    raw = search_news_tool(ticker, retrieval_query)
+                except Exception as exc:  # noqa: BLE001 — search is additive; never crash gather
+                    logger.warning(
+                        "gather %s: followup search_news failed: %s (continuing)", ticker, exc
+                    )
+                    raw = "[]"
+                reports, news_sources = _fold_news_hits(reports, raw)
+                if news_sources:
+                    retrieved_sources += news_sources
+                    logger.info(
+                        "gather %s: folded %d targeted-news hits into followup news report",
+                        ticker,
+                        len(news_sources),
+                    )
+
+            if _followup_fires_earnings_search(state) and search_earnings_tool is not None:
+                try:
+                    raw = search_earnings_tool(ticker, retrieval_query)
+                except Exception as exc:  # noqa: BLE001 — search is additive; never crash gather
+                    logger.warning(
+                        "gather %s: followup search_earnings failed: %s (continuing)", ticker, exc
+                    )
+                    raw = "[]"
+                reports, earnings_sources = _fold_earnings_hits(reports, raw)
+                if earnings_sources:
+                    retrieved_sources += earnings_sources
+                    logger.info(
+                        "gather %s: folded %d earnings-release hits into followup "
+                        "fundamental report",
+                        ticker,
+                        len(earnings_sources),
+                    )
+
+            logger.info(
+                "gather %s: followup RAG fired, reports=%s retrieved=%d",
+                ticker,
+                sorted(reports),
+                len(retrieved_sources),
+            )
+            return {"reports": reports, "retrieved_sources": retrieved_sources}
 
         # Conversational path: nothing to gather — keep state intact and
         # let synthesize emit the prose answer.
@@ -1812,18 +1974,12 @@ def build_graph(
             except Exception as exc:  # noqa: BLE001 — search is additive; never crash gather
                 logger.warning("gather %s: search_news failed: %s (continuing)", ticker, exc)
                 raw = "[]"
-            # QNT-226: parse once into both the prompt block (folded into the
-            # news report) and the structured provenance list (surfaced to the
-            # frontend). Same rows, two renderings.
-            retrieved_sources = _parse_search_sources(raw)
-            hits = _format_search_hits(raw)
-            if hits:
-                existing = reports.get("news")
-                # QNT-276: retrieved hits LEAD, canned digest follows. The block
-                # that specifically matched the question must sit ahead of the
-                # generic digest, not below it where the synthesis prompt's
-                # "omission is fine" license used to demote it.
-                reports["news"] = f"{hits}\n\n{existing}" if existing else hits
+            # QNT-276: retrieved hits LEAD, canned digest follows -- the block
+            # that specifically matched the question must sit ahead of the
+            # generic digest, not below it where the synthesis prompt's
+            # "omission is fine" license used to demote it.
+            reports, retrieved_sources = _fold_news_hits(reports, raw)
+            if retrieved_sources:
                 logger.info(
                     "gather %s: folded %d targeted-news hits into news report",
                     ticker,
@@ -1848,13 +2004,10 @@ def build_graph(
             except Exception as exc:  # noqa: BLE001 — search is additive; never crash gather
                 logger.warning("gather %s: search_earnings failed: %s (continuing)", ticker, exc)
                 raw = "[]"
-            earnings_sources = _parse_earnings_sources(raw)
-            hits = _format_earnings_hits(raw)
-            if hits:
-                existing = reports.get("fundamental")
-                # QNT-276: retrieved earnings excerpts LEAD, canned fundamental
-                # digest follows -- same foregrounding as the news fold above.
-                reports["fundamental"] = f"{hits}\n\n{existing}" if existing else hits
+            # QNT-276: retrieved earnings excerpts LEAD, canned fundamental
+            # digest follows -- same foregrounding as the news fold above.
+            reports, earnings_sources = _fold_earnings_hits(reports, raw)
+            if earnings_sources:
                 retrieved_sources = retrieved_sources + earnings_sources
                 logger.info(
                     "gather %s: folded %d earnings-release hits into fundamental report",
@@ -2532,6 +2685,34 @@ def build_graph(
                 except Exception:  # noqa: BLE001
                     prior_thesis_markdown = None
 
+        # QNT-290: a flagged followup ran gather THIS turn and folded fresh
+        # search hits into reports["news"]/["fundamental"]. Surface that
+        # evidence to the narrator on top of whatever payload_markdown /
+        # prior_thesis_markdown already carry (typically the prior turn's
+        # thesis) so the spoken answer reaches the new headline/excerpt, not
+        # just the old framing. Gated on the corpus tags in THIS turn's
+        # retrieved_sources (not just report presence) so a search that fired
+        # but found zero hits doesn't pad the prompt with the unchanged
+        # canned digest, and a pure followup (gather never ran) can't leak a
+        # stale hydrated report in.
+        if intent == "followup" and "gather" in (state.get("intent_path") or []):
+            followup_corpora = {
+                str(source.get("corpus")) for source in (state.get("retrieved_sources") or [])
+            }
+            followup_reports = state.get("reports") or {}
+            retrieval_blocks = [
+                str(followup_reports[report_key])
+                for report_key, corpus in (("news", "news"), ("fundamental", "earnings"))
+                if corpus in followup_corpora and followup_reports.get(report_key)
+            ]
+            if retrieval_blocks:
+                retrieval_text = "\n\n".join(retrieval_blocks)
+                payload_markdown = (
+                    f"{payload_markdown}\n\n{retrieval_text}"
+                    if payload_markdown
+                    else retrieval_text
+                )
+
         # QNT-226/276: narrative-only substrate. When synthesize dropped the
         # focused card (search fired + hits, focused=None), no structured payload
         # exists, so feed the gathered report -- which now LEADS with the folded
@@ -2705,15 +2886,22 @@ def build_graph(
         """QNT-212/QNT-215: pick the next node from classify_node's output.
 
         Ambiguity always wins -- a clarify run never burns the plan/gather
-        LLM call. Conversational and followup short-circuit to synthesize so
-        warm thread behavior stays unchanged. QNT-215 exploration owns broad
-        anchored scan prompts even when the classifier labels them as news,
-        but named-lens, quick_fact, comparison, clarify, and normal follow-up
-        flows keep their existing routes.
+        LLM call. Conversational short-circuits to synthesize unconditionally.
+        QNT-290: followup short-circuits to synthesize too UNLESS the
+        classifier flagged a targeted RAG need on this warm-thread turn
+        (``_followup_fires_search``) -- then it routes through plan/gather
+        like any other intent so the RAG branch can fire (plan_node still
+        returns an empty plan for followup, so no report re-fetch happens).
+        QNT-215 exploration owns broad anchored scan prompts even when the
+        classifier labels them as news, but named-lens, quick_fact,
+        comparison, clarify, and pure follow-up flows keep their existing
+        routes.
         """
         if state.get("ambiguity_kind"):
             return "clarify"
         intent = state.get("intent", "thesis")
+        if intent == "followup" and _followup_fires_search(state):
+            return "plan"
         if intent in _SHORT_CIRCUIT_INTENTS:
             return "synthesize"
         if intent == "exploration":
