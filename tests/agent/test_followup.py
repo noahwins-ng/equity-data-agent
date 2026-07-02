@@ -17,6 +17,7 @@ real persistence layer end-to-end without touching disk.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import Any
 from unittest.mock import MagicMock
@@ -25,6 +26,7 @@ import pytest
 from agent import graph as graph_module
 from agent.graph import _resolve_single_ticker_context, build_graph
 from agent.intent import _heuristic_intent
+from agent.prompts import RETRIEVED_NEWS_HEADING
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 from langchain_core.messages import AIMessage
@@ -335,6 +337,65 @@ def test_single_thread_spans_two_tickers_then_followup_inherits(
     assert t3["analysis_ticker"] == "AMZN"  # inherited, not snapped to NVDA
     assert _tool_calls(tools) == 0  # checkpoint reused, not re-gathered
     assert t3["reports"]  # hydrated reports survived the followup branch
+
+
+# ─── QNT-290: flagged followup RAG retrieval (chained-followup dedupe) ─────
+
+
+def test_chained_flagged_followups_do_not_duplicate_retrieved_block(
+    stub_llm: _StubLLM,
+    saver: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC2: two consecutive flagged followups on the same thread fold onto the
+    checkpointer-hydrated reports dict, not a fresh fetch. The second fold must
+    REPLACE the first turn's retrieved block, not stack a second one on top of
+    it -- otherwise a long followup chain would grow the persisted news report
+    without bound.
+    """
+    monkeypatch.setattr(
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("followup", "llm", True, False, "NVDA buyback"),
+    )
+    search = MagicMock(
+        side_effect=[
+            json.dumps(
+                [{"headline": "First hit headline", "source": "Reuters", "date": "2026-06-01"}]
+            ),
+            json.dumps(
+                [{"headline": "Second hit headline", "source": "Bloomberg", "date": "2026-06-02"}]
+            ),
+        ]
+    )
+    tools = {
+        "technical": MagicMock(return_value="## technical\nRSI 50\n"),
+        "fundamental": MagicMock(return_value="## fundamental\nP/E 20\n"),
+        "company": MagicMock(return_value="## company\nDescription\n"),
+        "news": MagicMock(return_value="## news\nprior digest\n"),
+    }
+    graph = build_graph(tools, checkpointer=saver, search_news_tool=search)
+    config: RunnableConfig = {"configurable": {"thread_id": "chain:NVDA"}}
+
+    first = graph.invoke(
+        {
+            "ticker": "NVDA",
+            "question": "and the buyback?",
+            "reports": {"news": "## news\nprior digest\n"},
+        },
+        config=config,
+    )
+    assert first["reports"]["news"].count("First hit headline") == 1
+
+    second = graph.invoke(
+        {"ticker": "NVDA", "question": "anything new on the buyback?"}, config=config
+    )
+    assert second["reports"]["news"].count("Second hit headline") == 1
+    assert "First hit headline" not in second["reports"]["news"]
+    # Exactly one retrieved-block heading survives the chained fold -- never two.
+    assert second["reports"]["news"].count(f"## {RETRIEVED_NEWS_HEADING}") == 1
+    # Neither turn re-ran the report plan.
+    assert _tool_calls(tools) == 0
 
 
 def test_thread_persists_across_saver_restart(

@@ -1091,9 +1091,11 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
         # QNT-226: provenance for the semantic news search. Gather stores the
         # retrieved hits; we surface them as a clickable "Retrieved sources"
         # list. Gated on ``gather`` having run this turn (mirrors the
-        # tools_count guard below) so a followup turn -- which skips gather and
-        # reuses checkpointer-hydrated state -- does not re-emit the prior
-        # turn's sources.
+        # tools_count guard below) so a PURE followup turn -- which skips
+        # gather and reuses checkpointer-hydrated state -- does not re-emit
+        # the prior turn's sources. QNT-290: a FLAGGED followup (targeted RAG
+        # pivot) does visit gather, so this gate now naturally lets that
+        # turn's fresh sources through too.
         retrieved_sources = (
             list(state.get("retrieved_sources") or []) if isinstance(state, dict) else []
         )
@@ -1217,9 +1219,22 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                     comparison_lean if isinstance(comparison_lean, LeanComparisonAnswer) else None
                 )
         elif intent in {"quick_fact", "followup"}:
-            citations_count = _count_quick_fact_citations(
-                quick_fact if isinstance(quick_fact, QuickFactAnswer) else None
-            )
+            if (
+                intent == "followup"
+                and quick_fact is None
+                and retrieved_sources
+                and "gather" in intent_path
+            ):
+                # QNT-290: narrative-only flagged followup -- same QNT-281 fix
+                # as the focused-card-dropped case below. No QuickFactAnswer
+                # card exists to count inline citations from; narrate spoke
+                # from the retrieved sources, so count each surfaced source
+                # as a citation instead of reading a misleading 0.
+                citations_count = len(retrieved_sources)
+            else:
+                citations_count = _count_quick_fact_citations(
+                    quick_fact if isinstance(quick_fact, QuickFactAnswer) else None
+                )
         elif intent in {"fundamental", "technical", "news"}:
             if isinstance(focused, FocusedAnalysis):
                 citations_count = _count_focused_citations(focused)
@@ -1250,23 +1265,32 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
 
         # QNT-209/212: tools_count reflects tools INVOKED this turn, not the
         # size of the hydrated report bundle. Any turn that skipped gather
-        # (followup, conversational, and clarify all short-circuit past
-        # plan+gather per QNT-212) reused or ignored the prior turn's
-        # checkpointer-hydrated reports and fired zero tools, so the frontend
-        # chip must read "0 sources" rather than the misleading hydrated
-        # count. ``gather`` in intent_path is the authoritative signal; the
-        # ``intent_path and`` guard preserves the old len(reports) fallback
-        # for stubbed test graphs that don't populate intent_path, and the
-        # explicit followup clause keeps the QNT-209 contract for those stubs
-        # (which set intent="followup" with hydrated reports but no path).
+        # (conversational and clarify short-circuit past plan+gather per
+        # QNT-212; a pure followup does too) reused or ignored the prior
+        # turn's checkpointer-hydrated reports and fired zero tools, so the
+        # frontend chip must read "0 sources" rather than the misleading
+        # hydrated count. ``gather`` in intent_path is the authoritative
+        # signal; the ``intent_path and`` guard preserves the old
+        # len(reports) fallback for stubbed test graphs that don't populate
+        # intent_path.
         if "explore_supervisor" in intent_path:
             tools_count = len(plan)
-        else:
+        elif intent == "followup":
+            # QNT-290: a flagged followup runs gather for the RAG-only branch
+            # and never re-fetches the report plan, so tools_count reflects
+            # the corpora that actually produced a hit THIS turn, not the
+            # full hydrated bundle. Gate on "gather" in intent_path exactly
+            # like the retrieved_sources event above so a stale hydrated
+            # list can't leak into an unflagged followup's count; stubbed
+            # test graphs with no intent_path keep the original QNT-209
+            # "0 sources" contract.
             tools_count = (
-                0
-                if intent == "followup" or (intent_path and "gather" not in intent_path)
-                else len(reports)
+                len({source.get("corpus") for source in retrieved_sources})
+                if intent_path and "gather" in intent_path and retrieved_sources
+                else 0
             )
+        else:
+            tools_count = 0 if (intent_path and "gather" not in intent_path) else len(reports)
         yield _sse(
             "done",
             {
