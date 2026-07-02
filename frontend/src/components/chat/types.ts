@@ -43,6 +43,11 @@ export type ChatRun = {
   // yet" (narrate hasn't started or failed silently); the bubble only
   // renders when non-empty.
   narrative: string;
+  // QNT-298: plan_rationale event text, rendered as a one-line italic
+  // status above the tool rows for as long as no card has landed yet. null
+  // means "no rationale streamed" (quick_fact/focused/comparison plans
+  // carry none, or the event hasn't arrived).
+  planRationale: string | null;
   thesis: ThesisPayload | null;
   quickFact: QuickFactPayload | null;
   comparison: ComparisonPayload | null;

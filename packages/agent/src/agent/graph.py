@@ -49,7 +49,12 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from shared.tickers import TICKERS
 
 from agent.comparison import ComparisonAnswer, LeanComparisonAnswer, LeanComparisonRow
-from agent.conversational import ConversationalAnswer, coerce_suggestions, domain_redirect
+from agent.conversational import (
+    ConversationalAnswer,
+    coerce_suggestions,
+    domain_redirect,
+    is_answerable_suggestion,
+)
 from agent.disclaimer import DISCLAIMER
 from agent.evals.hallucination import HallucinationResult, extract_numbers
 from agent.evals.hallucination import check as check_grounding
@@ -258,6 +263,16 @@ class IntentPolicy:
     # intents that never reach the fallback redirect narratively or have no
     # failure-path bias to set.
     suggestion_hint: str | None
+    # QNT-298: deterministic follow-up chip templates shown under this
+    # intent's card once the turn completes -- each pair is
+    # (target_intent, template), where target_intent is the shape a click
+    # would classify as (used by tests to confirm the chip does not route to
+    # clarify) and template contains ``{ticker}`` and, for the comparison
+    # shape, ``{partner}`` placeholders. None for intents that render no
+    # analytical card to follow up on: conversational already IS the
+    # suggestion surface (see suggestion_hint), and followup reuses the
+    # prior turn's card with nothing new to suggest.
+    followup_templates: tuple[tuple[Intent, str], ...] | None
 
 
 # QNT-288: single source of truth for per-intent routing behaviour. A
@@ -273,6 +288,11 @@ INTENT_POLICIES: dict[Intent, IntentPolicy] = {
         requires_ticker=True,
         short_circuit=False,
         suggestion_hint="thesis",
+        followup_templates=(
+            ("news", "What's the news angle on {ticker}?"),
+            ("comparison", "Compare {ticker} vs {partner}"),
+            ("exploration", "What should I watch this week on {ticker}?"),
+        ),
     ),
     "quick_fact": IntentPolicy(
         focused_report=None,
@@ -284,6 +304,10 @@ INTENT_POLICIES: dict[Intent, IntentPolicy] = {
         # No bank label for "quick_fact" itself -- most single-metric asks
         # are technical (RSI, MACD, price), so failures bias there.
         suggestion_hint="technical",
+        followup_templates=(
+            ("thesis", "Full thesis on {ticker}?"),
+            ("news", "What's the news angle on {ticker}?"),
+        ),
     ),
     "comparison": IntentPolicy(
         focused_report=None,
@@ -293,6 +317,10 @@ INTENT_POLICIES: dict[Intent, IntentPolicy] = {
         requires_ticker=False,  # its own multi-ticker ambiguity check governs this
         short_circuit=False,
         suggestion_hint="comparison",
+        followup_templates=(
+            ("thesis", "Full thesis on {ticker}?"),
+            ("thesis", "Full thesis on {partner}?"),
+        ),
     ),
     "conversational": IntentPolicy(
         focused_report=None,
@@ -303,6 +331,10 @@ INTENT_POLICIES: dict[Intent, IntentPolicy] = {
         short_circuit=True,
         # Conversational IS the fallback redirect -- this hint is unreachable.
         suggestion_hint=None,
+        # Conversational already ships its own suggestions on the answer
+        # payload (see suggestion_hint / domain_redirect) -- no separate
+        # follow-up chip row.
+        followup_templates=None,
     ),
     "fundamental": IntentPolicy(
         focused_report="fundamental",
@@ -312,6 +344,10 @@ INTENT_POLICIES: dict[Intent, IntentPolicy] = {
         requires_ticker=True,
         short_circuit=False,
         suggestion_hint="fundamental",
+        followup_templates=(
+            ("technical", "How is {ticker} trending technically?"),
+            ("thesis", "Full thesis on {ticker}?"),
+        ),
     ),
     "technical": IntentPolicy(
         focused_report="technical",
@@ -321,6 +357,10 @@ INTENT_POLICIES: dict[Intent, IntentPolicy] = {
         requires_ticker=True,
         short_circuit=False,
         suggestion_hint="technical",
+        followup_templates=(
+            ("fundamental", "What's the fundamental case for {ticker}?"),
+            ("thesis", "Full thesis on {ticker}?"),
+        ),
     ),
     "news": IntentPolicy(
         focused_report="news",
@@ -330,6 +370,10 @@ INTENT_POLICIES: dict[Intent, IntentPolicy] = {
         requires_ticker=True,
         short_circuit=False,
         suggestion_hint="news",
+        followup_templates=(
+            ("thesis", "Full thesis on {ticker}?"),
+            ("technical", "How is {ticker} trending technically?"),
+        ),
     ),
     "followup": IntentPolicy(
         focused_report=None,
@@ -343,6 +387,9 @@ INTENT_POLICIES: dict[Intent, IntentPolicy] = {
         short_circuit=True,
         # narrate owns the spoken response on this path; no bias to set.
         suggestion_hint=None,
+        # Reuses the prior turn's card (QuickFactAnswer) verbatim -- nothing
+        # new happened this turn to suggest a follow-up from.
+        followup_templates=None,
     ),
     "exploration": IntentPolicy(
         focused_report=None,
@@ -353,6 +400,10 @@ INTENT_POLICIES: dict[Intent, IntentPolicy] = {
         short_circuit=False,
         # QNT-220 follow-up: a failed broad scan biases toward thesis suggestions.
         suggestion_hint="thesis",
+        followup_templates=(
+            ("thesis", "Full thesis on {ticker}?"),
+            ("comparison", "Compare {ticker} vs {partner}"),
+        ),
     ),
 }
 
@@ -1651,6 +1702,53 @@ def _hint_from_intent(intent: Intent) -> str | None:
     return INTENT_POLICIES[intent].suggestion_hint
 
 
+# QNT-298: static "compare against" pick for the ``{partner}`` slot in a
+# single-ticker intent's follow-up templates. Not a scored comparability
+# metric -- a fixed, deterministic second ticker (sector/competitive line an
+# analyst would reach for first) so a "Compare X vs Y" chip always names two
+# covered symbols with zero LLM calls. Every ``TICKERS`` entry has a key and
+# every value is itself a distinct covered ticker (asserted in tests).
+_COMPARISON_PARTNER: dict[str, str] = {
+    "NVDA": "AMD",
+    "AMD": "NVDA",
+    "INTC": "AMD",
+    "MU": "NVDA",
+    "AAPL": "MSFT",
+    "MSFT": "GOOGL",
+    "GOOGL": "META",
+    "META": "GOOGL",
+    "AMZN": "MSFT",
+    "TSLA": "NVDA",
+}
+
+
+def analytical_followup_suggestions(
+    intent: Intent,
+    ticker: str,
+    comparison_tickers: list[str] | None = None,
+) -> list[str]:
+    """QNT-298: 2-3 deterministic follow-up chips for an analytical card.
+
+    Zero LLM calls -- ``IntentPolicy.followup_templates`` are filled from the
+    resolved analysis ``ticker`` and (for the comparison shape) the second
+    compared ticker, or (for every other shape) the static
+    ``_COMPARISON_PARTNER`` pick. Every filled chip is re-checked against the
+    QNT-244 ``is_answerable_suggestion`` guardrail so a malformed template can
+    never ship an unanswerable/clarify-routing chip. Returns ``[]`` for
+    intents with no ``followup_templates`` entry (conversational, followup).
+    """
+    templates = INTENT_POLICIES[intent].followup_templates
+    if not templates:
+        return []
+    if intent == "comparison" and comparison_tickers and len(comparison_tickers) >= 2:
+        primary, partner = comparison_tickers[0], comparison_tickers[1]
+    else:
+        primary = ticker
+        partner = _COMPARISON_PARTNER.get(ticker, ticker)
+    filled = [template.format(ticker=primary, partner=partner) for _, template in templates]
+    return [chip for chip in filled if is_answerable_suggestion(chip)]
+
+
 def build_graph(
     tools: dict[str, ToolFn],
     *,
@@ -2014,6 +2112,17 @@ def build_graph(
             intent,
             comparison_tickers,
         )
+        # QNT-298: surface the analyst-voice plan rationale over SSE as soon
+        # as it resolves -- BEFORE gather's tool calls fire -- so the panel
+        # can fill the gather->synthesize dead air with a real sentence
+        # instead of a generic spinner. None (quick_fact/focused/comparison
+        # plans) emits nothing; narrate's own consumption of plan_rationale
+        # is unchanged.
+        if plan_rationale is not None and event_emitter is not None:
+            try:
+                event_emitter("plan_rationale", {"text": plan_rationale})
+            except Exception as exc:  # noqa: BLE001 — never let SSE plumbing crash the graph
+                logger.warning("plan %s: event_emitter failed: %s (continuing)", ticker, exc)
         return {
             "plan": plan,
             "plan_rationale": plan_rationale,
@@ -2293,10 +2402,23 @@ def build_graph(
             sorted(errors),
         )
 
+        # QNT-298: same SSE surfacing as plan_node's thesis rationale (see
+        # comment there) -- exploration gathers inline in this single node,
+        # so the rationale lands right after this turn's tool_result events
+        # rather than before them, but still well ahead of synthesize.
+        exploration_rationale = _exploration_rationale(question, plan)
+        if exploration_rationale is not None and event_emitter is not None:
+            try:
+                event_emitter("plan_rationale", {"text": exploration_rationale})
+            except Exception as exc:  # noqa: BLE001 — never let SSE plumbing crash the graph
+                logger.warning(
+                    "explore_supervisor %s: event_emitter failed: %s (continuing)", ticker, exc
+                )
+
         return {
             "intent": output_intent,
             "plan": plan,
-            "plan_rationale": _exploration_rationale(question, plan),
+            "plan_rationale": exploration_rationale,
             "reports": reports,
             "errors": errors,
             "reports_by_ticker": {},
@@ -3246,5 +3368,6 @@ __all__ = [
     "Thesis",
     "ThesisPlan",
     "ToolFn",
+    "analytical_followup_suggestions",
     "build_graph",
 ]

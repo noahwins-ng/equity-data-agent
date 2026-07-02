@@ -1184,6 +1184,142 @@ def test_thesis_failure_falls_back_to_conversational_redirect(
     assert len(payload["suggestions"]) == 3
 
 
+# ─── QNT-298: follow-up chips on the done event ────────────────────────────
+
+
+def test_done_carries_analytical_followup_suggestions_for_thesis(
+    client: TestClient,
+    stub_graph: MagicMock,
+) -> None:
+    """AC1: a landed thesis card carries 2-3 deterministic follow-up chips
+    on the ``done`` event, matching the pure ``analytical_followup_suggestions``
+    helper for the same (intent, ticker)."""
+    from agent.graph import analytical_followup_suggestions
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
+    frames = _parse_sse(r.text)
+    done_data = frames[-1][1]
+
+    assert done_data["intent"] == "thesis"
+    assert done_data["suggestions"] == analytical_followup_suggestions("thesis", "NVDA")
+    assert 2 <= len(done_data["suggestions"]) <= 3
+
+
+def test_done_suggestions_empty_on_conversational_fallback(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC1: a synthesize-failure conversational fallback (intent still reads
+    "thesis") carries no follow-up chips -- the fallback card already ships
+    its own suggestions, and no thesis card actually landed to follow up on."""
+    from agent.conversational import domain_redirect
+    from shared.tickers import TICKERS
+
+    fallback = domain_redirect(
+        reason="I had trouble pulling a thesis together for that.",
+        tickers=TICKERS,
+        hint="thesis",
+    )
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:  # noqa: ARG001
+        graph = MagicMock()
+        graph.invoke.return_value = {
+            "ticker": "NVDA",
+            "intent": "thesis",
+            "plan": ["technical"],
+            "reports": {"technical": "stub"},
+            "errors": {},
+            "thesis": None,
+            "quick_fact": None,
+            "comparison": None,
+            "conversational": fallback,
+            "confidence": 1.0,
+        }
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    r = client.post(
+        "/api/v1/agent/chat",
+        json={"ticker": "NVDA", "message": "Should I buy NVDA?"},
+    )
+    frames = _parse_sse(r.text)
+    done_data = frames[-1][1]
+    assert done_data["suggestions"] == []
+
+
+def test_done_comparison_suggestions_name_both_compared_tickers(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC1: comparison follow-up chips use the two tickers the user actually
+    compared (state['comparison_tickers']), not a single-ticker partner
+    guess."""
+    from agent.comparison import ComparisonAnswer, ComparisonSection
+
+    def _section(ticker: str, label: str) -> ComparisonSection:
+        return ComparisonSection(
+            ticker=ticker,
+            company=AspectView(
+                label=None,
+                summary=f"{ticker} context (source: company).",
+                supports=[],
+                challenges=[],
+            ),
+            fundamental=AspectView(
+                label=label,
+                summary=f"{ticker} sits {label} (source: fundamental).",
+                supports=[],
+                challenges=[],
+            ),
+            technical=AspectView(
+                label="Sideways",
+                summary=f"{ticker} TREND Sideways (source: technical).",
+                supports=[],
+                challenges=[],
+            ),
+            news=AspectView(
+                label=None,
+                summary=f"{ticker} no headlines (source: news).",
+                supports=[],
+                challenges=[],
+            ),
+        )
+
+    comparison = ComparisonAnswer(
+        sections=[_section("NVDA", "Premium"), _section("AAPL", "Inline")],
+        differences="NVDA carries a richer multiple than AAPL (source: fundamental).",
+    )
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:  # noqa: ARG001
+        graph = MagicMock()
+        graph.invoke.return_value = {
+            "ticker": "NVDA",
+            "intent": "comparison",
+            "plan": ["fundamental"],
+            "reports": {"fundamental": "stub"},
+            "reports_by_ticker": {"NVDA": {"fundamental": "stub"}, "AAPL": {"fundamental": "stub"}},
+            "comparison_tickers": ["NVDA", "AAPL"],
+            "errors": {},
+            "thesis": None,
+            "quick_fact": None,
+            "comparison": comparison,
+            "conversational": None,
+            "confidence": 1.0,
+        }
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    r = client.post(
+        "/api/v1/agent/chat",
+        json={"ticker": "NVDA", "message": "Compare NVDA vs AAPL on valuation."},
+    )
+    frames = _parse_sse(r.text)
+    done_data = frames[-1][1]
+    assert done_data["suggestions"] == ["Full thesis on NVDA?", "Full thesis on AAPL?"]
+
+
 # ─── QNT-150: production-hardening (disconnect, timeout, race) ────────────
 
 

@@ -146,7 +146,7 @@ from agent.conversational import ConversationalAnswer, domain_redirect
 from agent.eval_scores import push_to_trace_id as push_eval_scores
 from agent.exploration import ExplorationAnswer
 from agent.focused import FocusedAnalysis
-from agent.graph import OPTIONAL_TOOLS, build_graph
+from agent.graph import OPTIONAL_TOOLS, analytical_followup_suggestions, build_graph
 from agent.llm import (
     ServedModelTracker,
     TokenUsageTracker,
@@ -665,6 +665,39 @@ async def _maybe_alert_breaker_once() -> None:
             return
         _BREAKER_ALERTED_DATE = today
     record_breaker_trip("global TPD ceiling reached")
+
+
+def _analytical_card_present(
+    intent: str,
+    *,
+    thesis: Thesis | None,
+    quick_fact: QuickFactAnswer | None,
+    comparison: ComparisonAnswer | None,
+    comparison_lean: LeanComparisonAnswer | None,
+    focused: FocusedAnalysis | None,
+    exploration: ExplorationAnswer | None,
+) -> bool:
+    """QNT-298: True when this turn actually landed the analytical card for ``intent``.
+
+    Gates the follow-up chip row on the ``done`` event. A synthesize-path
+    failure ships a ``conversational`` redirect INSTEAD of the analytical
+    card (``state["intent"]`` still reads e.g. ``"thesis"`` on that
+    fallback) — that redirect already carries its own suggestions, so chips
+    referencing a card that never rendered would be misleading.
+    """
+    if intent == "thesis":
+        return isinstance(thesis, Thesis)
+    if intent == "quick_fact":
+        return isinstance(quick_fact, QuickFactAnswer)
+    if intent == "comparison":
+        return isinstance(comparison, ComparisonAnswer) or isinstance(
+            comparison_lean, LeanComparisonAnswer
+        )
+    if intent in {"fundamental", "technical", "news"}:
+        return isinstance(focused, FocusedAnalysis)
+    if intent == "exploration":
+        return isinstance(exploration, ExplorationAnswer)
+    return False
 
 
 async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  # noqa: C901, PLR0915 — orchestration coroutine, refactor candidate for QNT-209 follow-up
@@ -1291,6 +1324,41 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
             )
         else:
             tools_count = 0 if (intent_path and "gather" not in intent_path) else len(reports)
+
+        # QNT-298: deterministic follow-up chips under the landed analytical
+        # card. Gated on the card actually being present (not just the
+        # intent label) so a synthesize-failure conversational fallback —
+        # which already carries its own suggestions — never doubles up.
+        # ``analysis_ticker``/``ticker`` is classify_node's resolved subject
+        # (may differ from the request's page ticker on a rebase); falls
+        # back to the request ticker for stubbed test graphs.
+        resolved_ticker = (
+            (state.get("analysis_ticker") or state.get("ticker") or ticker)
+            if isinstance(state, dict)
+            else ticker
+        )
+        suggestions = (
+            analytical_followup_suggestions(
+                intent,
+                str(resolved_ticker),
+                comparison_tickers=list(state.get("comparison_tickers") or [])
+                if isinstance(state, dict)
+                else None,
+            )
+            if _analytical_card_present(
+                intent,
+                thesis=thesis if isinstance(thesis, Thesis) else None,
+                quick_fact=quick_fact if isinstance(quick_fact, QuickFactAnswer) else None,
+                comparison=comparison if isinstance(comparison, ComparisonAnswer) else None,
+                comparison_lean=comparison_lean
+                if isinstance(comparison_lean, LeanComparisonAnswer)
+                else None,
+                focused=focused if isinstance(focused, FocusedAnalysis) else None,
+                exploration=exploration if isinstance(exploration, ExplorationAnswer) else None,
+            )
+            else []
+        )
+
         yield _sse(
             "done",
             {
@@ -1305,6 +1373,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                 "thread_id": thread_id,
                 "intent_path": intent_path,
                 "supervisor_iterations": supervisor_iterations,
+                "suggestions": suggestions,
             },
         )
     finally:
