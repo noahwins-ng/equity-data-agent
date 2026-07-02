@@ -420,6 +420,44 @@ class TestAppendHistory:
         assert rows[0]["analyst_logic"] == ""
         assert rows[0]["composite"] == ""
 
+    def test_verdict_label_consistent_serialises_by_flag(self, tmp_path: Path) -> None:
+        """QNT-302: True -> '1', False -> '0', None -> '' — and the value lands
+        under its own column name on read (guards the mid-list-insert corruption
+        that would shift every later column)."""
+        history = tmp_path / "history.csv"
+
+        def _mk(flag: bool | None) -> EvalOutcome:
+            return EvalOutcome(
+                record=_record(),
+                thesis="t",
+                actual_tools=(),
+                hallucination_ok=True,
+                hallucination_reason="clean",
+                tool_call_ok=True,
+                tool_call_reason="clean",
+                judge_score=None,
+                cosine=0.0,
+                elapsed_ms=1,
+                verdict_label_consistent=flag,
+            )
+
+        append_history([_mk(True), _mk(False), _mk(None)], run_id="r", history_path=history)
+        rows = list(csv.DictReader(history.open()))
+        assert [r["verdict_label_consistent"] for r in rows] == ["1", "0", ""]
+        # Columns after the new one must still align (eval_type is not shifted).
+        assert {r["eval_type"] for r in rows} == {"structured"}
+
+    def test_history_fields_is_append_only_vs_committed_header(self) -> None:
+        """QNT-302 regression guard: the ragged committed history.csv is
+        append-only — a new field must be added at the TAIL of HISTORY_FIELDS
+        and mirrored into the on-disk header, or existing rows misalign on read.
+        This pins both invariants so a future mid-list insert fails loudly."""
+        committed = csv.reader(golden_set.HISTORY_PATH.open()).__next__()
+        # On-disk header is exactly the current schema, in order.
+        assert committed == list(HISTORY_FIELDS)
+        # Newest field is last (the append-only tail).
+        assert HISTORY_FIELDS[-1] == "verdict_label_consistent"
+
 
 class TestGate:
     def test_is_failing_only_on_hard_contract_violations(self) -> None:
@@ -468,6 +506,7 @@ def _outcome(
     provider_error: bool = False,
     reason: str = "clean",
     elapsed_ms: int = 1000,
+    verdict_label_consistent: bool | None = None,
 ) -> EvalOutcome:
     return EvalOutcome(
         record=_record(rid),
@@ -481,7 +520,26 @@ def _outcome(
         cosine=0.0,
         elapsed_ms=elapsed_ms,
         provider_error=provider_error,
+        verdict_label_consistent=verdict_label_consistent,
     )
+
+
+def test_summarise_reports_verdict_label_consistent_over_thesis_rows_only() -> None:
+    """QNT-302: the advisory aggregate counts only structured-thesis rows (flag
+    is not None); non-thesis shapes (flag None) are excluded from the ratio."""
+    text = summarise(
+        [
+            _outcome(rid="a", verdict_label_consistent=True),
+            _outcome(rid="b", verdict_label_consistent=False),
+            _outcome(rid="c", verdict_label_consistent=None),  # non-thesis: excluded
+        ]
+    )
+    assert "verdict_label_consistent: 1/2" in text
+
+
+def test_summarise_verdict_label_consistent_na_when_no_thesis_rows() -> None:
+    text = summarise([_outcome(rid="a", verdict_label_consistent=None)])
+    assert "verdict_label_consistent: n/a" in text
 
 
 class TestProviderPressure:

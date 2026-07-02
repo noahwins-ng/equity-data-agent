@@ -9,12 +9,19 @@ asymmetry-allowed semantics, and the verdict closed set.
 from __future__ import annotations
 
 import pytest
-from agent.thesis import AspectView, Thesis
+from agent.thesis import (
+    AspectView,
+    Thesis,
+    expected_verdict_from_labels,
+    normalize_aspect_label,
+)
 from pydantic import ValidationError
+
+from ._thesis_factory import make_thesis
 
 
 def _aspect(label: str | None = None, summary: str = "x") -> AspectView:
-    return AspectView(label=label, summary=summary, supports=[], challenges=[])
+    return AspectView(label=label, summary=summary, supports=[], challenges=[])  # pyright: ignore[reportArgumentType]
 
 
 def _full_thesis() -> Thesis:
@@ -207,3 +214,79 @@ def test_to_markdown_preserves_verdict_rationale_text() -> None:
     t = _full_thesis()
     rendered = t.to_markdown()
     assert "verdict Overweight (source: technical, fundamental)" in rendered
+
+
+# ─────────────── QNT-302: AspectView.label normalization (AC1) ────────────────
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Premium", "Premium"),
+        ("premium", "Premium"),  # lower-case
+        ("UPTREND", "Uptrend"),  # upper-case
+        ("  Discounted  ", "Discounted"),  # surrounding whitespace
+        ("Inline", "Inline"),
+    ],
+)
+def test_aspect_label_normalizes_casing(raw: str, expected: str) -> None:
+    """Off-casing must coerce to the canonical spelling so the frontend pill
+    palette (indexed by the raw string) always gets a known key."""
+    assert AspectView(label=raw, summary="x").label == expected  # pyright: ignore[reportArgumentType]
+    assert normalize_aspect_label(raw) == expected
+
+
+@pytest.mark.parametrize("junk", ["Bullish", "premuim", "N/M", "", "12", "Overweight"])
+def test_aspect_label_junk_normalizes_to_none(junk: str) -> None:
+    """Any off-vocabulary label maps to None (no chip) rather than raising —
+    a raise inside with_structured_output would trip the retry/fallback."""
+    assert AspectView(label=junk, summary="x").label is None  # pyright: ignore[reportArgumentType]
+    assert normalize_aspect_label(junk) is None
+
+
+def test_aspect_label_non_string_normalizes_to_none() -> None:
+    assert normalize_aspect_label(42) is None
+    assert normalize_aspect_label(None) is None
+
+
+def test_aspect_label_omitted_defaults_to_none() -> None:
+    assert AspectView(summary="x").label is None
+
+
+# ─────────────── QNT-302: verdict-vs-labels tripwire (AC3) ────────────────────
+
+
+@pytest.mark.parametrize(
+    ("fundamental", "technical", "expected"),
+    [
+        ("Discounted", "Uptrend", "Overweight"),  # two favourable, none unfavourable
+        ("Premium", "Downtrend", "Underweight"),  # two unfavourable
+        ("Premium", "Uptrend", "Neutral"),  # one of each
+        ("Inline", "Sideways", "Neutral"),  # both neutral
+        ("Discounted", "Sideways", "Neutral"),  # one favourable is not enough
+        (None, None, "Neutral"),  # narrative-only aspects
+    ],
+)
+def test_expected_verdict_from_labels_rule(
+    fundamental: str | None, technical: str | None, expected: str
+) -> None:
+    assert expected_verdict_from_labels([fundamental, technical]) == expected
+
+
+def test_verdict_matches_labels_flags_contradiction() -> None:
+    """A thesis whose verdict contradicts its labels is still constructible
+    (advisory, never raises) but reports the mismatch via the flag."""
+    inconsistent = make_thesis(verdict="Overweight")  # factory labels = Premium + Uptrend
+    assert inconsistent.verdict_matches_labels() is False
+
+
+def test_verdict_matches_labels_true_for_consistent_thesis() -> None:
+    consistent = make_thesis(verdict="Neutral")  # Premium + Uptrend => Neutral
+    assert consistent.verdict_matches_labels() is True
+
+
+def test_factory_fixture_thesis_is_consistent() -> None:
+    """Eval-layer guard: the shared thesis fixture the eval/test suite builds
+    on must itself satisfy the label rule, so a future fixture edit that drifts
+    the verdict off its labels is caught here."""
+    assert make_thesis().verdict_matches_labels() is True

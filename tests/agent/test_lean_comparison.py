@@ -237,3 +237,46 @@ def test_offpage_two_named_stays_rich_no_primary_inflation(
     assert result.get("comparison_lean") is None
     # NVDA (the page primary) is NOT pulled into the comparison.
     assert set(result["reports_by_ticker"]) == {"AAPL", "MSFT"}
+
+
+# ─────────────── QNT-302: LeanComparisonRow label normalization (AC1) ─────────
+
+
+def test_lean_row_normalizes_label_casing() -> None:
+    """The three pill fields share the frontend ASPECT_LABEL_PILL palette, so
+    off-casing must coerce to the canonical spelling."""
+    from agent.comparison import LeanComparisonRow
+
+    row = LeanComparisonRow(
+        ticker="NVDA",
+        pe="28.4",
+        rsi="61",
+        net_margin="25%",
+        price="$120",
+        valuation_label="discounted",  # pyright: ignore[reportArgumentType]  # normalized by validator
+        trend_daily="UPTREND",  # pyright: ignore[reportArgumentType]
+        trend_weekly="Sideways",
+    )
+    assert row.valuation_label == "Discounted"
+    assert row.trend_daily == "Uptrend"
+    assert row.trend_weekly == "Sideways"
+
+
+def test_lean_row_off_vocabulary_labels_normalize_to_none() -> None:
+    """An off-vocabulary label (e.g. the API's 'N/M' sentinel) maps to None so
+    the frontend renders a muted dash, never an unknown pill key."""
+    from agent.comparison import LeanComparisonRow
+
+    row = LeanComparisonRow(
+        ticker="NVDA",
+        pe="N/M",
+        rsi="N/M",
+        net_margin="N/M",
+        price="$120",
+        valuation_label="N/M",  # pyright: ignore[reportArgumentType]  # normalized to None by validator
+        trend_daily="Bullish",  # pyright: ignore[reportArgumentType]
+        trend_weekly=None,
+    )
+    assert row.valuation_label is None
+    assert row.trend_daily is None
+    assert row.trend_weekly is None

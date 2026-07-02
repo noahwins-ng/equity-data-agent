@@ -941,7 +941,7 @@ def test_comparison_intent_emits_comparison_event_not_thesis(
                 challenges=[],
             ),
             fundamental=AspectView(
-                label=label,
+                label=label,  # pyright: ignore[reportArgumentType]  # str normalized by field validator
                 summary=f"{ticker} sits {label} (source: fundamental).",
                 supports=[],
                 challenges=[],
@@ -1266,7 +1266,7 @@ def test_done_comparison_suggestions_name_both_compared_tickers(
                 challenges=[],
             ),
             fundamental=AspectView(
-                label=label,
+                label=label,  # pyright: ignore[reportArgumentType]  # str normalized by field validator
                 summary=f"{ticker} sits {label} (source: fundamental).",
                 supports=[],
                 challenges=[],

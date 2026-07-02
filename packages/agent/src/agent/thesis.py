@@ -30,11 +30,15 @@ part of the JSON schema the LLM sees, so they double as inline prompting.
 
 from __future__ import annotations
 
-from typing import Literal
+import logging
+from collections.abc import Iterable
+from typing import Literal, get_args
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from agent.disclaimer import DISCLAIMER
+
+logger = logging.getLogger(__name__)
 
 Verdict = Literal["Overweight", "Neutral", "Underweight"]
 
@@ -51,6 +55,57 @@ AspectLabel = Literal[
     "Downtrend",
 ]
 
+# QNT-302: case-insensitive map from any casing of a canonical label to its
+# canonical spelling. Off-vocabulary / non-string values normalize to None.
+_ASPECT_LABEL_BY_LOWER: dict[str, AspectLabel] = {v.lower(): v for v in get_args(AspectLabel)}
+
+
+def normalize_aspect_label(raw: object) -> AspectLabel | None:
+    """Coerce an arbitrary label value to a canonical AspectLabel, or None.
+
+    NORMALIZE-never-raise (QNT-302): the frontend pill palette is indexed by
+    the raw label string (``ASPECT_LABEL_PILL[label]``), so an off-vocabulary
+    label ("premium", "Bullish") renders a broken chip. Any value that is not
+    one of the six AspectLabel spellings (case-insensitively) maps to None --
+    the frontend's null-label convention (no chip). Never raises, so a
+    cosmetic mismatch in LLM output can't trigger the structured-output
+    retry -> fallback-redirect chain.
+    """
+    if not isinstance(raw, str):
+        return None
+    return _ASPECT_LABEL_BY_LOWER.get(raw.strip().lower())
+
+
+# QNT-302: verdict-vs-labels tripwire vocabulary. The frontend colour-codes
+# Discounted / Uptrend green (favourable); Premium amber and Downtrend red
+# (both unfavourable); Inline / Sideways neutral zinc. "Premium" is a
+# valuation *caution* (multiple above own-history 75th pct / peer median per
+# the fundamental report), so it counts against, not for, a bullish verdict.
+_FAVOURABLE_LABELS: frozenset[str] = frozenset({"Discounted", "Uptrend"})
+_UNFAVOURABLE_LABELS: frozenset[str] = frozenset({"Premium", "Downtrend"})
+
+
+def expected_verdict_from_labels(labels: Iterable[str | None]) -> Verdict:
+    """Deterministic verdict implied by the aspect labels alone (QNT-302).
+
+    Restates the ``Thesis.verdict`` Field-description rule over the two
+    label-bearing aspects (fundamental + technical): Overweight when at least
+    two carry favourable labels and none carries an unfavourable one;
+    Underweight when at least two carry unfavourable labels; Neutral
+    otherwise. The description's news-catalyst clause is not checkable from
+    the Thesis payload (it carries no catalyst field), so the label-only rule
+    is an advisory approximation -- used to flag drift, not to rewrite the
+    verdict.
+    """
+    materialised = list(labels)
+    favourable = sum(1 for label in materialised if label in _FAVOURABLE_LABELS)
+    unfavourable = sum(1 for label in materialised if label in _UNFAVOURABLE_LABELS)
+    if favourable >= 2 and unfavourable == 0:
+        return "Overweight"
+    if unfavourable >= 2:
+        return "Underweight"
+    return "Neutral"
+
 
 class AspectView(BaseModel):
     """One source aspect inside a Thesis (company / fundamental / technical / news).
@@ -60,7 +115,7 @@ class AspectView(BaseModel):
     aspect's verdict in the matching report's own vocabulary.
     """
 
-    label: str | None = Field(
+    label: AspectLabel | None = Field(
         default=None,
         description=(
             "Aspect verdict label. Fundamental carries one of "
@@ -71,6 +126,15 @@ class AspectView(BaseModel):
             "pass null."
         ),
     )
+
+    @field_validator("label", mode="before")
+    @classmethod
+    def _normalize_label(cls, v: object) -> AspectLabel | None:
+        """QNT-302: coerce off-vocabulary / mis-cased labels to a canonical
+        value or None *before* the Literal validates, so junk normalizes
+        instead of raising (which would trip the structured-output retry)."""
+        return normalize_aspect_label(v)
+
     summary: str = Field(
         description=(
             "Two to three sentences of analytical prose for this aspect. "
@@ -153,6 +217,32 @@ class Thesis(BaseModel):
         ),
     )
 
+    def verdict_matches_labels(self) -> bool:
+        """QNT-302 advisory flag: does the verdict agree with the
+        label-derived expectation? Exposed to the eval layer so a golden run
+        can record the mismatch rate. Never mutates the verdict -- promotion
+        to normalization is a follow-up, gated on the observed rate."""
+        expected = expected_verdict_from_labels([self.fundamental.label, self.technical.label])
+        return expected == self.verdict
+
+    @model_validator(mode="after")
+    def _warn_on_verdict_label_mismatch(self) -> Thesis:
+        """Log one advisory line when the verdict contradicts its own aspect
+        labels. ADVISORY only (QNT-302) -- does not rewrite the verdict, so a
+        human-plausible read the strict label rule disagrees with still
+        ships; the log makes the drift observable for the promote decision."""
+        if not self.verdict_matches_labels():
+            expected = expected_verdict_from_labels([self.fundamental.label, self.technical.label])
+            logger.warning(
+                "Thesis verdict %s inconsistent with labels "
+                "(fundamental=%s technical=%s; label-rule expects %s)",
+                self.verdict,
+                self.fundamental.label,
+                self.technical.label,
+                expected,
+            )
+        return self
+
     def to_markdown(self) -> str:
         """Re-render the structured thesis as markdown.
 
@@ -188,4 +278,11 @@ class Thesis(BaseModel):
         return "\n".join(parts).strip()
 
 
-__all__ = ["AspectLabel", "AspectView", "Thesis", "Verdict"]
+__all__ = [
+    "AspectLabel",
+    "AspectView",
+    "Thesis",
+    "Verdict",
+    "expected_verdict_from_labels",
+    "normalize_aspect_label",
+]

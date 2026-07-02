@@ -30,10 +30,10 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from agent.disclaimer import DISCLAIMER
-from agent.thesis import AspectView
+from agent.thesis import AspectLabel, AspectView, normalize_aspect_label
 
 # Same source enum as quick_fact.py / focused.py — Pydantic validates the
 # Literal at structured-output parse time, and the LLM is told to cite
@@ -163,13 +163,24 @@ class LeanComparisonRow(BaseModel):
     # QNT-224 follow-up: interpretive verdicts copied verbatim from the
     # fundamental + technical reports (Premium/Inline/Discounted,
     # Uptrend/Sideways/Downtrend). None when the report suppressed the label.
-    valuation_label: str | None = Field(default=None, description="Premium / Inline / Discounted.")
-    trend_daily: str | None = Field(
+    valuation_label: AspectLabel | None = Field(
+        default=None, description="Premium / Inline / Discounted."
+    )
+    trend_daily: AspectLabel | None = Field(
         default=None, description="Daily Uptrend / Sideways / Downtrend."
     )
-    trend_weekly: str | None = Field(
+    trend_weekly: AspectLabel | None = Field(
         default=None, description="Weekly Uptrend / Sideways / Downtrend."
     )
+
+    @field_validator("valuation_label", "trend_daily", "trend_weekly", mode="before")
+    @classmethod
+    def _normalize_pill_labels(cls, v: object) -> AspectLabel | None:
+        """QNT-302: these three share the frontend ASPECT_LABEL_PILL palette
+        (lean-comparison-card indexes it by the raw string), so coerce any
+        off-vocabulary value to a canonical label or None before it can index
+        the palette with an unknown key."""
+        return normalize_aspect_label(v)
 
 
 class LeanComparisonAnswer(BaseModel):

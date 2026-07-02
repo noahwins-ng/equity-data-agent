@@ -2767,8 +2767,11 @@ def build_graph(
                 return _fallback("I had trouble pulling that focused analysis together.")
             # Re-assert the focus discriminator from intent — defends against
             # a misbehaving provider that echoed the wrong literal back.
+            # Re-validate rather than model_copy (which skips validators) so
+            # QNT-302's verdict-family / news-field normalization tracks the
+            # corrected focus.
             if focused.focus != intent:
-                focused = focused.model_copy(update={"focus": intent})
+                focused = FocusedAnalysis.model_validate({**focused.model_dump(), "focus": intent})
             payload = _empty_payload()
             payload["focused"] = focused
             logger.info(
