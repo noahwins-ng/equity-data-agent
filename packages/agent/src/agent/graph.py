@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
@@ -50,7 +51,7 @@ from shared.tickers import TICKERS
 from agent.comparison import ComparisonAnswer, LeanComparisonAnswer, LeanComparisonRow
 from agent.conversational import ConversationalAnswer, coerce_suggestions, domain_redirect
 from agent.disclaimer import DISCLAIMER
-from agent.evals.hallucination import HallucinationResult
+from agent.evals.hallucination import HallucinationResult, extract_numbers
 from agent.evals.hallucination import check as check_grounding
 from agent.exploration import ExplorationAnswer
 from agent.focused import FocusedAnalysis
@@ -832,6 +833,101 @@ def _runtime_grounding_check(answer: str, reports: list[str]) -> tuple[Hallucina
     """Advisory runtime numeric grounding check for completed answer text."""
     result = check_grounding(answer, reports)
     return result, _grounding_rate(result)
+
+
+def _quick_fact_cited_value_supported(quick_fact: QuickFactAnswer, state: AgentState) -> bool:
+    """C-4: ``cited_value`` must be a verbatim substring of the report it
+    names (the contract from ``quick_fact.py``'s module docstring). Empty
+    ``cited_value`` is a no-op -- nothing was cited, nothing to check.
+
+    Case-insensitive, word-boundary-aware match rather than plain ``in``:
+    a naive substring test both false-positives on a garbled non-numeric
+    citation that happens to be a substring of the right word (``"sold"``
+    inside a report's ``"oversold"`` reads as supported) and false-positives
+    on harmless case drift (``"Overbought"`` vs. the report's
+    ``"overbought"``) — exactly the class of reformatted/invented citation
+    this check exists to catch. ``(?<!\\w)`` / ``(?!\\w)`` rather than ``\\b``
+    so a value with leading punctuation (``"$1,234.56"``) still boundary-checks
+    correctly (``\\b`` is undefined between two non-word characters).
+    """
+    if not quick_fact.cited_value:
+        return True
+    if quick_fact.source is None:
+        return False
+    report = (state.get("reports") or {}).get(quick_fact.source, "")
+    pattern = rf"(?<!\w){re.escape(quick_fact.cited_value)}(?!\w)"
+    return re.search(pattern, report, re.IGNORECASE) is not None
+
+
+def _quick_fact_grounding(state: AgentState, quick_fact: QuickFactAnswer) -> dict[str, object]:
+    """QNT-296: runtime numeric grounding for quick_fact turns.
+
+    quick_fact skips narrate's tail entirely (QNT-232 #3), so it never picks
+    up ``_runtime_grounding_check`` / ``_composite_confidence`` the way every
+    other analytical shape does. This mirrors that pair against the card's
+    own markdown, then folds in the C-4 substring check on ``cited_value`` --
+    stricter than the number-regex check, since it also catches a
+    reformatted or invented non-numeric ``cited_value`` (e.g. a wrong regime
+    word) that the regex would never flag.
+    """
+    coverage = float(state.get("confidence", 0.0))
+    grounding_result, _ = _runtime_grounding_check(
+        quick_fact.to_markdown(), _runtime_report_texts(state)
+    )
+    unsupported = list(grounding_result.unsupported)
+    total = len(grounding_result.thesis_numbers)
+    cited_value = quick_fact.cited_value
+    if cited_value:
+        # A numeric cited_value is embedded verbatim in to_markdown()'s
+        # "**Value:**" line, so the regex check above already extracted and
+        # scored it as one of ``thesis_numbers`` -- don't inflate the
+        # denominator by counting the same claim twice. A non-numeric
+        # cited_value (a regime word like "overbought") is invisible to the
+        # regex check, so it IS a new claim and adds a denominator slot.
+        cited_numbers = extract_numbers(cited_value)
+        already_scored = bool(cited_numbers) and cited_numbers <= grounding_result.thesis_numbers
+        if not already_scored:
+            total += 1
+        if not _quick_fact_cited_value_supported(quick_fact, state):
+            # Flag using the SAME token form the claim was already counted
+            # under: the canonicalised number(s) if already_scored (avoids
+            # e.g. both "1234.56" and the raw "$1,234.56" landing in
+            # ``unsupported`` for one claim, which would double-penalise it
+            # and could push grounding_rate below 0); the raw string
+            # otherwise, since a non-numeric cited_value has no canonical
+            # form and was never added to ``unsupported`` by the regex pass.
+            if already_scored:
+                for canonical in cited_numbers:
+                    if canonical not in unsupported:
+                        unsupported.append(canonical)
+            elif cited_value not in unsupported:
+                unsupported.append(cited_value)
+    grounding_rate = 1.0 if total == 0 else round((total - len(unsupported)) / total, 2)
+    confidence = _composite_confidence(coverage, grounding_rate)
+    combined = HallucinationResult(
+        ok=not unsupported,
+        unsupported=tuple(unsupported),
+        thesis_numbers=grounding_result.thesis_numbers,
+        report_numbers=grounding_result.report_numbers,
+    )
+    ticker = state["ticker"]
+    if combined.ok:
+        logger.info(
+            "narrate %s: grounding_rate=%s confidence=%s", ticker, grounding_rate, confidence
+        )
+    else:
+        logger.warning(
+            "narrate %s: grounding miss rate=%s unsupported=%s confidence=%s",
+            ticker,
+            grounding_rate,
+            combined.reason(),
+            confidence,
+        )
+    return {
+        "grounding_rate": grounding_rate,
+        "grounding_unsupported": unsupported,
+        "confidence": confidence,
+    }
 
 
 def _is_tool_error(result: str) -> bool:
@@ -2766,10 +2862,19 @@ def build_graph(
         # leaves quick_fact None, in which case there is no surface to skip for.
         # The followup path reuses QuickFactAnswer but keeps intent="followup",
         # so it is unaffected and still narrates.
-        if intent == "quick_fact" and state.get("quick_fact") is not None:
+        #
+        # QNT-296: skipping the LLM call must not skip the grounding check
+        # that call's tail would otherwise have produced -- _quick_fact_grounding
+        # runs the same _runtime_grounding_check / _composite_confidence pair
+        # against the card's own markdown so the confidence chip is never
+        # coverage-only for the one shape whose entire contract is a single
+        # cited number.
+        quick_fact_answer = state.get("quick_fact")
+        if intent == "quick_fact" and quick_fact_answer is not None:
             return {
                 "narrative": None,
                 "messages": _append_assistant_message(state, None),
+                **_quick_fact_grounding(state, quick_fact_answer),
             }
 
         # Pick the structured payload to summarise. Exactly one of these is

@@ -29,12 +29,15 @@ from agent import graph as graph_module
 from agent.graph import (
     OPTIONAL_TOOLS,
     REPORT_TOOLS,
+    AgentState,
     ThesisPlan,
     ToolFn,
     _composite_confidence,
     _confidence_from_reports,
     _format_search_hits,
     _parse_plan,
+    _quick_fact_cited_value_supported,
+    _quick_fact_grounding,
     _runtime_grounding_check,
     build_graph,
 )
@@ -186,6 +189,185 @@ def test_runtime_grounding_rate_lowers_composite_confidence() -> None:
     assert miss_rate < 1.0
     assert _composite_confidence(1.0, clean_rate) == 1.0
     assert _composite_confidence(1.0, miss_rate) < 1.0
+
+
+# ─── QNT-296: runtime numeric grounding for quick_fact (narrate-skip gap) ────
+
+
+def test_quick_fact_grounding_clean_card_yields_full_confidence() -> None:
+    """AC1: a clean QuickFactAnswer -- cited value verbatim in its report --
+    yields grounding_rate 1.0 and confidence == coverage."""
+    quick = QuickFactAnswer(
+        answer="RSI sits at 62 (source: technical).",
+        cited_value="62",
+        source="technical",
+    )
+    state: AgentState = {"ticker": "NVDA", "confidence": 1.0, "reports": {"technical": "RSI 62"}}
+
+    result: dict[str, Any] = _quick_fact_grounding(state, quick)
+
+    assert result["grounding_rate"] == 1.0
+    assert result["grounding_unsupported"] == []
+    assert result["confidence"] == 1.0
+
+
+def test_quick_fact_grounding_fabricated_number_lowers_confidence() -> None:
+    """AC1: a fabricated number in the answer (absent from every gathered
+    report) drops grounding_rate below 1.0 and lowers composite confidence."""
+    quick = QuickFactAnswer(
+        answer="RSI sits at 99 (source: technical).",
+        cited_value="99",
+        source="technical",
+    )
+    state: AgentState = {"ticker": "NVDA", "confidence": 1.0, "reports": {"technical": "RSI 62"}}
+
+    result: dict[str, Any] = _quick_fact_grounding(state, quick)
+
+    assert result["grounding_rate"] < 1.0
+    assert result["confidence"] < 1.0
+    assert "99" in result["grounding_unsupported"]
+
+
+def test_quick_fact_grounding_valid_cited_value_not_double_counted() -> None:
+    """A valid, verbatim cited_value is already embedded in to_markdown()'s
+    "**Value:**" line, so the regex check already scored it as one of
+    thesis_numbers -- the C-4 pass must not add a second denominator slot
+    for the same claim. An unrelated fabricated number elsewhere in the
+    answer should score exactly 1 unsupported out of 2 claims (0.5), not
+    1 out of 3 (0.67) -- the latter would mean the same clean citation
+    silently inflates confidence in mixed-error turns."""
+    quick = QuickFactAnswer(
+        answer="RSI sits at 62, up from 58 (source: technical).",
+        cited_value="62",
+        source="technical",
+    )
+    state: AgentState = {"ticker": "NVDA", "confidence": 1.0, "reports": {"technical": "RSI 62"}}
+
+    result: dict[str, Any] = _quick_fact_grounding(state, quick)
+
+    assert result["grounding_rate"] == 0.5
+    assert result["grounding_unsupported"] == ["58"]
+
+
+def test_quick_fact_grounding_formatted_fabricated_value_stays_in_zero_one_range() -> None:
+    """A formatted cited_value (``$1,234.56`` -- a documented example shape
+    from the QuickFactAnswer field description) that fails the C-4 check
+    must be flagged using its canonicalised form, not the raw string --
+    otherwise the same claim lands in ``grounding_unsupported`` twice (once
+    canonical from the regex pass, once raw from the C-4 pass), which can
+    double-penalise a single hallucination and push grounding_rate below
+    0.0 (unclamped, unlike composite confidence)."""
+    quick = QuickFactAnswer(
+        answer="Market cap sits at $1,234.56 (source: fundamental).",
+        cited_value="$1,234.56",
+        source="fundamental",
+    )
+    state: AgentState = {
+        "ticker": "NVDA",
+        "confidence": 1.0,
+        "reports": {"fundamental": "Market cap: $999.00"},
+    }
+
+    result: dict[str, Any] = _quick_fact_grounding(state, quick)
+
+    assert result["grounding_rate"] == 0.0
+    assert result["grounding_unsupported"] == ["1234.56"]
+
+
+def test_quick_fact_cited_value_verbatim_in_named_report_passes() -> None:
+    """AC4: a cited_value that's a verbatim substring of the report named by
+    ``source`` passes -- not flagged, grounding stays 1.0."""
+    quick = QuickFactAnswer(
+        answer="Sentiment reads overbought (source: technical).",
+        cited_value="overbought",
+        source="technical",
+    )
+    state: AgentState = {
+        "ticker": "NVDA",
+        "confidence": 1.0,
+        "reports": {"technical": "RSI regime: overbought"},
+    }
+
+    assert _quick_fact_cited_value_supported(quick, state) is True
+    result: dict[str, Any] = _quick_fact_grounding(state, quick)
+    assert result["grounding_rate"] == 1.0
+    assert result["grounding_unsupported"] == []
+
+
+def test_quick_fact_cited_value_case_insensitive_match_passes() -> None:
+    """A cited_value differing from the report only in case is still a
+    verbatim citation of the same fact -- naive case-sensitive matching
+    would false-positive-flag harmless case drift as unsupported."""
+    quick = QuickFactAnswer(
+        answer="Sentiment reads Overbought (source: technical).",
+        cited_value="Overbought",
+        source="technical",
+    )
+    state: AgentState = {
+        "ticker": "NVDA",
+        "confidence": 1.0,
+        "reports": {"technical": "RSI regime: overbought"},
+    }
+
+    assert _quick_fact_cited_value_supported(quick, state) is True
+
+
+def test_quick_fact_cited_value_substring_collision_is_rejected() -> None:
+    """A garbled citation that happens to be a SUBSTRING of the right word
+    (``"sold"`` inside the report's ``"oversold"``) must NOT read as
+    supported -- a naive ``in`` check would let this invented/garbled
+    citation slip through as fully grounded, exactly the failure mode C-4
+    exists to catch."""
+    quick = QuickFactAnswer(
+        answer="Sentiment reads sold (source: technical).",
+        cited_value="sold",
+        source="technical",
+    )
+    state: AgentState = {
+        "ticker": "NVDA",
+        "confidence": 1.0,
+        "reports": {"technical": "RSI regime: oversold"},
+    }
+
+    assert _quick_fact_cited_value_supported(quick, state) is False
+
+
+def test_quick_fact_cited_value_absent_from_named_report_is_flagged() -> None:
+    """AC4: a cited_value absent from its named report's text (even if it
+    would pass the number-regex check by appearing elsewhere) lowers
+    grounding and is flagged -- catches a reformatted/invented non-numeric
+    value like a wrong regime word."""
+    quick = QuickFactAnswer(
+        answer="Sentiment reads oversold (source: technical).",
+        cited_value="oversold",
+        source="technical",
+    )
+    state: AgentState = {
+        "ticker": "NVDA",
+        "confidence": 1.0,
+        "reports": {"technical": "RSI regime: overbought"},
+    }
+
+    assert _quick_fact_cited_value_supported(quick, state) is False
+    result: dict[str, Any] = _quick_fact_grounding(state, quick)
+    assert result["grounding_rate"] < 1.0
+    assert "oversold" in result["grounding_unsupported"]
+
+
+def test_quick_fact_empty_cited_value_is_a_noop() -> None:
+    """AC4: an empty cited_value (the 'not available' apology shape) never
+    triggers the C-4 check and never lowers grounding on its own."""
+    quick = QuickFactAnswer(
+        answer="RSI not available in the supplied reports.",
+        cited_value="",
+        source=None,
+    )
+    state: AgentState = {"ticker": "NVDA", "confidence": 1.0, "reports": {"technical": "RSI 62"}}
+
+    assert _quick_fact_cited_value_supported(quick, state) is True
+    result: dict[str, Any] = _quick_fact_grounding(state, quick)
+    assert result["grounding_rate"] == 1.0
+    assert result["grounding_unsupported"] == []
 
 
 def test_composite_confidence_covers_each_factor() -> None:
@@ -741,7 +923,10 @@ def test_classify_node_routes_to_quick_fact_for_rsi_question(
         source="technical",
     )
     stub_llm.structured_invoke.return_value = quick
-    graph = build_graph({"technical": _mock_tool("tech")})
+    # QNT-296: the runtime grounding check now runs on this narrate-skip
+    # path, so the mock report must actually contain the cited value —
+    # a bare "tech for NVDA" would (correctly) flag "62" as unsupported.
+    graph = build_graph({"technical": MagicMock(return_value="## technical\nRSI 62\n")})
 
     # QNT-212: the question names no ticker AND there's no prior turn, so
     # the ambiguity detector would short-circuit to clarify. Anchor the
@@ -751,8 +936,10 @@ def test_classify_node_routes_to_quick_fact_for_rsi_question(
     assert result["intent"] == "quick_fact"
     assert isinstance(result["quick_fact"], QuickFactAnswer)
     assert result["thesis"] is None
-    # Confidence still reflects coverage so the panel can show a bar.
+    # Confidence reflects coverage x grounding — both are clean here.
     assert result["confidence"] == 1.0
+    assert result["grounding_rate"] == 1.0
+    assert result["grounding_unsupported"] == []
 
 
 def test_question_named_ticker_rebases_quick_fact_run(
