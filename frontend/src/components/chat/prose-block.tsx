@@ -13,7 +13,41 @@
 
 import { type DedupeState, type ProseSegment, parseInlineChips, parseProse } from "./prose-parse";
 
+// QNT-301: an anchored citation (`(source: news R1)`) scrolls to the matching
+// Retrieved-sources row and flashes a ring on it. The row lives in the same run
+// `<article>` as the chip, so we resolve it by walking up to that ancestor and
+// querying its `data-source-id` — scoping the lookup to this run avoids id
+// collisions across the multi-run tape without threading a run id through every
+// card.
+function scrollToSource(anchor: string, target: HTMLElement): void {
+  const row = target.closest("article")?.querySelector<HTMLElement>(
+    `[data-source-id="${anchor}"]`,
+  );
+  if (!row) return;
+  row.scrollIntoView({ behavior: "smooth", block: "center" });
+  row.classList.add("ring-1", "ring-emerald-400/70");
+  window.setTimeout(() => row.classList.remove("ring-1", "ring-emerald-400/70"), 1600);
+}
+
 function renderSegment(seg: ProseSegment, key: number) {
+  if (seg.type === "chip" && seg.anchor) {
+    // Anchored retrieved-source citation: a clickable link-chip. Kept in the
+    // same quiet family as the canned chip but tinted emerald + underlined so it
+    // reads as interactive, and it names the row id so the jump target is
+    // legible before the click.
+    const anchor = seg.anchor;
+    return (
+      <button
+        key={key}
+        type="button"
+        onClick={(e) => scrollToSource(anchor, e.currentTarget)}
+        className="mx-0.5 inline-flex items-center gap-0.5 rounded border border-emerald-700/50 bg-emerald-950/30 px-1 py-px font-mono text-[10px] uppercase tracking-wide text-emerald-300 underline decoration-dotted underline-offset-2 transition hover:bg-emerald-900/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-400/70"
+        aria-label={`Jump to retrieved source ${anchor}`}
+      >
+        {seg.text ? `${seg.text} ${anchor}` : anchor}
+      </button>
+    );
+  }
   if (seg.type === "chip") {
     // QNT-295: a subtle boxed pill, restored. QNT-286 went borderless to kill
     // the "ransom-note" repetition, but with the box gone the label read as

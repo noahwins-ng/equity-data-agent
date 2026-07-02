@@ -476,7 +476,11 @@ export type ExplorationAnswerPayload = {
 // QNT-226: one retrieved article surfaced by the agent's semantic news
 // search. Mirrors the rows the `/search/news` endpoint returns (minus the
 // score + body the prompt uses) — the provenance list shows what RAG found.
+// QNT-301: `id` is the stable claim-anchor tag (`R1`, `R2`, ... in list order)
+// the agent stamps on each hit; an inline citation `(source: news R1)` links to
+// the row carrying that id. Optional so a pre-QNT-301 cached run still parses.
 export type RetrievedSource = {
+  id?: string;
   headline: string;
   source: string;
   date: string;

@@ -1983,6 +1983,8 @@ def test_targeted_news_drops_focused_card_and_surfaces_sources(
     sources = result["retrieved_sources"]
     assert sources == [
         {
+            # QNT-301: stable claim-anchor id, R1 for the first retrieved hit.
+            "id": "R1",
             "headline": "NVDA strikes Micron HBM4 supply deal",
             "source": "Reuters",
             "date": "2026-06-01",
@@ -2067,6 +2069,8 @@ def test_parse_search_sources_extracts_fields_and_degrades() -> None:
     sources = graph_module._parse_search_sources(raw)
     assert sources == [
         {
+            # QNT-301: first kept row gets the R1 anchor id.
+            "id": "R1",
             "headline": "AAPL antitrust probe",
             "source": "Bloomberg",
             "date": "2026-05-02",
@@ -2118,6 +2122,7 @@ def test_followup_with_needs_news_search_fires_search_and_folds_hits(
     assert sum(t.call_count for t in report_tools.values()) == 0
     assert result["retrieved_sources"] == [
         {
+            "id": "R1",
             "headline": "NVDA CEO addresses buyback",
             "source": "Reuters",
             "date": "2026-06-01",
@@ -2334,6 +2339,7 @@ def test_format_earnings_hits_and_parse_sources_degrade() -> None:
     sources = graph_module._parse_earnings_sources(rows)
     assert sources == [
         {
+            "id": "R1",
             "headline": "NVDA Q1 FY26 earnings release",
             "source": "guidance",
             "date": "2026-05-28",
@@ -2380,7 +2386,7 @@ def test_format_search_hits_renders_body_under_headline() -> None:
         ]
     )
     block = _format_search_hits(rows)
-    assert "- NVDA and SK Hynix announce memory partnership (Reuters, 2026-06-05)" in block
+    assert "- [R1] NVDA and SK Hynix announce memory partnership (Reuters, 2026-06-05)" in block
     assert "  Nvidia and SK Hynix signed a multi-year deal" in block
     # Empty-body row renders the headline only -- no stray indented blank line.
     assert "  \n" not in block
@@ -2485,6 +2491,83 @@ def test_earnings_fold_orders_retrieved_hits_ahead_of_canned_digest(
     assert "Management guided Q2 revenue" in report
     assert "fundamental for NVDA" in report
     assert report.index("Management guided Q2 revenue") < report.index("fundamental for NVDA")
+
+
+def test_retrieved_hit_ids_align_across_block_and_sources() -> None:
+    """QNT-301 AC1: folded news + earnings hits carry stable ``R{n}`` ids that
+    stay aligned between the prompt block (``[Rn]`` bullet tags) and the
+    retrieved_sources rows, and the combined list is R1..Rn gap-free across both
+    corpora (news folds first, earnings offsets past it)."""
+    news_raw = json.dumps(
+        [
+            {"headline": "NVDA sued over patents", "source": "Reuters", "date": "2026-06-01"},
+            {"headline": "NVDA buyback expanded", "source": "WSJ", "date": "2026-06-02"},
+        ]
+    )
+    earnings_raw = json.dumps(
+        [
+            {
+                "title": "NVDA Q1 FY26 release",
+                "section": "guidance",
+                "date": "2026-05-28",
+                "text": "guided higher",
+            },
+            {
+                "title": "NVDA Q2 FY26 release",
+                "section": "risk factors",
+                "date": "2026-05-28",
+                "text": "supply risk",
+            },
+        ]
+    )
+    reports: dict[str, str] = {}
+    reports, news_sources = graph_module._fold_news_hits(reports, news_raw)
+    combined = list(news_sources)
+    # Mirror the gather call-site: earnings ids continue past the news hits.
+    reports, earnings_sources = graph_module._fold_earnings_hits(
+        reports, earnings_raw, len(combined) + 1
+    )
+    combined += earnings_sources
+
+    # Combined provenance ids are R1..R4, gap-free, news-then-earnings order.
+    assert [s["id"] for s in combined] == ["R1", "R2", "R3", "R4"]
+    # Each id's [Rn] tag appears on a bullet in the corpus block it belongs to,
+    # so a claim citing that id can be traced to the exact folded row.
+    for src in news_sources:
+        assert f"- [{src['id']}] {src['headline']}" in reports["news"]
+    for src in earnings_sources:
+        assert f"- [{src['id']}] {src['headline']}" in reports["fundamental"]
+
+
+def test_retrieved_ids_stay_aligned_when_a_row_has_no_headline() -> None:
+    """QNT-301 AC1 (regression): a null/missing headline must be skipped
+    IDENTICALLY by the block formatter and the source parser, so the ``[Rn]``
+    tag on each kept bullet still matches the id on its source row. Before the
+    fix the formatter used ``row.get("headline", "")`` (which returns None for an
+    explicit JSON null -> ``str(None)`` == truthy "None"), keeping a row the
+    parser skipped and drifting every later id by one."""
+    raw = json.dumps(
+        [
+            {"headline": None, "source": "X", "date": "d"},  # null -> skip in both
+            {"headline": "Real headline", "source": "Y", "date": "d2"},
+        ]
+    )
+    block = graph_module._format_search_hits(raw)
+    sources = graph_module._parse_search_sources(raw)
+    # The null-headline row is dropped by both; the surviving hit is R1 in the
+    # block AND R1 in the sources -- no "None" bullet, no id drift.
+    assert "None" not in block
+    assert sources == [
+        {
+            "id": "R1",
+            "headline": "Real headline",
+            "source": "Y",
+            "date": "d2",
+            "url": "",
+            "corpus": "news",
+        }
+    ]
+    assert f"- [{sources[0]['id']}] {sources[0]['headline']}" in block
 
 
 def test_targeted_earnings_drops_focused_card_and_surfaces_sources(

@@ -8,10 +8,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { type DedupeState, parseInlineChips, parseProse } from "./prose-parse.ts";
+import {
+  type DedupeState,
+  type ProseSegment,
+  parseInlineChips,
+  parseProse,
+} from "./prose-parse.ts";
 
 const chipTexts = (segs: { type: string; text: string }[]) =>
   segs.filter((s) => s.type === "chip").map((s) => s.text);
+
+// QNT-301: chip segments narrowed so the optional `anchor` id is accessible.
+const chips = (segs: ProseSegment[]) =>
+  segs.filter((s): s is Extract<ProseSegment, { type: "chip" }> => s.type === "chip");
 
 test("empty / whitespace text parses to no blocks", () => {
   assert.deepEqual(parseProse(""), []);
@@ -147,4 +156,68 @@ test("a shared carrier de-dups across calls (the AspectBlock summary+bullets cas
   assert.deepEqual(chipTexts(summary), ["news"], "summary keeps the first chip");
   assert.deepEqual(chipTexts(bullet1), [], "same-source bullet drops its chip");
   assert.deepEqual(chipTexts(bullet2), [], "and the next one too");
+});
+
+// ─── QNT-301: claim-anchored retrieved-source citations ───────────────────
+
+test("an anchored citation carries its retrieved-source id; a canned one does not", () => {
+  const cs = chips(
+    parseInlineChips("Buyback expanded (source: news R1). RSI firm (source: technical)."),
+  );
+  assert.equal(cs[0].text, "news");
+  assert.equal(cs[0].anchor, "R1");
+  assert.equal(cs[1].text, "technical");
+  assert.equal(cs[1].anchor, undefined, "a canned citation stays anchor-less");
+});
+
+test("the anchor splits cleanly off the source name (source text has no id)", () => {
+  // The id must not leak into the chip label — `(source: fundamental R3)` chips
+  // as text "fundamental" + anchor "R3", so the pill reads "fundamental R3".
+  const [chip] = chips(parseInlineChips("Guidance raised (source: fundamental R3)."));
+  assert.equal(chip.text, "fundamental");
+  assert.equal(chip.anchor, "R3");
+});
+
+test("distinct retrieved anchors both render — they are not de-duped", () => {
+  // Two claims citing different rows (R1 vs R2) must each keep their chip: the
+  // per-claim provenance is the whole point of anchoring.
+  const cs = chips(parseInlineChips("A (source: news R1). B (source: news R2)."));
+  assert.deepEqual(
+    cs.map((c) => c.anchor),
+    ["R1", "R2"],
+  );
+});
+
+test("bold + anchored chip coexist in the narrate BLUF path (parseProse)", () => {
+  const blocks = parseProse(
+    "**Constructive.**\n\nGuidance was raised (source: fundamental R2).",
+  );
+  const [chip] = chips(blocks[1][0]);
+  assert.equal(chip.text, "fundamental");
+  assert.equal(chip.anchor, "R2");
+});
+
+test("a bare [Rn] tag becomes an anchor chip — a raw tag never renders as text", () => {
+  // The narrate voice (news answers) tends to append the raw [R1] tag next to a
+  // (publisher, date) citation instead of the (source: news R1) form. The parser
+  // must turn that bare tag into the same anchored chip so a literal "[R1]" can
+  // never reach the user.
+  const segs = parseInlineChips("Rubin platform (finnhub, 2026-06-27) [R1] is material.");
+  const cs = chips(segs);
+  assert.equal(cs.length, 1);
+  assert.equal(cs[0].text, ""); // no source label on a bare tag
+  assert.equal(cs[0].anchor, "R1");
+  // No text segment retains the raw bracket tag.
+  const allText = segs
+    .filter((s) => s.type === "text")
+    .map((s) => s.text)
+    .join("");
+  assert.ok(!allText.includes("[R1]"), "the raw [R1] must not survive as text");
+});
+
+test("a bare [Rn] tag is recognised in the narrate BLUF path too (parseProse)", () => {
+  const blocks = parseProse("**Constructive.**\n\nThe deal (finnhub, 2026-06-30) [R3] expands reach.");
+  const cs = chips(blocks[1][0]);
+  assert.equal(cs[0].anchor, "R3");
+  assert.equal(cs[0].text, "");
 });

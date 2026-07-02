@@ -142,6 +142,56 @@ def test_synthesis_prompt_foregrounds_retrieved_evidence() -> None:
     assert 'does NOT extend to a "matching your question" block' in text
 
 
+def test_synthesis_prompt_instructs_anchored_retrieved_citation() -> None:
+    """QNT-301: the synthesis prompt must teach the id-anchored citation form so
+    a claim drawn from a specific retrieved hit cites ``(source: news R1)`` -- the
+    shape the frontend prose-parser and the citation counter both key on. Canned
+    (non-retrieved) citations must stay id-less, and the digit must be glued to
+    the ``R`` so the hallucination detector never reads it as a numeric claim."""
+    text = SYSTEM_PROMPT
+    # The primacy rule itself now demands the id (folded in so the model can't
+    # obey "cite it" while skipping the anchor).
+    assert "you must cite it WITH its id" in text
+    assert "(source: news R1)" in text
+    assert "(source: fundamental R3)" in text
+    # A BAD/OK example pair teaches the shape (the prompt's proven adherence
+    # pattern) -- the OK case carries the id, the BAD case drops it.
+    assert "OK   (anchored):" in text
+    # The glued-digit rule protects the hallucination detector (R1, never "R 1").
+    assert "never `R 1`" in text
+
+
+def test_retrieval_prompts_teach_id_anchor() -> None:
+    """QNT-301: the [Rn] tag is now stamped on EVERY folded retrieved bullet,
+    which all retrieval-firing intents read (thesis, quick_fact, fundamental,
+    news, followup). So every non-thesis prompt that consumes a folded block must
+    also learn the tag -- both to not leak a literal ``[R1]`` into a quoted
+    headline AND to anchor a retrieved citation. The shared rule names the block
+    headings verbatim so it stays in sync with the graph fold helpers."""
+    from agent.prompts.system import (
+        FOCUSED_SYSTEM_PROMPT,
+        FOLLOWUP_SYSTEM_PROMPT,
+        NARRATE_SYSTEM_PROMPT,
+        QUICK_FACT_SYSTEM_PROMPT,
+        RETRIEVED_EARNINGS_HEADING,
+        RETRIEVED_NEWS_HEADING,
+    )
+
+    for name, prompt in (
+        ("QUICK_FACT_SYSTEM_PROMPT", QUICK_FACT_SYSTEM_PROMPT),
+        ("FOCUSED_SYSTEM_PROMPT", FOCUSED_SYSTEM_PROMPT),
+        ("FOLLOWUP_SYSTEM_PROMPT", FOLLOWUP_SYSTEM_PROMPT),
+        ("NARRATE_SYSTEM_PROMPT", NARRATE_SYSTEM_PROMPT),
+    ):
+        assert "carry its id into the citation" in prompt, name
+        assert "(source: news R1)" in prompt, name
+        # Never-quote-the-raw-tag guard against a literal [R1] leak.
+        assert 'literal "[R1]"' in prompt, name
+        # Heading constants named verbatim so the rule and the fold stay in sync.
+        assert RETRIEVED_NEWS_HEADING in prompt, name
+        assert RETRIEVED_EARNINGS_HEADING in prompt, name
+
+
 def test_system_prompt_requires_verbatim_numbers() -> None:
     """QNT-208 (carry-over from QNT-175): the prompt must require every digit
     to appear verbatim in the supplied reports. The v1 ``verdict_action``
