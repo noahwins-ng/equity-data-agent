@@ -1213,6 +1213,59 @@ def test_hint_from_intent_quick_fact_resolves_to_a_real_bank_label() -> None:
     assert _hint_from_intent("conversational") is None
 
 
+# ─── QNT-288: declarative per-intent routing policy table ──────────────────
+
+
+def test_every_intent_literal_has_a_fully_populated_policy() -> None:
+    """Meta-test: a future intent cannot ship half-configured.
+
+    QNT-263's failure mode was ``quick_fact`` missing from
+    ``_EARNINGS_SEARCH_INTENTS`` because nothing enforced that a new intent
+    (or a new flag on an existing one) touched every parallel set. This
+    asserts every member of the ``Intent`` literal has an ``INTENT_POLICIES``
+    entry with every field populated to a value of the expected type/shape.
+    """
+    from typing import get_args
+
+    from agent.conversational import _SUGGESTION_BANK
+    from agent.graph import INTENT_POLICIES, IntentPolicy
+    from agent.intent import Intent
+
+    intents = get_args(Intent)
+    assert intents, "Intent literal resolved to no members -- typing changed"
+
+    missing = [intent for intent in intents if intent not in INTENT_POLICIES]
+    assert not missing, f"INTENT_POLICIES missing entries for: {missing}"
+
+    extra = set(INTENT_POLICIES) - set(intents)
+    assert not extra, f"INTENT_POLICIES has entries for non-Intent values: {extra}"
+
+    bank_labels = {label for label, _ in _SUGGESTION_BANK}
+
+    for intent in intents:
+        policy = INTENT_POLICIES[intent]
+        assert isinstance(policy, IntentPolicy), f"{intent!r} entry is not an IntentPolicy"
+        assert policy.focused_report is None or isinstance(policy.focused_report, str), intent
+        assert isinstance(policy.rag_corpora, frozenset), intent
+        assert policy.rag_corpora <= {"news", "earnings"}, (
+            f"{intent!r} rag_corpora has an unexpected corpus: {policy.rag_corpora}"
+        )
+        assert isinstance(policy.history_budget, int) and policy.history_budget > 0, intent
+        assert policy.company_variant in ("compact", "full"), intent
+        assert isinstance(policy.requires_ticker, bool), intent
+        assert isinstance(policy.short_circuit, bool), intent
+        assert policy.suggestion_hint is None or isinstance(policy.suggestion_hint, str), intent
+        # A hint that doesn't resolve to a real bank label silently degrades
+        # domain_redirect's suggestion bias at runtime -- catch that here
+        # rather than in prod (mirrors test_hint_from_intent_quick_fact_
+        # resolves_to_a_real_bank_label above, generalised to every intent).
+        if policy.suggestion_hint is not None:
+            assert policy.suggestion_hint in bank_labels, (
+                f"{intent!r} suggestion_hint {policy.suggestion_hint!r} not in "
+                f"suggestion bank labels {bank_labels}"
+            )
+
+
 # ─── QNT-176: focused-analysis intents ──────────────────────────────────────
 
 
