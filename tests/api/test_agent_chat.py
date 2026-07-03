@@ -1763,6 +1763,55 @@ def test_retrieved_sources_event_emitted_on_targeted_news(
     assert rs_data == {"sources": sources}
 
 
+def test_out_of_range_anchor_stripped_from_thesis_card_over_sse(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QNT-305 AC2: the render-boundary strip fires at the actual SSE emit site.
+    A thesis whose supports cite a fabricated ``R5`` (only R1/R2 retrieved) must
+    reach the client with the id dropped -- the source attribution kept as a
+    canned citation -- while the in-range ``R1`` still anchors. Proves the
+    per-card wiring, not just the isolated citations.py helper."""
+    sources = [
+        {"headline": "h1", "source": "Reuters", "date": "2026-06-01", "url": "https://ex.com/1"},
+        {"headline": "h2", "source": "Reuters", "date": "2026-06-02", "url": "https://ex.com/2"},
+    ]
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:
+        graph = MagicMock()
+        graph.invoke.return_value = {
+            "ticker": "NVDA",
+            "intent": "thesis",
+            "plan": ["news"],
+            "reports": {"news": "stub"},
+            "errors": {},
+            "thesis": _stub_thesis(
+                technical_supports=[
+                    "Buyback expanded (source: news R5)",  # fabricated -> strip id
+                    "Deal closed (source: news R1)",  # in-range -> keep anchor
+                ],
+            ),
+            "quick_fact": None,
+            "comparison": None,
+            "conversational": None,
+            "focused": None,
+            "narrative": "NVDA read.",
+            "retrieved_sources": sources,
+            "confidence": 1.0,
+            "intent_path": ["classify", "plan", "gather", "synthesize", "narrate"],
+        }
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
+    frames = _parse_sse(r.text)
+    thesis_data = next(data for name, data in frames if name == "thesis")
+    supports = thesis_data["technical"]["supports"]
+    assert supports[0] == "Buyback expanded (source: news)"  # R5 stripped
+    assert supports[1] == "Deal closed (source: news R1)"  # R1 kept
+
+
 def test_retrieved_sources_suppressed_when_gather_skipped(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2176,6 +2225,7 @@ def test_eval_scores_pushed_on_happy_path(
     assert score_names == {
         "hallucination_ok",
         "plan_adherence",
+        "anchor_integrity_ok",  # QNT-305: clean thesis cites no out-of-range id
     }
 
     for call in score_calls:

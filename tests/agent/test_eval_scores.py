@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from agent.comparison import ComparisonAnswer
 from agent.conversational import ConversationalAnswer
-from agent.eval_scores import compute_scores
+from agent.eval_scores import compute_anchor_integrity, compute_scores
 from agent.quick_fact import QuickFactAnswer
 
 from ._thesis_factory import make_comparison_section, make_thesis
@@ -140,3 +140,51 @@ def test_compute_scores_empty_state_returns_clean() -> None:
     hallucination, missing = compute_scores({})
     assert hallucination.ok is True
     assert missing == set()
+
+
+def test_anchor_integrity_flags_out_of_range_cited_id() -> None:
+    """QNT-305: a thesis citing R5 while only R1/R2 were retrieved is flagged."""
+    state = {
+        "thesis": make_thesis(
+            supports=["Buyback expanded (source: news R5)"],
+        ),
+        "retrieved_sources": [{"id": "R1"}, {"id": "R2"}],
+        "intent_path": ["classify", "plan", "gather", "synthesize"],
+    }
+    assert compute_anchor_integrity(state) == [5]
+
+
+def test_anchor_integrity_clean_when_ids_in_range() -> None:
+    state = {
+        "thesis": make_thesis(
+            supports=["Buyback expanded (source: news R1)"],
+            challenges=["Margin risk (source: fundamental R2)"],
+        ),
+        "retrieved_sources": [{"id": "R1"}, {"id": "R2"}],
+        "intent_path": ["classify", "plan", "gather", "synthesize"],
+    }
+    assert compute_anchor_integrity(state) == []
+
+
+def test_anchor_integrity_scans_narrate_bubble() -> None:
+    """The streamed narrate text is the shape most prone to a fabricated tag."""
+    state = {
+        "narrative": "The Rubin platform (finnhub, 2026-06-27) [R11] is material.",
+        "retrieved_sources": [{"id": "R1"}, {"id": "R2"}],
+        "intent_path": ["classify", "gather", "synthesize", "narrate"],
+    }
+    assert compute_anchor_integrity(state) == [11]
+
+
+def test_anchor_integrity_stale_followup_sources_count_as_zero() -> None:
+    """A pure followup skips gather but hydrates the prior turn's sources. The
+    render boundary counts those as 0 rows (no retrieved_sources event this
+    turn), so the detector must flag ANY cited id -- matching the guard rather
+    than passing on the stale count."""
+    state = {
+        "narrative": "Still constructive (source: news R1).",
+        # Hydrated from a prior turn, but gather did NOT run this turn.
+        "retrieved_sources": [{"id": "R1"}, {"id": "R2"}],
+        "intent_path": ["classify", "synthesize", "narrate"],
+    }
+    assert compute_anchor_integrity(state) == [1]

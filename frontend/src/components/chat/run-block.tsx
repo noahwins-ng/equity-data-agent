@@ -34,6 +34,19 @@ export const RunBlock = memo(function RunBlock({
 }) {
   const proseText = run.proseChunks.join("");
   const isStreaming = run.status === "streaming";
+  // QNT-305: the number of retrieved-sources rows rendered below this run. The
+  // parser de-anchors any retrieved id above it -- a fabricated anchor pointing
+  // at no row. Passed into the streamed narrate/prose surfaces (the backend
+  // strips the structured card payloads before the SSE; these stream as deltas
+  // and only the client knows the final row count).
+  //
+  // Undefined WHILE STREAMING: the `retrieved_sources` SSE event is emitted
+  // post-graph, strictly AFTER the narrate deltas have streamed, so
+  // `run.retrievedSources` is still `[]` for the whole live narration. Applying
+  // a 0 count then would de-anchor every in-range id until the event lands.
+  // Gate on the run being terminal, when the final count is authoritative (0
+  // genuinely means "no rows"), so in-range anchors render live and unmolested.
+  const maxAnchor = isStreaming ? undefined : run.retrievedSources.length;
   const groundingPct =
     typeof run.stats?.grounding_rate === "number"
       ? Math.max(0, Math.min(100, Math.round(run.stats.grounding_rate * 100)))
@@ -132,7 +145,7 @@ export const RunBlock = memo(function RunBlock({
       ))}
 
       {/* Streamed prose (only when no card has arrived yet) */}
-      {showStandaloneProse && <ProseBlock text={proseText} />}
+      {showStandaloneProse && <ProseBlock text={proseText} maxAnchor={maxAnchor} />}
 
       {/* QNT-156: comparison card — renders when intent=comparison */}
       {run.comparison && (
@@ -199,7 +212,7 @@ export const RunBlock = memo(function RunBlock({
         transition is in place. For the followup narrative-only path (no card)
         the bubble is the only surface. */}
       {run.narrative ? (
-        <NarrativeBubble text={run.narrative} />
+        <NarrativeBubble text={run.narrative} maxAnchor={maxAnchor} />
       ) : composing ? (
         <ComposingBubble intent={run.intent} />
       ) : null}

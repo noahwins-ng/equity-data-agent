@@ -253,3 +253,62 @@ test("a bare [Rn] tag is recognised in the narrate BLUF path too (parseProse)", 
   assert.equal(cs[0].anchor, "R3");
   assert.equal(cs[0].text, "");
 });
+
+// ─── QNT-305: de-anchor an out-of-range retrieved id ──────────────────────
+// The synthesis model fabricates ids past the number of rows retrieved (only
+// R1/R2 retrieved, answer cites R5/R11). `maxAnchor` = the retrieved-row count;
+// any id above it points at no `data-source-id` row, so it must not render as a
+// clickable anchor. In-range ids still anchor and scroll as before.
+
+test("an out-of-range (source: name Rn) drops the id but keeps the source chip", () => {
+  // Only 2 rows retrieved; R5 is fabricated -> render as the canned `news` chip.
+  const cs = chips(parseInlineChips("Buyback expanded (source: news R5).", undefined, 2));
+  assert.equal(cs.length, 1);
+  assert.equal(cs[0].text, "news");
+  assert.equal(cs[0].anchor, undefined, "the fabricated id must not anchor");
+});
+
+test("an in-range anchor still renders as an anchored chip (control)", () => {
+  const cs = chips(parseInlineChips("Buyback expanded (source: news R2).", undefined, 2));
+  assert.equal(cs[0].text, "news");
+  assert.equal(cs[0].anchor, "R2");
+});
+
+test("an out-of-range bare [Rn] tag is dropped entirely, leaving no chip or text", () => {
+  const segs = parseInlineChips(
+    "Rubin platform (finnhub, 2026-06-27) [R11] is material.",
+    undefined,
+    2,
+  );
+  assert.deepEqual(chips(segs), [], "the fabricated bare tag is dropped");
+  const allText = segs
+    .filter((s) => s.type === "text")
+    .map((s) => s.text)
+    .join("");
+  assert.ok(!allText.includes("[R11]"), "the raw tag must not survive as text");
+  assert.ok(!allText.includes("  "), "no orphan double space is left behind");
+});
+
+test("with zero retrieved rows every anchor is de-anchored", () => {
+  const cs = chips(parseInlineChips("A claim (source: news R1).", undefined, 0));
+  assert.equal(cs[0].anchor, undefined);
+  assert.equal(cs[0].text, "news");
+});
+
+test("maxAnchor undefined leaves anchors untouched (existing callers)", () => {
+  const cs = chips(parseInlineChips("A claim (source: news R9)."));
+  assert.equal(cs[0].anchor, "R9");
+});
+
+test("the narrate BLUF path de-anchors an out-of-range tag too (parseProse)", () => {
+  const blocks = parseProse(
+    "**Constructive.**\n\nThe deal (finnhub, 2026-06-30) [R11] expands reach (source: news R5).",
+    undefined,
+    2,
+  );
+  const cs = chips(blocks[1][0]);
+  // The bare [R11] is dropped; the (source: news R5) keeps its source, loses R5.
+  assert.equal(cs.length, 1);
+  assert.equal(cs[0].text, "news");
+  assert.equal(cs[0].anchor, undefined);
+});

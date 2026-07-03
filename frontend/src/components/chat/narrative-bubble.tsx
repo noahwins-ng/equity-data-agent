@@ -7,11 +7,14 @@
 
 import { ProseBlock } from "./prose-block";
 
-export function NarrativeBubble({ text }: { text: string }) {
+export function NarrativeBubble({ text, maxAnchor }: { text: string; maxAnchor?: number }) {
   if (!text.trim()) return null;
   return (
     <div className="rounded border border-zinc-800 bg-zinc-900/40 px-3 py-2">
-      <ProseBlock text={text} rich />
+      {/* QNT-305: the narrate voice is the shape most prone to appending a
+        fabricated `[Rn]`; pass the retrieved-row count so the parser de-anchors
+        any id past it (the backend strip does not reach this streamed bubble). */}
+      <ProseBlock text={text} rich maxAnchor={maxAnchor} />
     </div>
   );
 }

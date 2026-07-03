@@ -86,15 +86,21 @@ export function ProseBlock({
   text,
   rich = false,
   dedupe,
+  maxAnchor,
 }: {
   text: string;
   rich?: boolean;
   dedupe?: DedupeState;
+  // QNT-305: the count of retrieved-sources rows this run. When set, the parser
+  // de-anchors any retrieved id above it (an out-of-range, fabricated anchor).
+  // Threaded from RunBlock into the streamed narrate/prose surfaces, which the
+  // backend strip cannot reach (they stream as deltas, not card payloads).
+  maxAnchor?: number;
 }) {
   if (!text.trim()) return null;
 
   if (!rich) {
-    const segments = parseInlineChips(text, dedupe);
+    const segments = parseInlineChips(text, dedupe, maxAnchor);
     return (
       <p className="text-xs leading-relaxed text-zinc-200">
         {segments.map((seg, i) => renderSegment(seg, i))}
@@ -102,7 +108,7 @@ export function ProseBlock({
     );
   }
 
-  const blocks = parseProse(text);
+  const blocks = parseProse(text, undefined, maxAnchor);
   if (blocks.length === 0) return null;
   return (
     <div className="space-y-2">

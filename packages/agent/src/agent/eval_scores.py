@@ -33,6 +33,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from agent.citations import find_oob_anchor_ids
 from agent.comparison import ComparisonAnswer
 from agent.conversational import ConversationalAnswer
 from agent.evals.hallucination import HallucinationResult
@@ -128,6 +129,33 @@ def _missing_planned_tools(state: dict[str, Any], planned: set[str]) -> set[str]
     return planned - set(reports.keys())
 
 
+def compute_anchor_integrity(state: dict[str, Any]) -> list[int]:
+    """Return retrieved-source ids the answer cited that point at no row (QNT-305).
+
+    The turn retrieved ``len(retrieved_sources)`` rows, tagged ``R1..R{n}``. Any
+    ``(source: name Rk)`` or bare ``[Rk]`` with ``k > n`` is a fabricated anchor
+    -- a fake footnote. Deterministic (no LLM), so it runs on every prod chat as
+    a regression guard alongside ``hallucination_ok``. Scans both the rendered
+    card answer and the streamed narrate bubble (``state["narrative"]``), since
+    the narrate voice is the shape most prone to inventing ids. An empty list
+    means every cited id is in range (or none was cited).
+
+    ``max_id`` mirrors the render-boundary gate in ``api.routers.agent_chat``
+    exactly: ``retrieved_sources`` is only in-range when gather actually ran this
+    turn. A pure followup skips gather and reuses checkpointer-hydrated (stale)
+    sources; the render boundary counts those as 0 rows, so the detector must too
+    -- otherwise the stale count would let a fabricated id pass as ``clean`` on
+    exactly the case the guard strips.
+    """
+    intent_path = state.get("intent_path") or []
+    max_id = len(state.get("retrieved_sources") or []) if "gather" in intent_path else 0
+    answer = _render_answer(state)
+    narrative = state.get("narrative")
+    if isinstance(narrative, str):
+        answer = f"{answer}\n{narrative}"
+    return find_oob_anchor_ids(answer, max_id)
+
+
 def compute_scores(state: dict[str, Any]) -> tuple[HallucinationResult, set[str]]:
     """Compute ``(hallucination_result, missing_planned_tools)`` for one run.
 
@@ -169,6 +197,18 @@ def push_to_trace_id(state: dict[str, Any], trace_id: str | None) -> None:
             data_type="NUMERIC",
             comment=(f"missing: {', '.join(sorted(missing_tools))}" if missing_tools else "clean"),
         )
+        oob_ids = compute_anchor_integrity(state)
+        langfuse.create_score(
+            trace_id=trace_id,
+            name="anchor_integrity_ok",
+            value=0.0 if oob_ids else 1.0,
+            data_type="NUMERIC",
+            comment=(
+                f"out-of-range retrieved ids: {', '.join(f'R{n}' for n in oob_ids)}"
+                if oob_ids
+                else "clean"
+            ),
+        )
         grounding_rate = state.get("grounding_rate")
         if isinstance(grounding_rate, int | float):
             unsupported = state.get("grounding_unsupported") or []
@@ -189,6 +229,7 @@ def push_to_trace_id(state: dict[str, Any], trace_id: str | None) -> None:
 
 
 __all__ = [
+    "compute_anchor_integrity",
     "compute_scores",
     "push_to_trace_id",
 ]
