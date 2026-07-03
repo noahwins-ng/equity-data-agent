@@ -57,16 +57,15 @@ import yaml
 from shared.config import settings
 from shared.tickers import TICKERS
 
-from agent.evals.golden_set import (
-    HISTORY_FIELDS,
-    HISTORY_PATH,
-    _git_sha,
-    _prompt_version,
-)
 from agent.evals.provider_errors import is_provider_pressure_error, provider_error_label
+from agent.evals.spine import append_suite_history, suite_history_path
 from agent.graph import build_graph
 
 logger = logging.getLogger(__name__)
+
+# QNT-293 follow-up: rag_impact writes one aggregate row per run to its own file.
+RAG_IMPACT_HISTORY_PATH = suite_history_path("rag_impact")
+RAG_IMPACT_FIELDS = ("eval_type", "rag_impact_pass_rate", "rag_impact_n")
 
 RAG_IMPACT_GOLDENS_PATH = Path(__file__).parent / "goldens" / "rag_impact.yaml"
 
@@ -589,37 +588,24 @@ def append_history(
     report: RagImpactReport,
     *,
     run_id: str | None = None,
-    history_path: Path = HISTORY_PATH,
+    history_path: Path = RAG_IMPACT_HISTORY_PATH,
 ) -> str:
-    """Append one aggregate ``eval_type="rag_impact"`` row to history.csv.
+    """Append one aggregate rag_impact row to ``rag_impact_history.csv``.
 
-    Mirrors the retrieval-eval aggregate row (QNT-261): one row per run, the
-    rag_impact_* columns filled and everything else blank, stamped with the same
-    git_sha + prompt_version as the other eval types so a regression is bisectable
-    against the same commits.
+    QNT-293 follow-up: one row per run in the suite's own file (columns =
+    :data:`RAG_IMPACT_FIELDS`), stamped by :func:`spine.append_suite_history`
+    with the shared envelope so a regression is bisectable against the same
+    git_sha + prompt_version as every other suite.
     """
-    import csv
-
     rid = run_id or uuid.uuid4().hex[:8]
-    new_file = not history_path.exists()
-    history_path.parent.mkdir(parents=True, exist_ok=True)
-    with history_path.open("a", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=HISTORY_FIELDS)
-        if new_file:
-            writer.writeheader()
-        row: dict[str, Any] = {field: "" for field in HISTORY_FIELDS}
-        row.update(
-            {
-                "run_id": rid,
-                "git_sha": _git_sha(),
-                "prompt_version": _prompt_version(),
-                "eval_type": "rag_impact",
-                "rag_impact_pass_rate": round(report.pass_rate, 4),
-                "rag_impact_n": len(report.gated),
-            }
-        )
-        writer.writerow(cast(Any, row))
-    return rid
+    row = {
+        "eval_type": "rag_impact",
+        "rag_impact_pass_rate": round(report.pass_rate, 4),
+        "rag_impact_n": len(report.gated),
+    }
+    return append_suite_history(
+        "rag_impact", RAG_IMPACT_FIELDS, [row], run_id=rid, path=history_path
+    )
 
 
 def summarise(report: RagImpactReport) -> str:

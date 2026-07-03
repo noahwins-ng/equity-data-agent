@@ -58,13 +58,12 @@ import os
 os.environ.setdefault("DEEPEVAL_TELEMETRY_OPT_OUT", "YES")
 os.environ.setdefault("ERROR_REPORTING", "0")
 
-import csv  # noqa: E402
 import sys  # noqa: E402
 import uuid  # noqa: E402
 from dataclasses import dataclass  # noqa: E402
 from datetime import UTC, datetime  # noqa: E402
 from pathlib import Path  # noqa: E402
-from typing import Any, cast  # noqa: E402
+from typing import Any  # noqa: E402
 
 import httpx  # noqa: E402
 import yaml  # noqa: E402
@@ -72,18 +71,27 @@ from shared.config import settings  # noqa: E402
 from shared.tickers import TICKERS  # noqa: E402
 
 from agent.evals.golden_set import (  # noqa: E402
-    HISTORY_FIELDS,
-    HISTORY_PATH,
     EvalOutcome,
     GoldenRecord,
-    _git_sha,
-    _prompt_version,
     run_record,
 )
 from agent.evals.hallucination import check as check_hallucination  # noqa: E402
+from agent.evals.spine import append_suite_history, suite_history_path  # noqa: E402
 from agent.llm import DEEPEVAL_JUDGE_ALIAS, get_judge_llm  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+# QNT-293 follow-up: deepeval writes one aggregate row per run to its own file.
+DEEPEVAL_HISTORY_PATH = suite_history_path("deepeval")
+DEEPEVAL_FIELDS = (
+    "eval_type",
+    "deepeval_faithfulness",
+    "deepeval_answer_relevancy",
+    "deepeval_context_precision",
+    "deepeval_context_recall",
+    "deepeval_geval",
+    "deepeval_n",
+)
 
 # QNT-275: the recall-appropriate golden set. Distinct from questions.yaml (the
 # structured-eval goldens whose reference_thesis describes the answer SHAPE):
@@ -446,43 +454,30 @@ def append_deepeval_history(
     *,
     n_cases: int,
     run_id: str | None = None,
-    history_path: Path = HISTORY_PATH,
+    history_path: Path = DEEPEVAL_HISTORY_PATH,
 ) -> str:
-    """Append one aggregate ``eval_type="deepeval"`` row to history.csv (AC5).
+    """Append one aggregate deepeval row to ``deepeval_history.csv`` (AC5).
 
-    Mirrors the retrieval aggregate row (QNT-261): one row per run, the
-    ``deepeval_*`` columns filled and everything else blank, stamped with the
-    same git_sha + prompt_version as the other eval types so a generation
-    regression is bisectable against the same commits as the IR metrics.
+    QNT-293 follow-up: one row per run in the suite's own file (columns =
+    :data:`DEEPEVAL_FIELDS`), stamped by :func:`spine.append_suite_history` with
+    the shared envelope so a generation regression is bisectable against the same
+    git_sha + prompt_version as the IR metrics.
     """
 
     def _fmt(value: float) -> str:
         return "" if value != value else str(round(value, 4))  # blank on NaN
 
     rid = run_id or uuid.uuid4().hex[:8]
-    new_file = not history_path.exists()
-    history_path.parent.mkdir(parents=True, exist_ok=True)
-    with history_path.open("a", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=HISTORY_FIELDS)
-        if new_file:
-            writer.writeheader()
-        row: dict[str, Any] = {field: "" for field in HISTORY_FIELDS}
-        row.update(
-            {
-                "run_id": rid,
-                "git_sha": _git_sha(),
-                "prompt_version": _prompt_version(),
-                "eval_type": "deepeval",
-                "deepeval_faithfulness": _fmt(means.get("faithfulness", float("nan"))),
-                "deepeval_answer_relevancy": _fmt(means.get("answer_relevancy", float("nan"))),
-                "deepeval_context_precision": _fmt(means.get("context_precision", float("nan"))),
-                "deepeval_context_recall": _fmt(means.get("context_recall", float("nan"))),
-                "deepeval_geval": _fmt(means.get("geval", float("nan"))),
-                "deepeval_n": n_cases,
-            }
-        )
-        writer.writerow(cast(Any, row))
-    return rid
+    row = {
+        "eval_type": "deepeval",
+        "deepeval_faithfulness": _fmt(means.get("faithfulness", float("nan"))),
+        "deepeval_answer_relevancy": _fmt(means.get("answer_relevancy", float("nan"))),
+        "deepeval_context_precision": _fmt(means.get("context_precision", float("nan"))),
+        "deepeval_context_recall": _fmt(means.get("context_recall", float("nan"))),
+        "deepeval_geval": _fmt(means.get("geval", float("nan"))),
+        "deepeval_n": n_cases,
+    }
+    return append_suite_history("deepeval", DEEPEVAL_FIELDS, [row], run_id=rid, path=history_path)
 
 
 def enforcement_enabled() -> bool:
