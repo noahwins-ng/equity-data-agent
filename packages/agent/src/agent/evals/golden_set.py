@@ -26,8 +26,6 @@ from __future__ import annotations
 
 import csv
 import logging
-import os
-import subprocess
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -46,6 +44,13 @@ from agent.evals.judge import JudgeScore
 from agent.evals.judge import score as judge_score_fn
 from agent.evals.provider_errors import is_provider_pressure_error, provider_error_label
 from agent.evals.similarity import cosine
+from agent.evals.spine import (
+    HISTORY_FIELDS,
+    HISTORY_PATH,
+    git_sha,
+    prompt_version,
+    threshold_from_env,
+)
 from agent.evals.tool_calls import check as check_tool_calls
 from agent.evals.tool_calls import wrap_with_recorder
 from agent.exploration import ExplorationAnswer
@@ -58,7 +63,6 @@ from agent.tools import default_report_tools, get_company_report_compact
 logger = logging.getLogger(__name__)
 
 GOLDENS_PATH = Path(__file__).parent / "goldens" / "questions.yaml"
-HISTORY_PATH = Path(__file__).parent / "history.csv"
 
 # QNT-234: a single structured record never approaches the per-call LLM timeout
 # in a clean window -- gather is local HTTP and each LLM call returns in a few
@@ -71,84 +75,9 @@ HISTORY_PATH = Path(__file__).parent / "history.csv"
 # baseline if a contaminated run stops being flagged.
 CONTAMINATION_LATENCY_MS = int(settings.LLM_REQUEST_TIMEOUT * 1000)
 
-HISTORY_FIELDS = (
-    "run_id",
-    "git_sha",
-    "prompt_version",
-    "ticker",
-    "question_id",
-    "question",
-    "faithfulness",
-    "structure",
-    "correctness",
-    "analyst_logic",
-    "composite",
-    "cosine",
-    "tool_call_ok",
-    "hallucination_ok",
-    "elapsed_ms",
-    "eval_type",
-    "dialogue_fixture_id",
-    "dialogue_turns",
-    "analyst_likeness",
-    "analyst_likeness_rationale",
-    "helpfulness",
-    "helpfulness_rationale",
-    "non_hallucination",
-    "non_hallucination_rationale",
-    "exploration_quality",
-    "exploration_quality_rationale",
-    "voice_match",
-    "voice_match_rationale",
-    "dialogue_composite",
-    "judge_model",
-    "agent_model",
-    # QNT-218: per-run aggregate band, written on a single eval_type="dialogue_summary"
-    # row per run. Axis columns above carry the mean; these carry its standard error
-    # across fixtures, and dialogue_n the fixture count. Blank on per-fixture rows.
-    "analyst_likeness_se",
-    "helpfulness_se",
-    "non_hallucination_se",
-    "exploration_quality_se",
-    "voice_match_se",
-    "dialogue_composite_se",
-    "dialogue_n",
-    # QNT-261: retrieval-eval aggregate, written on a single eval_type="retrieval"
-    # row per run (recall@k / MRR / nDCG from ir_measures). Blank on every other
-    # eval_type's rows. retrieval_n is the labeled-query count.
-    "recall_at_5",
-    "recall_at_20",
-    "mrr",
-    "ndcg_at_10",
-    "retrieval_n",
-    # QNT-264: LLM-judged DeepEval generation metrics (RAGAS set + custom G-Eval),
-    # written on a single eval_type="deepeval" row per run. 0.0-1.0 floats, blank
-    # on every other eval_type's rows. Distinct from the integer `faithfulness`
-    # judge axis above (0-10, golden-set) -- the deepeval_* prefix avoids the
-    # collision. deepeval_n is the sampled-record count (sample-gated, AC2).
-    "deepeval_faithfulness",
-    "deepeval_answer_relevancy",
-    "deepeval_context_precision",
-    "deepeval_context_recall",
-    "deepeval_geval",
-    "deepeval_n",
-    # QNT-277: RAG-impact behavioral eval aggregate, written on a single
-    # eval_type="rag_impact" row per run. rag_impact_pass_rate is the fraction of
-    # gated fixtures (positives + negative-controls that actually fired) whose
-    # retrieved-only fact reached (positive) / stayed out of (negative) the answer
-    # text; rag_impact_n is that gated-fixture count. Blank on every other
-    # eval_type's rows.
-    "rag_impact_pass_rate",
-    "rag_impact_n",
-    # QNT-302: advisory verdict-vs-labels tripwire, per structured-thesis row
-    # ("1"/"0"; blank on non-thesis rows and every run-level aggregate row).
-    # Appended at the END to preserve the append-only column order this ragged
-    # history.csv depends on -- older rows are positionally shorter, so a
-    # mid-list insert would misalign every column after it on read. The mean
-    # over structured rows is the observed mismatch rate that gates promoting
-    # the tripwire from advisory to normalization; it never gates the exit code.
-    "verdict_label_consistent",
-)
+# HISTORY_FIELDS / HISTORY_PATH now live in agent.evals.spine (QNT-293) so the
+# shared history envelope can't drift between the eight suites. Re-exported above
+# and in __all__ for back-compat -- suites still import them from here today.
 
 
 @dataclass(frozen=True)
@@ -277,34 +206,11 @@ def load_goldens(path: Path = GOLDENS_PATH) -> list[GoldenRecord]:
     return records
 
 
-def _git_sha() -> str:
-    """Short SHA of HEAD, or ``unknown`` if git isn't reachable."""
-    try:
-        out = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=2,
-        )
-    except (subprocess.SubprocessError, FileNotFoundError, OSError):
-        return "unknown"
-    return out.stdout.strip() or "unknown"
-
-
-def _prompt_version() -> str:
-    """Stable hash of every agent prompt + report-tool registry (QNT-187, QNT-230).
-
-    Delegates to the shared :func:`agent.prompt_version.compute_prompt_version`
-    so this harness and ``agent.graph`` produce the SAME version for the same
-    prompts. Previously these were hand-synced copies that had drifted (this
-    one hashed only five system prompts to graph's nine), so the same
-    ``prompt_version`` column meant different things depending on the writer.
-    """
-    from agent.graph import _build_plan_prompt, _build_thesis_plan_prompt
-    from agent.prompt_version import compute_prompt_version
-
-    return compute_prompt_version(_build_plan_prompt, _build_thesis_plan_prompt)
+# Run-identity helpers moved to agent.evals.spine (QNT-293); aliased here under
+# their historical private names so the suites and tests that import
+# ``_git_sha`` / ``_prompt_version`` from golden_set keep working unchanged.
+_git_sha = git_sha
+_prompt_version = prompt_version
 
 
 def run_record(record: GoldenRecord, *, llm_for_judge: Any | None = None) -> EvalOutcome:
@@ -746,22 +652,10 @@ def fail_threshold_from_env() -> float | None:
 
     Off by default so the gate stays on hard contracts. Set ``EVAL_MIN_JUDGE=7``
     in CI once the harness has produced enough history to trust a threshold.
-
-    CLAUDE.md says config goes through ``shared.Settings``; this is a
-    deliberate exception. The setting is a developer-time eval gate, off by
-    default and probably never used in prod. Adding a field to the global
-    Settings object so a never-used eval threshold can be configured the
-    same way as ``CLICKHOUSE_HOST`` would pollute the runtime contract.
-    Promote to ``Settings`` if a second eval-only knob ever shows up.
+    Thin golden-set binding over the shared :func:`spine.threshold_from_env`
+    (QNT-293) so every suite parses env thresholds the same way.
     """
-    raw = os.environ.get("EVAL_MIN_JUDGE")
-    if not raw:
-        return None
-    try:
-        return float(raw)
-    except ValueError:
-        logger.warning("EVAL_MIN_JUDGE=%r not a number; ignoring", raw)
-        return None
+    return threshold_from_env("EVAL_MIN_JUDGE")
 
 
 __all__ = [

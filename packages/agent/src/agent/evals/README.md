@@ -4,6 +4,20 @@ Evaluation framework for the LangGraph agent. Lives in-tree under `packages/agen
 
 **Design intent**: this harness is the single most important piece of AI-Engineering signal in the repo. It operationalises the ADR-003 contract ("the LLM never calculates") and provides a measurable quality signal for the prompt across versions. Reusable enough to extract as a standalone repo later.
 
+## Shared spine — `spine.py` (QNT-293)
+
+The eight suites below grew their own runners, history formats, thresholds, and env-gating. `spine.py` is the shared home for the pieces that must stay identical so they can't drift again (the prompt-version hash already drifted once between `graph.py` and `golden_set.py` before QNT-230 unified it):
+
+- **History envelope** — `HISTORY_PATH` + `HISTORY_FIELDS`: the single wide `history.csv` schema every suite appends to, keyed by the `eval_type` column. Per-suite metrics stay suite-defined (each suite fills its own columns, blanks the rest); only the envelope columns (`run_id` / `git_sha` / `prompt_version` / `eval_type`) are shared. **New metric columns append at the END** — this is a ragged append-only CSV, so a mid-list insert misaligns every later column on read.
+- **Run identity** — `git_sha()` and `prompt_version()`, stamped on every row so a run reproduces from the CSV alone.
+- **Gating primitives** — `threshold_from_env(name)` (one warn-on-garbage env parser) and `SuiteResult(summary, failed, run_id)` (the summary + pass/fail contract the CLI dispatches on).
+
+**One CLI:** `python -m agent.evals` runs the golden set exactly as before (default, unchanged); `python -m agent.evals --suite {golden,retrieval}` dispatches a named suite through the spine, printing its `summary` and mapping `failed` to the exit code.
+
+**Adding a suite:** write a runner returning a `SuiteResult`; fill the envelope columns from `git_sha()` / `prompt_version()` and tag `eval_type`; gate via `threshold_from_env`; register it in the `_SUITES` table in `__main__.py`. Full contract in the `spine.py` module docstring.
+
+**Migration status:** golden + retrieval (the ci.yml gating pair) flow through the spine. The remaining six fold in opportunistically — they still import the envelope from `golden_set` (which re-exports it from `spine`), so nothing broke; repoint each at `agent.evals.spine` when next touched. The `metrics`-as-JSON-column envelope sketched in QNT-293 is the eventual target once all eight are folded; the committed wide CSV is preserved during the migration.
+
 ## Four eval types — all required, not optional
 
 ### (a) Numeric-claim hallucination detector — `hallucination.py`
