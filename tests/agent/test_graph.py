@@ -430,6 +430,60 @@ def test_gather_reports_tool_error_string_records_error() -> None:
     assert "news" not in errors
 
 
+def test_gather_reports_runs_tools_concurrently() -> None:
+    """QNT-300 (B-6): the planned tools are fetched in parallel, so a plan of N
+    tools that each block ``d`` seconds gathers in ~``d``, not ~``N*d``.
+
+    Each tool blocks on a shared barrier that only releases once ALL of them
+    have entered -- if the gather were serial the first tool would deadlock
+    waiting for peers that never start, so passing at all proves concurrency.
+    The wall-clock assertion is a loose upper bound (well under the 4x a serial
+    loop would cost) to stay robust on a loaded CI box.
+    """
+    import threading
+    import time
+
+    plan = ["company", "technical", "fundamental", "news"]
+    barrier = threading.Barrier(len(plan), timeout=5)
+    block = 0.15
+
+    def _make(name: str) -> Callable[[str], str]:
+        def _tool(ticker: str) -> str:
+            barrier.wait()  # deadlocks unless all tools run at once
+            time.sleep(block)
+            return f"## {name} for {ticker}"
+
+        return _tool
+
+    tools = {name: _make(name) for name in plan}
+    start = time.perf_counter()
+    reports, errors = graph_module._gather_reports("NVDA", plan=plan, tools=tools)
+    elapsed = time.perf_counter() - start
+
+    assert errors == {}
+    assert set(reports) == set(plan)
+    # Serial would be >= len(plan) * block = 0.6s; concurrent is ~block. Assert
+    # comfortably below the serial floor.
+    assert elapsed < len(plan) * block, f"gather was not concurrent: {elapsed:.3f}s"
+
+
+def test_gather_reports_concurrent_preserves_optional_and_error_contract() -> None:
+    """QNT-300 (B-6): parallel gather keeps the retry/optional-drop/error-map
+    contract -- an optional tool ('news') failing is dropped silently while a
+    required tool failing surfaces in ``errors``, regardless of scheduling."""
+    tools = {
+        "company": _mock_tool("co"),
+        "technical": _mock_tool("[error] http-500: down"),
+        "news": _mock_tool("[error] http-500: down"),
+    }
+    reports, errors = graph_module._gather_reports(
+        "NVDA", plan=["company", "technical", "news"], tools=tools
+    )
+    assert reports == {"company": "co for NVDA"}
+    assert errors["technical"] == "[error] http-500: down for NVDA"
+    assert "news" not in errors  # optional drop preserved under concurrency
+
+
 def test_synthesize_returns_none_when_structured_output_fails(
     stub_llm: _StructuredLLM,
 ) -> None:
