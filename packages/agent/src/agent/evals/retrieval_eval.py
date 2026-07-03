@@ -59,7 +59,7 @@ import logging
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import ir_measures
 import yaml
@@ -74,16 +74,7 @@ from shared.retrieval import (
 )
 from shared.tickers import TICKERS
 
-from agent.evals.spine import (
-    HISTORY_FIELDS,
-    HISTORY_PATH,
-)
-from agent.evals.spine import (
-    git_sha as _git_sha,
-)
-from agent.evals.spine import (
-    prompt_version as _prompt_version,
-)
+from agent.evals.spine import append_suite_history, suite_history_path
 
 if TYPE_CHECKING:
     from qdrant_client import QdrantClient
@@ -145,6 +136,19 @@ GATE_FLOORS: dict[str, float] = {
 
 # ir_measures metric objects, evaluated together in one pass.
 METRICS = [R @ 5, R @ 20, RR, nDCG @ 10]
+
+# QNT-293 follow-up: retrieval writes one aggregate row per run to its own
+# per-suite history file. Columns are exactly the retrieval metrics; the envelope
+# (run_id/git_sha/prompt_version/suite) is stamped by append_suite_history.
+RETRIEVAL_HISTORY_PATH = suite_history_path("retrieval")
+RETRIEVAL_FIELDS = (
+    "eval_type",
+    "recall_at_5",
+    "recall_at_20",
+    "mrr",
+    "ndcg_at_10",
+    "retrieval_n",
+)
 
 
 @dataclass(frozen=True)
@@ -450,41 +454,28 @@ def append_retrieval_history(
     *,
     n_queries: int,
     run_id: str | None = None,
-    history_path: Path = HISTORY_PATH,
+    history_path: Path = RETRIEVAL_HISTORY_PATH,
 ) -> str:
-    """Append one aggregate ``eval_type="retrieval"`` row to history.csv.
+    """Append one aggregate retrieval row to ``retrieval_history.csv``.
 
-    Mirrors the dialogue_summary aggregate row (QNT-218): one row per run, the
-    retrieval metric columns filled and everything else blank, stamped with the
-    same git_sha + prompt_version as the other eval types so a retrieval
-    regression is bisectable against the same commits.
+    QNT-293 follow-up: one row per run in the retrieval suite's own file
+    (columns = :data:`RETRIEVAL_FIELDS`), stamped by
+    :func:`spine.append_suite_history` with the shared envelope so a retrieval
+    regression is bisectable against the same git_sha + prompt_version as every
+    other suite. ``history_path`` overrides the default file (CI / tests).
     """
-    import csv
     import uuid
 
     rid = run_id or uuid.uuid4().hex[:8]
-    new_file = not history_path.exists()
-    history_path.parent.mkdir(parents=True, exist_ok=True)
-    with history_path.open("a", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=HISTORY_FIELDS)
-        if new_file:
-            writer.writeheader()
-        row: dict[str, Any] = {field: "" for field in HISTORY_FIELDS}
-        row.update(
-            {
-                "run_id": rid,
-                "git_sha": _git_sha(),
-                "prompt_version": _prompt_version(),
-                "eval_type": "retrieval",
-                "recall_at_5": round(metrics.get("R@5", 0.0), 4),
-                "recall_at_20": round(metrics.get("R@20", 0.0), 4),
-                "mrr": round(metrics.get("RR", 0.0), 4),
-                "ndcg_at_10": round(metrics.get("nDCG@10", 0.0), 4),
-                "retrieval_n": n_queries,
-            }
-        )
-        writer.writerow(cast(Any, row))
-    return rid
+    row = {
+        "eval_type": "retrieval",
+        "recall_at_5": round(metrics.get("R@5", 0.0), 4),
+        "recall_at_20": round(metrics.get("R@20", 0.0), 4),
+        "mrr": round(metrics.get("RR", 0.0), 4),
+        "ndcg_at_10": round(metrics.get("nDCG@10", 0.0), 4),
+        "retrieval_n": n_queries,
+    }
+    return append_suite_history("retrieval", RETRIEVAL_FIELDS, [row], run_id=rid, path=history_path)
 
 
 def summarise(metrics: dict[str, float], *, n_queries: int, label: str = "baseline") -> str:
@@ -900,7 +891,9 @@ __all__ = [
     "MAX_QUERIES",
     "METRICS",
     "MIN_QUERIES",
+    "RETRIEVAL_FIELDS",
     "RETRIEVAL_GOLDENS_PATH",
+    "RETRIEVAL_HISTORY_PATH",
     "RETRIEVAL_QRELS_PATH",
     "RETRIEVAL_RUN_HYBRID_PATH",
     "RETRIEVAL_RUN_PATH",

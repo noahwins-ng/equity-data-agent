@@ -1,0 +1,5 @@
+run_id,git_sha,prompt_version,suite,eval_type,recall_at_5,recall_at_20,mrr,ndcg_at_10,retrieval_n
+e2331302,869b203,dc79f7ab0c,retrieval,retrieval,0.4802,0.7232,0.845,0.7023,51
+174163a5,e0c21a6,dc79f7ab0c,retrieval,retrieval,0.4859,0.7611,0.8252,0.7083,51
+3afb5818,a73098a,dc79f7ab0c,retrieval,retrieval,0.5317,0.7611,0.9379,0.7857,51
+97602ba8,ac86c94,dc79f7ab0c,retrieval,retrieval,0.2949,0.5773,0.7404,0.5712,13
