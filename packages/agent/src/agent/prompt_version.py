@@ -48,12 +48,15 @@ def compute_prompt_version(
         EXPLORATION_SYSTEM_PROMPT,
         FOCUSED_SYSTEM_PROMPT,
         FOLLOWUP_SYSTEM_PROMPT,
+        NARRATE_FALSIFIER_RULE,
+        NARRATE_SYSTEM_PROMPT,
         NEUTRAL_GREETING_SYSTEM_PROMPT,
         QUICK_FACT_SYSTEM_PROMPT,
         REPORT_TOOLS,
         SYSTEM_PROMPT,
         WARM_CONVERSATIONAL_SYSTEM_PROMPT,
     )
+    from agent.prompts.system import NARRATE_PROBE_CLOSE_RULE
 
     payload = "\n".join(
         (
@@ -67,6 +70,14 @@ def compute_prompt_version(
             EXPLORATION_SYSTEM_PROMPT,
             FOLLOWUP_SYSTEM_PROMPT,
             CLARIFY_SYSTEM_PROMPT,
+            # QNT-303: the narrate prompt (base + its two appended rule blocks)
+            # is the user-facing voice surface but was historically outside the
+            # hash, so a narrate voice edit shipped with an unchanged
+            # prompt_version. Folded in here so the D-1 falsifier rule (and any
+            # future narrate change) registers as a new version.
+            NARRATE_SYSTEM_PROMPT,
+            NARRATE_PROBE_CLOSE_RULE,
+            NARRATE_FALSIFIER_RULE,
             # QNT-230 #11: classify + plan prompts were outside the hash, so a
             # routing-prompt change shipped with an unchanged prompt_version.
             _CLASSIFY_PROMPT,

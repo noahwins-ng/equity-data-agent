@@ -41,3 +41,16 @@ def test_changing_plan_prompt_changes_version() -> None:
 
     altered = compute_prompt_version(_altered_plan_prompt, _build_thesis_plan_prompt)
     assert baseline != altered
+
+
+def test_changing_narrate_prompt_changes_version(monkeypatch) -> None:
+    """QNT-303: the narrate voice surface is now inside the hash, so a narrate
+    rule edit (e.g. the D-1 falsifier) bumps prompt_version instead of shipping
+    invisibly."""
+    before = compute_prompt_version(_build_plan_prompt, _build_thesis_plan_prompt)
+    monkeypatch.setattr(
+        "agent.prompts.NARRATE_FALSIFIER_RULE",
+        "an entirely different falsifier rule body",
+    )
+    after = compute_prompt_version(_build_plan_prompt, _build_thesis_plan_prompt)
+    assert before != after
