@@ -1997,6 +1997,91 @@ def test_flag_false_never_calls_search_even_on_news_intent(
     search.assert_not_called()
 
 
+def test_gather_emits_retrieved_sources_before_narrate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-305 follow-up: gather emits ``retrieved_sources`` through the
+    event_emitter, and it lands BEFORE the narrate bubble streams. That early
+    row count is what lets the frontend anchor-integrity guard tell an in-range
+    id from a fabricated one WHILE the narration is still streaming -- without
+    it a hallucinated Rn renders mid-stream and then vanishes on completion (a
+    flicker). Pins both that the early emit fires and that it precedes narrate."""
+    monkeypatch.setattr(
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("news", "llm", True, False, ""),
+    )
+    llm = _news_focused_llm()
+    # Give narrate a working .stream() so narrative_chunk actually fires and the
+    # ordering assertion below is real rather than vacuously skipped.
+    llm.stream = lambda *_a, **_kw: iter(  # type: ignore[attr-defined]
+        [AIMessage(content="On balance "), AIMessage(content="the read is cautious.")]
+    )
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+    search = _recording_search_news(
+        [{"headline": "H", "source": "Reuters", "date": "2026-06-01", "url": "https://ex.com/a"}]
+    )
+    emitted: list[tuple[str, dict[str, Any]]] = []
+    graph = build_graph(
+        {name: _mock_tool(name) for name in REPORT_TOOLS},
+        search_news_tool=search,
+        event_emitter=lambda e, d: emitted.append((e, dict(d))),
+    )
+    graph.invoke({"ticker": "NVDA", "question": "any news on NVDA and the Micron deal?"})
+
+    names = [e for e, _ in emitted]
+    assert "retrieved_sources" in names, f"gather must emit retrieved_sources early; got {names}"
+    rs_idx = names.index("retrieved_sources")
+    assert emitted[rs_idx][1]["sources"][0]["id"] == "R1"
+    # The count must reach the client before the first narrate delta.
+    if "narrative_chunk" in names:
+        assert rs_idx < names.index("narrative_chunk"), (
+            "retrieved_sources must precede narrate so the guard has the row "
+            f"count before anchors stream; got {names}"
+        )
+
+
+def test_early_card_emit_strips_out_of_range_anchor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-305 follow-up: the EARLY card emit (synthesize, before narrate) is
+    stripped with the same gate as the post-graph emit. Only R1 is retrieved but
+    the thesis fabricates R5; the early-emitted card must already carry R5
+    de-anchored (kept as the canned ``(source: news)``) so it never renders as a
+    dangling anchor that the stripped post-graph card then removes -- the card's
+    twin of the narrate flicker."""
+    from ._thesis_factory import make_thesis
+
+    monkeypatch.setattr(
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("thesis", "llm", True, False, ""),
+    )
+    llm = _StructuredLLM()
+    llm._structured_runnable.invoke = MagicMock(
+        return_value=make_thesis(
+            supports=["Buyback expanded (source: news R5)", "Deal closed (source: news R1)"],
+        )
+    )
+    llm.stream = lambda *_a, **_kw: iter([AIMessage(content="cautious.")])  # type: ignore[attr-defined]
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+    search = _recording_search_news(
+        [{"headline": "H", "source": "Reuters", "date": "2026-06-01", "url": "https://ex.com/a"}]
+    )
+    emitted: list[tuple[str, dict[str, Any]]] = []
+    graph = build_graph(
+        {name: _mock_tool(name) for name in REPORT_TOOLS},
+        search_news_tool=search,
+        event_emitter=lambda e, d: emitted.append((e, dict(d))),
+    )
+    graph.invoke({"ticker": "NVDA", "question": "is NVDA a buy given the latest news?"})
+
+    thesis_ev = next(d for e, d in emitted if e == "thesis")
+    supports = thesis_ev["technical"]["supports"]
+    assert supports[0] == "Buyback expanded (source: news)"  # R5 fabricated -> id stripped
+    assert supports[1] == "Deal closed (source: news R1)"  # R1 in range -> kept
+
+
 def test_targeted_news_drops_focused_card_and_surfaces_sources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

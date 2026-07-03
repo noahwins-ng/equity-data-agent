@@ -49,6 +49,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from shared.tickers import TICKERS
 
+from agent.citations import strip_oob_anchors_in_obj
 from agent.comparison import ComparisonAnswer, LeanComparisonAnswer, LeanComparisonRow
 from agent.conversational import (
     ConversationalAnswer,
@@ -2456,6 +2457,25 @@ def build_graph(
         # on AAPL" leaves the flag False and keeps the canned digest.
         reports, retrieved_sources = _run_retrievals(state, reports)
 
+        # QNT-305 follow-up: emit the retrieved-sources rows NOW -- gather runs
+        # before synthesize/narrate, so this reaches the client BEFORE the narrate
+        # bubble streams. The frontend needs the row count during streaming: the
+        # anchor-integrity guard can only tell an in-range id from a fabricated
+        # one once it knows how many rows exist, and without the early count a
+        # hallucinated Rn renders mid-stream and then vanishes when the count
+        # finally lands (a jarring flicker). Mirrors the early card emit in
+        # synthesize_node; the post-graph emit in agent_chat stays as the
+        # idempotent safety net (updateRun overwrites with the same payload).
+        if event_emitter is not None and retrieved_sources:
+            try:
+                event_emitter("retrieved_sources", {"sources": retrieved_sources})
+            except Exception as exc:  # noqa: BLE001 — never let SSE plumbing crash gather
+                logger.warning(
+                    "gather %s: early retrieved_sources emit failed: %s (continuing)",
+                    ticker,
+                    exc,
+                )
+
         logger.info(
             "gather %s: gathered=%s errors=%s",
             ticker,
@@ -2995,6 +3015,15 @@ def build_graph(
         """
         result = _synthesize_payload(state, config)
         if event_emitter is not None and isinstance(result, dict):
+            # QNT-305 follow-up: strip out-of-range retrieved anchors from the
+            # EARLY card emit too, with the same gate as the post-graph strip in
+            # agent_chat (``intent_path`` already carries "gather" here, appended
+            # by the node wrapper before synthesize runs). Without this the early
+            # card renders a fabricated anchor that the stripped post-graph emit
+            # then removes -- the card's own flicker, the twin of the narrate one.
+            intent_path = state.get("intent_path") or []
+            retrieved = state.get("retrieved_sources") or []
+            anchor_max = len(retrieved) if retrieved and "gather" in intent_path else 0
             # State key == SSE event name for every card shape; conversational
             # is intentionally excluded (no card, streams as prose_chunk).
             for slot in (
@@ -3008,7 +3037,9 @@ def build_graph(
                 payload = result.get(slot)
                 if isinstance(payload, BaseModel):
                     try:
-                        event_emitter(slot, payload.model_dump())
+                        event_emitter(
+                            slot, strip_oob_anchors_in_obj(payload.model_dump(), anchor_max)
+                        )
                     except Exception as exc:  # noqa: BLE001 — never let SSE plumbing crash synthesize
                         logger.warning(
                             "synthesize %s: card emit (%s) failed: %s (continuing)",
