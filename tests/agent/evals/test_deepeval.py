@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import pytest
 from agent.evals import deepeval_eval as de
-from agent.evals.golden_set import HISTORY_FIELDS, run_record
+from agent.evals.golden_set import run_record
 from agent.llm import DEEPEVAL_JUDGE_ALIAS
 from shared.tickers import TICKERS
 
@@ -59,8 +59,9 @@ def test_ragas_set_and_custom_geval_present() -> None:
 
 
 def test_history_schema_has_deepeval_columns() -> None:
-    """AC5: history.csv carries the deepeval_* aggregate columns, distinct from
-    the integer golden-set ``faithfulness`` judge axis."""
+    """AC5: deepeval_history.csv carries the deepeval_* aggregate columns
+    (QNT-293 follow-up), kept distinct from the integer golden-set ``faithfulness``
+    judge axis by the deepeval_ prefix so the two can't collide."""
     for col in (
         "deepeval_faithfulness",
         "deepeval_answer_relevancy",
@@ -69,9 +70,9 @@ def test_history_schema_has_deepeval_columns() -> None:
         "deepeval_geval",
         "deepeval_n",
     ):
-        assert col in HISTORY_FIELDS, f"history.csv missing deepeval column {col!r}"
-    # The deterministic golden faithfulness axis must still exist alongside it.
-    assert "faithfulness" in HISTORY_FIELDS
+        assert col in de.DEEPEVAL_FIELDS, f"deepeval_history.csv missing column {col!r}"
+    # The bare golden faithfulness axis is NOT a deepeval column (no collision).
+    assert "faithfulness" not in de.DEEPEVAL_FIELDS
 
 
 def test_judge_routes_through_pinned_deepeval_alias() -> None:

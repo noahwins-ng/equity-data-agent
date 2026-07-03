@@ -1,0 +1,3 @@
+run_id,git_sha,prompt_version,suite,eval_type,rag_impact_pass_rate,rag_impact_n
+2441f9bf,f1d419c,dc79f7ab0c,rag_impact,rag_impact,0.875,8
+0ade590e,fb4411c,1edccfccf6,rag_impact,rag_impact,1.0,8

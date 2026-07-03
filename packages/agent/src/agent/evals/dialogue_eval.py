@@ -13,7 +13,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import fmean, median, stdev
-from typing import Any, cast
+from typing import Any
 
 import httpx
 import yaml
@@ -30,9 +30,9 @@ from agent.evals.dialogue_judge import (
     DialogueJudgeScore,
 )
 from agent.evals.dialogue_judge import score as judge_score_fn
-from agent.evals.golden_set import HISTORY_FIELDS, HISTORY_PATH, _git_sha, _prompt_version
 from agent.evals.hallucination import HallucinationResult
 from agent.evals.hallucination import check as check_hallucination
+from agent.evals.spine import append_suite_history, suite_history_path
 from agent.graph import build_graph
 from agent.llm import current_model_info, set_temperature_override
 from agent.tools import default_report_tools, get_company_report_compact
@@ -48,6 +48,32 @@ DIALOGUE_AXES = (
     "non_hallucination",
     "exploration_quality",
     "voice_match",
+)
+
+# QNT-293 follow-up: dialogue writes its own per-suite history file. Two row types
+# share it (per-fixture eval_type="dialogue" + one eval_type="dialogue_summary"
+# aggregate), so the columns are the union both need; the envelope is stamped by
+# append_suite_history. Axis columns are derived from DIALOGUE_AXES so a new axis
+# can't drift the schema.
+DIALOGUE_HISTORY_PATH = suite_history_path("dialogue")
+_DIALOGUE_BASE_FIELDS = (
+    "eval_type",
+    "ticker",
+    "question_id",
+    "question",
+    "hallucination_ok",
+    "elapsed_ms",
+    "dialogue_fixture_id",
+    "dialogue_turns",
+    "dialogue_composite",
+    "dialogue_composite_se",
+    "dialogue_n",
+    "judge_model",
+    "agent_model",
+)
+DIALOGUE_FIELDS = (
+    *_DIALOGUE_BASE_FIELDS,
+    *(f"{axis}{suffix}" for axis in DIALOGUE_AXES for suffix in ("", "_rationale", "_se")),
 )
 
 # QNT-218: the agent-under-test runs at temperature 0 during the eval so its
@@ -152,7 +178,7 @@ class AxisGateResult:
 
 
 def load_dialogue_scores(
-    run_id: str, *, history_path: Path = HISTORY_PATH
+    run_id: str, *, history_path: Path = DIALOGUE_HISTORY_PATH
 ) -> dict[str, dict[str, float]]:
     """Read one run's per-fixture axis scores: ``fixture_id -> {axis: score}``.
 
@@ -494,75 +520,63 @@ def append_dialogue_history(
     outcomes: list[DialogueOutcome],
     *,
     run_id: str | None = None,
-    history_path: Path = HISTORY_PATH,
+    history_path: Path = DIALOGUE_HISTORY_PATH,
 ) -> str:
-    """Append dialogue eval rows to the shared history.csv schema."""
+    """Append dialogue eval rows to ``dialogue_history.csv`` (QNT-293 follow-up).
+
+    Two row types share the file: one per fixture (``eval_type="dialogue"``) plus
+    one aggregate (``eval_type="dialogue_summary"``, QNT-218) carrying the per-axis
+    mean + standard error. The shared envelope is stamped by
+    :func:`spine.append_suite_history`.
+    """
     rid = (
         run_id
         or f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{uuid.uuid4().hex[:6]}-dialogue"
     )
-    sha = _git_sha()
-    pv = _prompt_version()
-    new_file = not history_path.exists()
-    history_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with history_path.open("a", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=HISTORY_FIELDS)
-        if new_file:
-            writer.writeheader()
-        for outcome in outcomes:
-            js = outcome.judge_score
-            row: dict[str, Any] = {field: "" for field in HISTORY_FIELDS}
-            row.update(
-                {
-                    "run_id": rid,
-                    "git_sha": sha,
-                    "prompt_version": pv,
-                    "ticker": outcome.fixture.ticker,
-                    "question_id": outcome.fixture.id,
-                    "question": " | ".join(outcome.fixture.turns),
-                    "hallucination_ok": "1" if outcome.numeric_support.ok else "0",
-                    "elapsed_ms": outcome.elapsed_ms,
-                    "eval_type": "dialogue",
-                    "dialogue_fixture_id": outcome.fixture.id,
-                    "dialogue_turns": len(outcome.fixture.turns),
-                    "dialogue_composite": "" if js is None else js.composite,
-                    "judge_model": f"{JUDGE_MODEL_ALIAS} ({JUDGE_RESOLVED_MODEL})",
-                    "agent_model": AGENT_UNDER_TEST_RESOLVED_MODEL,
-                }
-            )
-            if js is not None:
-                for axis in DIALOGUE_AXES:
-                    axis_score = getattr(js, axis)
-                    row[axis] = axis_score.score
-                    row[f"{axis}_rationale"] = axis_score.rationale
-            writer.writerow(cast(Any, row))
-
-        # QNT-218: one aggregate row per run carrying the per-axis mean (axis
-        # columns) + standard error (`*_se` columns) so a single sweep ships
-        # with its own dispersion band.
-        agg = aggregate(outcomes)
-        if agg is not None:
-            summary: dict[str, Any] = {field: "" for field in HISTORY_FIELDS}
-            summary.update(
-                {
-                    "run_id": rid,
-                    "git_sha": sha,
-                    "prompt_version": pv,
-                    "question_id": "ALL",
-                    "eval_type": "dialogue_summary",
-                    "dialogue_composite": round(agg.composite_mean, 4),
-                    "dialogue_composite_se": round(agg.composite_se, 4),
-                    "dialogue_n": agg.n,
-                    "judge_model": f"{JUDGE_MODEL_ALIAS} ({JUDGE_RESOLVED_MODEL})",
-                    "agent_model": AGENT_UNDER_TEST_RESOLVED_MODEL,
-                }
-            )
+    rows: list[dict[str, Any]] = []
+    for outcome in outcomes:
+        js = outcome.judge_score
+        row: dict[str, Any] = {
+            "ticker": outcome.fixture.ticker,
+            "question_id": outcome.fixture.id,
+            "question": " | ".join(outcome.fixture.turns),
+            "hallucination_ok": "1" if outcome.numeric_support.ok else "0",
+            "elapsed_ms": outcome.elapsed_ms,
+            "eval_type": "dialogue",
+            "dialogue_fixture_id": outcome.fixture.id,
+            "dialogue_turns": len(outcome.fixture.turns),
+            "dialogue_composite": "" if js is None else js.composite,
+            "judge_model": f"{JUDGE_MODEL_ALIAS} ({JUDGE_RESOLVED_MODEL})",
+            "agent_model": AGENT_UNDER_TEST_RESOLVED_MODEL,
+        }
+        if js is not None:
             for axis in DIALOGUE_AXES:
-                summary[axis] = round(agg.axis_mean[axis], 4)
-                summary[f"{axis}_se"] = round(agg.axis_se[axis], 4)
-            writer.writerow(cast(Any, summary))
-    return rid
+                axis_score = getattr(js, axis)
+                row[axis] = axis_score.score
+                row[f"{axis}_rationale"] = axis_score.rationale
+        rows.append(row)
+
+    # QNT-218: one aggregate row per run carrying the per-axis mean (axis columns)
+    # + standard error (`*_se` columns) so a single sweep ships with its own
+    # dispersion band.
+    agg = aggregate(outcomes)
+    if agg is not None:
+        summary: dict[str, Any] = {
+            "question_id": "ALL",
+            "eval_type": "dialogue_summary",
+            "dialogue_composite": round(agg.composite_mean, 4),
+            "dialogue_composite_se": round(agg.composite_se, 4),
+            "dialogue_n": agg.n,
+            "judge_model": f"{JUDGE_MODEL_ALIAS} ({JUDGE_RESOLVED_MODEL})",
+            "agent_model": AGENT_UNDER_TEST_RESOLVED_MODEL,
+        }
+        for axis in DIALOGUE_AXES:
+            summary[axis] = round(agg.axis_mean[axis], 4)
+            summary[f"{axis}_se"] = round(agg.axis_se[axis], 4)
+        rows.append(summary)
+
+    return append_suite_history("dialogue", DIALOGUE_FIELDS, rows, run_id=rid, path=history_path)
 
 
 def precheck_environment(*, timeout: float = 5.0) -> None:
@@ -615,7 +629,7 @@ def contamination_warning(outcomes: list[DialogueOutcome]) -> str | None:
 
 def run_all(
     *,
-    history_path: Path = HISTORY_PATH,
+    history_path: Path = DIALOGUE_HISTORY_PATH,
     only: str | None = None,
     llm_for_judge: Any | None = None,
     emit_langfuse_scores: bool = False,
@@ -671,8 +685,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--history-path",
         type=Path,
-        default=HISTORY_PATH,
-        help=f"Where to append history rows (default: {HISTORY_PATH})",
+        default=DIALOGUE_HISTORY_PATH,
+        help=f"Where to append history rows (default: {DIALOGUE_HISTORY_PATH})",
     )
     parser.add_argument(
         "--emit-langfuse-scores",
