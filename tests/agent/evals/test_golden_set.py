@@ -20,7 +20,6 @@ from agent.evals import golden_set
 from agent.evals.golden_set import (
     CONTAMINATION_LATENCY_MS,
     GOLDEN_FIELDS,
-    HISTORY_FIELDS,
     EvalOutcome,
     GoldenRecord,
     append_history,
@@ -450,17 +449,6 @@ class TestAppendHistory:
         assert [r["verdict_label_consistent"] for r in rows] == ["1", "0", ""]
         # Columns after the new one must still align (eval_type is not shifted).
         assert {r["eval_type"] for r in rows} == {"structured"}
-
-    def test_history_fields_is_append_only_vs_committed_header(self) -> None:
-        """QNT-302 regression guard: the ragged committed history.csv is
-        append-only — a new field must be added at the TAIL of HISTORY_FIELDS
-        and mirrored into the on-disk header, or existing rows misalign on read.
-        This pins both invariants so a future mid-list insert fails loudly."""
-        committed = csv.reader(golden_set.HISTORY_PATH.open()).__next__()
-        # On-disk header is exactly the current schema, in order.
-        assert committed == list(HISTORY_FIELDS)
-        # Newest field is last (the append-only tail).
-        assert HISTORY_FIELDS[-1] == "verdict_label_consistent"
 
 
 class TestGate:

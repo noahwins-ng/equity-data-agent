@@ -45,11 +45,7 @@ from agent.evals.judge import score as judge_score_fn
 from agent.evals.provider_errors import is_provider_pressure_error, provider_error_label
 from agent.evals.similarity import cosine
 from agent.evals.spine import (
-    HISTORY_FIELDS,
-    HISTORY_PATH,
     append_suite_history,
-    git_sha,
-    prompt_version,
     suite_history_path,
     threshold_from_env,
 )
@@ -76,10 +72,6 @@ GOLDENS_PATH = Path(__file__).parent / "goldens" / "questions.yaml"
 # a slower model) the floor rises with it -- recalibrate against a fresh clean-run
 # baseline if a contaminated run stops being flagged.
 CONTAMINATION_LATENCY_MS = int(settings.LLM_REQUEST_TIMEOUT * 1000)
-
-# HISTORY_FIELDS / HISTORY_PATH now live in agent.evals.spine (QNT-293) so the
-# shared history envelope can't drift between the eight suites. Re-exported above
-# and in __all__ for back-compat -- suites still import them from here today.
 
 # QNT-293 follow-up: the golden set writes its own per-suite history file. Its
 # columns are exactly the golden metrics (the envelope -- run_id/git_sha/
@@ -229,13 +221,6 @@ def load_goldens(path: Path = GOLDENS_PATH) -> list[GoldenRecord]:
             )
         )
     return records
-
-
-# Run-identity helpers moved to agent.evals.spine (QNT-293); aliased here under
-# their historical private names so the suites and tests that import
-# ``_git_sha`` / ``_prompt_version`` from golden_set keep working unchanged.
-_git_sha = git_sha
-_prompt_version = prompt_version
 
 
 def run_record(record: GoldenRecord, *, llm_for_judge: Any | None = None) -> EvalOutcome:
@@ -660,8 +645,6 @@ __all__ = [
     "GOLDENS_PATH",
     "GOLDEN_FIELDS",
     "GOLDEN_HISTORY_PATH",
-    "HISTORY_FIELDS",
-    "HISTORY_PATH",
     "append_history",
     "fail_threshold_from_env",
     "is_failing",
