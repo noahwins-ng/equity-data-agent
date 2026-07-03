@@ -34,19 +34,18 @@ export const RunBlock = memo(function RunBlock({
 }) {
   const proseText = run.proseChunks.join("");
   const isStreaming = run.status === "streaming";
-  // QNT-305: the number of retrieved-sources rows rendered below this run. The
-  // parser de-anchors any retrieved id above it -- a fabricated anchor pointing
-  // at no row. Passed into the streamed narrate/prose surfaces (the backend
-  // strips the structured card payloads before the SSE; these stream as deltas
-  // and only the client knows the final row count).
+  // QNT-305: the number of retrieved-sources rows for this run. The parser
+  // de-anchors any retrieved id above it -- a fabricated anchor pointing at no
+  // row -- in the streamed narrate/prose surfaces (the backend strips the
+  // structured card payloads before the SSE; these stream as deltas).
   //
-  // Undefined WHILE STREAMING: the `retrieved_sources` SSE event is emitted
-  // post-graph, strictly AFTER the narrate deltas have streamed, so
-  // `run.retrievedSources` is still `[]` for the whole live narration. Applying
-  // a 0 count then would de-anchor every in-range id until the event lands.
-  // Gate on the run being terminal, when the final count is authoritative (0
-  // genuinely means "no rows"), so in-range anchors render live and unmolested.
-  const maxAnchor = isStreaming ? undefined : run.retrievedSources.length;
+  // QNT-305 follow-up: the count is authoritative from the first render because
+  // `gather` now emits `retrieved_sources` BEFORE the narrate deltas stream (it
+  // runs earlier in the graph). So the guard filters consistently the whole way
+  // through -- a fabricated id never renders, rather than showing mid-stream and
+  // vanishing on completion. `0` genuinely means "no rows retrieved this turn",
+  // so any Rn is fabricated and correctly dropped on sight.
+  const maxAnchor = run.retrievedSources.length;
   const groundingPct =
     typeof run.stats?.grounding_rate === "number"
       ? Math.max(0, Math.min(100, Math.round(run.stats.grounding_rate * 100)))
