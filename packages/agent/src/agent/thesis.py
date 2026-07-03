@@ -163,6 +163,28 @@ class AspectView(BaseModel):
     )
 
 
+def render_aspect_block(heading: str, aspect: AspectView, *, level: int = 2) -> list[str]:
+    """Render one aspect block (heading + label + summary + bullets) to markdown lines.
+
+    QNT-294 (C-6): the single aspect-rendering loop shared by
+    :meth:`Thesis.to_markdown` and :meth:`ComparisonAnswer.to_markdown`, which
+    used to duplicate it and disagreed on the challenges glyph (thesis rendered
+    ``· ``, comparison ``- ``). Supports render ``+ ``, challenges ``- `` --
+    one convention across both shapes. ``level`` is the heading depth (2 for a
+    top-level thesis aspect, 3 for a comparison aspect nested under a ``## {ticker}``
+    section). Returns lines including the trailing blank-line separator.
+    """
+    hashes = "#" * level
+    parts = [f"{hashes} {heading}"]
+    if aspect.label:
+        parts.append(f"**Label:** {aspect.label}")
+    parts.append(aspect.summary.strip() or "_(no summary supplied)_")
+    parts.extend(f"+ {point.strip()}" for point in aspect.supports)
+    parts.extend(f"- {point.strip()}" for point in aspect.challenges)
+    parts.append("")
+    return parts
+
+
 class Thesis(BaseModel):
     """Structured investment thesis with four aspect blocks + a verdict.
 
@@ -258,17 +280,7 @@ class Thesis(BaseModel):
             ("Technical", self.technical),
             ("News", self.news),
         ):
-            parts.append(f"## {heading}")
-            if aspect.label:
-                parts.append(f"**Label:** {aspect.label}")
-            parts.append(aspect.summary.strip() or "_(no summary supplied)_")
-            if aspect.supports:
-                for point in aspect.supports:
-                    parts.append(f"+ {point.strip()}")
-            if aspect.challenges:
-                for point in aspect.challenges:
-                    parts.append(f"· {point.strip()}")
-            parts.append("")
+            parts.extend(render_aspect_block(heading, aspect, level=2))
 
         parts.append("## Verdict")
         parts.append(f"**{self.verdict}**")
@@ -285,4 +297,5 @@ __all__ = [
     "Verdict",
     "expected_verdict_from_labels",
     "normalize_aspect_label",
+    "render_aspect_block",
 ]

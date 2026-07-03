@@ -1207,13 +1207,34 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
             return
 
         state = final_state_holder.get("state") or {}
-        thesis = state.get("thesis") if isinstance(state, dict) else None
-        quick_fact = state.get("quick_fact") if isinstance(state, dict) else None
-        comparison = state.get("comparison") if isinstance(state, dict) else None
-        comparison_lean = state.get("comparison_lean") if isinstance(state, dict) else None
-        conversational = state.get("conversational") if isinstance(state, dict) else None
-        focused = state.get("focused") if isinstance(state, dict) else None
-        exploration = state.get("exploration") if isinstance(state, dict) else None
+        # QNT-294 (AC2): the seven card locals are derived from the single
+        # ``answer`` discriminated union -- the SSE emit + citation ladders below
+        # read them unchanged. ``answer`` mirrors the one populated shape (or
+        # None when no card was produced this turn, e.g. a narrative-only followup).
+        _sdict = state if isinstance(state, dict) else {}
+        answer = _sdict.get("answer")
+
+        def _card[T](cls: type[T], slot: str) -> T | None:
+            if isinstance(answer, cls):
+                return answer
+            # Back-compat (QNT-294 AC2/AC3): a state written before ``answer``
+            # existed -- an old checkpoint the graph hydrated, or a stub state --
+            # carries only the legacy slot. Fall back to it only when no fresh
+            # ``answer`` was produced, so a followup's hydrated prior card can't
+            # leak in over this turn's None.
+            if answer is None:
+                legacy = _sdict.get(slot)
+                if isinstance(legacy, cls):
+                    return legacy
+            return None
+
+        thesis = _card(Thesis, "thesis")
+        quick_fact = _card(QuickFactAnswer, "quick_fact")
+        comparison = _card(ComparisonAnswer, "comparison")
+        comparison_lean = _card(LeanComparisonAnswer, "comparison_lean")
+        conversational = _card(ConversationalAnswer, "conversational")
+        focused = _card(FocusedAnalysis, "focused")
+        exploration = _card(ExplorationAnswer, "exploration")
         intent = state.get("intent", "thesis") if isinstance(state, dict) else "thesis"
         confidence = float(state.get("confidence", 0.0)) if isinstance(state, dict) else 0.0
         grounding_rate = float(state.get("grounding_rate", 1.0)) if isinstance(state, dict) else 1.0
