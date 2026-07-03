@@ -89,7 +89,11 @@ def main(argv: list[str] | None = None) -> int:
         n = len(rows)
         h_ok = sum(1 for r in rows if r["hallucination_ok"] == "1")
         t_ok = sum(1 for r in rows if r["tool_call_ok"] == "1")
-        judges = [int(r["judge_score"]) for r in rows if r["judge_score"]]
+        # The judge composite lives in the `composite` column (rounded 0-10 mean
+        # of the four axes); there has never been a `judge_score` column -- reading
+        # it KeyError'd on every row. Empty on provider-error / unjudged rows, so
+        # the truthiness guard still filters those out.
+        judges = [int(r["composite"]) for r in rows if r["composite"]]
         avg_judge = round(sum(judges) / len(judges), 2) if judges else None
         cosines = [float(r["cosine"]) for r in rows]
         avg_cos = round(sum(cosines) / len(cosines), 3) if cosines else None
