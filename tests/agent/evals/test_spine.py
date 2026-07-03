@@ -11,7 +11,34 @@ before QNT-230 unified it). These lock the two invariants that guarantee it:
 
 from __future__ import annotations
 
+import csv
+from pathlib import Path
+
 import pytest
+
+
+def test_append_suite_history_writes_envelope_plus_metric_columns(tmp_path: Path) -> None:
+    """The per-suite writer (QNT-293 follow-up) lays down ENVELOPE_FIELDS + the
+    suite's own metric columns, stamps the shared envelope, and names the file
+    ``{suite}_history.csv``."""
+    from agent.evals.spine import (
+        ENVELOPE_FIELDS,
+        append_suite_history,
+        suite_history_path,
+    )
+
+    path = suite_history_path("demo", tmp_path)
+    assert path.name == "demo_history.csv"
+    append_suite_history("demo", ("score", "n"), [{"score": 0.5, "n": 3}], run_id="rX", path=path)
+
+    rows = list(csv.DictReader(path.open()))
+    assert len(rows) == 1
+    assert list(rows[0].keys()) == [*ENVELOPE_FIELDS, "score", "n"]
+    assert rows[0]["run_id"] == "rX"
+    assert rows[0]["suite"] == "demo"
+    assert rows[0]["score"] == "0.5" and rows[0]["n"] == "3"
+    # envelope identity columns are stamped from the shared helpers, not blank
+    assert rows[0]["git_sha"] and rows[0]["prompt_version"]
 
 
 def test_golden_reexports_spine_envelope() -> None:

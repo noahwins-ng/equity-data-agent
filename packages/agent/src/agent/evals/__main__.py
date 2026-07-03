@@ -38,7 +38,7 @@ os.environ["LANGFUSE_PUBLIC_KEY"] = ""
 os.environ["LANGFUSE_SECRET_KEY"] = ""
 
 from agent.evals.golden_set import (  # noqa: E402
-    HISTORY_PATH,
+    GOLDEN_HISTORY_PATH,
     fail_threshold_from_env,
     is_failing,
     run_all,
@@ -128,8 +128,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--history-path",
         type=Path,
-        default=HISTORY_PATH,
-        help=f"Where to append history rows (default: {HISTORY_PATH}). Golden suite only.",
+        default=GOLDEN_HISTORY_PATH,
+        help=f"Where to append history rows (default: {GOLDEN_HISTORY_PATH}). Golden suite only.",
     )
     parser.add_argument(
         "--model",
