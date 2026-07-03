@@ -1,14 +1,14 @@
 """Tests for the shared prompt-version hash (QNT-230 #11).
 
-The hash must (a) be identical across the ``agent.graph`` and
-``agent.evals.golden_set`` copies -- they previously drifted -- and (b) move
+The hash must (a) be identical across the ``agent.graph`` and the eval-harness
+spine (``agent.evals.spine``) copies -- they previously drifted -- and (b) move
 when a routing prompt (classify / plan) changes, so version-filtered Langfuse
 before/after comparisons can't silently mix two routing behaviours.
 """
 
 from __future__ import annotations
 
-from agent.evals.golden_set import _prompt_version as golden_prompt_version
+from agent.evals.spine import prompt_version as spine_prompt_version
 from agent.graph import (
     _build_plan_prompt,
     _build_thesis_plan_prompt,
@@ -19,8 +19,8 @@ from agent.graph import (
 from agent.prompt_version import compute_prompt_version
 
 
-def test_graph_and_golden_set_versions_agree() -> None:
-    assert graph_prompt_version() == golden_prompt_version()
+def test_graph_and_spine_versions_agree() -> None:
+    assert graph_prompt_version() == spine_prompt_version()
 
 
 def test_changing_classify_prompt_changes_version(monkeypatch) -> None:

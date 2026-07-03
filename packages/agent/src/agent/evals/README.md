@@ -8,17 +8,15 @@ Evaluation framework for the LangGraph agent. Lives in-tree under `packages/agen
 
 The eight suites below grew their own runners, history formats, thresholds, and env-gating. `spine.py` is the shared home for the pieces that must stay identical so they can't drift again (the prompt-version hash already drifted once between `graph.py` and `golden_set.py` before QNT-230 unified it):
 
-- **History envelope** — `HISTORY_PATH` + `HISTORY_FIELDS`: the single wide `history.csv` schema every suite appends to, keyed by the `eval_type` column. Per-suite metrics stay suite-defined (each suite fills its own columns, blanks the rest); only the envelope columns (`run_id` / `git_sha` / `prompt_version` / `eval_type`) are shared. **New metric columns append at the END** — this is a ragged append-only CSV, so a mid-list insert misaligns every later column on read.
-- **Run identity** — `git_sha()` and `prompt_version()`, stamped on every row so a run reproduces from the CSV alone.
-- **Gating primitives** — `threshold_from_env(name)` (one warn-on-garbage env parser) and `SuiteResult(summary, failed, run_id)` (the summary + pass/fail contract the CLI dispatches on).
+- **History envelope + writer** — `ENVELOPE_FIELDS` (`run_id` / `git_sha` / `prompt_version` / `suite`) + `append_suite_history(suite, fields, rows, run_id=…)`, which writes one **`{suite}_history.csv` per suite**: the shared envelope columns followed by that suite's own metric columns. Per-suite metrics stay suite-defined; only the envelope is shared. Each suite owns its file, so there's no sparsity (no row blanks another suite's columns) and no shared column order to keep in lockstep — the QNT-264/QNT-277 header-misalignment bug class can't recur. (This replaced a single wide `history.csv` keyed by an `eval_type` column; a `metrics`-as-JSON blob was considered and dropped — a plain per-suite CSV stays spreadsheet- and `git log -p`-readable, and cross-suite `run_id` queries are rare for eval history.)
+- **Run identity** — `git_sha()` and `prompt_version()`, stamped on every row by the writer so a run reproduces from its file alone.
+- **Gating primitives** — `threshold_from_env(name)` (one warn-on-garbage env parser) and `SuiteResult(summary, failed, run_id, warning)` (the summary + pass/fail contract the CLI dispatches on).
 
 **One CLI:** `python -m agent.evals` runs the golden set exactly as before (default, unchanged); `python -m agent.evals --suite {golden,retrieval}` dispatches a named suite through the spine, printing its `summary` and mapping `failed` to the exit code.
 
-**Adding a suite:** write a runner returning a `SuiteResult`; fill the envelope columns from `git_sha()` / `prompt_version()` and tag `eval_type`; gate via `threshold_from_env`; register it in the `_SUITES` table in `__main__.py`. Full contract in the `spine.py` module docstring.
+**Adding a suite:** write a runner returning a `SuiteResult`; declare a `{SUITE}_FIELDS` tuple of the suite's own columns next to its code and write via `append_suite_history(suite, SUITE_FIELDS, rows, run_id=…)`; gate via `threshold_from_env`; register it in the `_SUITES` table in `__main__.py`. Full contract in the `spine.py` module docstring.
 
-**Migration status:** golden + retrieval (the ci.yml gating pair) flow through the spine. The remaining six fold in opportunistically — they still import the envelope from `golden_set` (which re-exports it from `spine`), so nothing broke; repoint each at `agent.evals.spine` when next touched.
-
-**Eventual target — per-suite history files** (decided as a QNT-293 follow-up): each suite writes its own `{suite}_history.csv` with exactly its metric columns — no sparsity (today a retrieval row blanks ~40 dialogue/deepeval columns), no shared column order to drift (so the QNT-264/QNT-277 header-misalignment bug class can't recur) — while the spine owns the shared envelope (`run_id`/`git_sha`/`prompt_version`/`suite`) via one append helper. A single `metrics`-as-JSON-column table was considered and dropped: it buries each suite's schema in an untyped blob and needs `json_normalize` to analyse, whereas a plain per-suite CSV stays spreadsheet- and `git log -p`-readable (the one thing a single file buys — a cross-suite query on `run_id` — is rare for eval history). The wide `history.csv` is preserved until each suite folds in and its rows split into `{suite}_history.csv` along the way.
+All five history-writing suites (golden, retrieval, dialogue, deepeval, rag_impact) write their own `{suite}_history.csv`; the committed test `test_committed_suite_files_match_their_code_schema` pins each file's header to its `*_FIELDS`.
 
 ## Four eval types — all required, not optional
 
@@ -39,9 +37,9 @@ Per run, for each record:
 2. Score the generated thesis against the reference thesis via:
    - **LLM-as-judge** per-axis scores (0–10 each) using the agent's own LLM via the LiteLLM proxy at `temperature=0.0`. Four axes: `faithfulness`, `structure`, `correctness`, `analyst_logic`. A `composite` column holds the rounded average of all four.
    - **Cosine similarity** over normalised term-frequency vectors. The original spec called for `all-MiniLM-L6-v2` embeddings; we ship the lighter zero-dep equivalent (same operation in a different vector space) to keep the harness portable. Swap `similarity.cosine` for an embedding-backed implementation behind the same signature when MiniLM is on the path.
-3. Append one row per record to `history.csv`:
-   `run_id, git_sha, prompt_version, ticker, question_id, question, faithfulness, structure, correctness, analyst_logic, composite, cosine, tool_call_ok, hallucination_ok, elapsed_ms`.
-4. `history.csv` is committed so prompt-version quality is visible in `git log -p packages/agent/src/agent/evals/history.csv`.
+3. Append one row per record to `golden_history.csv` (envelope + `GOLDEN_FIELDS`):
+   `run_id, git_sha, prompt_version, suite, eval_type, ticker, question_id, question, faithfulness, structure, correctness, analyst_logic, composite, cosine, tool_call_ok, hallucination_ok, verdict_label_consistent, elapsed_ms`.
+4. `golden_history.csv` is committed so prompt-version quality is visible in `git log -p packages/agent/src/agent/evals/golden_history.csv`.
 
 ### (c) Tool-call correctness — `tool_calls.py`
 
@@ -58,8 +56,8 @@ objective numeric-support check for the narrative bubble; the judge scores the
 subjective dialogue axes: `analyst_likeness`, `helpfulness`,
 `non_hallucination`, `exploration_quality`, and `voice_match`.
 
-Dialogue rows append to the same `history.csv` with `eval_type=dialogue` and
-blank structured-golden columns, preserving one reviewable quality ledger. Each
+Dialogue rows append to `dialogue_history.csv` with `eval_type=dialogue`,
+preserving a reviewable quality ledger. Each
 run also appends one `eval_type=dialogue_summary` row carrying the per-axis mean
 (axis columns) plus its standard error (`*_se` columns) and the fixture count
 (`dialogue_n`) — see "Making the dialogue eval trustworthy" below.
@@ -261,7 +259,7 @@ uv run python -m agent.evals.retrieval_eval --baseline   # rewrite run + history
 uv run python -m agent.evals.retrieval_eval              # offline score + gate (the CI path)
 ```
 
-The baseline appends one `eval_type="retrieval"` row to `history.csv`
+The baseline appends one `eval_type="retrieval"` row to `retrieval_history.csv`
 (`recall_at_5` / `recall_at_20` / `mrr` / `ndcg_at_10` / `retrieval_n`) stamped
 with the same `git_sha` + `prompt_version` as every other eval type.
 
@@ -320,7 +318,7 @@ verbatim faithfulness layer for financial figures than generic LLM-judged
 faithfulness. DeepEval is the nuance layer on top.
 
 **Recorded alongside the IR metrics (AC5).** Each run appends one
-`eval_type="deepeval"` row to `history.csv` (`deepeval_faithfulness` /
+`eval_type="deepeval"` row to `deepeval_history.csv` (`deepeval_faithfulness` /
 `deepeval_answer_relevancy` / `deepeval_context_precision` /
 `deepeval_context_recall` / `deepeval_geval` / `deepeval_n`), stamped with the same
 `git_sha` + `prompt_version` as every other eval type. The `deepeval_*` prefix keeps
@@ -399,7 +397,7 @@ the coined entity. A positive whose search never fired is reported as `misrouted
 (an intent-routing axis owned by evals (e)/(g)) and kept out of the pass-rate.
 
 **Recorded alongside the other eval rows.** Each run appends one
-`eval_type="rag_impact"` row to `history.csv` (`rag_impact_pass_rate` /
+`eval_type="rag_impact"` row to `rag_impact_history.csv` (`rag_impact_pass_rate` /
 `rag_impact_n`), same `git_sha` + `prompt_version` stamping as every other type.
 
 **First recorded baseline** (run `2441f9bf`, sha `f1d419c`, 2026-06-23, clean
@@ -574,9 +572,9 @@ The LLM-as-judge scores four axes independently (each 0–10):
 `composite` is the rounded average of all four axes, kept for backwards-compatible trend lines.
 Historical rows (before QNT-191) have empty axis columns and carry the old single score in `composite`.
 
-## Reading `history.csv`
+## Reading the history files
 
-Each row is one (run × record) pair. `tool_call_ok` and `hallucination_ok` are the hard contracts (1 = pass, 0 = fail). The committed baseline at QNT-67 ship-time intentionally includes failing rows — the eval surfaced 3 real prompt-quality findings on its first live sweep:
+Each suite has its own `{suite}_history.csv` (QNT-293 follow-up); the golden set's is `golden_history.csv`. Each golden row is one (run × record) pair. `tool_call_ok` and `hallucination_ok` are the hard contracts (1 = pass, 0 = fail). The committed baseline at QNT-67 ship-time intentionally includes failing rows — the eval surfaced 3 real prompt-quality findings on its first live sweep:
 
 - `amzn-fundamental` — thesis emitted `16.09`, not in any report
 - `unh-fundamental` and `unh-news` — thesis emitted `89.02` and `99.82`, not in any report (news synthesis quoting fundamental-style numbers is the suspicious one)
@@ -587,4 +585,4 @@ Those are **the framework working as intended**, not framework noise. They're th
 
 - The harness runs the same agent code and prompts that ship to prod — keeping it in-tree makes that automatic.
 - CI can run a subset of evals on every PR.
-- `history.csv` in git gives a permanent, reviewable record of how prompt changes moved the metrics.
+- The committed `{suite}_history.csv` files in git give a permanent, reviewable record of how prompt changes moved the metrics.

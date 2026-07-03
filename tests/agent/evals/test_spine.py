@@ -41,14 +41,29 @@ def test_append_suite_history_writes_envelope_plus_metric_columns(tmp_path: Path
     assert rows[0]["git_sha"] and rows[0]["prompt_version"]
 
 
-def test_golden_reexports_spine_envelope() -> None:
-    """golden_set must re-export the spine's envelope, not a divergent copy --
-    the whole point of the spine is one authority for HISTORY_FIELDS/PATH."""
-    from agent.evals import spine
-    from agent.evals.golden_set import HISTORY_FIELDS, HISTORY_PATH
+def test_committed_suite_files_match_their_code_schema() -> None:
+    """Each committed {suite}_history.csv header must equal ENVELOPE_FIELDS + that
+    suite's own *_FIELDS -- the per-suite replacement for the old wide-CSV
+    append-only guard. Catches a suite's code schema drifting from the file it
+    writes (the QNT-264/QNT-277 header-misalignment class, per suite now)."""
+    from agent.evals.deepeval_eval import DEEPEVAL_FIELDS, DEEPEVAL_HISTORY_PATH
+    from agent.evals.dialogue_eval import DIALOGUE_FIELDS, DIALOGUE_HISTORY_PATH
+    from agent.evals.golden_set import GOLDEN_FIELDS, GOLDEN_HISTORY_PATH
+    from agent.evals.rag_impact_eval import RAG_IMPACT_FIELDS, RAG_IMPACT_HISTORY_PATH
+    from agent.evals.retrieval_eval import RETRIEVAL_FIELDS, RETRIEVAL_HISTORY_PATH
+    from agent.evals.spine import ENVELOPE_FIELDS
 
-    assert HISTORY_FIELDS is spine.HISTORY_FIELDS
-    assert HISTORY_PATH is spine.HISTORY_PATH
+    for path, fields in (
+        (GOLDEN_HISTORY_PATH, GOLDEN_FIELDS),
+        (RETRIEVAL_HISTORY_PATH, RETRIEVAL_FIELDS),
+        (DIALOGUE_HISTORY_PATH, DIALOGUE_FIELDS),
+        (DEEPEVAL_HISTORY_PATH, DEEPEVAL_FIELDS),
+        (RAG_IMPACT_HISTORY_PATH, RAG_IMPACT_FIELDS),
+    ):
+        header = next(csv.reader(path.open()))
+        assert header == [*ENVELOPE_FIELDS, *fields], (
+            f"{path.name} header drifted from its *_FIELDS"
+        )
 
 
 def test_suite_registry_covers_migrated_pair() -> None:
