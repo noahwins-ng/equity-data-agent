@@ -62,3 +62,7 @@ audit-*.png
 .agents
 AGENTS.md
 CLAUDE.md
+
+# Playwright MCP screenshots / traces (never commit)
+.playwright-mcp/
+*-validated.png
