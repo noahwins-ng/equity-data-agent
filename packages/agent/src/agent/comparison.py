@@ -33,7 +33,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 from agent.disclaimer import DISCLAIMER
-from agent.thesis import AspectLabel, AspectView, normalize_aspect_label
+from agent.thesis import AspectLabel, AspectView, normalize_aspect_label, render_aspect_block
 
 # Same source enum as quick_fact.py / focused.py — Pydantic validates the
 # Literal at structured-output parse time, and the LLM is told to cite
@@ -118,17 +118,7 @@ class ComparisonAnswer(BaseModel):
                 ("Technical", section.technical),
                 ("News", section.news),
             ):
-                parts.append(f"### {heading}")
-                if aspect.label:
-                    parts.append(f"**Label:** {aspect.label}")
-                parts.append(aspect.summary.strip() or "_(no summary supplied)_")
-                if aspect.supports:
-                    for point in aspect.supports:
-                        parts.append(f"+ {point.strip()}")
-                if aspect.challenges:
-                    for point in aspect.challenges:
-                        parts.append(f"- {point.strip()}")
-                parts.append("")
+                parts.extend(render_aspect_block(heading, aspect, level=3))
 
         parts.append("## Differences")
         parts.append(self.differences.strip() or "_(no differences supplied)_")

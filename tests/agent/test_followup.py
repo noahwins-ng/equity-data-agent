@@ -179,6 +179,76 @@ def test_followup_reuses_reports_and_skips_gather(
     assert isinstance(second.get("quick_fact"), QuickFactAnswer)
 
 
+def test_old_shape_checkpoint_hydrates_and_followup_works(
+    stub_llm: _StubLLM,  # noqa: ARG001
+    saver: Any,
+) -> None:
+    """QNT-294 (AC3): a checkpoint written in the PRE-refactor state shape --
+    the legacy ``thesis`` / ``reports`` / ``messages`` slots populated, and NO
+    ``answer`` field (the discriminated union did not exist yet) -- hydrates into
+    the new state without error, and a warm-thread followup on that thread still
+    works.
+
+    The concern (QNT-209 / QNT-216 backwards-compat): existing SqliteSaver
+    threads persist the old shape. Adding the ``answer`` channel is additive, so
+    an old checkpoint simply lacks a value for it; the followup path reads the
+    still-hydrated legacy ``thesis`` channel to reason over the prior turn. We
+    seed such a checkpoint directly (never writing ``answer``) and confirm turn 2
+    hydrates it, reuses the reports with zero tool calls, and produces a card.
+    """
+    tools = {
+        "technical": MagicMock(return_value="## technical\nRSI 78\n"),
+        "fundamental": MagicMock(return_value="## fundamental\nP/E 80\n"),
+        "company": MagicMock(return_value="## company\nDescription\n"),
+    }
+    graph = build_graph(tools, checkpointer=saver)
+    config: RunnableConfig = {"configurable": {"thread_id": "legacy:TSLA"}}
+
+    # Seed a PRE-QNT-294 checkpoint: legacy answer slot (``thesis``) + reports +
+    # transcript, but deliberately NO ``answer`` key -- exactly what a thread
+    # persisted before the discriminated-union migration carries.
+    old_shape_state: dict[str, Any] = {
+        "ticker": "TSLA",
+        "analysis_ticker": "TSLA",
+        "question": "is TSLA overvalued?",
+        "intent": "thesis",
+        "reports": {
+            "technical": "## technical\nRSI 78\n",
+            "fundamental": "## fundamental\nP/E 80\n",
+            "company": "## company\nDescription\n",
+        },
+        "thesis": _stub_thesis(),
+        "confidence": 0.9,
+        "messages": [
+            {"role": "user", "content": "is TSLA overvalued?"},
+            {
+                "role": "assistant",
+                "content": "TSLA looks rich.\nStructured payload: thesis verdict=Underweight",
+            },
+        ],
+    }
+    graph.update_state(config, old_shape_state)
+
+    # Sanity: the seeded checkpoint really has no ``answer`` channel.
+    hydrated = graph.get_state(config).values
+    assert "answer" not in hydrated
+    assert isinstance(hydrated.get("thesis"), Thesis)
+
+    for t in tools.values():
+        t.reset_mock()
+
+    # Turn 2: a metric-shaped followup on the OLD-shape thread. It must hydrate
+    # the old checkpoint (no crash), skip gather (reuse hydrated reports), and
+    # produce a QuickFactAnswer reasoned over the hydrated prior thesis.
+    second = graph.invoke({"ticker": "TSLA", "question": "elaborate on the RSI"}, config=config)
+    assert second["intent"] == "followup"
+    assert _tool_calls(tools) == 0
+    # The card is produced (works), and the new-shape ``answer`` union is now
+    # written on the once-legacy thread.
+    assert isinstance(second.get("quick_fact"), QuickFactAnswer)
+    assert isinstance(second.get("answer"), QuickFactAnswer)
+
+
 def test_fresh_thread_with_pronoun_routes_to_clarify(
     stub_llm: _StubLLM,  # noqa: ARG001
     saver: Any,
