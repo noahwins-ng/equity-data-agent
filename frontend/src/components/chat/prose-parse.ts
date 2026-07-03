@@ -140,13 +140,26 @@ function tokenizeLine(line: string, st: DedupeState): ProseSegment[] {
   return segments;
 }
 
+// QNT-303 follow-up: the narrate model is inconsistent about the separator
+// before its "Watch:" close -- a blank line, a single newline, or just a space
+// (confirmed across prod traces). Left to the model it renders glued to the
+// synthesis with no spacing and no styling. Normalise it here to a paragraph
+// break plus a bold label so the close always renders as its own spaced,
+// emphasised block -- a deterministic render-boundary guarantee (cf. the
+// QNT-301 bare-`[Rn]` handling) rather than trusting model formatting. The
+// literal "Watch:" (capital W, as the prompt emits and every sample shows) is
+// matched once so only the close is promoted, never a "watch:" mid-prose.
+function normaliseWatchClose(text: string): string {
+  return text.replace(/\s*\bWatch:/, "\n\n**Watch:**");
+}
+
 export function parseProse(text: string, dedupe?: DedupeState): ProseBlock[] {
   if (!text.trim()) return [];
   // One carrier for the whole document so a repeated source collapses across
   // paragraphs/lines, not just within a single line (the synthesis bubble is
   // one parseProse call spanning every paragraph).
   const st = dedupe ?? { last: null };
-  return text
+  return normaliseWatchClose(text)
     .split(/\n\s*\n/)
     .map((block) =>
       block

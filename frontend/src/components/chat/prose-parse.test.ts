@@ -44,10 +44,36 @@ test("blank line splits the call from the synthesis into two paragraphs", () => 
 });
 
 test("a single newline is a line break within one paragraph", () => {
-  const blocks = parseProse("Driver one.\nWatch: the next print.");
+  const blocks = parseProse("Driver one.\nSecond driver.");
   assert.equal(blocks.length, 1);
   assert.equal(blocks[0].length, 2);
-  assert.equal(blocks[0][1][0].text, "Watch: the next print.");
+  assert.equal(blocks[0][1][0].text, "Second driver.");
+});
+
+// QNT-303 follow-up: the "Watch:" close renders as its own spaced block with a
+// bold label, regardless of the separator the model emitted before it.
+for (const [name, sep] of [
+  ["single newline", "\n"],
+  ["blank line", "\n\n"],
+  ["just a space", " "],
+] as const) {
+  test(`Watch close is promoted to its own bold block (separator: ${name})`, () => {
+    const blocks = parseProse(`The trend is intact.${sep}Watch: the next print.`);
+    assert.equal(blocks.length, 2, "synthesis and Watch must be separate blocks");
+    // First block is the synthesis, second is the Watch close.
+    assert.equal(blocks[0][0][0].text, "The trend is intact.");
+    const watchSeg = blocks[1][0][0];
+    assert.equal(watchSeg.type, "bold");
+    assert.equal(watchSeg.text, "Watch:");
+    // The catalyst text follows the bold label as plain text.
+    assert.equal(blocks[1][0][1].text, " the next print.");
+  });
+}
+
+test("a lowercase 'watch:' mid-prose is not promoted (only the capital-W close)", () => {
+  const blocks = parseProse("Keep a close watch: on margins next quarter.");
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0][0][0].type, "text");
 });
 
 test("the (source:) chip transform still fires inside synthesis prose", () => {
@@ -89,12 +115,18 @@ test("bold and chip coexist across a realistic BLUF take", () => {
     "The trend is intact (source: technical), but the multiple is at a premium (source: fundamental).\n" +
     "Watch: whether growth holds into the next print.";
   const blocks = parseProse(text);
-  assert.equal(blocks.length, 2);
+  // QNT-303 follow-up: three blocks -- the bold call, the synthesis, and the
+  // promoted bold Watch close (previously the Watch line was glued into the
+  // synthesis block as a second <br> line).
+  assert.equal(blocks.length, 3);
   assert.equal(blocks[0][0][0].type, "bold");
-  // second block: synthesis line + Watch line
-  assert.equal(blocks[1].length, 2);
+  // synthesis block: one line, two chips.
+  assert.equal(blocks[1].length, 1);
   const chipCount = blocks[1][0].filter((s) => s.type === "chip").length;
   assert.equal(chipCount, 2);
+  // Watch block: bold label leads.
+  assert.equal(blocks[2][0][0].type, "bold");
+  assert.equal(blocks[2][0][0].text, "Watch:");
 });
 
 // ─── QNT-287: consecutive same-source de-duplication ──────────────────────
