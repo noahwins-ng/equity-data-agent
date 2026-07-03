@@ -1806,10 +1806,17 @@ def test_out_of_range_anchor_stripped_from_thesis_card_over_sse(
 
     r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
     frames = _parse_sse(r.text)
+    events = [name for name, _ in frames]
     thesis_data = next(data for name, data in frames if name == "thesis")
     supports = thesis_data["technical"]["supports"]
     assert supports[0] == "Buyback expanded (source: news)"  # R5 stripped
     assert supports[1] == "Deal closed (source: news R1)"  # R1 kept
+    # The strip must not abort the stream: the retrieved_sources event (emitted
+    # AFTER the card dispatch) must still reach the client so the "Retrieved
+    # sources" card renders. Guards against a strip exception swallowing it.
+    assert "retrieved_sources" in events
+    rs = next(data for name, data in frames if name == "retrieved_sources")
+    assert rs["sources"] == sources
 
 
 def test_retrieved_sources_suppressed_when_gather_skipped(
