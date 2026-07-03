@@ -33,7 +33,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from agent.citations import find_oob_anchor_ids
+from agent.citations import find_bad_anchors
 from agent.comparison import ComparisonAnswer
 from agent.conversational import ConversationalAnswer
 from agent.evals.hallucination import HallucinationResult
@@ -129,31 +129,31 @@ def _missing_planned_tools(state: dict[str, Any], planned: set[str]) -> set[str]
     return planned - set(reports.keys())
 
 
-def compute_anchor_integrity(state: dict[str, Any]) -> list[int]:
-    """Return retrieved-source ids the answer cited that point at no row (QNT-305).
+def compute_anchor_integrity(state: dict[str, Any]) -> list[str]:
+    """Return the retrieved anchors the answer cited that are untrustworthy --
+    out of range (a fake footnote) OR corpus-mismatched (``fundamental R1`` where
+    R1 is a news row), each as it was cited (QNT-305 + corpus follow-up).
 
-    The turn retrieved ``len(retrieved_sources)`` rows, tagged ``R1..R{n}``. Any
-    ``(source: name Rk)`` or bare ``[Rk]`` with ``k > n`` is a fabricated anchor
-    -- a fake footnote. Deterministic (no LLM), so it runs on every prod chat as
-    a regression guard alongside ``hallucination_ok``. Scans both the rendered
-    card answer and the streamed narrate bubble (``state["narrative"]``), since
-    the narrate voice is the shape most prone to inventing ids. An empty list
-    means every cited id is in range (or none was cited).
+    Deterministic (no LLM), so it runs on every prod chat as a regression guard
+    alongside ``hallucination_ok``. Scans both the rendered card answer and the
+    streamed narrate bubble (``state["narrative"]``), since the narrate voice is
+    the shape most prone to mis-anchoring. An empty list means every cited anchor
+    is trustworthy (or none was cited).
 
-    ``max_id`` mirrors the render-boundary gate in ``api.routers.agent_chat``
-    exactly: ``retrieved_sources`` is only in-range when gather actually ran this
-    turn. A pure followup skips gather and reuses checkpointer-hydrated (stale)
-    sources; the render boundary counts those as 0 rows, so the detector must too
-    -- otherwise the stale count would let a fabricated id pass as ``clean`` on
-    exactly the case the guard strips.
+    ``sources`` mirrors the render-boundary gate in ``api.routers.agent_chat``
+    exactly: retrieved rows only count when gather actually ran this turn. A pure
+    followup skips gather and reuses checkpointer-hydrated (stale) sources; the
+    render boundary counts those as zero rows, so the detector must too --
+    otherwise the stale rows would let a bad anchor pass as ``clean`` on exactly
+    the case the guard strips.
     """
     intent_path = state.get("intent_path") or []
-    max_id = len(state.get("retrieved_sources") or []) if "gather" in intent_path else 0
+    sources = state.get("retrieved_sources") or [] if "gather" in intent_path else []
     answer = _render_answer(state)
     narrative = state.get("narrative")
     if isinstance(narrative, str):
         answer = f"{answer}\n{narrative}"
-    return find_oob_anchor_ids(answer, max_id)
+    return find_bad_anchors(answer, sources)
 
 
 def compute_scores(state: dict[str, Any]) -> tuple[HallucinationResult, set[str]]:
@@ -197,16 +197,14 @@ def push_to_trace_id(state: dict[str, Any], trace_id: str | None) -> None:
             data_type="NUMERIC",
             comment=(f"missing: {', '.join(sorted(missing_tools))}" if missing_tools else "clean"),
         )
-        oob_ids = compute_anchor_integrity(state)
+        bad_anchors = compute_anchor_integrity(state)
         langfuse.create_score(
             trace_id=trace_id,
             name="anchor_integrity_ok",
-            value=0.0 if oob_ids else 1.0,
+            value=0.0 if bad_anchors else 1.0,
             data_type="NUMERIC",
             comment=(
-                f"out-of-range retrieved ids: {', '.join(f'R{n}' for n in oob_ids)}"
-                if oob_ids
-                else "clean"
+                f"bad retrieved anchors: {', '.join(bad_anchors)}" if bad_anchors else "clean"
             ),
         )
         grounding_rate = state.get("grounding_rate")

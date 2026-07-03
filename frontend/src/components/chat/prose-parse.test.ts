@@ -254,22 +254,27 @@ test("a bare [Rn] tag is recognised in the narrate BLUF path too (parseProse)", 
   assert.equal(cs[0].text, "");
 });
 
-// ─── QNT-305: de-anchor an out-of-range retrieved id ──────────────────────
+// ─── QNT-305: de-anchor an untrustworthy retrieved id ─────────────────────
 // The synthesis model fabricates ids past the number of rows retrieved (only
-// R1/R2 retrieved, answer cites R5/R11). `maxAnchor` = the retrieved-row count;
-// any id above it points at no `data-source-id` row, so it must not render as a
-// clickable anchor. In-range ids still anchor and scroll as before.
+// R1/R2 retrieved, answer cites R5/R11) OR mis-staples an in-range id onto the
+// wrong corpus (`fundamental R1` where R1 is a news row). Either way the id
+// points at the wrong (or no) `data-source-id` row, so it must not render as a
+// clickable anchor. `sources` is the retrieved-rows list; passing rows without a
+// `corpus` tag exercises the range-only check (QNT-305 original behaviour).
+
+// n untagged rows -> range check only (no corpus to compare against).
+const bare = (n: number) => Array.from({ length: n }, () => ({}));
 
 test("an out-of-range (source: name Rn) drops the id but keeps the source chip", () => {
   // Only 2 rows retrieved; R5 is fabricated -> render as the canned `news` chip.
-  const cs = chips(parseInlineChips("Buyback expanded (source: news R5).", undefined, 2));
+  const cs = chips(parseInlineChips("Buyback expanded (source: news R5).", undefined, bare(2)));
   assert.equal(cs.length, 1);
   assert.equal(cs[0].text, "news");
   assert.equal(cs[0].anchor, undefined, "the fabricated id must not anchor");
 });
 
 test("an in-range anchor still renders as an anchored chip (control)", () => {
-  const cs = chips(parseInlineChips("Buyback expanded (source: news R2).", undefined, 2));
+  const cs = chips(parseInlineChips("Buyback expanded (source: news R2).", undefined, bare(2)));
   assert.equal(cs[0].text, "news");
   assert.equal(cs[0].anchor, "R2");
 });
@@ -278,7 +283,7 @@ test("an out-of-range bare [Rn] tag is dropped entirely, leaving no chip or text
   const segs = parseInlineChips(
     "Rubin platform (finnhub, 2026-06-27) [R11] is material.",
     undefined,
-    2,
+    bare(2),
   );
   assert.deepEqual(chips(segs), [], "the fabricated bare tag is dropped");
   const allText = segs
@@ -290,12 +295,12 @@ test("an out-of-range bare [Rn] tag is dropped entirely, leaving no chip or text
 });
 
 test("with zero retrieved rows every anchor is de-anchored", () => {
-  const cs = chips(parseInlineChips("A claim (source: news R1).", undefined, 0));
+  const cs = chips(parseInlineChips("A claim (source: news R1).", undefined, bare(0)));
   assert.equal(cs[0].anchor, undefined);
   assert.equal(cs[0].text, "news");
 });
 
-test("maxAnchor undefined leaves anchors untouched (existing callers)", () => {
+test("sources undefined leaves anchors untouched (existing callers)", () => {
   const cs = chips(parseInlineChips("A claim (source: news R9)."));
   assert.equal(cs[0].anchor, "R9");
 });
@@ -304,11 +309,56 @@ test("the narrate BLUF path de-anchors an out-of-range tag too (parseProse)", ()
   const blocks = parseProse(
     "**Constructive.**\n\nThe deal (finnhub, 2026-06-30) [R11] expands reach (source: news R5).",
     undefined,
-    2,
+    bare(2),
   );
   const cs = chips(blocks[1][0]);
   // The bare [R11] is dropped; the (source: news R5) keeps its source, loses R5.
   assert.equal(cs.length, 1);
   assert.equal(cs[0].text, "news");
   assert.equal(cs[0].anchor, undefined);
+});
+
+// ─── QNT-305 follow-up: corpus-consistency (in-range but wrong corpus) ─────
+
+test("a corpus-mismatched (source: fundamental R1) on a news row drops the id", () => {
+  // R1 is a NEWS row; `fundamental R1` mis-staples a news id onto a fundamental
+  // claim. In range (1 of 1) so the range check passes -- the corpus check must
+  // catch it: keep the plain `fundamental` chip, drop the R1 anchor.
+  const cs = chips(
+    parseInlineChips("Growth strong (source: fundamental R1).", undefined, [{ corpus: "news" }]),
+  );
+  assert.equal(cs[0].text, "fundamental");
+  assert.equal(cs[0].anchor, undefined, "a wrong-corpus id must not anchor");
+});
+
+test("a corpus-matched (source: news R1) on a news row still anchors", () => {
+  const cs = chips(
+    parseInlineChips("Deal closed (source: news R1).", undefined, [{ corpus: "news" }]),
+  );
+  assert.equal(cs[0].text, "news");
+  assert.equal(cs[0].anchor, "R1");
+});
+
+test("(source: fundamental R1) on an earnings row anchors (news folds elsewhere)", () => {
+  const cs = chips(
+    parseInlineChips("Guidance raised (source: fundamental R1).", undefined, [
+      { corpus: "earnings" },
+    ]),
+  );
+  assert.equal(cs[0].text, "fundamental");
+  assert.equal(cs[0].anchor, "R1");
+});
+
+test("a never-retrieval-backed name (technical Rn) is always de-anchored", () => {
+  const cs = chips(
+    parseInlineChips("RSI firm (source: technical R1).", undefined, [{ corpus: "news" }]),
+  );
+  assert.equal(cs[0].text, "technical");
+  assert.equal(cs[0].anchor, undefined);
+});
+
+test("a bare [Rn] is corpus-agnostic -- kept when in range on any corpus", () => {
+  const segs = parseInlineChips("The deal (finnhub) [R1] matters.", undefined, [{ corpus: "news" }]);
+  const cs = chips(segs);
+  assert.equal(cs[0].anchor, "R1");
 });

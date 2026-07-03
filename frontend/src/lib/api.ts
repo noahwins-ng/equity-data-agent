@@ -485,6 +485,12 @@ export type RetrievedSource = {
   source: string;
   date: string;
   url: string;
+  // QNT-263: the Qdrant corpus this hit came from ("news" | "earnings"). Emitted
+  // as a raw dict field (not part of the OpenAPI schema), so it is declared here
+  // by hand. QNT-305 follow-up: the prose parser reads it to de-anchor a citation
+  // whose source name does not match the id's corpus (e.g. `fundamental R1` on a
+  // news row).
+  corpus?: string;
 };
 
 // QNT-226: emitted once after the graph completes when a targeted news ask

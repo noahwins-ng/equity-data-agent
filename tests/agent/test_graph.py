@@ -2045,11 +2045,12 @@ def test_early_card_emit_strips_out_of_range_anchor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """QNT-305 follow-up: the EARLY card emit (synthesize, before narrate) is
-    stripped with the same gate as the post-graph emit. Only R1 is retrieved but
-    the thesis fabricates R5; the early-emitted card must already carry R5
-    de-anchored (kept as the canned ``(source: news)``) so it never renders as a
-    dangling anchor that the stripped post-graph card then removes -- the card's
-    twin of the narrate flicker."""
+    stripped with the same gate as the post-graph emit -- both for an
+    out-of-range id (R5, only R1 retrieved) AND a corpus-mismatched one
+    (``fundamental R1`` where R1 is a news row). The early-emitted card must
+    already carry both de-anchored (kept as the canned ``(source: …)``) so it
+    never renders a bad anchor that the stripped post-graph card then removes --
+    the card's twin of the narrate flicker."""
     from ._thesis_factory import make_thesis
 
     monkeypatch.setattr(
@@ -2060,11 +2061,16 @@ def test_early_card_emit_strips_out_of_range_anchor(
     llm = _StructuredLLM()
     llm._structured_runnable.invoke = MagicMock(
         return_value=make_thesis(
-            supports=["Buyback expanded (source: news R5)", "Deal closed (source: news R1)"],
+            supports=[
+                "Buyback expanded (source: news R5)",  # out of range (1 row)
+                "Deal closed (source: news R1)",  # in range + right corpus
+                "Growth strong (source: fundamental R1)",  # in range, WRONG corpus (R1 is news)
+            ],
         )
     )
     llm.stream = lambda *_a, **_kw: iter([AIMessage(content="cautious.")])  # type: ignore[attr-defined]
     monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+    # The fold tags each retrieved row corpus="news", so R1 is a news row.
     search = _recording_search_news(
         [{"headline": "H", "source": "Reuters", "date": "2026-06-01", "url": "https://ex.com/a"}]
     )
@@ -2078,8 +2084,9 @@ def test_early_card_emit_strips_out_of_range_anchor(
 
     thesis_ev = next(d for e, d in emitted if e == "thesis")
     supports = thesis_ev["technical"]["supports"]
-    assert supports[0] == "Buyback expanded (source: news)"  # R5 fabricated -> id stripped
-    assert supports[1] == "Deal closed (source: news R1)"  # R1 in range -> kept
+    assert supports[0] == "Buyback expanded (source: news)"  # R5 out of range -> id stripped
+    assert supports[1] == "Deal closed (source: news R1)"  # R1 in range + news corpus -> kept
+    assert supports[2] == "Growth strong (source: fundamental)"  # wrong corpus -> id stripped
 
 
 def test_targeted_news_drops_focused_card_and_surfaces_sources(
