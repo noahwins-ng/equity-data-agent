@@ -24,10 +24,10 @@ History is the source of truth:
 
 from __future__ import annotations
 
-import csv
 import logging
 import time
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -47,8 +47,10 @@ from agent.evals.similarity import cosine
 from agent.evals.spine import (
     HISTORY_FIELDS,
     HISTORY_PATH,
+    append_suite_history,
     git_sha,
     prompt_version,
+    suite_history_path,
     threshold_from_env,
 )
 from agent.evals.tool_calls import check as check_tool_calls
@@ -78,6 +80,29 @@ CONTAMINATION_LATENCY_MS = int(settings.LLM_REQUEST_TIMEOUT * 1000)
 # HISTORY_FIELDS / HISTORY_PATH now live in agent.evals.spine (QNT-293) so the
 # shared history envelope can't drift between the eight suites. Re-exported above
 # and in __all__ for back-compat -- suites still import them from here today.
+
+# QNT-293 follow-up: the golden set writes its own per-suite history file. Its
+# columns are exactly the golden metrics (the envelope -- run_id/git_sha/
+# prompt_version/suite -- is added by append_suite_history). eval_type stays
+# "structured" for every golden row; it is kept as a column so the migrated
+# historical rows carry it and a future golden sub-variant has somewhere to land.
+GOLDEN_HISTORY_PATH = suite_history_path("golden")
+GOLDEN_FIELDS = (
+    "eval_type",
+    "ticker",
+    "question_id",
+    "question",
+    "faithfulness",
+    "structure",
+    "correctness",
+    "analyst_logic",
+    "composite",
+    "cosine",
+    "tool_call_ok",
+    "hallucination_ok",
+    "verdict_label_consistent",
+    "elapsed_ms",
+)
 
 
 @dataclass(frozen=True)
@@ -381,78 +406,48 @@ def append_history(
     outcomes: list[EvalOutcome],
     *,
     run_id: str | None = None,
-    history_path: Path = HISTORY_PATH,
+    history_path: Path = GOLDEN_HISTORY_PATH,
 ) -> str:
-    """Append one row per outcome to ``history.csv``. Returns the run_id used.
+    """Append one row per outcome to ``golden_history.csv``. Returns the run_id.
 
-    Creates the file with a header if absent so the first run also produces
-    a self-describing artefact (one of the AC items: "history.csv committed
-    with at least one row after first run").
-
-    Concurrency: the existence-check + write is not atomic. Two parallel
-    eval processes racing on a fresh file could both write the header. Not
-    a problem for the single-developer dev tool this is today; if extracted
-    as a standalone CI service, wrap with a file lock or pre-create the
-    header out-of-band.
+    QNT-293 follow-up: golden rows now go to the golden suite's own file (columns
+    = :data:`GOLDEN_FIELDS`) via :func:`spine.append_suite_history`, which stamps
+    the shared envelope. Creates the file with a header if absent so the first run
+    also produces a self-describing artefact. ``history_path`` overrides the
+    default file (CI / experimentation / tests).
     """
     rid = run_id or uuid.uuid4().hex[:8]
-    sha = _git_sha()
-    pv = _prompt_version()
-    new_file = not history_path.exists()
-    history_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with history_path.open("a", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=HISTORY_FIELDS)
-        if new_file:
-            writer.writeheader()
+    def _rows() -> Iterator[dict[str, Any]]:
         for outcome in outcomes:
             js = outcome.judge_score
-            writer.writerow(
-                {
-                    "run_id": rid,
-                    "git_sha": sha,
-                    "prompt_version": pv,
-                    "ticker": outcome.record.ticker,
-                    "question_id": outcome.record.id,
-                    "question": outcome.record.question,
-                    "faithfulness": "" if js is None else js.faithfulness,
-                    "structure": "" if js is None else js.structure,
-                    "correctness": "" if js is None else js.correctness,
-                    "analyst_logic": "" if js is None else js.analyst_logic,
-                    "composite": "" if js is None else js.composite,
-                    "cosine": outcome.cosine,
-                    "tool_call_ok": "1" if outcome.tool_call_ok else "0",
-                    "hallucination_ok": "1" if outcome.hallucination_ok else "0",
-                    "verdict_label_consistent": (
-                        ""
-                        if outcome.verdict_label_consistent is None
-                        else ("1" if outcome.verdict_label_consistent else "0")
-                    ),
-                    "elapsed_ms": outcome.elapsed_ms,
-                    "eval_type": "structured",
-                    "dialogue_fixture_id": "",
-                    "dialogue_turns": "",
-                    "analyst_likeness": "",
-                    "analyst_likeness_rationale": "",
-                    "helpfulness": "",
-                    "helpfulness_rationale": "",
-                    "non_hallucination": "",
-                    "non_hallucination_rationale": "",
-                    "exploration_quality": "",
-                    "exploration_quality_rationale": "",
-                    "voice_match": "",
-                    "voice_match_rationale": "",
-                    "dialogue_composite": "",
-                    "judge_model": "",
-                    "agent_model": "",
-                }
-            )
-    return rid
+            yield {
+                "eval_type": "structured",
+                "ticker": outcome.record.ticker,
+                "question_id": outcome.record.id,
+                "question": outcome.record.question,
+                "faithfulness": "" if js is None else js.faithfulness,
+                "structure": "" if js is None else js.structure,
+                "correctness": "" if js is None else js.correctness,
+                "analyst_logic": "" if js is None else js.analyst_logic,
+                "composite": "" if js is None else js.composite,
+                "cosine": outcome.cosine,
+                "tool_call_ok": "1" if outcome.tool_call_ok else "0",
+                "hallucination_ok": "1" if outcome.hallucination_ok else "0",
+                "verdict_label_consistent": (
+                    ""
+                    if outcome.verdict_label_consistent is None
+                    else ("1" if outcome.verdict_label_consistent else "0")
+                ),
+                "elapsed_ms": outcome.elapsed_ms,
+            }
+
+    return append_suite_history("golden", GOLDEN_FIELDS, _rows(), run_id=rid, path=history_path)
 
 
 def run_all(
     *,
-    history_path: Path = HISTORY_PATH,
+    history_path: Path = GOLDEN_HISTORY_PATH,
     only: str | None = None,
     llm_for_judge: Any | None = None,
     run_id_suffix: str | None = None,
@@ -663,6 +658,8 @@ __all__ = [
     "EvalOutcome",
     "GoldenRecord",
     "GOLDENS_PATH",
+    "GOLDEN_FIELDS",
+    "GOLDEN_HISTORY_PATH",
     "HISTORY_FIELDS",
     "HISTORY_PATH",
     "append_history",

@@ -1,7 +1,8 @@
-"""Per-bench-alias aggregation from history.csv (QNT-129, QNT-138).
+"""Per-bench-alias aggregation from golden_history.csv (QNT-129, QNT-138).
 
-Reads ``packages/agent/src/agent/evals/history.csv``, filters to bench
-sweeps (run_id contains ``-bench-``), and emits one row per bench alias
+Reads ``packages/agent/src/agent/evals/golden_history.csv`` (bench sweeps are
+golden-set runs; QNT-293 follow-up split them out of the shared history.csv),
+filters to bench sweeps (run_id contains ``-bench-``), and emits one row per bench alias
 with hallucination_ok, tool_call_ok, avg judge / cosine, p50 elapsed_ms,
 ready to paste into ``docs/model-bench-2026-04.md``.
 
@@ -25,7 +26,7 @@ from collections import defaultdict
 from pathlib import Path
 from statistics import median
 
-HISTORY = Path("packages/agent/src/agent/evals/history.csv")
+HISTORY = Path("packages/agent/src/agent/evals/golden_history.csv")
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -68,15 +68,74 @@ along the way.
 
 from __future__ import annotations
 
+import csv
 import logging
 import os
 import subprocess
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-HISTORY_PATH = Path(__file__).parent / "history.csv"
+EVALS_DIR = Path(__file__).parent
+HISTORY_PATH = EVALS_DIR / "history.csv"
+
+# The shared row envelope written on every per-suite history file (QNT-293
+# follow-up). ``suite`` names the harness (== the file stem); each suite adds its
+# own metric columns after these. Written by append_suite_history from the shared
+# git_sha() / prompt_version() so run identity is byte-identical across files.
+ENVELOPE_FIELDS = ("run_id", "git_sha", "prompt_version", "suite")
+
+
+def suite_history_path(suite: str, history_dir: Path | None = None) -> Path:
+    """Path to a suite's own ``{suite}_history.csv`` (QNT-293 follow-up)."""
+    return (history_dir or EVALS_DIR) / f"{suite}_history.csv"
+
+
+def append_suite_history(
+    suite: str,
+    metric_fields: Sequence[str],
+    rows: Iterable[Mapping[str, object]],
+    *,
+    run_id: str,
+    path: Path | None = None,
+) -> str:
+    """Append rows to ``{suite}_history.csv``; returns the ``run_id`` used.
+
+    The file's header is :data:`ENVELOPE_FIELDS` + ``metric_fields`` (the suite's
+    own columns). Each item in ``rows`` is a mapping of that suite's columns; the
+    envelope (``run_id`` / ``git_sha`` / ``prompt_version`` / ``suite``) is stamped
+    here from the shared helpers so every suite's identity columns match. Creates
+    the file with a header when absent. Callers generate their own ``run_id`` (the
+    per-suite id formats predate this) and pass it in. ``path`` overrides the
+    default ``{suite}_history.csv`` (CI / experimentation / tests).
+
+    Concurrency: the exists-check + write is not atomic (same single-developer
+    caveat as the legacy shared writer); wrap with a lock if this ever runs
+    concurrently.
+    """
+    target = path or suite_history_path(suite)
+    fields = (*ENVELOPE_FIELDS, *metric_fields)
+    sha = git_sha()
+    pv = prompt_version()
+    new_file = not target.exists()
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    with target.open("a", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fields)
+        if new_file:
+            writer.writeheader()
+        for metrics in rows:
+            row: dict[str, object] = {field: "" for field in fields}
+            row["run_id"] = run_id
+            row["git_sha"] = sha
+            row["prompt_version"] = pv
+            row["suite"] = suite
+            row.update(metrics)
+            writer.writerow(row)
+    return run_id
+
 
 HISTORY_FIELDS = (
     "run_id",
@@ -235,10 +294,14 @@ class SuiteResult:
 
 
 __all__ = [
+    "ENVELOPE_FIELDS",
+    "EVALS_DIR",
     "HISTORY_FIELDS",
     "HISTORY_PATH",
     "SuiteResult",
+    "append_suite_history",
     "git_sha",
     "prompt_version",
+    "suite_history_path",
     "threshold_from_env",
 ]

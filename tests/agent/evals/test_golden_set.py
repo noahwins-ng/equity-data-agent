@@ -19,6 +19,7 @@ import pytest
 from agent.evals import golden_set
 from agent.evals.golden_set import (
     CONTAMINATION_LATENCY_MS,
+    GOLDEN_FIELDS,
     HISTORY_FIELDS,
     EvalOutcome,
     GoldenRecord,
@@ -30,6 +31,7 @@ from agent.evals.golden_set import (
     summarise,
 )
 from agent.evals.judge import JudgeScore
+from agent.evals.spine import ENVELOPE_FIELDS
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 
@@ -371,7 +373,9 @@ class TestAppendHistory:
 
         rows = list(csv.DictReader(history.open()))
         assert len(rows) == 1
-        assert set(rows[0].keys()) == set(HISTORY_FIELDS)
+        # QNT-293 follow-up: golden writes its own file -- envelope + golden cols.
+        assert set(rows[0].keys()) == set(ENVELOPE_FIELDS) | set(GOLDEN_FIELDS)
+        assert rows[0]["suite"] == "golden"
         assert rows[0]["ticker"] == "NVDA"
         assert rows[0]["composite"] == "7"
         assert rows[0]["faithfulness"] == "7"
