@@ -545,8 +545,9 @@ def _is_targeted_news(question: str) -> bool:
 # signal -- broad phrasings like a bare "earnings" (which usually wants the
 # number) are intentionally absent so the firing stays narrative-shaped.
 # False-positive blast radius is contained by the intent gate (the gather node
-# only fires earnings search on _EARNINGS_SEARCH_INTENTS), the same way
-# _is_targeted_news is gated to _NEWS_SEARCH_INTENTS.
+# only fires earnings search for intents whose synthesis reads the earnings
+# corpus -- _intent_reads_corpus over the QNT-288 policy table), the same way
+# _is_targeted_news is gated to the news-reading intents.
 _EARNINGS_SEARCH_TOKENS: tuple[str, ...] = (
     "guidance",
     "guided",

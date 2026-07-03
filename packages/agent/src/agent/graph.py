@@ -423,23 +423,29 @@ _FOCUSED_REPORT: dict[Intent, str] = {
     if policy.focused_report is not None
 }
 
-# QNT-222 follow-up: intents whose synthesis consumes the news report, so a
-# semantic-news-search hit (folded into ``reports["news"]``) actually reaches
-# the prompt. The classifier's ``needs_news_search`` flag is intent-independent,
-# but fundamental/technical focused reads are forbidden from citing news
-# (FOCUSED_SYSTEM_PROMPT rule 3), so firing search there would be a wasted
-# Qdrant call. Gate the RAG fetch to the intents that can use it.
-_NEWS_SEARCH_INTENTS: frozenset[Intent] = frozenset(
-    intent for intent, policy in INTENT_POLICIES.items() if "news" in policy.rag_corpora
-)
 
-# QNT-263: intents whose synthesis consumes the fundamental report, so an
-# earnings-release hit (folded into ``reports["fundamental"]``) actually
-# reaches the prompt. The earnings narrative is management framing + guidance
-# -- a fundamental-flavoured read -- so it belongs with the fundamental slot.
-_EARNINGS_SEARCH_INTENTS: frozenset[Intent] = frozenset(
-    intent for intent, policy in INTENT_POLICIES.items() if "earnings" in policy.rag_corpora
-)
+# QNT-291: intents whose synthesis consumes a given RAG corpus gate that
+# corpus's retrieval fetch -- a semantic-search hit only reaches the prompt
+# for an intent whose synthesis actually reads the report it folds into
+# (news -> reports["news"], earnings -> reports["fundamental"]). A
+# fundamental/technical focused read is forbidden from citing news
+# (FOCUSED_SYSTEM_PROMPT rule 3), so firing news search there would be a
+# wasted Qdrant call. This replaces the former per-corpus _NEWS_SEARCH_INTENTS
+# / _EARNINGS_SEARCH_INTENTS frozensets: one predicate over the QNT-288 policy
+# table, so adding a corpus needs no new hand-derived intent set.
+def _intent_reads_corpus(intent: Intent, corpus: str) -> bool:
+    """QNT-291: True when ``intent``'s synthesis consumes ``corpus`` hits.
+
+    The single gating predicate for every retrieval tool in the registry --
+    reads the QNT-288 policy table directly (``INTENT_POLICIES[intent].
+    rag_corpora``) rather than a per-corpus frozenset, so a new corpus gates
+    off one ``RetrievalSpec.corpus`` plus the policy entries that list it, with
+    no new ``_X_SEARCH_INTENTS`` set to hand-maintain. ``.get`` so an unknown
+    intent is a clean no-fire rather than a KeyError.
+    """
+    policy = INTENT_POLICIES.get(intent)
+    return policy is not None and corpus in policy.rag_corpora
+
 
 _MAX_TOOL_ATTEMPTS = 2  # first try + one retry
 # QNT-300 (B-6): each report endpoint is a serial HTTP round trip measured at
@@ -605,8 +611,9 @@ class AgentState(TypedDict):
     # from the classify LLM's semantic ``needs_earnings_search`` flag (mirrors
     # needs_news_search; _is_earnings_search keyword decider is the recall
     # floor). When set
-    # and the intent reads the fundamental report (_EARNINGS_SEARCH_INTENTS),
-    # gather fires search_earnings over the equity_earnings corpus and folds the
+    # and the intent reads the fundamental report (_intent_reads_corpus,
+    # earnings), gather fires search_earnings over the equity_earnings corpus
+    # and folds the
     # hits into reports["fundamental"], tagging each retrieved source corpus=
     # "earnings" so provenance distinguishes the corpus a hit came from.
     needs_earnings_search: NotRequired[bool]
@@ -1352,6 +1359,88 @@ def _fold_earnings_hits(
     return updated, _parse_earnings_sources(raw, start_id)
 
 
+# QNT-291: fold signature every retrieval tool shares -- (reports, raw JSON,
+# start_id) -> (reports with the hit block folded in, provenance rows). Both
+# ``_fold_news_hits`` and ``_fold_earnings_hits`` already match it.
+RetrievalFold = Callable[[dict[str, str], str, int], tuple[dict[str, str], list[dict[str, str]]]]
+
+
+@dataclass(frozen=True)
+class RetrievalSpec:
+    """Declarative contract for a semantic-retrieval fold tool (QNT-291).
+
+    Ends the per-tool side channel that ``search_news`` (QNT-222) and
+    ``search_earnings`` (QNT-263) each had to grow: a typed alias, a
+    ``build_graph`` kwarg, a ``needs_*_search`` state flag, a hardcoded
+    gather branch (in BOTH the cold and followup paths), and an SSE
+    instrumentation seam. ``gather_node`` now iterates ``RETRIEVAL_SPECS``
+    instead of hand-writing one branch per corpus, so a third retrieval
+    corpus (filings, transcripts, ...) is one ``RETRIEVAL_SPECS`` entry plus
+    wiring its callable into ``build_graph`` -- no new gather branch, no new
+    kwarg, no new instrument call.
+
+    Fields:
+
+    * ``name`` -- stable id, also the SSE ``tool_name`` (panel label +
+      trace) the instrumentation wrapper stamps.
+    * ``flag`` -- the ``AgentState`` key the classifier sets to request this
+      corpus (``needs_news_search`` / ``needs_earnings_search``). The gate
+      fires only when it is truthy.
+    * ``corpus`` -- the ``rag_corpora`` member gated via
+      :func:`_intent_reads_corpus` against the QNT-288 policy table, so only
+      intents whose synthesis reads this corpus fire the search.
+    * ``fold`` -- how a raw JSON payload merges into ``reports`` and yields
+      provenance rows (:data:`RetrievalFold`).
+    * ``hit_noun`` -- unit word for the SSE result summary ("headlines" /
+      "excerpts") so each corpus reads distinctly in the trace.
+
+    Registry ORDER is fold order: ``RETRIEVAL_SPECS`` lists news before
+    earnings so the ``[Rn]`` provenance ids stay news-first, R1..Rn gap-free
+    (QNT-301), exactly as the old hardcoded sequence produced them.
+    """
+
+    name: str
+    flag: str
+    corpus: str
+    fold: RetrievalFold
+    hit_noun: str
+
+    def fires(self, tool: SearchToolFn | None, state: AgentState) -> bool:
+        """True when this corpus should be searched on the current turn.
+
+        Reproduces the old per-corpus gate byte-for-byte:
+        ``state[flag] and intent in _<CORPUS>_SEARCH_INTENTS and tool is not
+        None`` -- with ``intent in _<CORPUS>_SEARCH_INTENTS`` expressed as
+        :func:`_intent_reads_corpus`. Works for the followup path too:
+        ``intent`` is ``"followup"`` there and followup's policy lists both
+        corpora, matching the old hardcoded ``"followup" in
+        _<CORPUS>_SEARCH_INTENTS`` check.
+        """
+        intent = state.get("intent", "thesis")
+        return bool(
+            tool is not None and state.get(self.flag) and _intent_reads_corpus(intent, self.corpus)
+        )
+
+
+NEWS_RETRIEVAL = RetrievalSpec(
+    name="news_search",
+    flag="needs_news_search",
+    corpus="news",
+    fold=_fold_news_hits,
+    hit_noun="headlines",
+)
+EARNINGS_RETRIEVAL = RetrievalSpec(
+    name="earnings_search",
+    flag="needs_earnings_search",
+    corpus="earnings",
+    fold=_fold_earnings_hits,
+    hit_noun="excerpts",
+)
+# QNT-291: the retrieval registry. News before earnings preserves the
+# provenance-id order (QNT-301). Extend this tuple to add a corpus.
+RETRIEVAL_SPECS: tuple[RetrievalSpec, ...] = (NEWS_RETRIEVAL, EARNINGS_RETRIEVAL)
+
+
 def _coerce_thesis(response: object) -> Thesis | None:
     """Normalise whatever ``llm.invoke`` hands back into a ``Thesis``.
 
@@ -1835,9 +1924,15 @@ def build_graph(
     event_emitter: EventEmitter | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
     compact_company_tool: ToolFn | None = None,
+    retrieval_tools: dict[str, SearchToolFn] | None = None,
+    comparison_metrics_tool: ComparisonMetricsToolFn | None = None,
+    # QNT-291 deprecated shims: ``search_news_tool`` / ``search_earnings_tool``
+    # fold into ``retrieval_tools`` keyed by RetrievalSpec.name below. Kept so
+    # existing callers/tests that inject the two corpora by name keep passing
+    # mock callables unchanged. A NEW corpus goes through ``retrieval_tools``,
+    # not a new kwarg.
     search_news_tool: SearchToolFn | None = None,
     search_earnings_tool: SearchToolFn | None = None,
-    comparison_metrics_tool: ComparisonMetricsToolFn | None = None,
 ) -> CompiledStateGraph:
     """Compile the classify -> plan -> gather -> synthesize graph (QNT-149, QNT-159).
 
@@ -1861,33 +1956,43 @@ def build_graph(
     ``tools['company']`` is used everywhere (existing CLI / eval / test
     behavior). Focused fundamental/company asks always keep the full report.
 
-    QNT-222: ``search_news_tool`` is an optional ``(ticker, query) -> str``
-    callable (semantic vector search over the Qdrant equity_news collection).
-    It travels outside the ``tools`` map because its two-arg signature does not
-    fit the single-arg plan-surface dispatch (``_call_with_retry`` /
-    ``_instrument_tools``) and ``default_report_tools`` keeps it off the plan
-    surface by design. When the classifier sets ``needs_news_search`` (a
-    targeted-event ask -- litigation, CEO, buyback, lawsuit, recall,
-    partnership, ... -- judged semantically, independent of intent), gather
-    calls it with the user's question as the query and folds the retrieved
-    headlines into ``reports["news"]`` for the synthesis to cite. Scoped to
-    ``_NEWS_SEARCH_INTENTS`` (news / quick_fact / thesis). Generic news asks
-    leave the flag False and keep the canned digest. None ⇒ canned-digest-only
-    (CLI / eval / tests).
-
-    QNT-263: ``search_earnings_tool`` is the sibling ``(ticker, query) -> str``
-    callable for the second RAG corpus (semantic search over the Qdrant
-    equity_earnings collection). Fired by gather only on an earnings-narrative
-    ask (``needs_earnings_search`` + ``_EARNINGS_SEARCH_INTENTS``); the retrieved
-    release excerpts fold into ``reports["fundamental"]`` and their provenance is
-    tagged ``corpus="earnings"``. None ⇒ news-corpus-only (CLI / eval / tests).
+    QNT-291: retrieval tools (semantic vector search over a Qdrant corpus) are
+    injected via ``retrieval_tools`` -- a ``{RetrievalSpec.name: (ticker, query)
+    -> str}`` mapping -- and dispatched by ``gather_node`` iterating
+    ``RETRIEVAL_SPECS`` rather than a hand-written branch per corpus. Each
+    travels outside the ``tools`` map because its two-arg signature does not fit
+    the single-arg plan-surface dispatch (``_call_with_retry`` /
+    ``_instrument_tools``). ``search_news_tool`` (QNT-222, equity_news, folds
+    retrieved headlines into ``reports["news"]``) and ``search_earnings_tool``
+    (QNT-263, equity_earnings, folds release excerpts into
+    ``reports["fundamental"]`` tagged ``corpus="earnings"``) are DEPRECATED
+    kwargs kept as shims -- each populates ``retrieval_tools`` under its spec
+    name if that key is not already set. A corpus fires when the classifier sets
+    its ``needs_*_search`` flag AND the intent's synthesis reads that corpus
+    (``RetrievalSpec.fires`` / :func:`_intent_reads_corpus`, the QNT-288 policy
+    table). Unset corpora leave the flag False and keep the canned digest. Empty
+    ``retrieval_tools`` ⇒ canned-digest-only (CLI / eval / tests).
 
     QNT-224: ``comparison_metrics_tool`` is an optional ``(list[str]) -> str``
-    callable hitting the lean comparison-metrics endpoint. Fired only on a 3-4
-    ticker comparison; the rich two-ticker path never touches it. None ⇒ a 3-4
-    way compare degrades to a conversational redirect (CLI / eval / non-wired
-    tests); the rich two-ticker path is unaffected.
+    callable hitting the lean comparison-metrics endpoint. It is NOT a retrieval
+    registry entry: it fires only on the 3-4-ticker comparison topology (not a
+    per-turn gated fold), takes the whole ticker list, and stashes its JSON into
+    ``reports["comparison_metrics"]`` rather than folding provenance. The rich
+    two-ticker path never touches it. None ⇒ a 3-4 way compare degrades to a
+    conversational redirect (CLI / eval / non-wired tests); the rich two-ticker
+    path is unaffected.
     """
+    # QNT-291: bind the retrieval registry. Deprecated per-corpus kwargs fold
+    # into the name-keyed mapping (setdefault so an explicit ``retrieval_tools``
+    # entry wins); each spec is paired with its injected callable (or None).
+    retrieval_tools = dict(retrieval_tools or {})
+    if search_news_tool is not None:
+        retrieval_tools.setdefault(NEWS_RETRIEVAL.name, search_news_tool)
+    if search_earnings_tool is not None:
+        retrieval_tools.setdefault(EARNINGS_RETRIEVAL.name, search_earnings_tool)
+    active_retrievals: tuple[tuple[RetrievalSpec, SearchToolFn | None], ...] = tuple(
+        (spec, retrieval_tools.get(spec.name)) for spec in RETRIEVAL_SPECS
+    )
 
     def _effective_tools(intent: Intent) -> dict[str, ToolFn]:
         """Swap the compact company tool into the ``company`` slot for the
@@ -1901,38 +2006,58 @@ def build_graph(
             return {**tools, "company": compact_company_tool}
         return tools
 
-    def _followup_fires_news_search(state: AgentState) -> bool:
-        """QNT-290: True when a followup turn should fire ``search_news``.
+    def _run_retrievals(
+        state: AgentState, reports: dict[str, str]
+    ) -> tuple[dict[str, str], list[dict[str, str]]]:
+        """QNT-291: drive every gated retrieval corpus and fold the hits.
 
-        Actually CALLED by both ``_classify_router`` (via
-        ``_followup_fires_search`` below, to decide whether to route the
-        turn through plan/gather at all) and ``gather_node`` (to decide
-        whether to fire this specific corpus) so the two can never drift
-        apart -- a prior version duplicated this condition inline in
-        ``gather_node``, which is exactly the kind of copy that silently goes
-        stale when one copy is edited and the other isn't.
+        The single dispatch loop that replaces the four hand-written RAG
+        branches (news + earnings, in both the cold and followup gather
+        paths). For each ``RetrievalSpec`` whose gate fires
+        (``spec.fires``), calls the injected tool with the same
+        ``search_query`` -> raw-question fallback the branches used (QNT-289),
+        folds the result via ``spec.fold``, and appends its provenance rows.
+        The ``[Rn]`` ids continue past hits already folded (``len(...) + 1``)
+        so the combined list stays R1..Rn gap-free in registry order (QNT-301,
+        news before earnings). A tool exception is swallowed to ``"[]"`` --
+        search is additive and must never crash gather. Returns the folded
+        ``reports`` (a copy is the caller's responsibility) and the ordered
+        provenance rows.
         """
-        return bool(
-            state.get("needs_news_search")
-            and "followup" in _NEWS_SEARCH_INTENTS
-            and search_news_tool is not None
-        )
-
-    def _followup_fires_earnings_search(state: AgentState) -> bool:
-        """QNT-290: sibling of :func:`_followup_fires_news_search` for the
-        equity_earnings corpus."""
-        return bool(
-            state.get("needs_earnings_search")
-            and "followup" in _EARNINGS_SEARCH_INTENTS
-            and search_earnings_tool is not None
-        )
+        ticker = state["ticker"]
+        # QNT-289: the classifier's self-contained rewrite is the query when it
+        # survived sanitize_search_query; "" falls back to the raw (possibly
+        # elliptical) question -- today's behaviour, so recall can only gain.
+        query = state.get("search_query") or state.get("question", "")
+        retrieved_sources: list[dict[str, str]] = []
+        for spec, tool in active_retrievals:
+            if not spec.fires(tool, state):
+                continue
+            assert tool is not None  # spec.fires guarantees this
+            try:
+                raw = tool(ticker, query)
+            except Exception as exc:  # noqa: BLE001 — search is additive; never crash gather
+                logger.warning("gather %s: %s failed: %s (continuing)", ticker, spec.name, exc)
+                raw = "[]"
+            reports, sources = spec.fold(reports, raw, len(retrieved_sources) + 1)
+            if sources:
+                retrieved_sources += sources
+                logger.info(
+                    "gather %s: folded %d %s hits into %s report",
+                    ticker,
+                    len(sources),
+                    spec.corpus,
+                    spec.corpus if spec.corpus == "news" else "fundamental",
+                )
+        return reports, retrieved_sources
 
     def _followup_fires_search(state: AgentState) -> bool:
-        """QNT-290: True when a followup turn should visit plan/gather for RAG
-        at all (either corpus). Used by ``_classify_router``'s routing
-        decision; ``gather_node`` calls the two corpus-specific predicates
-        above directly to pick which search(es) to actually fire."""
-        return _followup_fires_news_search(state) or _followup_fires_earnings_search(state)
+        """QNT-290/291: True when a followup turn should visit plan/gather for
+        RAG at all (any corpus). Used by ``_classify_router``'s routing
+        decision; ``gather_node`` calls ``_run_retrievals`` which re-checks
+        each spec's gate, so the router and the loop can never drift apart --
+        both read ``RetrievalSpec.fires`` over the same ``active_retrievals``."""
+        return any(spec.fires(tool, state) for spec, tool in active_retrievals)
 
     def classify_node(state: AgentState, config: RunnableConfig) -> dict[str, object]:
         # QNT-181: nodes accept ``config`` so the LangGraph CallbackHandler
@@ -2227,53 +2352,14 @@ def build_graph(
         # already said yes (``_classify_router``), so the two predicate
         # calls below are just picking which corpus/corpora to actually call.
         if intent == "followup":
-            question = state.get("question", "")
-            # QNT-289: the classifier's self-contained rewrite is the query
-            # when it survived sanitize_search_query; "" falls back to the
-            # raw (possibly elliptical) question.
-            retrieval_query = state.get("search_query") or question
+            # QNT-209/290/291: followup keeps the hydrated reports verbatim
+            # and re-runs no report PLAN (plan_node returns an empty plan);
+            # the only fresh I/O is the gated retrieval fold(s). This branch
+            # is only reached when ``_followup_fires_search`` already said yes
+            # (``_classify_router``), and ``_run_retrievals`` re-checks each
+            # spec's gate to pick which corpus/corpora to actually fold.
             reports = dict(state.get("reports") or {})
-            retrieved_sources: list[dict[str, str]] = []
-
-            if _followup_fires_news_search(state) and search_news_tool is not None:
-                try:
-                    raw = search_news_tool(ticker, retrieval_query)
-                except Exception as exc:  # noqa: BLE001 — search is additive; never crash gather
-                    logger.warning(
-                        "gather %s: followup search_news failed: %s (continuing)", ticker, exc
-                    )
-                    raw = "[]"
-                reports, news_sources = _fold_news_hits(reports, raw)
-                if news_sources:
-                    retrieved_sources += news_sources
-                    logger.info(
-                        "gather %s: folded %d targeted-news hits into followup news report",
-                        ticker,
-                        len(news_sources),
-                    )
-
-            if _followup_fires_earnings_search(state) and search_earnings_tool is not None:
-                try:
-                    raw = search_earnings_tool(ticker, retrieval_query)
-                except Exception as exc:  # noqa: BLE001 — search is additive; never crash gather
-                    logger.warning(
-                        "gather %s: followup search_earnings failed: %s (continuing)", ticker, exc
-                    )
-                    raw = "[]"
-                # QNT-301: offset the earnings ids past the news hits already in
-                # retrieved_sources so the combined list stays R1..Rn gap-free.
-                reports, earnings_sources = _fold_earnings_hits(
-                    reports, raw, len(retrieved_sources) + 1
-                )
-                if earnings_sources:
-                    retrieved_sources += earnings_sources
-                    logger.info(
-                        "gather %s: folded %d earnings-release hits into followup "
-                        "fundamental report",
-                        ticker,
-                        len(earnings_sources),
-                    )
-
+            reports, retrieved_sources = _run_retrievals(state, reports)
             logger.info(
                 "gather %s: followup RAG fired, reports=%s retrieved=%d",
                 ticker,
@@ -2355,79 +2441,20 @@ def build_graph(
         # QNT-220 (#8): thesis gets the compact company variant when supplied.
         reports, errors = _gather_reports(ticker, plan, _effective_tools(intent))
 
-        # QNT-222: targeted news asks (litigation, CEO, buyback, lawsuit,
-        # recall, partnership, ...) additionally pull semantically-relevant
-        # headlines via search_news and fold them into the news report so the
-        # synthesis can cite them. The trigger is the classifier's
-        # intent-independent ``needs_news_search`` flag (QNT-222 follow-up) --
-        # so "what did the CEO say about the buyback?" fires it even as a
-        # quick_fact, not just on a literal news intent. Scoped to the intents
-        # whose synthesis actually reads the news report (_NEWS_SEARCH_INTENTS);
-        # generic "news on AAPL" leaves the flag False and keeps the canned
-        # digest. search_news never raises (it degrades to "[]"), but we guard
-        # defensively so a wrapper bug can't crash gather.
-        question = state.get("question", "")
-        # QNT-289: the classifier's self-contained rewrite (ticker/entity +
-        # topic, pronouns/ellipses resolved from history) is the query when it
-        # survived sanitize_search_query; "" falls back to the raw question --
-        # today's behaviour, so a warm-thread ellipsis can only gain recall,
-        # never lose it.
-        retrieval_query = state.get("search_query") or question
-        retrieved_sources: list[dict[str, str]] = []
-        if (
-            state.get("needs_news_search")
-            and intent in _NEWS_SEARCH_INTENTS
-            and search_news_tool is not None
-        ):
-            try:
-                raw = search_news_tool(ticker, retrieval_query)
-            except Exception as exc:  # noqa: BLE001 — search is additive; never crash gather
-                logger.warning("gather %s: search_news failed: %s (continuing)", ticker, exc)
-                raw = "[]"
-            # QNT-276: retrieved hits LEAD, canned digest follows -- the block
-            # that specifically matched the question must sit ahead of the
-            # generic digest, not below it where the synthesis prompt's
-            # "omission is fine" license used to demote it.
-            reports, retrieved_sources = _fold_news_hits(reports, raw)
-            if retrieved_sources:
-                logger.info(
-                    "gather %s: folded %d targeted-news hits into news report",
-                    ticker,
-                    len(retrieved_sources),
-                )
-
-        # QNT-263: multi-corpus routing. An earnings-narrative ask (guidance,
-        # management framing, outlook) additionally searches the equity_earnings
-        # corpus and folds the release excerpts into reports["fundamental"] (the
-        # earnings narrative is a fundamental-flavoured read). Gated, like news,
-        # on the deterministic flag AND the intents whose synthesis reads the
-        # fundamental report (_EARNINGS_SEARCH_INTENTS). Each hit's provenance is
-        # tagged corpus="earnings" and appended to the same retrieved_sources
-        # list, so the frontend distinguishes which corpus a citation came from.
-        if (
-            state.get("needs_earnings_search")
-            and intent in _EARNINGS_SEARCH_INTENTS
-            and search_earnings_tool is not None
-        ):
-            try:
-                raw = search_earnings_tool(ticker, retrieval_query)
-            except Exception as exc:  # noqa: BLE001 — search is additive; never crash gather
-                logger.warning("gather %s: search_earnings failed: %s (continuing)", ticker, exc)
-                raw = "[]"
-            # QNT-276: retrieved earnings excerpts LEAD, canned fundamental
-            # digest follows -- same foregrounding as the news fold above.
-            # QNT-301: earnings ids continue past the news hits (retrieved_sources
-            # holds only news at this point) so the combined list is R1..Rn.
-            reports, earnings_sources = _fold_earnings_hits(
-                reports, raw, len(retrieved_sources) + 1
-            )
-            if earnings_sources:
-                retrieved_sources = retrieved_sources + earnings_sources
-                logger.info(
-                    "gather %s: folded %d earnings-release hits into fundamental report",
-                    ticker,
-                    len(earnings_sources),
-                )
+        # QNT-291: targeted retrieval. A classifier-flagged ask
+        # (``needs_news_search`` for a targeted-event news ask -- litigation,
+        # CEO, buyback, recall, ...; ``needs_earnings_search`` for an
+        # earnings-narrative ask -- guidance, outlook, management framing)
+        # additionally searches the matching Qdrant corpus and folds the hits
+        # into the report its synthesis reads (news -> reports["news"],
+        # earnings -> reports["fundamental"]). Retrieved hits LEAD the canned
+        # digest (QNT-276), each carrying corpus-tagged provenance so the
+        # frontend distinguishes which corpus a citation came from. The whole
+        # dispatch is one loop over RETRIEVAL_SPECS (``_run_retrievals``); each
+        # spec's gate scopes the fire to the flag AND the intents whose
+        # synthesis reads that corpus (QNT-288 policy table). A generic "news
+        # on AAPL" leaves the flag False and keeps the canned digest.
+        reports, retrieved_sources = _run_retrievals(state, reports)
 
         logger.info(
             "gather %s: gathered=%s errors=%s",

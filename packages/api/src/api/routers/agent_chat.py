@@ -149,7 +149,12 @@ from agent.conversational import ConversationalAnswer, domain_redirect
 from agent.eval_scores import push_to_trace_id as push_eval_scores
 from agent.exploration import ExplorationAnswer
 from agent.focused import FocusedAnalysis
-from agent.graph import OPTIONAL_TOOLS, analytical_followup_suggestions, build_graph
+from agent.graph import (
+    OPTIONAL_TOOLS,
+    RETRIEVAL_SPECS,
+    analytical_followup_suggestions,
+    build_graph,
+)
 from agent.llm import (
     ServedModelTracker,
     TokenUsageTracker,
@@ -242,6 +247,15 @@ _TOOL_LABELS: dict[str, str] = {
 
 def _tool_label(name: str) -> str:
     return _TOOL_LABELS.get(name, name)
+
+
+# QNT-291: RetrievalSpec.name -> the concrete (ticker, query) -> str fetcher it
+# instruments. This is the whole per-corpus wiring the SSE seam needs; adding a
+# retrieval corpus is one entry here + one RETRIEVAL_SPECS entry in agent.graph.
+_RETRIEVAL_FETCHERS: dict[str, Callable[[str, str], str]] = {
+    "news_search": search_news,
+    "earnings_search": search_earnings,
+}
 
 
 # QNT-299: report templates append a uniform ``AS_OF: YYYY-MM-DD`` footer
@@ -904,18 +918,24 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
         compact_company = _instrument_tools(
             {"company": get_company_report_compact}, queue, loop, ticker
         )["company"]
-        # QNT-222: semantic news search, wired as its own (ticker, query) tool
-        # outside the single-arg plan-surface map. Fired by the graph only on
-        # targeted news asks (litigation, CEO, buyback, lawsuit, recall, ...).
-        search_news_tool = _instrument_search_tool(
-            search_news, queue, loop, tool_name="news_search", hit_noun="headlines"
-        )
-        # QNT-263: semantic earnings-release search, the second RAG corpus. Fired
-        # by the graph only on earnings-narrative asks (guidance, outlook,
-        # management framing).
-        search_earnings_tool = _instrument_search_tool(
-            search_earnings, queue, loop, tool_name="earnings_search", hit_noun="excerpts"
-        )
+        # QNT-291: instrument every retrieval corpus generically by iterating
+        # RETRIEVAL_SPECS -- one loop replaces the per-corpus _instrument_search_tool
+        # calls. Each spec's callable (search_news / search_earnings, the
+        # equity_news / equity_earnings semantic-search fetchers) is wrapped with
+        # the spec's own SSE tool_name (= spec.name) + hit_noun so the panel labels
+        # and trace summaries read exactly as before. A new corpus is one _FETCHERS
+        # entry + one RETRIEVAL_SPECS entry -- no new _instrument_search_tool call.
+        retrieval_tools = {
+            spec.name: _instrument_search_tool(
+                _RETRIEVAL_FETCHERS[spec.name],
+                queue,
+                loop,
+                tool_name=spec.name,
+                hit_noun=spec.hit_noun,
+            )
+            for spec in RETRIEVAL_SPECS
+            if spec.name in _RETRIEVAL_FETCHERS
+        }
         # QNT-209: attach the SqliteSaver only when the request named a
         # thread_id. The ephemeral compile path keeps the existing behavior
         # for curl / tests / non-frontend callers — no checkpoint rows, no
@@ -936,8 +956,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
             event_emitter=_emit,
             checkpointer=checkpointer,  # type: ignore[arg-type]
             compact_company_tool=compact_company,
-            search_news_tool=search_news_tool,
-            search_earnings_tool=search_earnings_tool,
+            retrieval_tools=retrieval_tools,
             comparison_metrics_tool=get_comparison_metrics,
         )
 

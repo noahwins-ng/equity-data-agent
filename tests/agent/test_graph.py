@@ -1545,8 +1545,8 @@ def test_hint_from_intent_quick_fact_resolves_to_a_real_bank_label() -> None:
 def test_every_intent_literal_has_a_fully_populated_policy() -> None:
     """Meta-test: a future intent cannot ship half-configured.
 
-    QNT-263's failure mode was ``quick_fact`` missing from
-    ``_EARNINGS_SEARCH_INTENTS`` because nothing enforced that a new intent
+    QNT-263's failure mode was ``quick_fact`` missing from the
+    earnings-search intent set because nothing enforced that a new intent
     (or a new flag on an existing one) touched every parallel set. This
     asserts every member of the ``Intent`` literal has an ``INTENT_POLICIES``
     entry with every field populated to a value of the expected type/shape.
@@ -1958,7 +1958,7 @@ def test_needs_news_search_skipped_for_focused_fundamental_intent(
 ) -> None:
     """Even with the flag set, a fundamental/technical focused read does not
     fire the search: those focuses are forbidden from citing news, so the fetch
-    would be wasted (gate scoped to _NEWS_SEARCH_INTENTS)."""
+    would be wasted (gate scoped to the news-reading intents)."""
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
@@ -2306,7 +2306,7 @@ def test_quick_fact_earnings_ask_routes_through_search_earnings(
     monkeypatch: pytest.MonkeyPatch, stub_llm: _StructuredLLM
 ) -> None:
     """QNT-263 follow-up: the natural single-fact earnings phrasing classifies as
-    quick_fact, which is now in _EARNINGS_SEARCH_INTENTS -- so it reaches the 8-K
+    quick_fact, whose policy now reads the earnings corpus -- so it reaches the 8-K
     corpus (build_quick_fact_prompt renders the fundamental report it folds into)
     instead of only the news headlines, mirroring quick_fact in the news gate."""
     monkeypatch.setattr(
@@ -2332,7 +2332,7 @@ def test_earnings_search_skipped_for_non_consuming_intent(
 ) -> None:
     """A technical focused read does not gather the fundamental report, so even
     with the earnings flag set the search must not fire (gate scoped to
-    _EARNINGS_SEARCH_INTENTS)."""
+    the earnings-reading intents)."""
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
@@ -2344,7 +2344,7 @@ def test_earnings_search_skipped_for_non_consuming_intent(
         search_earnings_tool=search_earnings,
     )
     # Names the ticker so it reaches gather -- the assertion then proves the
-    # INTENT gate (technical not in _EARNINGS_SEARCH_INTENTS) skipped the search,
+    # INTENT gate (technical's policy does not read the earnings corpus) skipped the search,
     # not that an earlier clarify gate did.
     graph.invoke({"ticker": "NVDA", "question": "what did NVDA management say about guidance?"})
 
@@ -2377,6 +2377,65 @@ def test_both_corpora_route_and_tag_distinct_provenance(
     search_earnings.assert_called_once_with("NVDA", question)
     corpora = {s["corpus"] for s in result["retrieved_sources"]}
     assert corpora == {"news", "earnings"}
+
+
+def test_registry_entry_alone_drives_gate_call_fold_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-291 AC3: a single FAKE RetrievalSpec exercises the whole
+    gate -> call -> fold -> provenance path with NO change to gather_node --
+    proving a new retrieval corpus (tool #4: a filings or transcript corpus) is
+    one RETRIEVAL_SPECS entry plus wiring its callable through ``retrieval_tools``.
+
+    The fake spec reuses the ``needs_news_search`` gate but points at a wholly
+    invented fold target (``reports["fake"]``) and corpus tag
+    (``corpus="filings"``), so what determines the fold and the surfaced
+    provenance is the registry entry alone -- not any hardcoded branch.
+    """
+    fold_calls: list[tuple[str, int]] = []
+
+    def fake_fold(
+        reports: dict[str, str], raw: str, start_id: int
+    ) -> tuple[dict[str, str], list[dict[str, str]]]:
+        fold_calls.append((raw, start_id))
+        updated = {**reports, "fake": f"FOLDED::{raw}"}
+        return updated, [{"id": f"R{start_id}", "headline": "fake hit", "corpus": "filings"}]
+
+    fake_spec = graph_module.RetrievalSpec(
+        name="fake_search",
+        flag="needs_news_search",
+        corpus="news",
+        fold=fake_fold,
+        hit_noun="things",
+    )
+    # The ONLY graph-side change to add the tool: swap in the registry entry.
+    monkeypatch.setattr(graph_module, "RETRIEVAL_SPECS", (fake_spec,))
+    monkeypatch.setattr(
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("news", "llm", True, False, ""),
+    )
+    llm = _news_focused_llm()
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+
+    question = "what did NVDA disclose in its latest filing?"
+    fake_tool = MagicMock(return_value="RAWPAYLOAD")
+    # The ONLY wiring: inject the callable under the spec's name.
+    graph = build_graph(
+        {name: _mock_tool(name) for name in REPORT_TOOLS},
+        retrieval_tools={"fake_search": fake_tool},
+    )
+    result = graph.invoke({"ticker": "NVDA", "question": question})
+
+    # gate + call: fired exactly once with (ticker, verbatim query).
+    fake_tool.assert_called_once_with("NVDA", question)
+    # fold: the spec's own fold ran (start_id 1) and merged into its target key.
+    assert fold_calls == [("RAWPAYLOAD", 1)]
+    assert result["reports"]["fake"] == "FOLDED::RAWPAYLOAD"
+    # provenance: surfaced verbatim from the spec's fold, corpus tag intact.
+    assert result["retrieved_sources"] == [
+        {"id": "R1", "headline": "fake hit", "corpus": "filings"}
+    ]
 
 
 def test_format_earnings_hits_and_parse_sources_degrade() -> None:
