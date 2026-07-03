@@ -12,12 +12,12 @@ runner can't catch without a corpus.
 from __future__ import annotations
 
 import pytest
-from agent.evals.golden_set import HISTORY_FIELDS
 from agent.evals.hallucination import check
 from agent.evals.retrieval_eval import (
     GATE_FLOORS,
     MAX_QUERIES,
     MIN_QUERIES,
+    RETRIEVAL_FIELDS,
     RETRIEVAL_RUN_HYBRID_PATH,
     compute_metrics,
     gate_failures,
@@ -98,8 +98,9 @@ def test_all_floors_have_metrics() -> None:
 
 
 def test_history_schema_has_retrieval_columns() -> None:
+    # QNT-293 follow-up: retrieval writes its own retrieval_history.csv.
     for col in ("recall_at_5", "recall_at_20", "mrr", "ndcg_at_10", "retrieval_n"):
-        assert col in HISTORY_FIELDS, f"history.csv missing retrieval column {col!r}"
+        assert col in RETRIEVAL_FIELDS, f"retrieval_history.csv missing column {col!r}"
 
 
 # --- hybrid A/B scorecard (QNT-262) --------------------------------------------
