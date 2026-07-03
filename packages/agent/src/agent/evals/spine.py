@@ -46,11 +46,24 @@ pair). The remaining six fold in opportunistically as each is next touched --
 they still import the envelope from ``golden_set`` (which re-exports it from
 here), so nothing broke; repoint each at ``agent.evals.spine`` when you touch it.
 
-The ``metrics``-as-a-JSON-column envelope sketched in QNT-293 is the *eventual*
-target once all eight are folded; converting the committed wide ``history.csv``
-now would be the maximal cross-cutting change (all eight read/write it) and
-would discard the committed quality trend, so the wide CSV is preserved during
-the two-to-eight migration.
+Eventual target -- per-suite history files, not one shared table (decided as a
+QNT-293 follow-up). Each suite gets its own ``{suite}_history.csv`` whose columns
+are exactly that suite's metrics: no sparsity (today a retrieval row blanks ~40
+dialogue/deepeval columns) and no shared column order to keep in lockstep, so the
+QNT-264 / QNT-277 header-misalignment class of bug can't recur. The spine still
+owns the shared ENVELOPE (``run_id`` / ``git_sha`` / ``prompt_version`` /
+``suite``) written by one append helper, so run identity stays consistent across
+every file -- this maps the "per-suite metrics stay suite-defined; only the
+envelope is shared" split directly onto the filesystem. (A single
+``metrics``-as-a-JSON-column table was considered and dropped: it buries each
+suite's metric schema in an untyped blob and needs ``json_normalize`` to analyse,
+whereas a plain per-suite CSV stays spreadsheet- and ``git log -p``-readable. The
+one thing a single file buys -- a cross-suite query keyed on ``run_id`` -- is rare
+for eval history, which is almost always one suite's trend at a time.) Converting
+now would be the maximal cross-cutting change (all eight read/write the shared
+``history.csv``) and would need the committed trend split out, so the wide CSV is
+preserved until each suite folds in and its rows split into ``{suite}_history.csv``
+along the way.
 """
 
 from __future__ import annotations

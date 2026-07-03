@@ -16,7 +16,9 @@ The eight suites below grew their own runners, history formats, thresholds, and 
 
 **Adding a suite:** write a runner returning a `SuiteResult`; fill the envelope columns from `git_sha()` / `prompt_version()` and tag `eval_type`; gate via `threshold_from_env`; register it in the `_SUITES` table in `__main__.py`. Full contract in the `spine.py` module docstring.
 
-**Migration status:** golden + retrieval (the ci.yml gating pair) flow through the spine. The remaining six fold in opportunistically — they still import the envelope from `golden_set` (which re-exports it from `spine`), so nothing broke; repoint each at `agent.evals.spine` when next touched. The `metrics`-as-JSON-column envelope sketched in QNT-293 is the eventual target once all eight are folded; the committed wide CSV is preserved during the migration.
+**Migration status:** golden + retrieval (the ci.yml gating pair) flow through the spine. The remaining six fold in opportunistically — they still import the envelope from `golden_set` (which re-exports it from `spine`), so nothing broke; repoint each at `agent.evals.spine` when next touched.
+
+**Eventual target — per-suite history files** (decided as a QNT-293 follow-up): each suite writes its own `{suite}_history.csv` with exactly its metric columns — no sparsity (today a retrieval row blanks ~40 dialogue/deepeval columns), no shared column order to drift (so the QNT-264/QNT-277 header-misalignment bug class can't recur) — while the spine owns the shared envelope (`run_id`/`git_sha`/`prompt_version`/`suite`) via one append helper. A single `metrics`-as-JSON-column table was considered and dropped: it buries each suite's schema in an untyped blob and needs `json_normalize` to analyse, whereas a plain per-suite CSV stays spreadsheet- and `git log -p`-readable (the one thing a single file buys — a cross-suite query on `run_id` — is rare for eval history). The wide `history.csv` is preserved until each suite folds in and its rows split into `{suite}_history.csv` along the way.
 
 ## Four eval types — all required, not optional
 
