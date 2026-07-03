@@ -198,7 +198,8 @@ the single `NARRATE_FALSIFIER_RULE` edit bumps it exactly once.
 
 - **D-2** — already a strength; no new rule.
 - **D-3** — narrate already leads with the relative lean; structured-card change
-  needs explicit product approval (not granted) → not shipped.
+  needs explicit product approval. **Approved 2026-07-03 and shipped as a
+  QNT-303 follow-up** (see the follow-up section below).
 - **D-4** — value+regime already present; prior-session grounding belongs to
   **QNT-296** (same shape).
 - **D-5** — no degraded-coverage sample in-window to grade against; pairs with
@@ -262,3 +263,26 @@ driven `msft-news-what-matters` to `non_hallucination=0.0` by fabricating a
 falsifier to thesis/comparison — the paired run above is post-fix. (Judge
 single-run scatter on `analyst_likeness` remains; the paired design cancels the
 shared fixture-difficulty term, so the deltas are the trustworthy quantity.)
+
+## Follow-up (2026-07-03, same-day, post-ship)
+
+**D-3 shipped (product-approved).** The comparison `differences` paragraph now
+closes with one RELATIVE-preference sentence between the two named tickers
+("at current levels, AAPL screens as the more balanced setup on
+valuation-vs-momentum"), never an absolute buy/sell, tied to the printed aspect
+labels, no new number. Pinned by `test_comparison_prompt_closes_with_relative_preference`.
+
+**Watch-vs-falsifier competition (confirmed, deferred as a design decision).**
+A controlled A/B (n=10 each, temp 0.3, live `groq/llama-3.3-70b`) confirmed the
+D-1 falsifier crowds out the QNT-285 "Watch:" close on thesis — Watch went from
+~7/10 to ~4/10 while the falsifier took the closing slot. Both are optional
+*closes* and the falsifier ("the read holds while Uptrend holds; flips if RSI
+rolls over") is semantically a terminal sentence, so it wins the slot. Prompt
+ordering (Watch-last) and explicit "keep Watch as the final line" wording did
+NOT reliably restore it on this model (Watch stayed ≤1/10). This is a
+genuine product trade-off — the falsifier is arguably a *stronger* close than a
+generic "Watch: the earnings print" — not a mechanical bug, so it is left for a
+product decision rather than shipped with a non-working fix. Options on the
+table: (a) accept the substitution; (b) merge the two into one combined close
+("read holds while Uptrend holds — watch the print for confirmation"); (c) make
+the falsifier body-only and rarer.

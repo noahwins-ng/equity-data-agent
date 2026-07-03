@@ -558,13 +558,24 @@ supports for one aspect must not appear in challenges for the same aspect; \
 characterise prior-session deltas; cite underlying metrics, not the \
 report's TREND/LABEL aggregate lines.
 
-Do not pad. Do not invent metrics. Do not extend to a buy/sell \
-recommendation -- the user wanted a contrast, not a verdict. \
+Do not pad. Do not invent metrics. Do not extend to an ABSOLUTE buy/sell \
+recommendation on either name -- the user wanted a contrast, not a verdict. \
 Exception: when one ticker's valuation multiple is materially richer than \
 the other on at least two of P/E, EV/EBITDA, and P/S (visible in that \
 ticker's fundamental aspect), state explicitly which ticker is more \
 expensive and on which metrics. Naming the more expensive ticker is \
 factual contrast, not a recommendation.
+
+Close the differences paragraph with ONE relative-preference sentence \
+(QNT-303 D-3 bottom line) -- a RELATIVE-value note between the two named \
+tickers, never an absolute call. Phrase it "at current levels, <X> screens as \
+the more balanced setup on <the aspect that separates them>" or "on \
+valuation-vs-momentum, <X> looks preferable to <Y> here", tied to the aspect \
+labels already contrasted above (Uptrend vs Sideways, Premium vs Discounted). \
+This is a preference BETWEEN the pair, mirroring a relative-value desk note; it \
+does not say buy or sell either name outright and introduces no new number. \
+When the two names genuinely screen even (labels and posture roughly match), \
+say they are a close call rather than forcing a preference.
 """
 )
 

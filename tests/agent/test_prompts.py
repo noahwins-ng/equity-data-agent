@@ -695,3 +695,16 @@ def test_comparison_prompt_allows_ranking_without_arithmetic_threshold() -> None
     assert "more expensive" in text
     assert "recommendation" in text
     assert "15%" not in text
+
+
+def test_comparison_prompt_closes_with_relative_preference() -> None:
+    """QNT-303 D-3 (follow-up, product-approved): the differences paragraph
+    closes with a RELATIVE-value preference between the two named tickers,
+    explicitly not an absolute buy/sell call, and introduces no new number."""
+    text = COMPARISON_SYSTEM_PROMPT
+    assert "relative-preference sentence" in text
+    assert "never an absolute call" in text
+    # Still forbids an absolute buy/sell on either name.
+    assert "ABSOLUTE buy/sell" in text
+    # No arithmetic threshold snuck in with the new rule.
+    assert "introduces no new number" in text
