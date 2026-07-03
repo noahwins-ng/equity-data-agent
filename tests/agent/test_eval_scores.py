@@ -151,7 +151,7 @@ def test_anchor_integrity_flags_out_of_range_cited_id() -> None:
         "retrieved_sources": [{"id": "R1"}, {"id": "R2"}],
         "intent_path": ["classify", "plan", "gather", "synthesize"],
     }
-    assert compute_anchor_integrity(state) == [5]
+    assert compute_anchor_integrity(state) == ["news R5"]
 
 
 def test_anchor_integrity_clean_when_ids_in_range() -> None:
@@ -173,7 +173,7 @@ def test_anchor_integrity_scans_narrate_bubble() -> None:
         "retrieved_sources": [{"id": "R1"}, {"id": "R2"}],
         "intent_path": ["classify", "gather", "synthesize", "narrate"],
     }
-    assert compute_anchor_integrity(state) == [11]
+    assert compute_anchor_integrity(state) == ["R11"]
 
 
 def test_anchor_integrity_stale_followup_sources_count_as_zero() -> None:
@@ -187,4 +187,16 @@ def test_anchor_integrity_stale_followup_sources_count_as_zero() -> None:
         "retrieved_sources": [{"id": "R1"}, {"id": "R2"}],
         "intent_path": ["classify", "synthesize", "narrate"],
     }
-    assert compute_anchor_integrity(state) == [1]
+    assert compute_anchor_integrity(state) == ["news R1"]
+
+
+def test_anchor_integrity_flags_corpus_mismatch() -> None:
+    """QNT-305 follow-up: an in-range id on the wrong corpus is flagged. R1 is a
+    NEWS row, but the narrate cites it as ``fundamental R1`` -- in range, so the
+    count check passes; only the corpus check catches the mis-staple."""
+    state = {
+        "narrative": "Growth strong (source: fundamental R1).",
+        "retrieved_sources": [{"id": "R1", "corpus": "news"}],
+        "intent_path": ["classify", "plan", "gather", "synthesize", "narrate"],
+    }
+    assert compute_anchor_integrity(state) == ["fundamental R1"]

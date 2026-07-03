@@ -49,7 +49,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from shared.tickers import TICKERS
 
-from agent.citations import strip_oob_anchors_in_obj
+from agent.citations import strip_bad_anchors_in_obj
 from agent.comparison import ComparisonAnswer, LeanComparisonAnswer, LeanComparisonRow
 from agent.conversational import (
     ConversationalAnswer,
@@ -3015,15 +3015,15 @@ def build_graph(
         """
         result = _synthesize_payload(state, config)
         if event_emitter is not None and isinstance(result, dict):
-            # QNT-305 follow-up: strip out-of-range retrieved anchors from the
-            # EARLY card emit too, with the same gate as the post-graph strip in
-            # agent_chat (``intent_path`` already carries "gather" here, appended
-            # by the node wrapper before synthesize runs). Without this the early
-            # card renders a fabricated anchor that the stripped post-graph emit
-            # then removes -- the card's own flicker, the twin of the narrate one.
+            # QNT-305 follow-up: strip untrustworthy retrieved anchors (out of
+            # range OR wrong-corpus) from the EARLY card emit too, with the same
+            # gate as the post-graph strip in agent_chat (``intent_path`` already
+            # carries "gather" here, appended by the node wrapper before synthesize
+            # runs). Without this the early card renders a bad anchor that the
+            # stripped post-graph emit then removes -- the card's own flicker, the
+            # twin of the narrate one.
             intent_path = state.get("intent_path") or []
-            retrieved = state.get("retrieved_sources") or []
-            anchor_max = len(retrieved) if retrieved and "gather" in intent_path else 0
+            anchor_sources = state.get("retrieved_sources") or [] if "gather" in intent_path else []
             # State key == SSE event name for every card shape; conversational
             # is intentionally excluded (no card, streams as prose_chunk).
             for slot in (
@@ -3038,7 +3038,7 @@ def build_graph(
                 if isinstance(payload, BaseModel):
                     try:
                         event_emitter(
-                            slot, strip_oob_anchors_in_obj(payload.model_dump(), anchor_max)
+                            slot, strip_bad_anchors_in_obj(payload.model_dump(), anchor_sources)
                         )
                     except Exception as exc:  # noqa: BLE001 — never let SSE plumbing crash synthesize
                         logger.warning(

@@ -11,7 +11,13 @@
 // bold, newlines collapsed — keeping the change scoped to the narrate bubble
 // and avoiding a block element inside the inline contexts those callers use.
 
-import { type DedupeState, type ProseSegment, parseInlineChips, parseProse } from "./prose-parse";
+import {
+  type AnchorSource,
+  type DedupeState,
+  type ProseSegment,
+  parseInlineChips,
+  parseProse,
+} from "./prose-parse";
 
 // QNT-301: an anchored citation (`(source: news R1)`) scrolls to the matching
 // Retrieved-sources row and flashes a ring on it. The row lives in the same run
@@ -86,21 +92,22 @@ export function ProseBlock({
   text,
   rich = false,
   dedupe,
-  maxAnchor,
+  sources,
 }: {
   text: string;
   rich?: boolean;
   dedupe?: DedupeState;
-  // QNT-305: the count of retrieved-sources rows this run. When set, the parser
-  // de-anchors any retrieved id above it (an out-of-range, fabricated anchor).
-  // Threaded from RunBlock into the streamed narrate/prose surfaces, which the
-  // backend strip cannot reach (they stream as deltas, not card payloads).
-  maxAnchor?: number;
+  // QNT-305: the retrieved-sources rows this run. When set, the parser de-anchors
+  // any retrieved id that is out of range or points at the wrong corpus (a
+  // fabricated / mis-stapled anchor). Threaded from RunBlock into the streamed
+  // narrate/prose surfaces, which the backend strip cannot reach (they stream as
+  // deltas, not card payloads).
+  sources?: readonly AnchorSource[];
 }) {
   if (!text.trim()) return null;
 
   if (!rich) {
-    const segments = parseInlineChips(text, dedupe, maxAnchor);
+    const segments = parseInlineChips(text, dedupe, sources);
     return (
       <p className="text-xs leading-relaxed text-zinc-200">
         {segments.map((seg, i) => renderSegment(seg, i))}
@@ -108,7 +115,7 @@ export function ProseBlock({
     );
   }
 
-  const blocks = parseProse(text, undefined, maxAnchor);
+  const blocks = parseProse(text, undefined, sources);
   if (blocks.length === 0) return null;
   return (
     <div className="space-y-2">

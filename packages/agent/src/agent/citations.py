@@ -1,33 +1,41 @@
-"""Retrieved-source citation-anchor integrity (QNT-305).
+"""Retrieved-source citation-anchor integrity (QNT-305 + corpus follow-up).
 
 QNT-301 shipped claim-anchored retrieved-source citations: a claim drawing on a
-folded retrieved hit cites it as ``(source: news R1)`` (or a bare ``[R1]`` tag
-in the narrate voice), and the frontend renders that ``Rn`` as a chip that
-scrolls to the matching retrieved-sources row (``data-source-id=Rn``). The ids
-run ``R1..R{n}`` where ``n`` is the number of rows actually retrieved this turn.
+folded retrieved hit cites it as ``(source: news R1)`` (or a bare ``[R1]`` tag in
+the narrate voice), and the frontend renders that ``Rn`` as a chip that scrolls
+to the matching retrieved-sources row. The ids run ``R1..R{n}`` where ``n`` is
+the number of rows retrieved this turn, and each row carries the ``corpus`` it
+came from (``news`` or ``earnings``).
 
-Live prod traces show the synthesis model fabricates OUT-OF-RANGE ids -- it
-cites an ``Rn`` larger than the number of rows retrieved (report carried only
-``[R1]``/``[R2]`` but the answer cited ``R5``/``R11``). Those ids point at no
-row: the chip dangles (a silent no-op click) and, worse, it is a fake footnote
-that undermines the one thing the citation layer exists to prove (ADR-003: the
-agent only quotes, never computes).
+A retrieved anchor is only trustworthy when BOTH hold:
 
-The fix is deterministic, not a prompt-only nudge. This module is the single
-Python source of truth for both boundaries:
+* **in range** -- ``Rk`` with ``k <= n`` (QNT-305: the model fabricates ids past
+  the row count -- a fake footnote pointing at no row); and
+* **corpus-consistent** -- the source NAME must match the corpus of that id. A
+  news-corpus hit folds into the ``news`` report, an earnings-corpus hit into the
+  ``fundamental`` report (QNT-263), so ``news Rk`` is valid only when row ``Rk``
+  is a news hit and ``fundamental Rk`` only when it is an earnings hit. The model
+  also mis-staples an in-range news id onto a canned fundamental figure
+  (``fundamental R1`` where R1 is a news headline) -- in range, so QNT-305's
+  count check misses it, but the anchor still points at an unrelated row.
 
-* :func:`strip_oob_anchors` / :func:`strip_oob_anchors_in_obj` -- the backend
+Both checks live here, the single Python source of truth for both boundaries:
+
+* :func:`strip_bad_anchors` / :func:`strip_bad_anchors_in_obj` -- the backend
   strip applied to every card payload before the SSE emit.
-* :func:`find_oob_anchor_ids` -- the deterministic eval-path check that flags
-  any answer citing an out-of-range id.
+* :func:`find_bad_anchors` -- the deterministic eval-path check.
 
-The frontend carries a mirror of the strip in ``prose-parse.ts`` (defense in
-depth for the streamed narrate bubble, which is not a card payload).
+The frontend carries a mirror in ``prose-parse.ts`` (defense in depth for the
+streamed narrate bubble, which is not a card payload).
+
+A row with no ``corpus`` tag falls back to the range check only, so callers with
+corpus-less rows (older data, stubbed tests) keep the QNT-305 behaviour.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 # A retrieved-source anchor in either shape the prompts / narrate voice emit:
@@ -35,77 +43,113 @@ from typing import Any
 #   [R5]                -- a bare tag (narrate voice); no source label
 # The source class mirrors the frontend chip pattern (letters + the multi-source
 # separators ``|`` ``,`` + whitespace) so a multi-source citation still parses.
-# The id must sit right before the closing paren -- ``(source: a, b R1)``, one id
-# per citation, matching what every prompt emits. A hypothetical per-source form
-# (``(source: a R1, b R2)``) is intentionally not matched; if a prompt ever emits
-# that shape, extend this pattern rather than relying on the fall-through.
-# The bare form optionally captures ONE preceding space (``bsp``) so removing an
-# out-of-range tag also swallows the space it sat behind -- no ``a tag .`` orphan
-# before punctuation (mirrors the frontend's trailing-space trim on drop).
+# The id must sit right before the closing paren -- one id per citation, matching
+# what every prompt emits. The bare form optionally captures ONE preceding space
+# (``bsp``) so removing an out-of-range tag also swallows the space it sat behind
+# -- no ``a tag .`` orphan before punctuation (mirrors the frontend's
+# trailing-space trim on drop).
 _ANCHOR_RE = re.compile(
     r"\(source:\s*(?P<src>[A-Za-z|,\s]+?)\s+R(?P<sid>\d+)\)|(?P<bsp> )?\[R(?P<bid>\d+)\]"
 )
 
+# A retrieved hit folds into a report by corpus, so an anchor's source NAME
+# implies which corpus its id must belong to. ``technical`` / ``company`` are
+# never fed by retrieval, so an id on them is never valid.
+_NAME_CORPUS: dict[str, str] = {"news": "news", "fundamental": "earnings"}
 
-def find_oob_anchor_ids(text: str, max_id: int) -> list[int]:
-    """Return every retrieved-source id cited in ``text`` that exceeds ``max_id``.
 
-    ``max_id`` is the count of retrieved-sources rows for the turn (ids run
-    ``R1..R{max_id}``); ``0`` when no rows were retrieved, so any id is out of
-    range. In-range ids and canned (id-less) citations are ignored. Duplicates
-    are preserved so a caller can count occurrences.
+def _corpus_at(id_num: int, sources: Sequence[Mapping[str, Any]]) -> str | None:
+    """Corpus of the ``R{id_num}`` row, or None when out of range / untagged.
+
+    Positional: ids are ``R1..Rn`` in retrieved order (contiguity invariant), so
+    row ``Rk`` is ``sources[k - 1]`` -- robust to rows that omit the ``id`` key.
     """
-    oob: list[int] = []
+    if id_num < 1 or id_num > len(sources):
+        return None
+    row = sources[id_num - 1]
+    corpus = row.get("corpus") if isinstance(row, Mapping) else None
+    return corpus if isinstance(corpus, str) and corpus else None
+
+
+def _anchor_is_valid(source_name: str, id_num: int, sources: Sequence[Mapping[str, Any]]) -> bool:
+    """True when a retrieved anchor may keep its id: in range AND corpus-consistent.
+
+    A bare tag (empty ``source_name``) or a row with no corpus tag is checked on
+    range alone. When both a source name and a corpus are present, at least one
+    named source must map to that corpus (``news``/``fundamental``; a multi-source
+    citation keeps the id if any of its names matches).
+    """
+    if id_num < 1 or id_num > len(sources):
+        return False
+    corpus = _corpus_at(id_num, sources)
+    if corpus is None or not source_name.strip():
+        return True
+    names = [n.strip().lower() for n in re.split(r"[|,]", source_name)]
+    return any(_NAME_CORPUS.get(n) == corpus for n in names)
+
+
+def find_bad_anchors(text: str, sources: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Return every retrieved anchor in ``text`` that is out of range or points at
+    the wrong corpus, rendered as it was cited (``"fundamental R1"``, ``"R11"``).
+
+    Deterministic (no LLM), so it runs on every prod chat as a regression guard.
+    An empty list means every cited anchor is trustworthy (or none was cited).
+    """
+    bad: list[str] = []
     for m in _ANCHOR_RE.finditer(text):
-        n = int(m.group("sid") or m.group("bid"))
-        if n > max_id:
-            oob.append(n)
-    return oob
+        src = m.group("src")
+        if src is not None:
+            if not _anchor_is_valid(src, int(m.group("sid")), sources):
+                bad.append(f"{src.strip()} R{m.group('sid')}")
+        elif not _anchor_is_valid("", int(m.group("bid")), sources):
+            bad.append(f"R{m.group('bid')}")
+    return bad
 
 
-def strip_oob_anchors(text: str, max_id: int) -> str:
-    """De-anchor any out-of-range retrieved-source citation in ``text``.
+def strip_bad_anchors(text: str, sources: Sequence[Mapping[str, Any]]) -> str:
+    """De-anchor any out-of-range OR corpus-mismatched retrieved citation.
 
-    * ``(source: news R5)`` with ``R5`` out of range -> ``(source: news)``: keep
-      the source attribution, drop only the fabricated row id.
-    * a bare ``[R5]`` tag out of range -> removed entirely, along with the one
-      space it sat behind (there is no source label to fall back to).
+    * ``(source: news R5)`` (out of range) or ``(source: fundamental R1)`` (R1 is
+      a news row) -> ``(source: news)`` / ``(source: fundamental)``: keep the
+      source attribution, drop only the bad row id.
+    * a bare ``[R5]`` tag out of range -> removed entirely, with the one space it
+      sat behind (there is no source label to fall back to).
 
-    In-range ids and canned citations pass through untouched.
+    Valid anchors (in range + corpus-consistent) pass through untouched.
     """
 
     def repl(m: re.Match[str]) -> str:
         src = m.group("src")
-        if src is not None:  # (source: name Rn) form
-            if int(m.group("sid")) > max_id:
+        if src is not None:  # (source: name Rk) form
+            if not _anchor_is_valid(src, int(m.group("sid")), sources):
                 return f"(source: {src.strip()})"
             return m.group(0)
-        # bare [Rn] tag (``bsp`` = the captured preceding space, if any)
-        if int(m.group("bid")) > max_id:
+        # bare [Rk] tag -- range-only (no source name to check corpus against)
+        if not _anchor_is_valid("", int(m.group("bid")), sources):
             return ""
         return m.group(0)
 
     return _ANCHOR_RE.sub(repl, text)
 
 
-def strip_oob_anchors_in_obj(obj: Any, max_id: int) -> Any:
-    """Recursively apply :func:`strip_oob_anchors` to every string in ``obj``.
+def strip_bad_anchors_in_obj(obj: Any, sources: Sequence[Mapping[str, Any]]) -> Any:
+    """Recursively apply :func:`strip_bad_anchors` to every string in ``obj``.
 
     ``obj`` is a card payload dict (``model_dump()``); anchors can appear in any
-    of its prose fields regardless of the schema shape, so we walk the whole
-    tree rather than naming fields per card.
+    of its prose fields regardless of the schema shape, so we walk the whole tree
+    rather than naming fields per card.
     """
     if isinstance(obj, str):
-        return strip_oob_anchors(obj, max_id)
+        return strip_bad_anchors(obj, sources)
     if isinstance(obj, list):
-        return [strip_oob_anchors_in_obj(v, max_id) for v in obj]
+        return [strip_bad_anchors_in_obj(v, sources) for v in obj]
     if isinstance(obj, dict):
-        return {k: strip_oob_anchors_in_obj(v, max_id) for k, v in obj.items()}
+        return {k: strip_bad_anchors_in_obj(v, sources) for k, v in obj.items()}
     return obj
 
 
 __all__ = [
-    "find_oob_anchor_ids",
-    "strip_oob_anchors",
-    "strip_oob_anchors_in_obj",
+    "find_bad_anchors",
+    "strip_bad_anchors",
+    "strip_bad_anchors_in_obj",
 ]

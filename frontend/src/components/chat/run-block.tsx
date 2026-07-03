@@ -34,18 +34,19 @@ export const RunBlock = memo(function RunBlock({
 }) {
   const proseText = run.proseChunks.join("");
   const isStreaming = run.status === "streaming";
-  // QNT-305: the number of retrieved-sources rows for this run. The parser
-  // de-anchors any retrieved id above it -- a fabricated anchor pointing at no
-  // row -- in the streamed narrate/prose surfaces (the backend strips the
-  // structured card payloads before the SSE; these stream as deltas).
+  // QNT-305: the retrieved-sources rows for this run. The parser de-anchors any
+  // retrieved id that is out of range or points at the wrong corpus (a
+  // fabricated / mis-stapled anchor) in the streamed narrate/prose surfaces (the
+  // backend strips the structured card payloads before the SSE; these stream as
+  // deltas).
   //
-  // QNT-305 follow-up: the count is authoritative from the first render because
+  // QNT-305 follow-up: the rows are authoritative from the first render because
   // `gather` now emits `retrieved_sources` BEFORE the narrate deltas stream (it
   // runs earlier in the graph). So the guard filters consistently the whole way
-  // through -- a fabricated id never renders, rather than showing mid-stream and
-  // vanishing on completion. `0` genuinely means "no rows retrieved this turn",
-  // so any Rn is fabricated and correctly dropped on sight.
-  const maxAnchor = run.retrievedSources.length;
+  // through -- a bad id never renders, rather than showing mid-stream and
+  // vanishing on completion. An empty list genuinely means "no rows retrieved
+  // this turn", so any Rn is fabricated and correctly dropped on sight.
+  const anchorSources = run.retrievedSources;
   const groundingPct =
     typeof run.stats?.grounding_rate === "number"
       ? Math.max(0, Math.min(100, Math.round(run.stats.grounding_rate * 100)))
@@ -144,7 +145,7 @@ export const RunBlock = memo(function RunBlock({
       ))}
 
       {/* Streamed prose (only when no card has arrived yet) */}
-      {showStandaloneProse && <ProseBlock text={proseText} maxAnchor={maxAnchor} />}
+      {showStandaloneProse && <ProseBlock text={proseText} sources={anchorSources} />}
 
       {/* QNT-156: comparison card — renders when intent=comparison */}
       {run.comparison && (
@@ -211,7 +212,7 @@ export const RunBlock = memo(function RunBlock({
         transition is in place. For the followup narrative-only path (no card)
         the bubble is the only surface. */}
       {run.narrative ? (
-        <NarrativeBubble text={run.narrative} maxAnchor={maxAnchor} />
+        <NarrativeBubble text={run.narrative} sources={anchorSources} />
       ) : composing ? (
         <ComposingBubble intent={run.intent} />
       ) : null}

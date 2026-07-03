@@ -143,7 +143,7 @@ from collections.abc import AsyncIterator, Callable
 from datetime import UTC
 from typing import Any
 
-from agent.citations import strip_oob_anchors_in_obj
+from agent.citations import strip_bad_anchors_in_obj
 from agent.comparison import ComparisonAnswer, LeanComparisonAnswer
 from agent.conversational import ConversationalAnswer, domain_redirect
 from agent.eval_scores import push_to_trace_id as push_eval_scores
@@ -1283,16 +1283,17 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                 },
             )
 
-        # QNT-305: render-boundary strip for hallucinated retrieved-source
-        # anchors. The synthesis model sometimes cites an ``Rn`` larger than the
-        # number of rows actually retrieved (report tagged [R1]/[R2], answer
-        # cited R5) -- a fake footnote pointing at no row. ``anchor_max`` is the
-        # count of rows the panel will render below (mirrors the emit gate on
-        # line ~1332 exactly), so any id above it is out of range. Every card
-        # dump below is stripped through ``strip_oob_anchors_in_obj`` before the
-        # SSE emit -- the single backend source of truth. The streamed narrate
-        # bubble (not a card payload) is de-anchored client-side in prose-parse.
-        anchor_max = len(retrieved_sources) if retrieved_sources and "gather" in intent_path else 0
+        # QNT-305: render-boundary strip for untrustworthy retrieved-source
+        # anchors. The synthesis model fabricates an ``Rn`` past the row count
+        # (fake footnote pointing at no row) OR mis-staples an in-range id onto
+        # the wrong corpus (``fundamental R1`` where R1 is a news row). Both are
+        # caught by ``strip_bad_anchors_in_obj`` against ``anchor_sources`` -- the
+        # rows the panel will render below (gated on gather having run, mirroring
+        # the emit gate on line ~1375, so a stale followup counts zero rows). Each
+        # card dump is stripped before the SSE emit -- the single backend source
+        # of truth. The streamed narrate bubble (not a card payload) is
+        # de-anchored client-side in prose-parse.
+        anchor_sources = retrieved_sources if "gather" in intent_path else []
 
         # QNT-156: branch on intent. Each shape emits its own structured event;
         # the deterministic conversational redirect (any synthesize-path
@@ -1304,13 +1305,15 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                 await asyncio.sleep(0)
             yield _sse(
                 "conversational",
-                strip_oob_anchors_in_obj(conversational.model_dump(), anchor_max),
+                strip_bad_anchors_in_obj(conversational.model_dump(), anchor_sources),
             )
         elif intent == "comparison" and isinstance(comparison, ComparisonAnswer):
             # QNT-229 #2b/#5: card emitted early from synthesize_node; this
             # post-graph yield is the idempotent safety net. narrate streams
             # the qualitative contrast as the prose surface, so no prose_chunk.
-            yield _sse("comparison", strip_oob_anchors_in_obj(comparison.model_dump(), anchor_max))
+            yield _sse(
+                "comparison", strip_bad_anchors_in_obj(comparison.model_dump(), anchor_sources)
+            )
         elif intent == "comparison" and isinstance(comparison_lean, LeanComparisonAnswer):
             # QNT-224: lean 3-4 way metrics table. No differences field — the
             # qualitative contrast streams as the narrate node's narrative
@@ -1318,7 +1321,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
             # metrics rows the panel renders as a table.
             yield _sse(
                 "comparison_lean",
-                strip_oob_anchors_in_obj(comparison_lean.model_dump(), anchor_max),
+                strip_bad_anchors_in_obj(comparison_lean.model_dump(), anchor_sources),
             )
         elif intent in {"quick_fact", "followup"} and isinstance(quick_fact, QuickFactAnswer):
             # QNT-209: followup reuses the QuickFactAnswer schema (the panel
@@ -1329,20 +1332,22 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
             # the idempotent net. QNT-232 #3: quick_fact skips narrate, so the
             # card answer is the surface -- no narrative bubble, no prose_chunk.
             # (followup reuses this branch and DOES narrate; intent tells apart.)
-            yield _sse("quick_fact", strip_oob_anchors_in_obj(quick_fact.model_dump(), anchor_max))
+            yield _sse(
+                "quick_fact", strip_bad_anchors_in_obj(quick_fact.model_dump(), anchor_sources)
+            )
         elif intent in {"fundamental", "technical", "news"} and isinstance(
             focused, FocusedAnalysis
         ):
             # QNT-176: focused-analysis card.
             # QNT-229 #2b/#5: card emitted early from synthesize_node; this is
             # the idempotent net. narrate owns the prose surface -> no prose_chunk.
-            yield _sse("focused", strip_oob_anchors_in_obj(focused.model_dump(), anchor_max))
+            yield _sse("focused", strip_bad_anchors_in_obj(focused.model_dump(), anchor_sources))
         elif intent == "exploration" and isinstance(exploration, ExplorationAnswer):
             # QNT-220 follow-up: exploration-scan card.
             # QNT-229 #2b/#5: card emitted early from synthesize_node; this is
             # the idempotent net. narrate owns the prose surface -> no prose_chunk.
             yield _sse(
-                "exploration", strip_oob_anchors_in_obj(exploration.model_dump(), anchor_max)
+                "exploration", strip_bad_anchors_in_obj(exploration.model_dump(), anchor_sources)
             )
         elif intent == "thesis" and isinstance(thesis, Thesis):
             # QNT-211: gate on intent so the followup narrative-only path
@@ -1351,7 +1356,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
             # state. The bubble alone is the response.
             # QNT-229 #2b/#5: card emitted early from synthesize_node; this is
             # the idempotent net. narrate owns the prose surface -> no prose_chunk.
-            yield _sse("thesis", strip_oob_anchors_in_obj(thesis.model_dump(), anchor_max))
+            yield _sse("thesis", strip_bad_anchors_in_obj(thesis.model_dump(), anchor_sources))
         elif isinstance(conversational, ConversationalAnswer):
             # Fallback redirect from a non-conversational intent that failed
             # mid-synthesize (no reports gathered, structured-output crash, etc).
@@ -1364,7 +1369,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                 await asyncio.sleep(0)
             yield _sse(
                 "conversational",
-                strip_oob_anchors_in_obj(conversational.model_dump(), anchor_max),
+                strip_bad_anchors_in_obj(conversational.model_dump(), anchor_sources),
             )
 
         # QNT-226: emit the retrieved-sources provenance list (headline / source

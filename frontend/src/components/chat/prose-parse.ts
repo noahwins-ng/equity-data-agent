@@ -68,21 +68,47 @@ function normaliseSource(raw: string): string {
 // single trailing space off the preceding text so the dropped `(source: x)`
 // doesn't leave an orphan space before the following punctuation/word
 // (`oversight (source: news).` -> `oversight.`, not `oversight .`).
+// QNT-305 follow-up: a retrieved anchor is trustworthy only when its id is in
+// range AND the source NAME matches the corpus of that row. A news-corpus hit
+// folds into the `news` report, an earnings hit into `fundamental` (QNT-263), so
+// `news Rk` needs a news row and `fundamental Rk` an earnings row;
+// `technical`/`company` are never retrieval-backed. A minimal row shape (just
+// `corpus`, positional) keeps this parser decoupled from the api types so it
+// stays unit-testable under node:test.
+export type AnchorSource = { corpus?: string };
+const NAME_CORPUS: Record<string, string> = { news: "news", fundamental: "earnings" };
+
+function anchorValid(
+  sourceName: string,
+  anchor: string,
+  sources: readonly AnchorSource[],
+): boolean {
+  const n = Number(anchor.slice(1));
+  if (!(n >= 1 && n <= sources.length)) return false; // out of range
+  const corpus = sources[n - 1]?.corpus;
+  // A bare tag (no source name) or an untagged row is checked on range alone.
+  if (!corpus || !sourceName.trim()) return true;
+  return sourceName
+    .toLowerCase()
+    .split(/[|,]/)
+    .some((nm) => NAME_CORPUS[nm.trim()] === corpus);
+}
+
 function pushChip(
   segments: ProseSegment[],
   rawSource: string,
   st: DedupeState,
   anchor?: string,
-  maxAnchor?: number,
+  sources?: readonly AnchorSource[],
 ): void {
   const text = rawSource.trim();
-  // QNT-305: de-anchor an OUT-OF-RANGE retrieved id -- one whose Rn exceeds the
-  // number of retrieved-sources rows this run, so it points at no
-  // `data-source-id` row (a fabricated footnote). The backend already strips
-  // card payloads before the SSE; this is the defense-in-depth layer for the
-  // streamed narrate bubble, which is not a card payload. `maxAnchor` undefined
-  // means "no row count known" -> leave anchors untouched (existing callers).
-  if (anchor && maxAnchor !== undefined && Number(anchor.slice(1)) > maxAnchor) {
+  // QNT-305 (+ corpus follow-up): de-anchor a retrieved id that is out of range
+  // OR points at the wrong corpus (`fundamental R1` where R1 is a news row) -- a
+  // fabricated / mis-stapled footnote. The backend strips card payloads before
+  // the SSE; this is the defense-in-depth layer for the streamed narrate bubble,
+  // which is not a card payload. `sources` undefined means "no row info known"
+  // -> leave anchors untouched (existing callers).
+  if (anchor && sources !== undefined && !anchorValid(text, anchor, sources)) {
     if (!text) {
       // A bare `[Rn]` tag has no source label to keep -- drop it entirely, and
       // trim the trailing space it leaves on the preceding text (mirrors the
@@ -114,7 +140,7 @@ function pushChip(
 export function parseInlineChips(
   text: string,
   dedupe?: DedupeState,
-  maxAnchor?: number,
+  sources?: readonly AnchorSource[],
 ): ProseSegment[] {
   if (!text) return [];
   const st = dedupe ?? { last: null };
@@ -128,9 +154,9 @@ export function parseInlineChips(
     // match[3] = a bare `[Rn]` tag (no source name); otherwise a `(source: …)`
     // citation with match[1]=source, match[2]=optional anchor.
     if (match[3] !== undefined) {
-      pushChip(segments, "", st, match[3], maxAnchor);
+      pushChip(segments, "", st, match[3], sources);
     } else {
-      pushChip(segments, match[1], st, match[2], maxAnchor);
+      pushChip(segments, match[1], st, match[2], sources);
     }
     lastIdx = start + match[0].length;
   }
@@ -140,7 +166,7 @@ export function parseInlineChips(
   return segments;
 }
 
-function tokenizeLine(line: string, st: DedupeState, maxAnchor?: number): ProseSegment[] {
+function tokenizeLine(line: string, st: DedupeState, sources?: readonly AnchorSource[]): ProseSegment[] {
   const segments: ProseSegment[] = [];
   let lastIdx = 0;
   for (const match of line.matchAll(TOKEN_PATTERN)) {
@@ -152,9 +178,9 @@ function tokenizeLine(line: string, st: DedupeState, maxAnchor?: number): ProseS
       segments.push({ type: "bold", text: match[1].trim() });
     } else if (match[4] !== undefined) {
       // Bare `[Rn]` tag — anchor chip with no source label.
-      pushChip(segments, "", st, match[4], maxAnchor);
+      pushChip(segments, "", st, match[4], sources);
     } else if (match[2] !== undefined) {
-      pushChip(segments, match[2], st, match[3], maxAnchor);
+      pushChip(segments, match[2], st, match[3], sources);
     }
     lastIdx = start + match[0].length;
   }
@@ -180,7 +206,7 @@ function normaliseWatchClose(text: string): string {
 export function parseProse(
   text: string,
   dedupe?: DedupeState,
-  maxAnchor?: number,
+  sources?: readonly AnchorSource[],
 ): ProseBlock[] {
   if (!text.trim()) return [];
   // One carrier for the whole document so a repeated source collapses across
@@ -192,7 +218,7 @@ export function parseProse(
     .map((block) =>
       block
         .split("\n")
-        .map((line) => tokenizeLine(line, st, maxAnchor))
+        .map((line) => tokenizeLine(line, st, sources))
         .filter((line) => line.length > 0),
     )
     .filter((block) => block.length > 0);
