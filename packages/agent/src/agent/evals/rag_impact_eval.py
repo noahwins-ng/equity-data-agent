@@ -206,7 +206,7 @@ class _RecordingStub:
     """A stubbed search tool that records whether the graph actually called it.
 
     The graph gates each search on the deterministic flag AND the resolved intent
-    (``_NEWS_SEARCH_INTENTS`` / ``_EARNINGS_SEARCH_INTENTS``). If a positive
+    (``_intent_reads_corpus`` over the QNT-288 policy table). If a positive
     fixture's stub was never called, the question misrouted (wrong intent label)
     rather than failing the synthesis-fold contract -- a distinct axis we report
     but never fold into the pass-rate.
