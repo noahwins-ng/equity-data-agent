@@ -22,6 +22,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from shared.config import settings
 from shared.tickers import TICKERS
 
+from agent.analyst_voice import find_filler
 from agent.evals.dialogue_judge import (
     AGENT_UNDER_TEST_RESOLVED_MODEL,
     JUDGE_MODEL_ALIAS,
@@ -362,6 +363,29 @@ def _apply_deterministic_numeric_gate(
     return score
 
 
+def _apply_deterministic_filler_gate(
+    score: DialogueJudgeScore | None,
+    narrative: str,
+) -> DialogueJudgeScore | None:
+    """QNT-303 (D-6): cap ``voice_match`` at 0 when banned filler is present.
+
+    The no-regret twin of the numeric gate above: soft padding a senior desk
+    never writes ("it's important to note", a leading "Overall,") is a voice
+    failure by definition, so it overrides whatever the LLM judge scored on
+    ``voice_match``. Enforced on every fixture regardless of the judge outcome.
+    """
+    if score is None:
+        return score
+    filler = find_filler(narrative)
+    if not filler:
+        return score
+    score.voice_match.score = 0.0
+    score.voice_match.rationale = (
+        f"Deterministic filler check failed: banned analyst-voice filler: {', '.join(filler)}."
+    )
+    return score
+
+
 def run_fixture(
     fixture: DialogueFixture,
     *,
@@ -429,6 +453,7 @@ def run_fixture(
             config=graph_config if handler is not None else None,
         )
         judge_score = _apply_deterministic_numeric_gate(judge_score, numeric_support)
+        judge_score = _apply_deterministic_filler_gate(judge_score, narrative)
         if emit_langfuse_scores:
             push_langfuse_scores(judge_score, trace_id)
     finally:

@@ -1215,6 +1215,44 @@ never manufacture a generic sign-off ("let me know if you have questions", \
 introduce no new number and cite nothing in the Watch line.
 """
 
+# QNT-303 (D-1): the falsifier signature. The 2026-07 voice assessment found
+# 0/63 recent prod narrations named what would change the view -- the strongest
+# missing senior-analyst signature. This rule asks the narrator to name the one
+# printed level or label whose breach would flip the call, tied to THIS read.
+# ADR-003-safe by construction: it must reuse a threshold the report already
+# prints (an RSI band, a moving-average level, a trend label) rather than invent
+# one, so no new number enters the answer. Optional, like the Watch close: when
+# no clean printed threshold anchors the call, stay silent rather than manufacture
+# a falsifier. Appended for the same forward-looking intents as the Watch close.
+NARRATE_FALSIFIER_RULE = """8. Name what would change your view. Inside the \
+synthesis prose, add one clause that states the single printed regime LABEL \
+whose flip would invert THIS call -- phrased as a condition, not a thing to \
+watch: "the read holds while the trend label stays Uptrend", "this turns \
+cautious if RSI leaves the neutral band it prints", "it flips on a move to \
+Discounted". This is the falsifier and it is distinct from the Watch line \
+(rule 7): the Watch line names a future catalyst to monitor; the falsifier \
+names the label that, if it flips NOW, inverts the call. Anchor ONLY on a \
+label or band the payload ALREADY prints (Uptrend/Sideways/Downtrend, \
+Premium/Inline/Discounted, an RSI regime word). Do NOT introduce a numeric \
+level the payload does not literally print -- in particular never reach for a \
+stock cliche like a long-run moving average the report never named; if the \
+only honest anchor is a raw price level the payload did not print, skip the \
+falsifier entirely. Keep it to one woven clause, no separate labelled line.
+"""
+
+
+# QNT-303 (D-1): intents that get the falsifier close. Narrower than the Watch
+# set on purpose -- the falsifier must quote a printed regime label/band, and
+# only thesis and comparison reliably carry the full technical + fundamental
+# reports that print those labels. News is narrative-only (no printed
+# threshold), and a followup can elaborate a news thread with nothing to anchor
+# on; on both, an earlier draft of this rule fabricated a "200-day moving
+# average" that no report stated (a non_hallucination regression caught by the
+# 2026-07 clean-window dialogue run). Scoping to thesis/comparison keeps the
+# falsifier ADR-003-safe by construction.
+_FALSIFIER_INTENTS = frozenset({"thesis", "comparison"})
+
+
 # Intents whose narration concludes with a forward-looking view, so the
 # optional Watch close earns its place. Single-lens technical/fundamental are
 # excluded (call + one driver is the whole take); quick_fact (terse lookup) and
@@ -1274,6 +1312,8 @@ def build_narrate_prompt(
     system_prompt = NARRATE_SYSTEM_PROMPT
     if intent in _PROBE_CLOSE_INTENTS and not is_clarify:
         system_prompt += NARRATE_PROBE_CLOSE_RULE
+    if intent in _FALSIFIER_INTENTS and not is_clarify:
+        system_prompt += NARRATE_FALSIFIER_RULE
     return [
         *_stable_prefix(system_prompt, history),
         HumanMessage(content=user_msg),
@@ -1422,6 +1462,7 @@ __all__ = [
     "FOCUSED_SYSTEM_PROMPT",
     "FOLLOWUP_SYSTEM_PROMPT",
     "HISTORY_TURN_LIMIT",
+    "NARRATE_FALSIFIER_RULE",
     "NARRATE_SYSTEM_PROMPT",
     "QUICK_FACT_SYSTEM_PROMPT",
     "REPORT_TOOLS",
