@@ -74,11 +74,15 @@ from shared.retrieval import (
 )
 from shared.tickers import TICKERS
 
-from agent.evals.golden_set import (
+from agent.evals.spine import (
     HISTORY_FIELDS,
     HISTORY_PATH,
-    _git_sha,
-    _prompt_version,
+)
+from agent.evals.spine import (
+    git_sha as _git_sha,
+)
+from agent.evals.spine import (
+    prompt_version as _prompt_version,
 )
 
 if TYPE_CHECKING:
