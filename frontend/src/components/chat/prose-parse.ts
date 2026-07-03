@@ -73,8 +73,28 @@ function pushChip(
   rawSource: string,
   st: DedupeState,
   anchor?: string,
+  maxAnchor?: number,
 ): void {
   const text = rawSource.trim();
+  // QNT-305: de-anchor an OUT-OF-RANGE retrieved id -- one whose Rn exceeds the
+  // number of retrieved-sources rows this run, so it points at no
+  // `data-source-id` row (a fabricated footnote). The backend already strips
+  // card payloads before the SSE; this is the defense-in-depth layer for the
+  // streamed narrate bubble, which is not a card payload. `maxAnchor` undefined
+  // means "no row count known" -> leave anchors untouched (existing callers).
+  if (anchor && maxAnchor !== undefined && Number(anchor.slice(1)) > maxAnchor) {
+    if (!text) {
+      // A bare `[Rn]` tag has no source label to keep -- drop it entirely, and
+      // trim the trailing space it leaves on the preceding text (mirrors the
+      // dedupe-drop cleanup) so no orphan double space survives.
+      const prev = segments[segments.length - 1];
+      if (prev && prev.type === "text") prev.text = prev.text.replace(/ $/, "");
+      return;
+    }
+    // `(source: name Rn)` -> keep the source attribution, drop the bad id so it
+    // renders as the quiet canned chip instead of a dangling link.
+    anchor = undefined;
+  }
   // QNT-301: fold the anchor into the dedupe key so two claims citing distinct
   // retrieved rows (R1 vs R2) both render — collapsing them would erase the
   // per-claim provenance the anchoring exists to show. A canned repeat still
@@ -91,7 +111,11 @@ function pushChip(
 
 // Legacy chip-only tokenizer (single paragraph, no bold). Used by every
 // non-narrate caller so their output is unchanged by QNT-285.
-export function parseInlineChips(text: string, dedupe?: DedupeState): ProseSegment[] {
+export function parseInlineChips(
+  text: string,
+  dedupe?: DedupeState,
+  maxAnchor?: number,
+): ProseSegment[] {
   if (!text) return [];
   const st = dedupe ?? { last: null };
   const segments: ProseSegment[] = [];
@@ -104,9 +128,9 @@ export function parseInlineChips(text: string, dedupe?: DedupeState): ProseSegme
     // match[3] = a bare `[Rn]` tag (no source name); otherwise a `(source: …)`
     // citation with match[1]=source, match[2]=optional anchor.
     if (match[3] !== undefined) {
-      pushChip(segments, "", st, match[3]);
+      pushChip(segments, "", st, match[3], maxAnchor);
     } else {
-      pushChip(segments, match[1], st, match[2]);
+      pushChip(segments, match[1], st, match[2], maxAnchor);
     }
     lastIdx = start + match[0].length;
   }
@@ -116,7 +140,7 @@ export function parseInlineChips(text: string, dedupe?: DedupeState): ProseSegme
   return segments;
 }
 
-function tokenizeLine(line: string, st: DedupeState): ProseSegment[] {
+function tokenizeLine(line: string, st: DedupeState, maxAnchor?: number): ProseSegment[] {
   const segments: ProseSegment[] = [];
   let lastIdx = 0;
   for (const match of line.matchAll(TOKEN_PATTERN)) {
@@ -128,9 +152,9 @@ function tokenizeLine(line: string, st: DedupeState): ProseSegment[] {
       segments.push({ type: "bold", text: match[1].trim() });
     } else if (match[4] !== undefined) {
       // Bare `[Rn]` tag — anchor chip with no source label.
-      pushChip(segments, "", st, match[4]);
+      pushChip(segments, "", st, match[4], maxAnchor);
     } else if (match[2] !== undefined) {
-      pushChip(segments, match[2], st, match[3]);
+      pushChip(segments, match[2], st, match[3], maxAnchor);
     }
     lastIdx = start + match[0].length;
   }
@@ -153,7 +177,11 @@ function normaliseWatchClose(text: string): string {
   return text.replace(/\s*\bWatch:/, "\n\n**Watch:**");
 }
 
-export function parseProse(text: string, dedupe?: DedupeState): ProseBlock[] {
+export function parseProse(
+  text: string,
+  dedupe?: DedupeState,
+  maxAnchor?: number,
+): ProseBlock[] {
   if (!text.trim()) return [];
   // One carrier for the whole document so a repeated source collapses across
   // paragraphs/lines, not just within a single line (the synthesis bubble is
@@ -164,7 +192,7 @@ export function parseProse(text: string, dedupe?: DedupeState): ProseBlock[] {
     .map((block) =>
       block
         .split("\n")
-        .map((line) => tokenizeLine(line, st))
+        .map((line) => tokenizeLine(line, st, maxAnchor))
         .filter((line) => line.length > 0),
     )
     .filter((block) => block.length > 0);

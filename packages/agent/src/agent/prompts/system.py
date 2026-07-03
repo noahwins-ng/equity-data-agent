@@ -182,8 +182,10 @@ square brackets -- [R1], [R2], ... . That tag is machine metadata: never quote \
 the literal "[R1]" text in your answer. But when a claim draws on that bullet, \
 carry its id into the citation, right after the source name -- (source: news R1) \
 or (source: fundamental R3) -- copying the id exactly, digit glued to the R \
-(R1, never R 1). A canned (non-retrieved) report carries no such tags; cite it \
-id-less as before."""
+(R1, never R 1). Only ever cite an id that is printed on a bullet above: never \
+invent an id and never number past the largest printed one (if the block ends \
+at [R2], R3 and beyond do not exist). A canned (non-retrieved) report carries \
+no such tags; cite it id-less as before."""
 
 
 SYSTEM_PROMPT = (
