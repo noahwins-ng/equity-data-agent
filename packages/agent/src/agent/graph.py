@@ -39,6 +39,7 @@ import json
 import logging
 import re
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
@@ -441,6 +442,14 @@ _EARNINGS_SEARCH_INTENTS: frozenset[Intent] = frozenset(
 )
 
 _MAX_TOOL_ATTEMPTS = 2  # first try + one retry
+# QNT-300 (B-6): each report endpoint is a serial HTTP round trip measured at
+# ~0.2-1.0s (news ~0.2s, company/technical/fundamental ~0.6-1.1s), so a 4-tool
+# thesis gather ran ~2.9s and a rich 2-ticker comparison ~5.9s serially -- both
+# far above ADR-007's "parallelise where possible" motivation. Fetch the planned
+# tools concurrently on a bounded pool (<= plan size, capped) so the round trips
+# overlap; the cap keeps concurrent connections against the report endpoints
+# modest even on the widest plan.
+_MAX_GATHER_WORKERS = 4
 _EXPLORATION_EXCLUSIONS: tuple[str, ...] = (
     # These are named lens or warm-follow-up requests. Let the existing
     # focused/followup paths handle them so exploration only owns broad scans.
@@ -1015,17 +1024,43 @@ def _gather_reports(
     doesn't make the synthesize prompt apologise. Required tools surface in
     ``errors`` either way. Factored out of the gather node closure so the
     branching can be unit-tested without compiling a graph.
+
+    QNT-300 (B-6): the planned tools are fetched concurrently on a bounded
+    ThreadPoolExecutor (workers <= plan size, capped at ``_MAX_GATHER_WORKERS``)
+    because each is an independent HTTP round trip. This collapses ONE ticker's
+    gather (e.g. a 4-tool thesis, ~2.9s serial -> ~0.9s). The comparison caller
+    still loops tickers sequentially, so a 2-ticker gather is two parallel
+    batches (~1.7s), not one -- capping concurrent connections per the ticket's
+    "workers = plan size, cap 4" note rather than fanning all 8 calls at once.
+    The retry / optional-drop / error-map contract is unchanged: results are
+    assembled in ``plan`` order in a second pass, so ``reports`` and ``errors``
+    are byte-for-byte identical to the old serial loop -- only the wall-clock
+    time to gather them differs. ``_call_with_retry`` swallows every tool
+    exception, so no future raises.
     """
+    # Kick off every callable planned tool at once; a tool absent from the map
+    # needs no I/O and is resolved in the plan-order pass below.
+    runnable: list[tuple[str, ToolFn]] = [
+        (name, tools[name]) for name in plan if tools.get(name) is not None
+    ]
+    results: dict[str, tuple[str | None, str | None]] = {}
+    if runnable:
+        with ThreadPoolExecutor(max_workers=min(len(runnable), _MAX_GATHER_WORKERS)) as pool:
+            futures = {
+                pool.submit(_call_with_retry, tool, ticker, name): name for name, tool in runnable
+            }
+            for future in as_completed(futures):
+                results[futures[future]] = future.result()
+
     reports: dict[str, str] = {}
     errors: dict[str, str] = {}
     for name in plan:
         optional = name in OPTIONAL_TOOLS
-        tool = tools.get(name)
-        if tool is None:
+        if name not in results:  # tool was not registered in the map
             if not optional:
                 errors[name] = "tool-not-registered"
             continue
-        result, error = _call_with_retry(tool, ticker, name)
+        result, error = results[name]
         if result is None:
             if not optional:
                 errors[name] = error or "failed-after-retries"
