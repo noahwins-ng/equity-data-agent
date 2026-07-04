@@ -6,19 +6,21 @@ Three orthogonal controls layered on ``POST /api/v1/agent/chat``:
    request-count flooding. Defaults: ``5/minute, 30/hour, 100/day``. Hitting
    any tier returns HTTP 429 with ``Retry-After``; the chat panel surfaces
    the friendly limit message.
-2. **Per-IP daily Groq token budget** — soft cap orthogonal to request
-   count. A chatty user can stay under 100 req/day but still exhaust a model
-   TPD by triggering many tool runs. Default ~10K tokens/IP/day. Once
+2. **Per-IP daily token budget** — soft cap orthogonal to request
+   count. A chatty user can stay under 100 req/day but still burn a large
+   token spend by triggering many tool runs. Default ~10K tokens/IP/day. Once
    exceeded, ``can_serve_request()`` returns ``False`` and the SSE handler
    short-circuits to a deterministic conversational redirect.
-3. **Global daily Groq TPD circuit breaker** — sized at ~50% of the
-   active model's TPD so daily ingest + the user's own dev usage retain
-   headroom. Defends against the rotating-IP / many-IPs-each-just-under
-   long-tail. **FAILS CLOSED** — when the breaker trips, the agent never
-   reaches the LLM (no fall-through to a paid provider; see ADR-017).
+3. **Global daily token circuit breaker** — QNT-258 / ADR-025: with the
+   paid launch primary (DeepSeek via OpenRouter) there is no free-tier TPD
+   to proxy, so this is now a runaway-cost / abuse breaker sized in paid
+   economics (see ``CHAT_TOKENS_GLOBAL_PER_DAY``). Defends against the
+   rotating-IP / many-IPs-each-just-under long-tail. **FAILS CLOSED** —
+   when the breaker trips, the agent never reaches the LLM, so a stuck
+   loop or scraper cannot run cost past the daily ceiling.
 
 Storage is in-memory (``threading.Lock``-guarded), keyed by IP, with a
-UTC-midnight reset matching Groq's TPD window. Acceptable on the
+UTC-midnight daily reset. Acceptable on the
 single-host Hetzner deploy; a future multi-host topology would need to
 swap the backend for Redis behind the same interface.
 

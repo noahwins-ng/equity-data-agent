@@ -2,6 +2,7 @@
 
 **Date**: 2026-04-23
 **Status**: Accepted (revised same-day from a Claude-override variant — see §"Revision history")
+**Later revised by**: [ADR-021](021-synthesis-model-and-tail-routing.md) (synthesize/narrate tail routing) and [ADR-025](025-paid-launch-primary-and-breaker-recalibration.md) (QNT-258 — the `equity-agent/default` provider slot is repointed to the paid DeepSeek V4 Flash primary for the public launch; the gemini free override decided here still stands).
 
 ## Context
 

@@ -2268,7 +2268,7 @@ def test_runtime_grounding_score_pushed_when_present(
         trace_id="test-trace-id",
         tags=[
             "intent:conversational",
-            "model:groq/llama-3.3-70b-versatile",
+            "model:openrouter/deepseek/deepseek-v4-flash",
             "runtime_grounding:miss",
             "runtime_grounding_rate:0.50",
         ],
@@ -2331,10 +2331,10 @@ def test_intent_and_model_tags_pushed_to_trace(
     assert r.status_code == 200
 
     # stub_graph hard-codes intent="thesis" in the canned final state.
-    # Default provider is groq -> equity-agent/default -> llama-3.3-70b.
+    # QNT-258: default provider -> equity-agent/default -> DeepSeek V4 Flash.
     fake_lf._create_trace_tags_via_ingestion.assert_called_once_with(
         trace_id="test-trace-id",
-        tags=["intent:thesis", "model:groq/llama-3.3-70b-versatile"],
+        tags=["intent:thesis", "model:openrouter/deepseek/deepseek-v4-flash"],
     )
 
 
@@ -2504,9 +2504,9 @@ def test_current_model_info_returned_for_default_provider() -> None:
     from agent.llm import current_model_info
 
     info = current_model_info()
-    # Default provider is groq -> equity-agent/default -> llama-3.3-70b.
+    # QNT-258: default provider -> equity-agent/default -> DeepSeek V4 Flash.
     assert info["alias"] == "equity-agent/default"
-    assert info["resolved_model"] == "groq/llama-3.3-70b-versatile"
+    assert info["resolved_model"] == "openrouter/deepseek/deepseek-v4-flash"
 
 
 def test_current_model_info_returns_unknown_for_unmapped_alias(

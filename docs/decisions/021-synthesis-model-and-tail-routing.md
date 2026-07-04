@@ -1,8 +1,9 @@
 # ADR-021: Synthesis stays on llama-3.3-70b; bound the tail with a proxy timeout + fallback
 
 **Date**: 2026-06-11
-**Status**: Accepted
+**Status**: Accepted — model choice superseded by [ADR-025](025-paid-launch-primary-and-breaker-recalibration.md)
 **Supersedes/extends**: [ADR-011](011-llm-routing-groq-default-gemini-override.md) (routing topology). Routing decisions for `synthesize`/`narrate` now live here; ADR-011's groq-default / gemini-override / fallback chain otherwise stands.
+**Superseded by**: [ADR-025](025-paid-launch-primary-and-breaker-recalibration.md) (QNT-258) — for the public launch the `synthesize`/`narrate` primary moves off Groq `llama-3.3-70b` to the paid DeepSeek V4 Flash primary (Groq is retiring the whole free synthesize-capable chain). The **tail-bounding mechanism** decided here (per-model `timeout: 45` → in-call fallback) is preserved and carried forward.
 
 ## Context
 

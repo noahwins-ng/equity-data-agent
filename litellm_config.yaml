@@ -47,25 +47,67 @@
 
 model_list:
   - model_name: equity-agent/default
+    # QNT-258 / ADR-025: paid primary for the public launch. Moved OFF Groq
+    # llama-3.3-70b (free-tier 100K TPD ceiling was the binding launch
+    # constraint) to DeepSeek V4 Flash via OpenRouter (paid: $0.09/$0.18 per M,
+    # ~$0.002/chat, 1M ctx, non-reasoning, structured-outputs capable — already
+    # exercised as the QNT-275 DeepEval judge). The whole Groq chain ADR-021
+    # calibrated is being retired by Groq's 2026-06-17 decommission (scout
+    # 07/17, 70b 08/16), so a same-provider billing flip was not available.
     litellm_params:
-      model: groq/llama-3.3-70b-versatile
-      api_key: os.environ/GROQ_API_KEY
-      # QNT-223 (#12) / ADR-021: bound the throttled tail. The 14-day baseline
-      # had synthesize max 117.5s — a throttled Groq call that ChatOpenAI
-      # (max_retries=2 x 60s LLM_REQUEST_TIMEOUT) retried to ~120s instead of
-      # rerouting. This per-model timeout makes the proxy abort a throttled
-      # llama-3.3-70b call at 45s and fall through to fallback-llama4scout
-      # (benched 16/16) within the SAME client call, bounding worst-case turn
-      # wall-clock to ~48s (< the 60s client timeout, so no client retry).
-      # 45s sits well above normal synthesize/narrate (~5-20s) so only genuine
-      # throttle trips it. Bench/eval aliases set no timeout and are unaffected.
+      model: openrouter/deepseek/deepseek-v4-flash
+      api_key: os.environ/OPENROUTER_API_KEY
+      # QNT-258: DeepSeek V4 Flash on OpenRouter defaults to REASONING ON (emits
+      # 37-89 CoT tokens/call even at reasoning_effort:low), which the ticket's
+      # "non-reasoning" premise missed. Reasoning-on caused a degenerate bench
+      # (30min vs ~3min), intermittent empty completions when CoT ate the token
+      # budget, and uniform narrate grounding misses. Disabling it (verified:
+      # reasoning_tokens -> 0, clean content) restores the fast non-reasoning
+      # model the ADR-025 economics assume. See ADR-025.
+      extra_body:
+        reasoning:
+          enabled: false
+      # QNT-223 (#12) / ADR-021: bound the throttled tail — carried forward. A
+      # throttled primary call is aborted at 45s and falls through to the
+      # fallback anchor (fallback-nemotron-ultra) within the SAME client call,
+      # bounding worst-case turn wall-clock to ~48s (< the 60s client timeout,
+      # so no client retry). 45s sits well above normal synthesize/narrate
+      # (~5-20s) so only genuine throttle trips it. Bench aliases set no timeout.
       timeout: 45
+
+  # ─── QNT-258 / ADR-025: OpenRouter fallback anchor ──────────
+  # The paid DeepSeek primary rarely fails, but when it 429s/throttles/times
+  # out the chain must still serve. Groq no longer offers a free
+  # synthesize-capable host (post-decommission every survivor caps at 8000 TPM
+  # -> 413 on a 9-12k synthesize), so the anchor is a free OpenRouter model.
+  # This overrides the ticket's "free models are bench-only" guidance FOR THE
+  # FALLBACK SLOT ONLY (user decision, ADR-025): the primary stays paid, and
+  # this free hop carries only the small residual traffic the paid model
+  # dropped. Free-tier caveats (shared RPM/RPD caps, train-on-prompts, ephemeral
+  # capacity) are acceptable for a rare fallback but NOT for primary.
+  #
+  # Laguna M.1 was evaluated as a second anchor and DROPPED (QNT-258 review):
+  # poolside/laguna-m.1:free returned upstream 429s and empty completions on a
+  # live smoke test, so a known-flaky last hop only added retry latency before
+  # the deterministic fallback. Nemotron alone is the anchor; if it also fails,
+  # graph.py _structured_call returns None and the caller degrades (fail-closed).
+  - model_name: equity-agent/fallback-nemotron-ultra
+    # Anchor: NVIDIA Nemotron 3 Ultra (550B), 1M ctx, structured-outputs CAPABLE
+    # — so it serves BOTH the free-text narrate AND the array-bounded ThesisPlan
+    # synthesize (the schema Cerebras was rejected on, QNT-227). Verified live
+    # (QNT-258): clean completion, finish_reason=stop.
+    litellm_params:
+      model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
+      api_key: os.environ/OPENROUTER_API_KEY
 
   - model_name: equity-agent/fallback-llama4scout
     # QNT-129: replaces the previous `equity-agent/fallback-qwen3`. Same
     # provider (Groq), same TPD ceiling (500K — 5× the default), strictly
     # better on every measured signal vs Qwen3-32B. See
     # docs/model-bench-2026-04.md for the rationale.
+    # QNT-258: no longer in equity-agent/default's chain (that moved to the
+    # OpenRouter anchors above); still serves the equity-agent/small chain
+    # until the Groq decommission re-anchoring follow-up (dies 2026-07-17).
     litellm_params:
       model: groq/meta-llama/llama-4-scout-17b-16e-instruct
       api_key: os.environ/GROQ_API_KEY
@@ -138,7 +180,13 @@ model_list:
       model: openrouter/deepseek/deepseek-v4-flash
       api_key: os.environ/OPENROUTER_API_KEY
       temperature: 0.0
-      reasoning_effort: low
+      # QNT-258: fully disable reasoning (was reasoning_effort: low, which still
+      # emitted 37-89 CoT tokens/call). Aligns with ADR-023's "verdict tasks
+      # don't need CoT" for the DeepEval judge AND makes this bench alias match
+      # the reasoning-off config the equity-agent/default primary now ships.
+      extra_body:
+        reasoning:
+          enabled: false
 
   - model_name: equity-agent/bench-gptoss20b
     litellm_params:
@@ -195,19 +243,21 @@ model_list:
 
 litellm_settings:
   drop_params: true
-  # Auto-failover on 429 (rate limit) — when Llama-3.3-70B exhausts its
-  # 100K TPD, requests transparently switch to Llama-4-Scout (500K TPD),
-  # then Groq-hosted gpt-oss-120b as the last same-provider fallback.
-  # (QNT-227 dropped the Cerebras hop that used to sit between them: it
-  # could not serve synthesize within the client timeout — see top-of-file.)
-  # `equity-agent/gemini` and the bench aliases stay direct so opting in is
-  # always an explicit choice.
+  # Auto-failover on 429 / throttle / per-model timeout. QNT-258 / ADR-025:
+  # equity-agent/default (now paid DeepSeek V4 Flash) falls through to the free
+  # OpenRouter anchor Nemotron 3 Ultra (structured-outputs capable, so it serves
+  # both synthesize and narrate). The paid primary has no daily cap, so this
+  # anchor fires rarely; if it also fails the node degrades to its deterministic
+  # fallback (fail-closed). (Laguna M.1 was dropped in review — see the anchor
+  # comment above.) `equity-agent/gemini` and the bench aliases stay direct so
+  # opting in is always an explicit choice.
   fallbacks:
     - equity-agent/default:
-        - equity-agent/fallback-llama4scout
-        - equity-agent/fallback-groq-gptoss120b
-    # QNT-220 (#7): small tier falls back to the 70b default on Groq TPD
-    # exhaustion -- classify/plan stay functional, just lose the cost win.
+        - equity-agent/fallback-nemotron-ultra
+    # QNT-220 (#7): small tier falls back to the default on provider throttle
+    # -- classify/plan stay functional. (Groq gpt-oss-20b survives the
+    # decommission; its Groq-fallback hop below dies 2026-07-17 and is part of
+    # the re-anchoring follow-up, out of scope here.)
     - equity-agent/small:
         - equity-agent/default
         - equity-agent/fallback-llama4scout
