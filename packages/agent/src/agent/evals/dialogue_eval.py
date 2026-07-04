@@ -335,13 +335,14 @@ def _parse_user_turn(path: Path, fixture_id: str, raw_turn: object) -> str:
 
 
 def _render_payload(state: dict[str, Any]) -> str:
-    """Render the user-visible structured payload, if any, to markdown."""
-    for key in ("comparison", "conversational", "quick_fact", "focused", "exploration", "thesis"):
-        raw = state.get(key)
-        to_markdown = getattr(raw, "to_markdown", None)
-        if callable(to_markdown):
-            return str(to_markdown())
-    return ""
+    """Render the user-visible structured payload, if any, to markdown.
+
+    QNT-307: reads the single ``answer`` discriminated union (was a seven-slot
+    priority loop). A narrative-only turn carries ``answer=None`` and renders "".
+    """
+    raw = state.get("answer")
+    to_markdown = getattr(raw, "to_markdown", None)
+    return str(to_markdown()) if callable(to_markdown) else ""
 
 
 def _flatten_reports(state: dict[str, Any]) -> list[str]:

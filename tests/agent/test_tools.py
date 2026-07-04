@@ -470,7 +470,7 @@ def test_default_report_tools_compose_with_build_graph(
     # Each gather call hit the API_BASE_URL + /api/v1/reports/<kind>/NVDA path.
     for kind, body in result["reports"].items():
         assert body.endswith(f"/api/v1/reports/{kind}/NVDA")
-    assert result["thesis"] is expected_thesis
+    assert result["answer"] is expected_thesis
     assert result["confidence"] == 1.0
 
 

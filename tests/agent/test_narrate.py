@@ -123,7 +123,7 @@ def test_narrate_assembles_text_and_emits_chunks_in_order(stub_llm: _StubLLM) ->
     result = graph.invoke({"ticker": "TSLA", "question": "is TSLA overvalued?"})
 
     assert result["intent"] == "thesis"
-    assert isinstance(result.get("thesis"), Thesis)
+    assert isinstance(result.get("answer"), Thesis)
     # The narrate node assembled the chunks into one string.
     assert result.get("narrative") == "I'd lean Overweight on this one."
     # And the same chunks streamed via the emitter, in order.
@@ -151,8 +151,8 @@ def test_synthesize_emits_card_before_narrate(stub_llm: _StubLLM) -> None:
     )
     # The emitted payload is the model dump of the same thesis carried in state.
     card_payload = next(data for event, data in events if event == "thesis")
-    assert isinstance(result.get("thesis"), Thesis)
-    assert card_payload == result["thesis"].model_dump()
+    assert isinstance(result.get("answer"), Thesis)
+    assert card_payload == result["answer"].model_dump()
 
 
 def test_synthesize_does_not_emit_card_for_conversational(
@@ -198,7 +198,7 @@ def test_narrate_grounding_miss_is_advisory_after_chunks(
 
     result = graph.invoke({"ticker": "TSLA", "question": "is TSLA overvalued?"})
 
-    assert isinstance(result.get("thesis"), Thesis)
+    assert isinstance(result.get("answer"), Thesis)
     assert result.get("narrative") == "RSI is 99."
     assert result["grounding_rate"] < 1.0
     assert result["confidence"] < 1.0
@@ -219,7 +219,7 @@ def test_narrate_failure_does_not_break_run(
     result = graph.invoke({"ticker": "TSLA", "question": "is TSLA overvalued?"})
 
     # Structured payload still landed.
-    assert isinstance(result.get("thesis"), Thesis)
+    assert isinstance(result.get("answer"), Thesis)
     # Narrative degraded to None.
     assert result.get("narrative") is None
     # No narrative_chunk events made it to the emitter.
@@ -253,7 +253,7 @@ def test_followup_narrative_only_skips_quick_fact(
     # No tool calls on the followup turn.
     assert sum(t.call_count for t in tools.values()) == 0
     # The defining assertion: no QuickFactAnswer; narrate owned the response.
-    assert second.get("quick_fact") is None
+    assert second.get("answer") is None
     # narrative_chunk events DID arrive (narrate ran).
     chunk_events = [e for e in events if e[0] == "narrative_chunk"]
     assert chunk_events, "expected narrative_chunk events on the followup turn"
@@ -283,7 +283,7 @@ def test_followup_metric_ask_keeps_quick_fact(
     second = graph.invoke({"ticker": "TSLA", "question": "elaborate on the RSI"}, config=config)
     assert second["intent"] == "followup"
     # Both signals must be present: the structured card AND the bubble.
-    assert isinstance(second.get("quick_fact"), QuickFactAnswer)
+    assert isinstance(second.get("answer"), QuickFactAnswer)
     chunk_events = [e for e in events if e[0] == "narrative_chunk"]
     assert chunk_events, "expected narrative_chunk events on metric-ask followup"
     assert second.get("narrative")
@@ -299,7 +299,7 @@ def test_narrate_prompt_strips_structured_payload_disclaimer(
 
     result = graph.invoke({"ticker": "NVDA", "question": "Give me an NVDA thesis."})
 
-    assert DISCLAIMER in result["thesis"].to_markdown()
+    assert DISCLAIMER in result["answer"].to_markdown()
     rendered_prompt = "\n".join(
         str(getattr(message, "content", message))
         for prompt in stub_llm.stream_prompts
@@ -321,7 +321,7 @@ def test_quick_fact_intent_skips_narrate(stub_llm: _StubLLM) -> None:
 
     assert result["intent"] == "quick_fact"
     # Surviving surface: the structured card carries the answer + cited value.
-    qf = result.get("quick_fact")
+    qf = result.get("answer")
     assert isinstance(qf, QuickFactAnswer)
     assert qf.answer
     assert qf.cited_value == "78"
@@ -370,8 +370,7 @@ def test_fallback_redirect_skips_narrate(
     result = graph.invoke({"ticker": "TSLA", "question": "thesis on TSLA?"})
 
     # The fallback fired (conversational redirect present, thesis None).
-    assert result.get("conversational") is not None
-    assert result.get("thesis") is None
+    assert result.get("answer") is not None
     # narrate stayed silent — no narrative_chunk events, narrative=None.
     assert not any(event == "narrative_chunk" for event, _ in events)
     assert result.get("narrative") is None

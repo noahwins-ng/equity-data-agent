@@ -37,8 +37,6 @@ import yaml
 from shared.config import settings
 from shared.tickers import TICKERS
 
-from agent.comparison import ComparisonAnswer
-from agent.conversational import ConversationalAnswer
 from agent.evals.hallucination import check as check_hallucination
 from agent.evals.judge import JudgeScore
 from agent.evals.judge import score as judge_score_fn
@@ -51,10 +49,7 @@ from agent.evals.spine import (
 )
 from agent.evals.tool_calls import check as check_tool_calls
 from agent.evals.tool_calls import wrap_with_recorder
-from agent.exploration import ExplorationAnswer
-from agent.focused import FocusedAnalysis
 from agent.graph import build_graph
-from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 from agent.tools import default_report_tools, get_company_report_compact
 
@@ -265,34 +260,18 @@ def run_record(record: GoldenRecord, *, llm_for_judge: Any | None = None) -> Eva
         )
     elapsed_ms = int((time.perf_counter() - started) * 1000)
 
-    # QNT-133/149/156: state can carry one of four structured payloads
-    # (``thesis``, ``quick_fact``, ``comparison``, ``conversational``). The
-    # eval scorers (hallucination / judge / cosine) all want a flat
-    # string, so render through ``to_markdown`` here rather than push the
-    # per-shape contract into each scorer. Comparison runs check
-    # hallucination against the union of all per-ticker reports;
-    # conversational runs treat ANY digit as a hallucination per the
-    # QNT-156 guardrail.
-    thesis_obj = state.get("thesis")
-    quick_fact_obj = state.get("quick_fact")
-    comparison_obj = state.get("comparison")
-    conversational_obj = state.get("conversational")
-    focused_obj = state.get("focused")
-    exploration_obj = state.get("exploration")
-    if isinstance(comparison_obj, ComparisonAnswer):
-        thesis = comparison_obj.to_markdown()
-    elif isinstance(thesis_obj, Thesis):
-        thesis = thesis_obj.to_markdown()
-    elif isinstance(quick_fact_obj, QuickFactAnswer):
-        thesis = quick_fact_obj.to_markdown()
-    elif isinstance(focused_obj, FocusedAnalysis):
-        thesis = focused_obj.to_markdown()
-    elif isinstance(exploration_obj, ExplorationAnswer):
-        thesis = exploration_obj.to_markdown()
-    elif isinstance(conversational_obj, ConversationalAnswer):
-        thesis = conversational_obj.to_markdown()
-    else:
-        thesis = ""
+    # QNT-133/149/156/307: state carries the synthesized shape in the single
+    # ``answer`` discriminated union. The eval scorers (hallucination / judge /
+    # cosine) all want a flat string, so render through ``to_markdown`` here
+    # rather than push the per-shape contract into each scorer. Comparison runs
+    # check hallucination against the union of all per-ticker reports;
+    # conversational runs treat ANY digit as a hallucination per the QNT-156
+    # guardrail. ``thesis_obj`` narrows the union to the Thesis shape for the
+    # QNT-302 verdict/labels + aspect-support checks below (None otherwise).
+    answer_obj = state.get("answer")
+    thesis_obj = answer_obj if isinstance(answer_obj, Thesis) else None
+    to_markdown = getattr(answer_obj, "to_markdown", None)
+    thesis = str(to_markdown()) if callable(to_markdown) else ""
     reports = dict(state.get("reports") or {})
 
     # Comparison runs gather reports per ticker — flatten to a corpus the

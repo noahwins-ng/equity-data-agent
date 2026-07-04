@@ -236,7 +236,7 @@ def test_warm_ack_after_nvda_thesis_uses_warm_prompt_no_tools(
     )
 
     assert second["intent"] == "conversational"
-    assert isinstance(second["conversational"], ConversationalAnswer)
+    assert isinstance(second["answer"], ConversationalAnswer)
     # AC3: no tools gathered on the warm conversational turn.
     assert sum(tool.call_count for tool in tools.values()) == 0
 
@@ -272,7 +272,7 @@ def test_bare_hi_after_nvda_thesis_uses_neutral_prompt_no_tools(
     second = graph.invoke({"ticker": "NVDA", "question": "hi"}, config=config)
 
     assert second["intent"] == "conversational"
-    assert isinstance(second["conversational"], ConversationalAnswer)
+    assert isinstance(second["answer"], ConversationalAnswer)
     assert sum(tool.call_count for tool in tools.values()) == 0
 
     assert stub.conversational_prompts, "conversational synthesize must have fired"

@@ -31,9 +31,10 @@ Pipeline:
 
 The synthesized shape lives in a single discriminated-union ``state['answer']``
 field (QNT-294) -- a single slot holds exactly one payload per run, so the
-"exactly one of" contract is enforced by the type rather than convention. The
-eight legacy answer slots remain as deprecated read-compat channels derived from
-it. Nodes are module-level functions in ``agent.nodes`` (bound to build-time
+"exactly one of" contract is enforced by the type rather than convention.
+QNT-307 retired the seven legacy read-compat slots QNT-294 kept during the
+migration; the followup path now reads a dedicated ``prior_answer`` channel.
+Nodes are module-level functions in ``agent.nodes`` (bound to build-time
 ``GraphDeps`` here); pure helpers live in ``agent.policy`` / ``agent.structured``
 / ``agent.support`` and are re-exported from this module.
 """
@@ -53,7 +54,7 @@ from shared.tickers import TICKERS  # noqa: F401
 
 from agent.answer import AnswerPayload, answer_slot, project_answer  # noqa: F401
 from agent.citations import strip_bad_anchors_in_obj  # noqa: F401
-from agent.comparison import ComparisonAnswer, LeanComparisonAnswer
+from agent.comparison import ComparisonAnswer, LeanComparisonAnswer  # noqa: F401
 from agent.conversational import (  # noqa: F401
     ConversationalAnswer,
     domain_redirect,
@@ -73,7 +74,9 @@ from agent.llm import SMALL_NODE_ALIAS, get_llm  # noqa: F401
 
 # QNT-294 (AC1): helpers relocated out of graph.py. Re-imported here so the
 # node closures in build_graph resolve them and so external callers/tests that
-# ``from agent.graph import <helper>`` keep working (re-export compat).
+# ``from agent.graph import <helper>`` keep working (re-export compat). QNT-307
+# (AC3) weighed decoupling this + the ``graph_module`` monkeypatch seam and chose
+# to defer it -- see ADR-024 (a working test seam is not automatically debt).
 from agent.policy import (  # noqa: F401
     _CLARIFY_FALLBACK_REASON,
     _CLARIFY_LEAD_IN,
@@ -235,8 +238,8 @@ class AgentState(TypedDict):
     with the primary ticker's reports so existing consumers (CLI confidence
     line, eval hallucination scorer) keep working.
 
-    Exactly one of ``thesis`` / ``quick_fact`` / ``comparison`` /
-    ``conversational`` is populated per run, matching ``intent``.
+    The synthesized answer lives in the single ``answer`` discriminated union,
+    matching ``intent`` (QNT-294 / QNT-307).
     """
 
     ticker: str
@@ -250,23 +253,25 @@ class AgentState(TypedDict):
     comparison_tickers: NotRequired[list[str]]
     reports_by_ticker: NotRequired[dict[str, dict[str, str]]]
     errors: NotRequired[dict[str, str]]
-    # QNT-294 (AC2): the single discriminated-union answer payload -- the write
-    # source of truth (populated only via ``agent.answer.project_answer``, so a
-    # node cannot hand-set two shapes). ``_assistant_surface``, synthesize's
-    # early card emit, narrate, and the SSE wrapper all read this. The eight
-    # slots below are now DEPRECATED read-compat channels derived from it: the
-    # checkpointer persists them, the eval scorers + SSE citation ladder still
-    # read them, and the followup path leans on the separately-hydrated
-    # ``thesis`` channel. A follow-up ticket migrates the remaining readers and
-    # drops them.
+    # QNT-294 / QNT-307: the single discriminated-union answer payload -- the sole
+    # answer write channel (populated only via ``agent.answer.project_answer``, so
+    # a node cannot hand-set two shapes; the union enforces exactly-one).
+    # ``_assistant_surface``, synthesize's early card emit, narrate, the eval
+    # scorers, and the SSE wrapper all read this. QNT-307 retired the seven legacy
+    # read-compat slots QNT-294 kept during the migration; old checkpoints that
+    # still carry them hydrate harmlessly (unknown channels ignored, missing
+    # ``answer`` reads as None).
     answer: NotRequired[AnswerPayload | None]
-    thesis: NotRequired[Thesis | None]
-    quick_fact: NotRequired[QuickFactAnswer | None]
-    comparison: NotRequired[ComparisonAnswer | None]
-    comparison_lean: NotRequired[LeanComparisonAnswer | None]
-    conversational: NotRequired[ConversationalAnswer | None]
-    focused: NotRequired[FocusedAnalysis | None]
-    exploration: NotRequired[ExplorationAnswer | None]
+    # QNT-307: the prior turn's Thesis, snapshotted at the turn boundary by
+    # ``classify_node``. Replaces the retired ``thesis`` slot the followup path
+    # leaned on and reproduces its lifetime exactly: only a Thesis is carried
+    # (non-thesis intents nulled the old slot), and a narrative-only followup
+    # preserves the earlier Thesis across the chain. The followup path (synthesize,
+    # narrate, ``_assistant_surface``) reads THIS to reason over the earlier turn
+    # while it overwrites ``answer`` mid-run. None on a cold thread or after a
+    # non-thesis analytical turn. Typed as the union for assignment flexibility,
+    # but only ever a Thesis or None in practice.
+    prior_answer: NotRequired[AnswerPayload | None]
     confidence: NotRequired[float]
     grounding_rate: NotRequired[float]
     grounding_unsupported: NotRequired[list[str]]

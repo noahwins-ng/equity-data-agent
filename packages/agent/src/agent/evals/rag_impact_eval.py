@@ -220,30 +220,27 @@ class _RecordingStub:
         return self.payload
 
 
-_PAYLOAD_KEYS = ("thesis", "quick_fact", "comparison", "conversational", "focused", "exploration")
-
-
 def _answer_text(state: dict[str, Any]) -> str:
     """Reconstruct the full user-facing answer: narrative + structured payload.
 
     The agent's answer is the streamed analyst ``narrative`` plus whichever
-    structured payload slot the synthesize node filled (each renders via
-    ``to_markdown``). The targeted-news path drops the focused card and lets
-    narrate own the spoken answer, so we must union both -- keying on this text
-    (not internal structures) is the QNT-276-refactor-proof invariant.
+    structured payload the synthesize node filled (QNT-307: the single ``answer``
+    union, renders via ``to_markdown``). The targeted-news path drops the focused
+    card and lets narrate own the spoken answer, so we must union both -- keying
+    on this text (not internal structures) is the QNT-276-refactor-proof
+    invariant.
     """
     parts: list[str] = []
     narrative = state.get("narrative")
     if narrative:
         parts.append(str(narrative))
-    for key in _PAYLOAD_KEYS:
-        obj = state.get(key)
-        to_markdown = getattr(obj, "to_markdown", None)
-        if obj is not None and callable(to_markdown):
-            try:
-                parts.append(str(to_markdown()))
-            except Exception:  # noqa: BLE001 — a render glitch must not crash the eval
-                logger.warning("rag-impact: %s.to_markdown() failed", key)
+    obj = state.get("answer")
+    to_markdown = getattr(obj, "to_markdown", None)
+    if obj is not None and callable(to_markdown):
+        try:
+            parts.append(str(to_markdown()))
+        except Exception:  # noqa: BLE001 — a render glitch must not crash the eval
+            logger.warning("rag-impact: answer.to_markdown() failed")
     return "\n\n".join(parts)
 
 

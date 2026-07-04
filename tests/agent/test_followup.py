@@ -176,25 +176,27 @@ def test_followup_reuses_reports_and_skips_gather(
     # AC4: zero tool calls on the followup turn.
     assert _tool_calls(tools) == 0
     # Metric-ask path: QuickFactAnswer is populated.
-    assert isinstance(second.get("quick_fact"), QuickFactAnswer)
+    assert isinstance(second.get("answer"), QuickFactAnswer)
 
 
 def test_old_shape_checkpoint_hydrates_and_followup_works(
     stub_llm: _StubLLM,  # noqa: ARG001
     saver: Any,
 ) -> None:
-    """QNT-294 (AC3): a checkpoint written in the PRE-refactor state shape --
+    """QNT-307 (AC2): a checkpoint written in the PRE-refactor state shape --
     the legacy ``thesis`` / ``reports`` / ``messages`` slots populated, and NO
-    ``answer`` field (the discriminated union did not exist yet) -- hydrates into
-    the new state without error, and a warm-thread followup on that thread still
-    works.
+    ``answer`` field -- hydrates into the new state without error, and a
+    warm-thread followup on that thread still works (degrades gracefully).
 
     The concern (QNT-209 / QNT-216 backwards-compat): existing SqliteSaver
-    threads persist the old shape. Adding the ``answer`` channel is additive, so
-    an old checkpoint simply lacks a value for it; the followup path reads the
-    still-hydrated legacy ``thesis`` channel to reason over the prior turn. We
-    seed such a checkpoint directly (never writing ``answer``) and confirm turn 2
-    hydrates it, reuses the reports with zero tool calls, and produces a card.
+    threads persist the old shape. QNT-307 retired the seven legacy answer slots,
+    so the ``thesis`` channel no longer exists -- LangGraph silently IGNORES the
+    stored value for a channel the current graph doesn't declare (proven below:
+    it is absent from the hydrated state, no raise). ``answer`` is likewise absent
+    (reads as None) and ``prior_answer`` is unset, so the followup has no prior
+    card to reason over -- but ``reports`` still hydrate, so turn 2 reuses them
+    with zero tool calls and produces a QuickFactAnswer. We seed such a checkpoint
+    directly (never writing ``answer``) and confirm turn 2 works.
     """
     tools = {
         "technical": MagicMock(return_value="## technical\nRSI 78\n"),
@@ -229,10 +231,12 @@ def test_old_shape_checkpoint_hydrates_and_followup_works(
     }
     graph.update_state(config, old_shape_state)
 
-    # Sanity: the seeded checkpoint really has no ``answer`` channel.
+    # Sanity: the seeded checkpoint has no ``answer`` channel, and the retired
+    # ``thesis`` channel is ignored on load (QNT-307) -- not carried into state.
     hydrated = graph.get_state(config).values
     assert "answer" not in hydrated
-    assert isinstance(hydrated.get("thesis"), Thesis)
+    assert "thesis" not in hydrated
+    assert hydrated["reports"]  # the surviving prior-turn context
 
     for t in tools.values():
         t.reset_mock()
@@ -243,9 +247,8 @@ def test_old_shape_checkpoint_hydrates_and_followup_works(
     second = graph.invoke({"ticker": "TSLA", "question": "elaborate on the RSI"}, config=config)
     assert second["intent"] == "followup"
     assert _tool_calls(tools) == 0
-    # The card is produced (works), and the new-shape ``answer`` union is now
-    # written on the once-legacy thread.
-    assert isinstance(second.get("quick_fact"), QuickFactAnswer)
+    # The card is produced (works): the new-shape ``answer`` union is now written
+    # on the once-legacy thread, reasoned from the hydrated reports.
     assert isinstance(second.get("answer"), QuickFactAnswer)
 
 
@@ -510,10 +513,72 @@ def test_thread_persists_across_saver_restart(
     assert r2["intent"] == "followup"
     # The cross-process-boundary assertion: no tool re-fetched.
     assert _tool_calls(tools2) == 0
-    # The state-preservation assertion: the prior turn's Thesis survived
-    # the restart AND survived the followup branch's return (which must
-    # NOT clobber it via _empty_payload). Future followups can still
-    # reference the v2 framing the prompt expects.
-    assert isinstance(r2.get("thesis"), Thesis)
+    # The state-preservation assertion (QNT-307): the prior turn's Thesis survived
+    # the restart AND was snapshotted into ``prior_answer`` by classify, so the
+    # narrative-only followup (answer=None this turn) can still reference the v2
+    # framing the prompt expects. ``prior_answer`` replaces the old ``thesis``
+    # slot that used to carry this across turns.
+    assert isinstance(r2.get("prior_answer"), Thesis)
     assert r2["reports"]  # hydrated reports still present
     conn2.close()
+
+
+# ─── QNT-307: prior_answer reproduces the retired thesis-slot lifetime ──────
+
+
+def test_prior_answer_carries_original_thesis_across_followup_chain(
+    stub_llm: _StubLLM,  # noqa: ARG001
+    saver: Any,
+) -> None:
+    """The old ``thesis`` slot survived a chain of followups because followup
+    returns never cleared it. ``prior_answer`` reproduces that: a thesis followed
+    by two narrative-only followups keeps the ORIGINAL Thesis as the prior
+    substrate on every turn."""
+    tools = {
+        "technical": MagicMock(return_value="## technical\nRSI 78\n"),
+        "fundamental": MagicMock(return_value="## fundamental\nP/E 80\n"),
+        "company": MagicMock(return_value="## company\nDescription\n"),
+    }
+    graph = build_graph(tools, checkpointer=saver)
+    config: RunnableConfig = {"configurable": {"thread_id": "prior-chain:TSLA"}}
+
+    graph.invoke({"ticker": "TSLA", "question": "is TSLA overvalued?"}, config=config)
+    # Turn 2: narrative-only followup -> this turn's answer is None, and classify
+    # snapshotted the prior Thesis into prior_answer.
+    t2 = graph.invoke({"ticker": "TSLA", "question": "tell me more"}, config=config)
+    assert t2["intent"] == "followup"
+    assert t2.get("answer") is None
+    assert isinstance(t2.get("prior_answer"), Thesis)
+    # Turn 3: another narrative-only followup -> the ORIGINAL Thesis is still
+    # carried (turn 2 wrote answer=None, so prior_answer is preserved).
+    t3 = graph.invoke({"ticker": "TSLA", "question": "why is that?"}, config=config)
+    assert t3["intent"] == "followup"
+    assert isinstance(t3.get("prior_answer"), Thesis)
+
+
+def test_prior_answer_is_none_after_non_thesis_turn(
+    stub_llm: _StubLLM,  # noqa: ARG001
+    saver: Any,
+) -> None:
+    """``prior_answer`` carries ONLY a Thesis -- every non-thesis intent went
+    through project_answer, which nulled the old ``thesis`` slot. A followup after
+    a quick_fact turn therefore gets prior_answer=None (NOT the quick_fact), so
+    build_followup_prompt's 'earlier thesis' section stays empty, matching the
+    pre-refactor behaviour (out-of-scope synthesis change otherwise)."""
+    tools = {
+        "technical": MagicMock(return_value="## technical\nRSI 78\n"),
+        "fundamental": MagicMock(return_value="## fundamental\nP/E 80\n"),
+        "company": MagicMock(return_value="## company\nDescription\n"),
+    }
+    graph = build_graph(tools, checkpointer=saver)
+    config: RunnableConfig = {"configurable": {"thread_id": "prior-nonthesis:TSLA"}}
+
+    graph.invoke({"ticker": "TSLA", "question": "is TSLA overvalued?"}, config=config)
+    # Turn 2: named-ticker metric ask routes quick_fact (not followup), nulling the
+    # thesis-equivalent -- prior_answer must not survive it.
+    t2 = graph.invoke({"ticker": "TSLA", "question": "what's TSLA's RSI?"}, config=config)
+    assert t2["intent"] == "quick_fact"
+    # Turn 3: followup after the quick_fact turn -> no prior Thesis to carry.
+    t3 = graph.invoke({"ticker": "TSLA", "question": "tell me more"}, config=config)
+    assert t3["intent"] == "followup"
+    assert t3.get("prior_answer") is None

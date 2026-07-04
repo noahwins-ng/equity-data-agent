@@ -188,7 +188,7 @@ def test_news_led_exploration_routes_and_gathers_two_lenses(
     # QNT-220 follow-up: a broad scan always renders as the dedicated
     # exploration card, regardless of the classifier's original label.
     assert result["intent"] == "exploration"
-    assert isinstance(result["exploration"], ExplorationAnswer)
+    assert isinstance(result["answer"], ExplorationAnswer)
     assert result["plan"] == ["news", "technical"]
     assert result["supervisor_iterations"] == 2
     assert set(result["reports"]) == {"news", "technical"}

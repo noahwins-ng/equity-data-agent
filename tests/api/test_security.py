@@ -94,10 +94,7 @@ def stub_chat_graph(monkeypatch: pytest.MonkeyPatch) -> None:
             "plan": [],
             "reports": {"technical": "stub"},
             "errors": {},
-            "thesis": _stub_thesis(),
-            "quick_fact": None,
-            "comparison": None,
-            "conversational": None,
+            "answer": _stub_thesis(),
             "confidence": 0.5,
         }
         return graph
@@ -606,10 +603,7 @@ def _stub_token_callback(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
                 "plan": [],
                 "reports": {"technical": "stub"},
                 "errors": {},
-                "thesis": _stub_thesis(),
-                "quick_fact": None,
-                "comparison": None,
-                "conversational": None,
+                "answer": _stub_thesis(),
                 "confidence": 0.5,
             }
 

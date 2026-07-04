@@ -36,11 +36,10 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
     # keep the full HISTORY_TURN_LIMIT).
     history_budget = graph._history_budget(str(intent))
 
-    # QNT-294 (AC2): project a synthesized payload into the answer state via
-    # the single ``project_answer`` writer (sets ``answer`` + the derived
-    # legacy slot, clears the rest) and attach this run's confidence. Each
-    # branch below returns ``_answer(payload)`` so no branch hand-assembles
-    # the multi-slot dict -- double-population is structurally impossible.
+    # QNT-294 / QNT-307: project a synthesized payload into the answer state via
+    # the single ``project_answer`` writer (writes the one ``answer`` field) and
+    # attach this run's confidence. Each branch below returns ``_answer(payload)``
+    # so no branch hand-assembles the dict -- the union enforces exactly-one.
     def _answer(payload: graph.AnswerPayload | None) -> dict[str, object]:
         return {**graph.project_answer(payload), "confidence": confidence}
 
@@ -67,7 +66,12 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
     # frontend already renders QuickFactAnswer and the AC explicitly
     # forbids introducing a new schema for followup.
     if intent == "followup":
-        prior_thesis = state.get("thesis")
+        # QNT-307: the prior turn's answer, snapshotted into ``prior_answer`` by
+        # classify_node (replaces the old hydrated ``thesis`` slot). None on a
+        # cold thread or an old-shape checkpoint with no ``answer`` -- reports are
+        # usually still hydrated, so the branch below proceeds and degrades the
+        # prior-answer framing rather than the whole turn.
+        prior_thesis = state.get("prior_answer")
         if not reports and not prior_thesis:
             # No prior context to reason over — degrade to the redirect
             # so the user sees an in-domain reply rather than blank.
@@ -84,11 +88,10 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
                 ticker,
             )
             followup_confidence = 1.0 if reports else confidence
-            # QNT-294 (AC2): clear this turn's card (answer=None) WITHOUT
-            # projecting (project_answer clears every slot, including the
-            # hydrated prior ``thesis`` this path reuses next turn); set the
-            # ``quick_fact`` slot None to match the pre-refactor return.
-            return {"answer": None, "quick_fact": None, "confidence": followup_confidence}
+            # QNT-307: clear this turn's card (answer=None). ``prior_answer`` is a
+            # separate channel classify already set, so nulling ``answer`` here no
+            # longer risks the prior-turn substrate the next followup reuses.
+            return {"answer": None, "confidence": followup_confidence}
         prompt = graph.build_followup_prompt(
             ticker,
             question,
@@ -101,23 +104,16 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
         followup = graph._structured_call(graph.QuickFactAnswer, prompt, config, "followup-prompt")
         if followup is None:
             return _fallback("I had trouble building a follow-up answer for that.")
-        # QNT-209: return ONLY the keys this branch owns. Using
-        # ``_empty_payload()`` here would write ``thesis=None`` /
-        # ``focused=None`` / etc. back to the checkpoint, clobbering
-        # the prior turn's hydrated payload — turn 3 of a followup
-        # chain would then see ``state['thesis'] is None`` and lose
-        # the v2 framing the FOLLOWUP_SYSTEM_PROMPT wants to reference.
         # plan is empty on followup runs, so the report-coverage
         # heuristic would render 0% confidence -- a misleading chip
         # given we reused EVERY hydrated report. Treat reuse as full
         # coverage.
         followup_confidence = 1.0 if reports else confidence
         logger.info("synthesize %s: confidence=%s followup=ok", ticker, followup_confidence)
-        # QNT-294 (AC2): set answer + the quick_fact slot narrowly (not via
-        # project_answer) so the hydrated prior ``thesis`` channel survives
-        # for the next followup turn -- same reason as the pre-refactor
-        # single-key return.
-        return {"answer": followup, "quick_fact": followup, "confidence": followup_confidence}
+        # QNT-307: write this turn's card to ``answer``; ``prior_answer`` (the
+        # earlier turn's substrate) is a separate channel classify owns, so this
+        # write can no longer clobber the next followup's prior context.
+        return {"answer": followup, "confidence": followup_confidence}
 
     if intent == "conversational":
         # QNT-217: thread prior conversation into the conversational
@@ -255,9 +251,9 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
                 ticker,
                 intent,
             )
-            # QNT-294 (AC2): no card this turn -- clear ``answer`` + the
-            # focused slot; narrate speaks from the retrieved sources.
-            return {"answer": None, "focused": None, "confidence": confidence}
+            # QNT-307: no card this turn -- clear ``answer``; narrate speaks from
+            # the retrieved sources.
+            return {"answer": None, "confidence": confidence}
         prompt = graph.build_focused_prompt(
             intent,
             ticker,

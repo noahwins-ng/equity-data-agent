@@ -309,7 +309,6 @@ def test_groq_quota_error_falls_back_to_conversational_redirect(
 
     # The fallback returned a ConversationalAnswer — no exception, no
     # propagation, no thesis (since the LLM crashed).
-    conversational = final_state.get("conversational")
+    conversational = final_state.get("answer")
     assert isinstance(conversational, ConversationalAnswer)
     assert conversational.answer
-    assert final_state.get("thesis") is None

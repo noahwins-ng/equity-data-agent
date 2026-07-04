@@ -297,7 +297,7 @@ def test_clarify_responds_with_question_shaped_conversational(
     graph = build_graph(_default_tools(), event_emitter=emit)
     result = graph.invoke({"ticker": "NVDA", "question": "what do you think?"})
 
-    conv = result.get("conversational")
+    conv = result.get("answer")
     assert isinstance(conv, ConversationalAnswer)
     assert conv.answer.endswith("?"), conv.answer
     # narrate ran AND emitted chunks -- the bubble streams above the clarify
@@ -433,7 +433,7 @@ def test_clarify_llm_failure_falls_back_to_domain_redirect(
     graph = build_graph(tools)
     result = graph.invoke({"ticker": "NVDA", "question": "what do you think?"})
 
-    conv = result.get("conversational")
+    conv = result.get("answer")
     assert isinstance(conv, ConversationalAnswer)
     # domain_redirect always lists covered tickers in the body.
     assert "NVDA" in conv.answer
@@ -458,14 +458,14 @@ def test_clarify_state_persists_for_resume(stub_llm: _StubLLM) -> None:  # noqa:
     # Turn 1: clarify -- no tools, no thesis.
     first = graph.invoke({"ticker": "NVDA", "question": "what do you think?"}, config=config)
     assert first["ambiguity_kind"] == "needs_ticker"
-    assert first.get("thesis") is None
+    assert not isinstance(first.get("answer"), Thesis)
     pre_tools = sum(t.call_count for t in tools.values())
     assert pre_tools == 0
 
     # Turn 2: user names TSLA -- thesis fires normally.
     second = graph.invoke({"ticker": "TSLA", "question": "thesis on TSLA?"}, config=config)
     assert second["intent"] == "thesis"
-    assert isinstance(second.get("thesis"), Thesis)
+    assert isinstance(second.get("answer"), Thesis)
     # Tools fired on the second turn only.
     assert sum(t.call_count for t in tools.values()) > 0
 

@@ -113,8 +113,7 @@ def stub_graph(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
                 "plan": list(tools.keys()),
                 "reports": reports,
                 "errors": {},
-                "thesis": thesis,
-                "quick_fact": None,
+                "answer": thesis,
                 "confidence": 0.67,
                 # QNT-212: the real graph carries this through the AgentState
                 # ``_wrap_path`` helper; stub returns the canonical thesis
@@ -245,8 +244,7 @@ def test_dynamic_thesis_plan_emits_only_chosen_tool_calls(
                 ),
                 "reports": reports,
                 "errors": {},
-                "thesis": thesis,
-                "quick_fact": None,
+                "answer": thesis,
                 "confidence": 1.0,
                 "intent_path": ["classify", "plan", "gather", "synthesize", "narrate"],
             }
@@ -297,8 +295,7 @@ def test_exploration_supervisor_done_payload_counts_plan_tools(
                 "plan": ["company", "news"],
                 "reports": reports,
                 "errors": {},
-                "thesis": thesis,
-                "quick_fact": None,
+                "answer": thesis,
                 "confidence": 1.0,
                 "supervisor_iterations": 1,
                 "intent_path": ["classify", "explore_supervisor", "synthesize", "narrate"],
@@ -372,9 +369,7 @@ def test_prose_chunks_split_answer_into_clauses(
             "plan": [],
             "reports": {},
             "errors": {},
-            "thesis": None,
-            "quick_fact": None,
-            "conversational": conversational,
+            "answer": conversational,
             "confidence": 0.0,
         }
         return graph
@@ -426,7 +421,7 @@ def test_thesis_with_empty_supports_emits_full_event(
             "plan": [],
             "reports": {"technical": "stub"},
             "errors": {},
-            "thesis": thesis,
+            "answer": thesis,
             "confidence": 0.5,
         }
         return graph
@@ -466,8 +461,6 @@ def test_no_thesis_when_reports_empty_emits_done_with_zero(
             "plan": [],
             "reports": {},
             "errors": {"technical": leaky_detail},
-            "thesis": None,
-            "quick_fact": None,
             "confidence": 0.0,
         }
         return graph
@@ -557,10 +550,6 @@ def test_agent_timeout_forwards_synthetic_exception_to_sentry(
             "plan": [],
             "reports": {},
             "errors": {},
-            "thesis": None,
-            "quick_fact": None,
-            "comparison": None,
-            "conversational": None,
             "confidence": 0.0,
         }
 
@@ -646,8 +635,7 @@ def test_optional_tool_failure_does_not_emit_error_event(
             "plan": ["technical", "news"],
             "reports": {"technical": "stub"},
             "errors": {"news": "qdrant-down"},  # optional — should be filtered
-            "thesis": thesis,
-            "quick_fact": None,
+            "answer": thesis,
             "confidence": 0.5,
         }
         return graph
@@ -694,8 +682,7 @@ def test_quick_fact_intent_emits_quick_fact_event_not_thesis(
             "plan": ["technical"],
             "reports": {"technical": "## technical NVDA\nRSI: 62"},
             "errors": {},
-            "thesis": None,
-            "quick_fact": quick_fact,
+            "answer": quick_fact,
             "confidence": 1.0,
         }
         return graph
@@ -755,10 +742,7 @@ def test_quick_fact_failure_emits_conversational_redirect(
             "plan": ["technical"],
             "reports": {"technical": "stub"},
             "errors": {},
-            "thesis": None,
-            "quick_fact": None,
-            "comparison": None,
-            "conversational": fallback,
+            "answer": fallback,
             "confidence": 1.0,
         }
         return graph
@@ -912,10 +896,7 @@ def test_intent_event_arrives_before_first_tool_call(
                 "plan": list(tools.keys()),
                 "reports": reports,
                 "errors": {},
-                "thesis": _stub_thesis(),
-                "quick_fact": None,
-                "comparison": None,
-                "conversational": None,
+                "answer": _stub_thesis(),
                 "confidence": 1.0,
             }
 
@@ -1006,10 +987,7 @@ def test_comparison_intent_emits_comparison_event_not_thesis(
             "reports": {"fundamental": "stub"},
             "reports_by_ticker": {"NVDA": {"fundamental": "stub"}, "AAPL": {"fundamental": "stub"}},
             "errors": {},
-            "thesis": None,
-            "quick_fact": None,
-            "comparison": comparison,
-            "conversational": None,
+            "answer": comparison,
             "confidence": 1.0,
         }
         return graph
@@ -1078,11 +1056,7 @@ def test_lean_comparison_emits_comparison_lean_event_and_counts_cells(
             "reports_by_ticker": {},
             "intent_path": ["classify", "plan", "gather", "synthesize", "narrate"],
             "errors": {},
-            "thesis": None,
-            "quick_fact": None,
-            "comparison": None,
-            "comparison_lean": lean,
-            "conversational": None,
+            "answer": lean,
             "confidence": 1.0,
         }
         return graph
@@ -1133,10 +1107,7 @@ def test_conversational_intent_emits_conversational_event(
             "plan": [],
             "reports": {},
             "errors": {},
-            "thesis": None,
-            "quick_fact": None,
-            "comparison": None,
-            "conversational": conversational,
+            "answer": conversational,
             "confidence": 0.0,
         }
         return graph
@@ -1191,10 +1162,7 @@ def test_thesis_failure_falls_back_to_conversational_redirect(
             "plan": ["technical"],
             "reports": {"technical": "stub"},
             "errors": {},
-            "thesis": None,
-            "quick_fact": None,
-            "comparison": None,
-            "conversational": fallback,
+            "answer": fallback,
             "confidence": 1.0,
         }
         return graph
@@ -1260,10 +1228,7 @@ def test_done_suggestions_empty_on_conversational_fallback(
             "plan": ["technical"],
             "reports": {"technical": "stub"},
             "errors": {},
-            "thesis": None,
-            "quick_fact": None,
-            "comparison": None,
-            "conversational": fallback,
+            "answer": fallback,
             "confidence": 1.0,
         }
         return graph
@@ -1332,10 +1297,7 @@ def test_done_comparison_suggestions_name_both_compared_tickers(
             "reports_by_ticker": {"NVDA": {"fundamental": "stub"}, "AAPL": {"fundamental": "stub"}},
             "comparison_tickers": ["NVDA", "AAPL"],
             "errors": {},
-            "thesis": None,
-            "quick_fact": None,
-            "comparison": comparison,
-            "conversational": None,
+            "answer": comparison,
             "confidence": 1.0,
         }
         return graph
@@ -1384,10 +1346,6 @@ async def test_client_disconnect_cancels_runner_task(
             "plan": [],
             "reports": {},
             "errors": {},
-            "thesis": None,
-            "quick_fact": None,
-            "comparison": None,
-            "conversational": None,
             "confidence": 0.0,
         }
 
@@ -1478,10 +1436,6 @@ async def test_run_timeout_emits_agent_timeout_error(
             "plan": [],
             "reports": {},
             "errors": {},
-            "thesis": None,
-            "quick_fact": None,
-            "comparison": None,
-            "conversational": None,
             "confidence": 0.0,
         }
 
@@ -1526,7 +1480,6 @@ def test_run_timeout_emits_partial_note_after_tool_results(
             "plan": ["technical"],
             "reports": {},
             "errors": {},
-            "thesis": None,
             "confidence": 0.0,
         }
 
@@ -1596,10 +1549,7 @@ def test_streaming_race_async_worker_drains_cleanly(
                 "plan": list(tools.keys()),
                 "reports": reports,
                 "errors": {},
-                "thesis": _stub_thesis(),
-                "quick_fact": None,
-                "comparison": None,
-                "conversational": None,
+                "answer": _stub_thesis(),
                 "confidence": 1.0,
             }
 
@@ -1674,11 +1624,7 @@ def test_focused_intent_emits_focused_event_not_thesis(
             "plan": ["company", "technical"],
             "reports": {"company": "stub", "technical": "stub"},
             "errors": {},
-            "thesis": None,
-            "quick_fact": None,
-            "comparison": None,
-            "conversational": None,
-            "focused": focused,
+            "answer": focused,
             "confidence": 1.0,
         }
         return graph
@@ -1734,11 +1680,6 @@ def test_retrieved_sources_event_emitted_on_targeted_news(
             "plan": ["company", "news"],
             "reports": {"company": "stub", "news": "stub"},
             "errors": {},
-            "thesis": None,
-            "quick_fact": None,
-            "comparison": None,
-            "conversational": None,
-            "focused": None,
             "narrative": "NVDA inked an HBM4 supply deal with Micron.",
             "retrieved_sources": sources,
             "confidence": 1.0,
@@ -1784,16 +1725,12 @@ def test_out_of_range_anchor_stripped_from_thesis_card_over_sse(
             "plan": ["news"],
             "reports": {"news": "stub"},
             "errors": {},
-            "thesis": _stub_thesis(
+            "answer": _stub_thesis(
                 technical_supports=[
                     "Buyback expanded (source: news R5)",  # fabricated -> strip id
                     "Deal closed (source: news R1)",  # in-range -> keep anchor
                 ],
             ),
-            "quick_fact": None,
-            "comparison": None,
-            "conversational": None,
-            "focused": None,
             "narrative": "NVDA read.",
             "retrieved_sources": sources,
             "confidence": 1.0,
@@ -1838,9 +1775,7 @@ def test_retrieved_sources_suppressed_when_gather_skipped(
             "plan": [],
             "reports": {"news": "stub"},
             "errors": {},
-            "thesis": _stub_thesis(),
-            "quick_fact": None,
-            "focused": None,
+            "answer": _stub_thesis(),
             "narrative": "Following up on the prior read.",
             "retrieved_sources": stale_sources,
             "confidence": 1.0,
@@ -1894,9 +1829,7 @@ def test_retrieved_sources_event_emitted_on_flagged_followup(
             "plan": [],
             "reports": {"news": "stub"},
             "errors": {},
-            "thesis": _stub_thesis(),
-            "quick_fact": None,
-            "focused": None,
+            "answer": _stub_thesis(),
             "narrative": "The CEO addressed the buyback directly on the call.",
             "retrieved_sources": sources,
             "confidence": 1.0,
@@ -1970,11 +1903,6 @@ def test_narrative_only_path_counts_retrieved_sources_as_citations(
             "plan": ["company", "news"],
             "reports": {"company": "stub", "news": "stub"},
             "errors": {},
-            "thesis": None,
-            "quick_fact": None,
-            "comparison": None,
-            "conversational": None,
-            "focused": None,
             "narrative": "NVDA inked an HBM4 supply deal with Micron.",
             "retrieved_sources": sources,
             "confidence": 1.0,
@@ -2025,11 +1953,7 @@ def test_focused_card_with_sources_does_not_double_count(
             "plan": ["company", "news"],
             "reports": {"company": "stub", "news": "stub"},
             "errors": {},
-            "thesis": None,
-            "quick_fact": None,
-            "comparison": None,
-            "conversational": None,
-            "focused": focused,
+            "answer": focused,
             "narrative": "NVDA inked an HBM4 supply deal with Micron.",
             "retrieved_sources": sources,
             "confidence": 1.0,
@@ -2084,12 +2008,7 @@ def test_exploration_intent_emits_exploration_event_not_thesis(
                 "plan": ["news", "technical"],
                 "reports": {"news": "stub", "technical": "stub"},
                 "errors": {},
-                "thesis": None,
-                "quick_fact": None,
-                "comparison": None,
-                "conversational": None,
-                "focused": None,
-                "exploration": exploration,
+                "answer": exploration,
                 "confidence": 1.0,
             }
 
@@ -2206,8 +2125,7 @@ def test_eval_scores_pushed_on_happy_path(
                     "fundamental": "P/E sits at 35.",
                 },
                 "errors": {},
-                "thesis": clean_thesis,
-                "quick_fact": None,
+                "answer": clean_thesis,
                 "confidence": 0.67,
             }
 
@@ -2287,8 +2205,7 @@ def test_eval_scores_flag_fabricated_number(
                 "plan": list(tools.keys()),
                 "reports": reports,
                 "errors": {},
-                "thesis": bad_thesis,
-                "quick_fact": None,
+                "answer": bad_thesis,
                 "confidence": 0.67,
             }
 
@@ -2322,7 +2239,7 @@ def test_runtime_grounding_score_pushed_when_present(
             "plan": [],
             "reports": {},
             "errors": {},
-            "conversational": ConversationalAnswer(answer="Hi.", suggestions=[]),
+            "answer": ConversationalAnswer(answer="Hi.", suggestions=[]),
             "confidence": 0.5,
             "grounding_rate": 0.5,
             "grounding_unsupported": ["99"],
@@ -2477,8 +2394,6 @@ def test_fallback_served_model_tagged_on_trace(
                 "plan": [],
                 "reports": {},
                 "errors": {},
-                "thesis": None,
-                "quick_fact": None,
                 "confidence": 0.5,
             }
 
@@ -2515,8 +2430,6 @@ def test_intent_tag_skipped_when_intent_missing(
             "plan": [],
             "reports": {},
             "errors": {},
-            "thesis": None,
-            "quick_fact": None,
             "confidence": 0.0,
             # intent deliberately absent
         }
@@ -2675,8 +2588,6 @@ def test_thread_id_drives_checkpointer_compile(
             "plan": [],
             "reports": {},
             "errors": {},
-            "thesis": None,
-            "quick_fact": None,
             "confidence": 0.0,
         }
         return graph
@@ -2730,8 +2641,7 @@ def test_narrative_chunk_emitted_for_thesis_run(
                 "plan": list(tools.keys()),
                 "reports": reports,
                 "errors": {},
-                "thesis": thesis,
-                "quick_fact": None,
+                "answer": thesis,
                 "narrative": "I'd lean Overweight here.",
                 "confidence": 1.0,
             }
@@ -2794,8 +2704,7 @@ def test_narrate_failure_still_emits_structured_payload(
                 "plan": list(tools.keys()),
                 "reports": reports,
                 "errors": {},
-                "thesis": thesis,
-                "quick_fact": None,
+                "answer": thesis,
                 "narrative": None,
                 "confidence": 1.0,
             }
@@ -2849,8 +2758,7 @@ def test_followup_narrative_only_emits_no_quick_fact_event(
                 "plan": [],
                 "reports": {"technical": "stub"},
                 "errors": {},
-                "thesis": _stub_thesis(),  # hydrated from prior turn
-                "quick_fact": None,
+                "answer": _stub_thesis(),  # hydrated from prior turn
                 "narrative": "That cuts both ways — the retail read here is mixed.",
                 "confidence": 1.0,
             }
@@ -2907,8 +2815,11 @@ def test_followup_metric_ask_emits_both_narrative_and_quick_fact(
                 "plan": [],
                 "reports": {"technical": "stub"},
                 "errors": {},
-                "thesis": _stub_thesis(),
-                "quick_fact": quick_fact,
+                # QNT-307: this turn's card is the quick_fact; the hydrated prior
+                # thesis rides in ``prior_answer`` (narrate substrate), not the
+                # answer union the SSE card reads.
+                "answer": quick_fact,
+                "prior_answer": _stub_thesis(),
                 "narrative": "RSI is still pegged overbought.",
                 "confidence": 1.0,
             }
@@ -2957,11 +2868,6 @@ def _path_stub_factory(monkeypatch: pytest.MonkeyPatch) -> Any:
                     "plan": [],
                     "reports": {},
                     "errors": {},
-                    "thesis": None,
-                    "quick_fact": None,
-                    "comparison": None,
-                    "conversational": None,
-                    "focused": None,
                     "confidence": 0.0,
                     "intent_path": list(intent_path),
                 }

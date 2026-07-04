@@ -34,54 +34,28 @@ import logging
 from typing import Any
 
 from agent.citations import find_bad_anchors
-from agent.comparison import ComparisonAnswer
-from agent.conversational import ConversationalAnswer
 from agent.evals.hallucination import HallucinationResult
 from agent.evals.hallucination import check as check_hallucination
-from agent.exploration import ExplorationAnswer
-from agent.focused import FocusedAnalysis
-from agent.quick_fact import QuickFactAnswer
-from agent.thesis import Thesis
 from agent.tracing import langfuse
 
 logger = logging.getLogger(__name__)
 
 
 def _render_answer(state: dict[str, Any]) -> str:
-    """Render whichever answer shape the SSE handler streamed into markdown.
+    """Render the synthesized answer shape into markdown for scoring.
 
-    Mirrors the SSE dispatch in
-    :func:`api.routers.agent_chat._stream`, NOT the eval-bench dispatch in
-    :func:`agent.evals.golden_set.run_record`. The two diverge on one case:
-    when the graph populates BOTH ``thesis`` and ``conversational`` (the
-    synthesize-path fallback path where intent picked thesis but synthesis
-    failed and a domain-redirect conversational was filled in), ``run_record``
-    scores the thesis but the SSE handler streams the conversational redirect
-    to the user. For prod scoring we want to score what the user actually
-    saw -- so conversational wins over thesis when both are present.
-
-    Order: comparison > conversational > quick_fact > focused > exploration
-    > thesis.
+    QNT-307: reads the single ``answer`` discriminated union (was a seven-slot
+    priority ladder). ``project_answer`` writes exactly one payload, so the
+    fallback path -- intent picked thesis but synthesis failed and a
+    ``domain_redirect`` ConversationalAnswer was written -- lands ``answer`` =
+    that ConversationalAnswer, which is exactly what the SSE handler streams; no
+    two-shape tie-break is possible any more. A narrative-only followup carries
+    ``answer=None`` (no card); its narrate voice is scored via ``grounding_rate``
+    and ``compute_anchor_integrity`` (which appends ``state['narrative']``).
     """
-    comparison = state.get("comparison")
-    if isinstance(comparison, ComparisonAnswer):
-        return comparison.to_markdown()
-    conversational = state.get("conversational")
-    if isinstance(conversational, ConversationalAnswer):
-        return conversational.to_markdown()
-    quick_fact = state.get("quick_fact")
-    if isinstance(quick_fact, QuickFactAnswer):
-        return quick_fact.to_markdown()
-    focused = state.get("focused")
-    if isinstance(focused, FocusedAnalysis):
-        return focused.to_markdown()
-    exploration = state.get("exploration")
-    if isinstance(exploration, ExplorationAnswer):
-        return exploration.to_markdown()
-    thesis = state.get("thesis")
-    if isinstance(thesis, Thesis):
-        return thesis.to_markdown()
-    return ""
+    answer = state.get("answer")
+    to_markdown = getattr(answer, "to_markdown", None)
+    return str(to_markdown()) if callable(to_markdown) else ""
 
 
 def _flatten_reports(state: dict[str, Any]) -> list[str]:
