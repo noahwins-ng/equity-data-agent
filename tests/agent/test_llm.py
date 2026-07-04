@@ -172,9 +172,9 @@ def test_judge_llm_unaffected_by_model_override(monkeypatch):
     from shared import config as cfg
 
     monkeypatch.setattr(cfg.settings, "EQUITY_AGENT_PROVIDER", "groq")
-    set_model_override("equity-agent/bench-qwen3-32b")
+    set_model_override("equity-agent/bench-gptoss20b")
     # The agent-under-test moves to the override...
-    assert get_llm().model_name == "equity-agent/bench-qwen3-32b"
+    assert get_llm().model_name == "equity-agent/bench-gptoss20b"
     # ...but the judge stays pinned.
     assert get_judge_llm().model_name == JUDGE_ALIAS
 

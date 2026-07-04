@@ -33,12 +33,11 @@ from langfuse import Langfuse  # type: ignore[import-not-found]
 ALIASES = (
     "equity-agent/bench-gptoss120b",
     "equity-agent/bench-gptoss20b",
-    "equity-agent/bench-llama4scout",
-    "equity-agent/bench-qwen3-32b",
+    # QNT-317 / ADR-026: bench-llama4scout / bench-qwen3-32b / bench-llama3-70b
+    # retired with the Groq decommission (07/17-08/16).
     "equity-agent/bench-gemma4-31b",
     "equity-agent/bench-gemma3-27b",
     "equity-agent/bench-gemini31flashlite",
-    "equity-agent/bench-llama3-70b",
 )
 
 

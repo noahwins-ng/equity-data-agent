@@ -59,27 +59,25 @@ SMALL_NODE_ALIAS = "equity-agent/small"
 # (we pass ``model=alias`` to ChatOpenAI), and LiteLLM echoes the alias back
 # in the response, so without this map "which model served this trace" is
 # unanswerable from observability. Does NOT capture fallback fires (when
-# ``equity-agent/default`` falls back to ``equity-agent/fallback-llama4scout``
-# on Groq TPD exhaustion); detecting that needs LiteLLM response inspection
-# and is a follow-up.
+# ``equity-agent/default`` falls back to ``equity-agent/fallback-nemotron-ultra``
+# on a throttle); detecting that needs LiteLLM response inspection and is a
+# follow-up.
 _RESOLVED_MODEL_BY_ALIAS: dict[str, str] = {
     # QNT-258 / ADR-025: paid launch primary (was groq/llama-3.3-70b-versatile).
     "equity-agent/default": "openrouter/deepseek/deepseek-v4-flash",
     "equity-agent/fallback-nemotron-ultra": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-    "equity-agent/fallback-llama4scout": "groq/meta-llama/llama-4-scout-17b-16e-instruct",
-    "equity-agent/fallback-groq-gptoss120b": "groq/openai/gpt-oss-120b",
+    # QNT-317 / ADR-026: fallback-llama4scout / fallback-groq-gptoss120b and the
+    # bench-llama4scout / bench-qwen3-32b / bench-llama3-70b aliases were retired
+    # with the Groq decommission — dropped from this map to stay in sync.
     "equity-agent/gemini": "gemini/gemini-2.5-flash",
     "equity-agent/small": "groq/openai/gpt-oss-20b",
     "equity-agent/bench-gptoss120b": "groq/openai/gpt-oss-120b",
     "equity-agent/bench-cerebras-gptoss120b": "cerebras/gpt-oss-120b",
     "equity-agent/bench-deepseek-v4-flash": "openrouter/deepseek/deepseek-v4-flash",
     "equity-agent/bench-gptoss20b": "groq/openai/gpt-oss-20b",
-    "equity-agent/bench-llama4scout": "groq/meta-llama/llama-4-scout-17b-16e-instruct",
-    "equity-agent/bench-qwen3-32b": "groq/qwen/qwen3-32b",
     "equity-agent/bench-gemma4-31b": "gemini/gemma-4-31b-it",
     "equity-agent/bench-gemma3-27b": "gemini/gemma-3-27b-it",
     "equity-agent/bench-gemini31flashlite": "gemini/gemini-3.1-flash-lite-preview",
-    "equity-agent/bench-llama3-70b": "groq/llama-3.3-70b-versatile",
 }
 
 # QNT-230 (#10): the LLM-as-judge must stay on a FIXED model while the
@@ -261,7 +259,7 @@ class ServedModelInfo:
     (the authoritative signal). ``served_model`` is ``response.model``: LiteLLM
     echoes the requested ALIAS there on a clean call (useless), but on a
     fallback it echoes the REAL served model (e.g.
-    ``meta-llama/llama-4-scout-17b-16e-instruct``) -- so it's only trusted when
+    ``nvidia/nemotron-3-ultra-550b-a55b``) -- so it's only trusted when
     ``fallback_fired`` is True.
     """
 

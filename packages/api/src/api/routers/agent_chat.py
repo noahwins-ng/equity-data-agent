@@ -887,7 +887,7 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
     tracker = TokenUsageTracker()
     tracker_token = set_token_tracker(tracker)
     # QNT-230 #14: capture the model LiteLLM actually serves so a fallback fire
-    # (e.g. default -> fallback-llama4scout on Groq TPD exhaustion) tags the
+    # (e.g. default -> fallback-nemotron-ultra on a throttle) tags the
     # trace with the real model instead of the static-map alias. Same
     # contextvar-through-to_thread propagation as the token tracker.
     served_tracker = ServedModelTracker()
