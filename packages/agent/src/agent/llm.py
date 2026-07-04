@@ -63,7 +63,9 @@ SMALL_NODE_ALIAS = "equity-agent/small"
 # on Groq TPD exhaustion); detecting that needs LiteLLM response inspection
 # and is a follow-up.
 _RESOLVED_MODEL_BY_ALIAS: dict[str, str] = {
-    "equity-agent/default": "groq/llama-3.3-70b-versatile",
+    # QNT-258 / ADR-025: paid launch primary (was groq/llama-3.3-70b-versatile).
+    "equity-agent/default": "openrouter/deepseek/deepseek-v4-flash",
+    "equity-agent/fallback-nemotron-ultra": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
     "equity-agent/fallback-llama4scout": "groq/meta-llama/llama-4-scout-17b-16e-instruct",
     "equity-agent/fallback-groq-gptoss120b": "groq/openai/gpt-oss-120b",
     "equity-agent/gemini": "gemini/gemini-2.5-flash",

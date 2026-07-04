@@ -1,21 +1,33 @@
-"""LiteLLM fail-closed audit (QNT-161).
+"""LiteLLM fail-closed audit (QNT-161; invariant revised by QNT-258 / ADR-025).
 
-The chat agent is fronted by LiteLLM. If a Groq quota-exhaustion (429)
-silently fell through to a paid Anthropic provider, every demo-limit
-event would convert into an unbounded cost event — exactly the
-"availability bomb" QNT-161 exists to prevent. ADR-017 commits the
-project to free-tier providers only for the chat path; this test asserts
-the LiteLLM config matches the policy.
+The chat agent is fronted by LiteLLM. If a quota-exhaustion (429) silently fell
+through to a *frontier* paid provider (Anthropic, direct OpenAI, Bedrock, …),
+every demo-limit event would convert into an unbounded cost event — the
+"availability bomb" QNT-161 exists to prevent.
+
+**Invariant change (QNT-258 / ADR-025).** For the public launch the chat
+PRIMARY is now an INTENTIONAL paid provider — DeepSeek V4 Flash via OpenRouter
+(~$0.002/chat) — because the Groq free tier's 100K-TPD ceiling was the binding
+launch constraint and Groq is retiring the whole synthesize-capable free chain
+(2026-06-17 decommission). So the guard is no longer "free-tier only." It is now
+two-part: (a) the cost ceiling is enforced by the global TPD breaker + per-IP
+token budget + rate limit (packages/shared config + api/security.py, tested in
+tests/api/test_security.py), and (b) this audit still forbids the *catastrophic*
+frontier providers so an accidental ``anthropic/`` / direct ``openai/`` / cloud
+alias at 50-100x the cost can never sit on the chat path. OpenRouter is a
+permitted gateway: WE pick the cheap model behind it (the primary is metered at
+DeepSeek prices; the fallback anchors are free OpenRouter models).
 
 Two layered checks:
 
-1. **Static config audit** — parse ``litellm_config.yaml`` and assert
-   every model alias the agent might call (``equity-agent/default``,
+1. **Static config audit** — parse ``litellm_config.yaml`` and assert every
+   model alias the agent might call (``equity-agent/default``,
    ``equity-agent/gemini``, and the alias's fallbacks chain) routes to a
-   free-tier provider (groq / gemini / google). A new alias accidentally
-   pointed at ``anthropic/`` or ``openai/`` would fail this test.
-2. **Runtime fail-closed contract** — when ``get_llm()`` raises a Groq
-   quota error (RateLimitError-shaped exception), the synthesize node
+   PERMITTED provider (groq / gemini / google / openrouter — never a frontier
+   paid provider). A new alias accidentally pointed at ``anthropic/`` or direct
+   ``openai/`` would fail this test.
+2. **Runtime fail-closed contract** — when ``get_llm()`` raises a quota
+   error (RateLimitError-shaped exception), the synthesize node
    must surface a deterministic conversational redirect, NOT propagate.
    The whole graph guarantees this for every intent — see
    ``agent.graph.synthesize_node``'s ``_fallback`` calls. This test
@@ -33,10 +45,12 @@ import yaml
 from agent.conversational import ConversationalAnswer
 from agent.graph import build_graph
 
-# Paid / non-free-tier providers the chat path must never reach. Drawn
-# from LiteLLM's provider list — extend if a new paid provider is added
-# to LiteLLM's namespace.
-_PAID_PROVIDER_PREFIXES = (
+# Frontier / catastrophic-cost providers the chat path must never reach. These
+# bill 10-100x a metered OpenRouter route and (unlike OpenRouter) are not fenced
+# by which model WE pick, so an accidental alias here is the real availability
+# bomb. Drawn from LiteLLM's provider list — extend if a new frontier provider
+# is added to LiteLLM's namespace.
+_FORBIDDEN_PROVIDER_PREFIXES = (
     "anthropic/",
     "openai/",  # not "groq/openai/..." — that's groq routing
     "azure/",
@@ -51,22 +65,25 @@ _PAID_PROVIDER_PREFIXES = (
     "perplexity/",
 )
 
-# Free-tier / no-card providers permitted on the chat path.
-_FREE_PROVIDER_PREFIXES = ("groq/", "cerebras/", "gemini/", "google/")
+# Providers permitted on the chat path. QNT-258 / ADR-025 added ``openrouter/``:
+# the launch primary (DeepSeek V4 Flash, metered but cheap) and the free
+# fallback anchors route through it. groq / gemini / google remain permitted
+# free-tier hosts (small tier + gemini override + surviving Groq fallbacks).
+_PERMITTED_PROVIDER_PREFIXES = ("groq/", "cerebras/", "gemini/", "google/", "openrouter/")
 
 
-def _model_routes_to_free_tier(model: str) -> bool:
+def _model_routes_to_permitted_provider(model: str) -> bool:
     """Return True iff ``model`` (a LiteLLM model string like
-    ``groq/llama-3.3-70b-versatile``) starts with a permitted free-tier
-    prefix AND not a paid prefix. Defensive ordering: paid check first
-    so a hypothetical ``groq/openai/...`` (Groq's OpenAI-compatible
-    namespace) is correctly identified as Groq."""
-    for prefix in _FREE_PROVIDER_PREFIXES:
-        if model.startswith(prefix):
-            return True
-    for prefix in _PAID_PROVIDER_PREFIXES:
+    ``openrouter/deepseek/deepseek-v4-flash``) starts with a permitted
+    prefix AND not a forbidden frontier prefix. Defensive ordering: forbidden
+    check first so a hypothetical ``groq/openai/...`` (Groq's OpenAI-compatible
+    namespace) is correctly identified as Groq, not direct OpenAI."""
+    for prefix in _FORBIDDEN_PROVIDER_PREFIXES:
         if model.startswith(prefix):
             return False
+    for prefix in _PERMITTED_PROVIDER_PREFIXES:
+        if model.startswith(prefix):
+            return True
     return False
 
 
@@ -92,24 +109,25 @@ def _models_by_alias(config: dict[str, Any]) -> dict[str, str]:
 # ─── Static config audit ────────────────────────────────────────────────────
 
 
-def test_chat_default_alias_routes_to_free_tier_provider() -> None:
-    """The agent's primary alias (``equity-agent/default``) must point at
-    a free-tier provider. ADR-017 / QNT-161 forbid paid providers on the
-    public chat path."""
+def test_chat_default_alias_routes_to_permitted_provider() -> None:
+    """The agent's primary alias (``equity-agent/default``) must point at a
+    permitted provider. QNT-258 / ADR-025 moved it to the paid OpenRouter
+    DeepSeek primary; a frontier paid provider (anthropic / direct openai /
+    cloud) is still forbidden on the public chat path (QNT-161)."""
     config = _load_config()
     models = _models_by_alias(config)
     default_model = models["equity-agent/default"]
-    assert _model_routes_to_free_tier(default_model), (
+    assert _model_routes_to_permitted_provider(default_model), (
         f"equity-agent/default -> {default_model} is not a permitted "
-        f"free-tier provider; chat path would convert quota events into "
-        f"cost events on fall-through. See ADR-017."
+        f"provider; a frontier paid provider on the chat path converts quota "
+        f"events into unbounded cost events on fall-through. See ADR-025."
     )
 
 
-def test_chat_default_fallback_chain_is_free_tier_only() -> None:
+def test_chat_default_fallback_chain_is_permitted_only() -> None:
     """LiteLLM's fallback config maps an alias to a list of fallback
     aliases. Every fallback in the chain — for every chat-path alias —
-    must also point at a free-tier provider. A future contributor adding
+    must also point at a permitted provider. A future contributor adding
     an Anthropic alias as a fallback would trip this immediately."""
     config = _load_config()
     models = _models_by_alias(config)
@@ -123,21 +141,21 @@ def test_chat_default_fallback_chain_is_free_tier_only() -> None:
                 continue
             for fb_alias in fallback_aliases:
                 fb_model = models.get(fb_alias, "")
-                if not _model_routes_to_free_tier(fb_model):
+                if not _model_routes_to_permitted_provider(fb_model):
                     failures.append(
                         f"alias {alias} falls back to {fb_alias} -> {fb_model}, "
-                        f"which is not a free-tier provider"
+                        f"which is not a permitted provider"
                     )
     assert not failures, "\n".join(failures)
 
 
-def test_chat_default_falls_back_scout_then_groq_gptoss() -> None:
-    """The chat path falls back Scout -> Groq gpt-oss. QNT-227 removed the
-    Cerebras hop: a controlled run showed Cerebras cannot serve the 9-12k
-    synthesize request within the client timeout (it stacked client retries to
-    ~181s), and because litellm fallbacks are recursive the array-bounded
-    ThesisPlan schema reached and was rejected by Cerebras. It is no longer
-    reachable from any chat chain."""
+def test_chat_default_falls_back_to_openrouter_anchor() -> None:
+    """QNT-258 / ADR-025: the chat primary (paid DeepSeek) falls back to the free
+    OpenRouter anchor Nemotron 3 Ultra (structured-outputs capable, so it serves
+    the array-bounded ThesisPlan synthesize AND narrate). Laguna M.1 was dropped
+    in review (live 429s + empty completions). Cerebras must still never appear
+    as a chain target (QNT-227: it cannot serve a 9-12k synthesize within the
+    client timeout)."""
     config = _load_config()
     fallbacks_cfg = config.get("litellm_settings", {}).get("fallbacks", [])
     fallback_map = {
@@ -147,21 +165,17 @@ def test_chat_default_falls_back_scout_then_groq_gptoss() -> None:
     }
 
     assert fallback_map["equity-agent/default"] == [
-        "equity-agent/fallback-llama4scout",
-        "equity-agent/fallback-groq-gptoss120b",
-    ]
-    assert fallback_map["equity-agent/fallback-llama4scout"] == [
-        "equity-agent/fallback-groq-gptoss120b",
+        "equity-agent/fallback-nemotron-ultra",
     ]
     # Cerebras must not appear as a chain target anywhere.
     for alias, fallback_aliases in fallback_map.items():
         assert "equity-agent/fallback-cerebras-gptoss120b" not in fallback_aliases, alias
 
 
-def test_no_chat_alias_references_paid_provider_directly() -> None:
+def test_no_chat_alias_references_forbidden_provider_directly() -> None:
     """Belt-and-braces: every alias that COULD be reached from the chat
     path (default, small, gemini, and any alias they fall back to) must
-    route to a free-tier provider. The bench-* aliases are explicitly
+    route to a permitted provider. The bench-* aliases are explicitly
     excluded — they're invoked only by the QNT-129 bench harness, never by
     the chat path.
 
@@ -186,11 +200,11 @@ def test_no_chat_alias_references_paid_provider_directly() -> None:
     bad: list[str] = []
     for alias in sorted(reachable):
         model = models.get(alias, "")
-        if not _model_routes_to_free_tier(model):
+        if not _model_routes_to_permitted_provider(model):
             bad.append(f"{alias} -> {model}")
     assert not bad, (
-        "Chat-path aliases must all route to free/no-card providers (groq / "
-        "cerebras / gemini / google). Offending aliases:\n  " + "\n  ".join(bad)
+        "Chat-path aliases must all route to permitted providers (groq / "
+        "cerebras / gemini / google / openrouter). Offending aliases:\n  " + "\n  ".join(bad)
     )
 
 

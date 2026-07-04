@@ -555,6 +555,44 @@ def test_token_budget_per_ip_and_global_caps() -> None:
     assert b.can_serve("c")[1] == "global"
 
 
+def test_paid_breaker_survives_30_chat_launch_free_tier_tripped_at_15() -> None:
+    """QNT-258 AC5: the recalibrated global breaker must let a launch evening of
+    >=30 substantive chats through, where the old free-tier 200K cap tripped at
+    ~15 (the silent quota wall this ticket removes).
+
+    A substantive thesis chat is ~14K tokens. The burst is spread across IPs so
+    no single IP exceeds its UNCHANGED 30K/day fence (<=2 chats/IP), isolating
+    the GLOBAL breaker as the thing under test. Uses the live settings value so
+    the test re-derives if CHAT_TOKENS_GLOBAL_PER_DAY changes again.
+    """
+    from api.security import TokenBudget
+
+    substantive_chat_tokens = 14_000
+    n_chats = 30
+    old_free_tier_global_cap = 200_000  # pre-QNT-258 value this AC regresses against
+
+    def chats_before_global_trip(global_cap: int) -> int:
+        b = TokenBudget(
+            per_ip_daily=security_module.settings.CHAT_TOKENS_PER_IP_PER_DAY,
+            global_daily=global_cap,
+        )
+        completed = 0
+        for i in range(n_chats):
+            ip = f"visitor-{i // 2}"  # 2 chats/IP -> 28K < 30K per-IP fence
+            ok, reason = b.can_serve(ip)
+            assert reason != "per_ip", "per-IP fence tripped; burst must isolate the global cap"
+            if not ok:
+                break
+            b.record(ip, substantive_chat_tokens)
+            completed += 1
+        return completed
+
+    # Paid cap (the change under test): all 30 complete, breaker never trips.
+    assert chats_before_global_trip(security_module.settings.CHAT_TOKENS_GLOBAL_PER_DAY) == n_chats
+    # Old free-tier cap: trips at ~15, well short of a 30-chat launch evening.
+    assert chats_before_global_trip(old_free_tier_global_cap) <= 15
+
+
 def test_token_budget_zero_or_negative_record_is_noop() -> None:
     """Avoid negative drift if a buggy callback returns 0 or < 0 tokens."""
     from api.security import TokenBudget

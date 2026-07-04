@@ -154,16 +154,23 @@ class Settings(BaseSettings):
     # company report). UTC-midnight reset matches Groq's TPD window.
     CHAT_TOKENS_PER_IP_PER_DAY: int = 30_000
 
-    # Global daily Groq token budget — the sum across all IPs. Sized at
-    # ~33% of the combined Groq free-tier ceiling: Llama-3.3-70B (100K TPD)
-    # auto-fails over to Llama-4-Scout (500K TPD) on RPM/TPD exhaustion via
-    # ``fallbacks`` in litellm_config.yaml, so the effective ceiling is
-    # 600K TPD. 200K leaves comfortable headroom for daily ingest + the
-    # user's own dev / eval sweeps. Once exceeded, every request gets the
-    # friendly demo-limit redirect for the rest of the day (FAIL CLOSED —
-    # the LiteLLM config has no paid-provider fallback, see ADR-017 /
-    # litellm_config.yaml).
-    CHAT_TOKENS_GLOBAL_PER_DAY: int = 200_000
+    # Global daily token budget — the sum across all IPs. QNT-258 / ADR-025:
+    # re-derived for the paid launch primary (DeepSeek V4 Flash via OpenRouter).
+    # The old 200K was ~50% of the Groq free-tier TPD and tripped after ~15
+    # substantive chats — a silent quota wall on launch night. On a paid plan
+    # there is no provider TPD ceiling, so this stops proxying "free tokens
+    # left" and becomes a pure runaway-cost / abuse circuit breaker.
+    #
+    # Sizing (paid economics): a substantive thesis chat is ~14K tokens at
+    # ~$0.002 (DeepSeek $0.09/$0.18 per M). The launch envelope is ~$1/day
+    # (~500 chats); 20M tokens is ~2.8x that (~1,400 chats) with a worst-case
+    # ceiling of ~$2.7/day — comfortably above a good launch evening + daily
+    # ingest + dev/eval sweeps, yet still bounding a stuck loop or scraper to a
+    # few dollars/day. The tight per-user fences are UNCHANGED and do the real
+    # anti-abuse work: per-IP token budget (30K/day) + rate limit (100/day).
+    # Still FAIL CLOSED — once exceeded, every request gets the friendly
+    # demo-limit redirect until UTC midnight (see api/security.py).
+    CHAT_TOKENS_GLOBAL_PER_DAY: int = 20_000_000
 
     # Burst-alert threshold: if a single IP receives N 429s within
     # CHAT_BURST_WINDOW_SECONDS, fire a Sentry capture_message. Defaults are
