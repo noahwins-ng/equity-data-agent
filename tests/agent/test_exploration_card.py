@@ -55,7 +55,7 @@ class _FallbackLLM:
     """Synthesize stub that returns None for any bound schema, forcing the
     deterministic conversational fallback."""
 
-    def with_structured_output(self, _schema: type) -> _FallbackLLM:
+    def with_structured_output(self, _schema: type, **_kwargs: object) -> _FallbackLLM:
         return self
 
     def with_retry(self, *_args: Any, **_kwargs: Any) -> _FallbackLLM:
@@ -81,7 +81,7 @@ class _CapturingLLM:
         )
         self.narrate_prompt: list[Any] = []
 
-    def with_structured_output(self, _schema: type) -> _CapturingLLM:
+    def with_structured_output(self, _schema: type, **_kwargs: object) -> _CapturingLLM:
         return self
 
     def with_retry(self, *_args: Any, **_kwargs: Any) -> _CapturingLLM:

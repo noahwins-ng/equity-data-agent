@@ -43,7 +43,7 @@ class _LLM:
             negative_catalysts=[],
         )
 
-    def with_structured_output(self, schema: type) -> _Runnable:
+    def with_structured_output(self, schema: type, **_kwargs: object) -> _Runnable:
         if schema is ThesisPlan:
             return _Runnable(
                 ThesisPlan(
