@@ -516,8 +516,8 @@ services:
     depends_on:
       prometheus:
         condition: service_healthy
-    mem_limit: 256m
-    mem_reservation: 96m
+    mem_limit: 384m
+    mem_reservation: 192m
     cpus: 0.25
     logging: *default-logging
     healthcheck:
