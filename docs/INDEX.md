@@ -44,6 +44,9 @@ Architecture Decision Records (ADRs). Read these to understand **why** we chose 
 - [021-synthesis-model-and-tail-routing.md](decisions/021-synthesis-model-and-tail-routing.md)
 - [022-decline-dbt-adoption-at-current-scale.md](decisions/022-decline-dbt-adoption-at-current-scale.md)
 - [023-openrouter-deepseek-judge-for-deepeval.md](decisions/023-openrouter-deepseek-judge-for-deepeval.md)
+- [024-defer-graph-module-monkeypatch-decoupling.md](decisions/024-defer-graph-module-monkeypatch-decoupling.md)
+- [025-paid-launch-primary-and-breaker-recalibration.md](decisions/025-paid-launch-primary-and-breaker-recalibration.md)
+- [026-paid-synthesis-economics-and-free-tier-simplification-dividend.md](decisions/026-paid-synthesis-economics-and-free-tier-simplification-dividend.md)
 
 ### [guides/](guides/)
 How to do common tasks. Operational runbooks.
