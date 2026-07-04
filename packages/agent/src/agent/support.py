@@ -924,19 +924,52 @@ def _strip_disclaimer(markdown: str) -> str:
     return markdown.replace(DISCLAIMER, "").strip()
 
 
+def _pick_payload(state: AgentState) -> object | None:
+    """Select the structured payload a turn's surfaces reason over (QNT-309).
+
+    Shared by ``narrate_node`` (the substrate the analyst voice narrates over)
+    and :func:`_assistant_surface` (the transcript anchor) so the two sibling
+    idioms can never silently diverge again -- before QNT-309 narrate picked
+    ``prior_answer`` first while ``_assistant_surface`` picked ``answer`` first,
+    disagreeing only on a followup metric turn.
+
+    Followup is the one intent that reacts to the PRIOR turn's answer rather than
+    this turn's: classify snapshots the earlier Thesis into ``prior_answer``, a
+    narrative-only followup carries ``answer=None``, and a metric-ask followup
+    narrates over the earlier thesis (not its own compact QuickFactAnswer card).
+    So ``prior_answer`` wins for followup; every other intent reads THIS turn's
+    ``answer``. The guard is on the intent, not on ``prior_answer`` being set,
+    because classify also carries a hydrated Thesis in ``prior_answer`` on a
+    non-followup turn -- gating on the intent keeps those turns on ``answer``.
+
+    Aligning ``_assistant_surface`` onto this precedence intentionally collapses a
+    SECOND divergence beyond the followup-metric turn: a non-followup turn whose
+    ``answer`` is None -- the focused news/fundamental RAG-drop path
+    (``synthesize._synthesize_payload`` returns ``{"answer": None}`` when a search
+    fired and hit) -- following a thesis turn. There the OLD ``_assistant_surface``
+    (``answer or prior_answer``) fell back to the stale prior Thesis for the
+    transcript anchor, while narrate spoke from the dropped report body, not the
+    Thesis. Returning None here makes the transcript anchor track what narrate
+    actually narrated (the report / narrative), which is the whole point of the
+    shared precedence. Pinned by ``test_non_followup_answer_none_does_not_borrow_prior``.
+    """
+    intent = state.get("intent", "thesis")
+    return (state.get("prior_answer") if intent == "followup" else None) or state.get("answer")
+
+
 def _assistant_surface(state: AgentState, narrative: str | None) -> str | None:
     """Compact assistant transcript entry for the completed turn.
 
     QNT-294 / QNT-307: dispatches on the single ``answer`` union instead of the
-    old seven-branch slot ladder. A followup narrative-only turn carries
-    ``answer=None`` but reuses the prior turn's ``prior_answer`` as its substrate
-    (the same fallback narrate uses), so fall back to it for the transcript
-    anchor. The isinstance order preserves the old ladder's priority
-    (conversational first, thesis last).
+    old seven-branch slot ladder. QNT-309: the substrate is picked by the shared
+    :func:`_pick_payload` so the transcript anchor tracks whatever narrate spoke
+    over (a followup narrative-only turn carries ``answer=None`` and reuses the
+    prior turn's ``prior_answer``). The isinstance order preserves the old
+    ladder's priority (conversational first, thesis last).
     """
     prefix = narrative.strip() if narrative else ""
 
-    payload = state.get("answer") or state.get("prior_answer")
+    payload = _pick_payload(state)
     if isinstance(payload, ConversationalAnswer):
         return (prefix or str(getattr(payload, "answer", ""))).strip() or None
     if isinstance(payload, QuickFactAnswer):

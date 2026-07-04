@@ -126,15 +126,12 @@ def narrate_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> 
             **graph._quick_fact_grounding(state, quick_fact_answer),
         }
 
-    # Pick the structured payload to summarise (QNT-294 / QNT-307). A followup
-    # turn reacts to the PRIOR turn's answer (``prior_answer``, set by classify):
-    # a narrative-only followup carries answer=None, and a metric-ask followup
-    # narrates over the earlier thesis, not its own compact card -- both want the
-    # prior substrate, so it wins for followup. Every other intent reads THIS
-    # turn's ``answer`` (the same markdown the panel renders).
-    payload_obj: object | None = (
-        state.get("prior_answer") if intent == "followup" else None
-    ) or answer_obj
+    # Pick the structured payload to summarise. Shared with _assistant_surface
+    # via graph._pick_payload (QNT-309) so the narrated substrate and the
+    # transcript anchor can't silently diverge -- the followup case (prior_answer
+    # wins, so a metric-ask followup narrates over the earlier thesis rather than
+    # its own compact card) is documented there.
+    payload_obj: object | None = graph._pick_payload(state)
     payload_markdown = ""
     to_md: Any = getattr(payload_obj, "to_markdown", None)
     if callable(to_md):

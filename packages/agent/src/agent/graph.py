@@ -157,6 +157,7 @@ from agent.support import (  # noqa: F401
     _parse_earnings_sources,
     _parse_plan,
     _parse_search_sources,
+    _pick_payload,
     _prior_turn_context,
     _resolve_comparison_tickers,
     _resolve_single_ticker_context,
