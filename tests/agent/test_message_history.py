@@ -54,7 +54,7 @@ class _StubLLM:
 
         self._make_structured = make_structured
 
-    def with_structured_output(self, schema: type) -> MagicMock:
+    def with_structured_output(self, schema: type, **_kwargs: object) -> MagicMock:
         return self._make_structured(schema)
 
     def stream(self, prompt: Any, *_args: Any, **_kwargs: Any) -> Any:

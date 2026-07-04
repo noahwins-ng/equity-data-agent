@@ -444,7 +444,7 @@ def test_default_report_tools_compose_with_build_graph(
         def invoke(self, _prompt: str, **_kwargs: Any) -> Any:
             return self._plan_response
 
-        def with_structured_output(self, _schema: object) -> Any:
+        def with_structured_output(self, _schema: object, **_kwargs: object) -> Any:
             outer = self
 
             class _StructuredRunnable:

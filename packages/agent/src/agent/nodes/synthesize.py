@@ -128,7 +128,13 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
             ),
         )
         conversational = graph._structured_call(
-            graph.ConversationalAnswer, prompt, config, "conversational-prompt"
+            graph.ConversationalAnswer,
+            prompt,
+            config,
+            "conversational-prompt",
+            # QNT-258 follow-up: force function_calling so DeepSeek cannot return
+            # the reply as bare prose (json_invalid on the default json_schema).
+            method="function_calling",
         )
         if conversational is None:
             # Deterministic redirect when the LLM itself fails — the

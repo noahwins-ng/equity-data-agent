@@ -288,7 +288,7 @@ def test_groq_quota_error_falls_back_to_conversational_redirect(
             stub = type("Stub", (), {"content": "technical"})()
             return stub
 
-        def with_structured_output(self, _schema: object) -> Any:
+        def with_structured_output(self, _schema: object, **_kwargs: object) -> Any:
             outer = self
 
             class _StructuredRunnable:

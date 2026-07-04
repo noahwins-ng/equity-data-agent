@@ -83,7 +83,7 @@ class _StubLLM:
 
         self._make_structured = make_structured
 
-    def with_structured_output(self, schema: type) -> MagicMock:
+    def with_structured_output(self, schema: type, **_kwargs: object) -> MagicMock:
         return self._make_structured(schema)
 
     def stream(self, *_args: Any, **_kwargs: Any) -> Any:
@@ -414,6 +414,42 @@ def test_clarify_routes_followup_without_prior_turn(
     assert result.get("ambiguity_kind") == "needs_prior_turn"
     assert result["intent_path"] == ["classify", "clarify", "narrate"]
     assert sum(t.call_count for t in tools.values()) == 0
+
+
+# ─── QNT-258 follow-up: conversational schema forces function_calling ───────
+
+
+def test_clarify_uses_function_calling_method(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QNT-258 follow-up: the clarify ConversationalAnswer call must pass
+    ``method="function_calling"`` so the paid DeepSeek primary cannot return the
+    clarify question as bare prose (json_invalid on the default json_schema path
+    -- the observed Sentry EQUITY-DATA-AGENT-8). Records the method kwarg the
+    node hands to ``with_structured_output`` for the ConversationalAnswer schema.
+    """
+    seen: dict[type, object] = {}
+
+    class _RecordingLLM:
+        invoke = MagicMock(return_value=AIMessage(content="conversational"))
+
+        def with_structured_output(self, schema: type, **kwargs: object) -> MagicMock:
+            seen[schema] = kwargs.get("method")
+            m = MagicMock()
+            m.invoke = MagicMock(return_value=_stub_clarify_answer())
+            m.with_retry.return_value = m
+            return m
+
+        def stream(self, *_a: Any, **_k: Any) -> Any:
+            return iter([AIMessage(content="Hi ")])
+
+    stub = _RecordingLLM()
+    monkeypatch.setattr(graph_module, "get_llm", lambda *a, **kw: stub)
+    monkeypatch.setattr("agent.intent.get_llm", lambda *a, **kw: stub)
+
+    build_graph(_default_tools()).invoke({"ticker": "NVDA", "question": "what do you think?"})
+
+    assert seen.get(ConversationalAnswer) == "function_calling", (
+        "clarify must request function_calling for the ConversationalAnswer schema"
+    )
 
 
 # ─── AC4: clarify failure falls back to domain_redirect ─────────────────────

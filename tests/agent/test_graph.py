@@ -94,7 +94,7 @@ class _StructuredLLM:
         # a fresh auto-generated MagicMock would lose the return_value.
         self._structured_runnable.with_retry.return_value = self._structured_runnable
 
-    def with_structured_output(self, schema: object) -> MagicMock:
+    def with_structured_output(self, schema: object, **_kwargs: object) -> MagicMock:
         if schema is ThesisPlan:
             return self._plan_runnable
         return self._structured_runnable
@@ -537,7 +537,7 @@ def test_thesis_retries_on_validation_error_and_returns_valid_answer(
         def __init__(self) -> None:
             self.invoke = MagicMock(return_value=AIMessage(content="technical"))
 
-        def with_structured_output(self, schema: object) -> RunnableLambda:
+        def with_structured_output(self, schema: object, **_kwargs: object) -> RunnableLambda:
             if schema is ThesisPlan:
                 return RunnableLambda(
                     lambda _input: ThesisPlan(

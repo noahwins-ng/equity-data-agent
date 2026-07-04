@@ -58,7 +58,7 @@ class _SynthLLM:
             cited_values=[],
         )
 
-    def with_structured_output(self, schema: type) -> _Runnable:
+    def with_structured_output(self, schema: type, **_kwargs: object) -> _Runnable:
         self.bound_schemas.append(schema)
         if schema is Thesis:
             return _Runnable(result=self.thesis)

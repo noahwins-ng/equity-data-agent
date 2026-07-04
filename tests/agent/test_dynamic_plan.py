@@ -39,7 +39,7 @@ class _PlanAwareLLM:
         self.plan_runnable: _Runnable | None = None
         self.thesis_runnable: _Runnable | None = None
 
-    def with_structured_output(self, schema: type) -> _Runnable:
+    def with_structured_output(self, schema: type, **_kwargs: object) -> _Runnable:
         if schema is ThesisPlan:
             self.plan_runnable = _Runnable(self.plan, self.plan_error)
             return self.plan_runnable
@@ -198,7 +198,7 @@ def test_thesis_plan_uses_small_alias_synthesis_keeps_default(
             )
             self._alias = alias
 
-        def with_structured_output(self, schema: type) -> _Runnable:
+        def with_structured_output(self, schema: type, **_kwargs: object) -> _Runnable:
             bindings.append((schema, self._alias))
             return super().with_structured_output(schema)
 

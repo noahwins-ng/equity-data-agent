@@ -44,7 +44,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from langchain_core.exceptions import OutputParserException
 from langchain_core.runnables import RunnableConfig
@@ -186,6 +186,7 @@ def _structured_call[T: BaseModel](
     *,
     llm: Any | None = None,
     linked: bool = True,
+    method: Literal["function_calling", "json_mode", "json_schema"] | None = None,
 ) -> T | None:
     """Run one structured-output LLM call with the shared retry/coerce ladder (AC5).
 
@@ -202,9 +203,25 @@ def _structured_call[T: BaseModel](
     routes through :func:`_linked_invoke` (prompt-version + native Langfuse prompt
     link) for the prompt-registered synthesize/clarify calls; the planner passes
     ``linked=False`` for a plain ``invoke`` (no registered prompt).
+
+    ``method`` overrides LangChain's default structured-output method. QNT-258
+    follow-up: the paid DeepSeek V4 Flash primary occasionally returns bare prose
+    instead of the JSON envelope on the conversational ``ConversationalAnswer``
+    schema (an inherently conversational task), tripping a json_invalid
+    ValidationError that the ladder recovers via the deterministic fallback but
+    that Sentry still captures. The conversational/clarify calls pass
+    ``method="function_calling"`` so the structured data comes back as tool-call
+    args -- a channel the model cannot fill with prose -- eliminating the failure
+    mode at the source. ``None`` keeps LangChain's default (json_schema), so the
+    validated ``Thesis``/synthesize path is unchanged.
     """
     base = llm if llm is not None else get_llm()
-    structured_llm = base.with_structured_output(schema).with_retry(
+    structured = (
+        base.with_structured_output(schema, method=method)
+        if method is not None
+        else base.with_structured_output(schema)
+    )
+    structured_llm = structured.with_retry(
         stop_after_attempt=2,
         retry_if_exception_type=(ValidationError, OutputParserException),
     )
