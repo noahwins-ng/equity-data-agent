@@ -5,35 +5,22 @@
 # switch, no code change. Keys are resolved from env at proxy startup; the
 # client (agent) does not need to know them.
 #
-# QNT-128/QNT-129: default stays Llama-3.3-70B (Groq free-tier TPD 100K) with
-# Llama-4-Scout-17B as auto-fallback (TPD 500K), then Groq-hosted gpt-oss-120b
-# as a last-resort same-provider fallback for eval/dev days where both Llama
-# buckets are exhausted. This is capacity insurance, not a quality promotion;
-# Scout remains the preferred fallback.
+# QNT-258 / ADR-025: default moved off Groq llama-3.3-70b to the paid DeepSeek
+# V4 Flash primary (see the equity-agent/default block below), with the free
+# OpenRouter anchor Nemotron 3 Ultra as its sole fallback.
 #
-# QNT-227: the Cerebras gpt-oss-120b fallback (added QNT-215) was REMOVED. A
-# controlled run (ADR-021 follow-up) showed Cerebras cannot serve the 9-12k-token
-# synthesize request within the 60s client timeout (0/4 trials; client retries
-# stacked to ~181s before erroring -- the exact unbounded tail ADR-021 set out
-# to kill). litellm fallbacks are recursive, so the array-bounded ThesisPlan
-# schema also reached Cerebras and was rejected. It served no call it could be
-# reached for, so it was pure tail-latency risk and is gone from every chain.
-#
-# Why Scout over Qwen: the QNT-129 free-tier bench
-# (docs/model-bench-2026-04.md) ran 16-record golden sweeps on every
-# plausible Groq + Google AI Studio free-tier model. Qwen3-32B produced
-# 12/16 hallucination_ok (4 records with invented magnitudes — AAPL P/E,
-# JPM EPS, UNH headlines) plus a Groq tool-use failure on the META
-# synthesize call. Scout produced 16/16 on every measure (judge 4.94 vs
-# 1.44, cosine 0.342 vs 0.296, p50 elapsed 836ms vs 25 635ms — 30× faster
-# wall time). Same provider, same key, same retry path, no new failure
-# mode added.
-#
-# Why not Scout-default-too: bench is 16 records on one prompt revision.
-# Llama-3.3-70B has months of production track record; Scout has zero.
-# Holding Scout in the fallback slot lets us collect production telemetry
-# before promoting; re-evaluate at the next bench run (target +2 weeks
-# from QNT-129 ship).
+# QNT-317 / ADR-026: the residual Groq free-tier fallback machinery was RETIRED
+# ahead of Groq's 2026-06-17 decommission (llama-4-scout + qwen3-32b die
+# 2026-07-17; llama-3.3-70b + llama-3.1-8b die 2026-08-16). ADR-026's verdict on
+# the transitive fallback chain was REMOVE (residual): the paid primary + the
+# decommission made these hops dead config. Deleted: the fallback-llama4scout
+# alias (Scout) and the fallback-groq-gptoss120b alias that sat behind it in the
+# small chain, plus the bench-llama4scout / bench-qwen3-32b / bench-llama3-70b
+# aliases. The small tier was re-anchored to equity-agent/default (paid, no
+# daily cap); gpt-oss-20b (small) and gpt-oss-120b (bench-gptoss120b) survive
+# the decommission and stay. The earlier Cerebras gpt-oss-120b hop was already
+# removed in QNT-227 (could not serve a 9-12k synthesize within the client
+# timeout).
 #
 # QNT-129: bench-* aliases below are dedicated harness slots used by
 # `python -m agent.evals --model equity-agent/bench-<name>` to compare
@@ -100,30 +87,10 @@ model_list:
       model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
       api_key: os.environ/OPENROUTER_API_KEY
 
-  - model_name: equity-agent/fallback-llama4scout
-    # QNT-129: replaces the previous `equity-agent/fallback-qwen3`. Same
-    # provider (Groq), same TPD ceiling (500K — 5× the default), strictly
-    # better on every measured signal vs Qwen3-32B. See
-    # docs/model-bench-2026-04.md for the rationale.
-    # QNT-258: no longer in equity-agent/default's chain (that moved to the
-    # OpenRouter anchors above); still serves the equity-agent/small chain
-    # until the Groq decommission re-anchoring follow-up (dies 2026-07-17).
-    litellm_params:
-      model: groq/meta-llama/llama-4-scout-17b-16e-instruct
-      api_key: os.environ/GROQ_API_KEY
-
-  - model_name: equity-agent/fallback-groq-gptoss120b
-    # QNT-215: final same-provider fallback behind Scout (QNT-227 removed the
-    # Cerebras hop that used to sit in front of it). The QNT-129 bench found
-    # gpt-oss-120b safe on hard contracts but too defensive for primary thesis
-    # quality, so keep it behind the stronger Llama fallback. Note: its 8000-TPM
-    # per-request ceiling means it cannot serve a 9-12k synthesize either (it
-    # fast-fails with a 413 rather than hanging); it still serves the small
-    # plan/classify calls fine.
-    litellm_params:
-      model: groq/openai/gpt-oss-120b
-      api_key: os.environ/GROQ_API_KEY
-      reasoning_effort: low
+  # QNT-317 / ADR-026: equity-agent/fallback-llama4scout (Scout, dies 07/17) and
+  # equity-agent/fallback-groq-gptoss120b (its downstream hop) were REMOVED here
+  # — the residual Groq free-tier chain the ADR-026 dividend retires. The small
+  # tier now falls back to the paid equity-agent/default (see fallbacks below).
 
   - model_name: equity-agent/gemini
     litellm_params:
@@ -195,19 +162,9 @@ model_list:
       rpm: 25
       tpm: 6500
 
-  - model_name: equity-agent/bench-llama4scout
-    litellm_params:
-      model: groq/meta-llama/llama-4-scout-17b-16e-instruct
-      api_key: os.environ/GROQ_API_KEY
-      rpm: 25
-      tpm: 24000    # Groq published 30K TPM — wide TPM is the headroom here
-
-  - model_name: equity-agent/bench-qwen3-32b
-    litellm_params:
-      model: groq/qwen/qwen3-32b
-      api_key: os.environ/GROQ_API_KEY
-      rpm: 50       # Groq published 60 RPM
-      tpm: 5000     # Groq published 6K TPM — TPM is the binding constraint
+  # QNT-317 / ADR-026: bench-llama4scout (Scout) and bench-qwen3-32b both die
+  # 2026-07-17 in the Groq decommission — retired, not re-pointed (their models
+  # are gone). Surviving bench slots (gptoss120b/gptoss20b/gemma/gemini) remain.
 
   - model_name: equity-agent/bench-gemma4-31b
     litellm_params:
@@ -229,17 +186,10 @@ model_list:
       rpm: 12       # Google published 15 RPM
       tpm: 200000   # Google published 250K TPM
 
-  - model_name: equity-agent/bench-llama3-70b
-    # Calibration line — same model as `equity-agent/default` but no fallback
-    # so the bench measures Llama-3.3-70B's own quality on the current
-    # prompt_version. The QNT-128 reference run was on an older prompt
-    # (1318d12a6d); without this alias the comparison would be unfair to
-    # every other candidate on the post-QNT-133/QNT-136/QNT-137 prompt.
-    litellm_params:
-      model: groq/llama-3.3-70b-versatile
-      api_key: os.environ/GROQ_API_KEY
-      rpm: 25       # ~80% of Groq published 30 RPM on 70B (rounded to nearest 5)
-      tpm: 5000     # ~80% of Groq published 6K TPM on 70B free tier (rounded to nearest 500)
+  # QNT-317 / ADR-026: bench-llama3-70b (the old production-default calibration
+  # line, groq/llama-3.3-70b-versatile) dies 2026-08-16 in the Groq decommission
+  # and is no longer the default anyway (QNT-258 moved default to paid DeepSeek).
+  # Retired — bench-deepseek-v4-flash is the current-primary calibration line.
 
 litellm_settings:
   drop_params: true
@@ -254,12 +204,11 @@ litellm_settings:
   fallbacks:
     - equity-agent/default:
         - equity-agent/fallback-nemotron-ultra
-    # QNT-220 (#7): small tier falls back to the default on provider throttle
-    # -- classify/plan stay functional. (Groq gpt-oss-20b survives the
-    # decommission; its Groq-fallback hop below dies 2026-07-17 and is part of
-    # the re-anchoring follow-up, out of scope here.)
+    # QNT-220 (#7): small tier (Groq gpt-oss-20b, survives the decommission)
+    # falls back to the default on provider throttle so classify/plan stay
+    # functional. QNT-317 / ADR-026: re-anchored here — the old Scout hop
+    # (fallback-llama4scout, dies 07/17) and its gpt-oss-120b tail were removed;
+    # the paid equity-agent/default (no daily cap) is the terminal fallback, and
+    # since fallbacks are recursive it inherits default's own nemotron anchor.
     - equity-agent/small:
         - equity-agent/default
-        - equity-agent/fallback-llama4scout
-    - equity-agent/fallback-llama4scout:
-        - equity-agent/fallback-groq-gptoss120b
