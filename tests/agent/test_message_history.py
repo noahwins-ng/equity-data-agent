@@ -131,7 +131,7 @@ def test_retail_followup_routes_to_followup_not_conversational(
         config=config,
     )
     assert second["intent"] == "followup"
-    assert second.get("conversational") is None
+    assert second.get("answer") is None
     assert sum(tool.call_count for tool in tools.values()) == 0
 
 
@@ -305,7 +305,7 @@ def test_fresh_intent_trims_assembled_prompt_history(monkeypatch: Any) -> None:
             "question": "what's the P/E?",  # metric ask -> build_followup_prompt
             "messages": _seeded_history(8),
             "reports": {"fundamental": "## fundamental\nP/E 31\n"},
-            "thesis": make_thesis(),
+            "answer": make_thesis(),
         }
     )
     followup_prompt = stub2.structured_prompts[QuickFactAnswer][-1]

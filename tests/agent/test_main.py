@@ -4,14 +4,13 @@ Mocks ``build_graph`` so the CLI is tested in isolation from the API layer.
 The graph itself is covered by tests/agent/test_graph.py.
 
 QNT-133 changed the contract: the graph state holds a structured ``Thesis``
-rather than a flat string. The CLI is responsible for re-rendering it to
-markdown for stdout / ``--output``, so the tests stub ``state["thesis"]``
-with real ``Thesis`` instances and assert the rendered markdown surfaces
-in the expected places.
+rather than a flat string. QNT-307 folded every answer shape into the single
+``state["answer"]`` discriminated union, so the tests stub ``state["answer"]``
+with real payload instances and assert the CLI re-renders the markdown for
+stdout / ``--output``.
 
-QNT-149 added a second response shape (quick-fact). The CLI renders
-whichever one ``state['intent']`` selects so callers piping to files
-don't have to branch.
+QNT-149 added a second response shape (quick-fact). The CLI renders whichever
+payload ``answer`` holds so callers piping to files don't have to branch.
 """
 
 from __future__ import annotations
@@ -53,7 +52,7 @@ def _stub_thesis(summary: str = "NVDA looks attractive on momentum.") -> Thesis:
 def stub_graph(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     graph = MagicMock()
     graph.invoke.return_value = {
-        "thesis": _stub_thesis(),
+        "answer": _stub_thesis(),
         "confidence": 0.67,
         "errors": {},
     }
@@ -101,8 +100,7 @@ def test_analyze_quick_fact_intent_prints_short_answer(
     four-section thesis output entirely."""
     stub_graph.invoke.return_value = {
         "intent": "quick_fact",
-        "thesis": None,
-        "quick_fact": QuickFactAnswer(
+        "answer": QuickFactAnswer(
             answer="RSI sits at 62 (source: technical).",
             cited_value="62",
             source="technical",
@@ -132,9 +130,9 @@ def test_analyze_missing_thesis_exits_1(
 def test_analyze_none_thesis_exits_1(
     stub_graph: MagicMock, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Defensive: a structured-output failure surfaces as ``thesis=None``;
+    """Defensive: a structured-output failure surfaces as ``answer=None``;
     CLI must treat that the same as the missing-key case."""
-    stub_graph.invoke.return_value = {"thesis": None, "confidence": 0.0, "errors": {}}
+    stub_graph.invoke.return_value = {"answer": None, "confidence": 0.0, "errors": {}}
     assert cli.main(["analyze", "NVDA"]) == 1
     assert "No answer produced" in capsys.readouterr().err
 
@@ -154,7 +152,7 @@ def test_analyze_surfaces_tool_errors_to_stderr(
     stub_graph: MagicMock, capsys: pytest.CaptureFixture[str]
 ) -> None:
     stub_graph.invoke.return_value = {
-        "thesis": _stub_thesis("Partial framing."),
+        "answer": _stub_thesis("Partial framing."),
         "confidence": 0.33,
         "errors": {"technical": "tool-not-registered"},
     }

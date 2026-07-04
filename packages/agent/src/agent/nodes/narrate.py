@@ -126,13 +126,15 @@ def narrate_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> 
             **graph._quick_fact_grounding(state, quick_fact_answer),
         }
 
-    # Pick the structured payload to summarise (QNT-294 AC2). A followup
-    # narrative-only turn carries answer=None but reuses the hydrated prior
-    # ``thesis`` as its substrate, so it takes priority in the ``or`` -- for
-    # every other turn ``thesis`` is either the answer itself or cleared to
-    # None, so this reduces to the single answer union. narrator reads the
-    # same markdown the panel renders.
-    payload_obj: object | None = state.get("thesis") or answer_obj
+    # Pick the structured payload to summarise (QNT-294 / QNT-307). A followup
+    # turn reacts to the PRIOR turn's answer (``prior_answer``, set by classify):
+    # a narrative-only followup carries answer=None, and a metric-ask followup
+    # narrates over the earlier thesis, not its own compact card -- both want the
+    # prior substrate, so it wins for followup. Every other intent reads THIS
+    # turn's ``answer`` (the same markdown the panel renders).
+    payload_obj: object | None = (
+        state.get("prior_answer") if intent == "followup" else None
+    ) or answer_obj
     payload_markdown = ""
     to_md: Any = getattr(payload_obj, "to_markdown", None)
     if callable(to_md):
@@ -147,7 +149,7 @@ def narrate_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> 
     # everything narrate needs.
     prior_thesis_markdown: str | None = None
     if intent == "followup" and not payload_markdown:
-        prior_thesis = state.get("thesis")
+        prior_thesis = state.get("prior_answer")
         prior_to_md: Any = getattr(prior_thesis, "to_markdown", None)
         if callable(prior_to_md):
             try:

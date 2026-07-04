@@ -171,7 +171,7 @@ def test_full_flow_produces_thesis_and_confidence(stub_llm: _StructuredLLM) -> N
 
     result = _run(graph)
 
-    assert result["thesis"] is expected
+    assert result["answer"] is expected
     assert result["confidence"] == 1.0
     # QNT-175: ``company`` is force-included on the thesis path even when the
     # plan LLM omits it, so the gathered set covers every REPORT_TOOLS entry.
@@ -389,7 +389,7 @@ def test_missing_news_tool_is_silently_skipped(stub_llm: _StructuredLLM) -> None
     assert result["reports"].keys() == {"technical", "fundamental"}
     # 'news' is in OPTIONAL_TOOLS, so its absence is not an error.
     assert "news" not in result["errors"]
-    assert isinstance(result["thesis"], Thesis)
+    assert isinstance(result["answer"], Thesis)
 
 
 def test_gather_reports_optional_tool_missing_from_map_is_dropped_silently() -> None:
@@ -497,7 +497,7 @@ def test_synthesize_returns_none_when_structured_output_fails(
 
     result = _run(graph)
 
-    assert result["thesis"] is None
+    assert not isinstance(result["answer"], Thesis)
     assert result["confidence"] == 1.0
 
 
@@ -554,8 +554,7 @@ def test_thesis_retries_on_validation_error_and_returns_valid_answer(
     graph = build_graph({name: _mock_tool(name) for name in REPORT_TOOLS})
     result = _run(graph)
 
-    assert result["thesis"] is valid_thesis, "retry recovery must produce the valid thesis"
-    assert result["conversational"] is None, "no fallback redirect when retry succeeds"
+    assert result["answer"] is valid_thesis, "retry recovery must produce the valid thesis"
     assert call_count[0] == 2, "structured output must be called twice (first fail, second ok)"
 
 
@@ -571,7 +570,7 @@ def test_synthesize_returns_none_when_response_is_not_a_thesis(
 
     result = _run(graph)
 
-    assert result["thesis"] is None
+    assert not isinstance(result["answer"], Thesis)
 
 
 def test_synthesize_extracts_thesis_from_include_raw_dict(
@@ -592,7 +591,7 @@ def test_synthesize_extracts_thesis_from_include_raw_dict(
 
     result = _run(graph)
 
-    assert result["thesis"] is expected
+    assert result["answer"] is expected
 
 
 def test_required_tool_failure_records_error(stub_llm: _StructuredLLM) -> None:
@@ -656,10 +655,7 @@ def test_no_reports_gathered_falls_back_to_conversational_redirect(
     graph = build_graph({"technical": always_fails})
     result = _run(graph)
 
-    assert result["thesis"] is None
-    assert result["quick_fact"] is None
-    assert result["comparison"] is None
-    assert isinstance(result["conversational"], ConversationalAnswer)
+    assert isinstance(result["answer"], ConversationalAnswer)
     assert result["errors"]["technical"].startswith("RuntimeError")
     # The thesis planner fires once, but synthesize does NOT call the LLM
     # because gather produced no reports and the fallback is deterministic,
@@ -774,8 +770,7 @@ def test_no_tools_registered_yields_empty_plan(stub_llm: _StructuredLLM) -> None
     graph = build_graph({})
     result = _run(graph)
     assert result.get("plan") == []
-    assert result["thesis"] is None
-    assert isinstance(result["conversational"], ConversationalAnswer)
+    assert isinstance(result["answer"], ConversationalAnswer)
 
 
 def test_parse_plan_picks_named_subset() -> None:
@@ -958,8 +953,7 @@ def test_classify_node_records_thesis_intent_for_balanced_question(
     result = _run(graph)
 
     assert result["intent"] == "thesis"
-    assert isinstance(result["thesis"], Thesis)
-    assert result["quick_fact"] is None
+    assert isinstance(result["answer"], Thesis)
 
 
 def test_classify_node_routes_to_quick_fact_for_rsi_question(
@@ -988,8 +982,7 @@ def test_classify_node_routes_to_quick_fact_for_rsi_question(
     result = graph.invoke({"ticker": "NVDA", "question": "What's NVDA's RSI right now?"})
 
     assert result["intent"] == "quick_fact"
-    assert isinstance(result["quick_fact"], QuickFactAnswer)
-    assert result["thesis"] is None
+    assert isinstance(result["answer"], QuickFactAnswer)
     # Confidence reflects coverage x grounding — both are clean here.
     assert result["confidence"] == 1.0
     assert result["grounding_rate"] == 1.0
@@ -1016,7 +1009,7 @@ def test_question_named_ticker_rebases_quick_fact_run(
     assert result["analysis_ticker"] == "AAPL"
     fundamental.assert_called_once_with("AAPL")
     assert result["intent"] == "quick_fact"
-    assert isinstance(result["quick_fact"], QuickFactAnswer)
+    assert isinstance(result["answer"], QuickFactAnswer)
 
 
 def test_question_named_ticker_rebases_thesis_run(
@@ -1041,7 +1034,7 @@ def test_question_named_ticker_rebases_thesis_run(
     assert result["analysis_ticker"] == "AAPL"
     for tool in (company, technical, fundamental, news):
         tool.assert_called_once_with("AAPL")
-    assert isinstance(result["thesis"], Thesis)
+    assert isinstance(result["answer"], Thesis)
 
 
 def test_quick_fact_failure_surfaces_as_none_quick_fact(
@@ -1059,8 +1052,7 @@ def test_quick_fact_failure_surfaces_as_none_quick_fact(
     result = graph.invoke({"ticker": "NVDA", "question": "What's NVDA's P/E?"})
 
     assert result["intent"] == "quick_fact"
-    assert result["quick_fact"] is None
-    assert result["thesis"] is None
+    assert not isinstance(result["answer"], QuickFactAnswer)
 
 
 def test_classify_default_to_thesis_when_classify_intent_fails(
@@ -1085,7 +1077,7 @@ def test_classify_default_to_thesis_when_classify_intent_fails(
     )
 
     assert result["intent"] == "thesis"
-    assert isinstance(result["thesis"], Thesis)
+    assert isinstance(result["answer"], Thesis)
 
 
 def test_quick_fact_intent_narrows_plan_prompt(
@@ -1144,10 +1136,8 @@ def test_classify_node_routes_to_comparison_for_two_ticker_question(
     result = graph.invoke({"ticker": "NVDA", "question": "Compare NVDA vs AAPL on valuation."})
 
     assert result["intent"] == "comparison"
-    assert isinstance(result["comparison"], ComparisonAnswer)
-    assert [s.ticker for s in result["comparison"].sections] == ["NVDA", "AAPL"]
-    assert result["thesis"] is None
-    assert result["quick_fact"] is None
+    assert isinstance(result["answer"], ComparisonAnswer)
+    assert [s.ticker for s in result["answer"].sections] == ["NVDA", "AAPL"]
     # Reports were gathered for BOTH tickers.
     assert set(result["reports_by_ticker"].keys()) == {"NVDA", "AAPL"}
 
@@ -1186,8 +1176,7 @@ def test_comparison_with_only_one_resolved_ticker_routes_to_clarify(
     assert result.get("ambiguity_kind") == "needs_second_ticker"
     # Clarify never visits synthesize, so comparison is never written --
     # absent or None both satisfy "no comparison payload landed".
-    assert result.get("comparison") is None
-    assert isinstance(result["conversational"], ConversationalAnswer)
+    assert isinstance(result["answer"], ConversationalAnswer)
     # Clarify skips plan + gather + synthesize entirely.
     assert result["intent_path"] == ["classify", "clarify", "narrate"]
 
@@ -1215,10 +1204,7 @@ def test_classify_node_routes_to_conversational_for_off_domain_ask(
     result = graph.invoke({"ticker": "NVDA", "question": "What's the weather like today?"})
 
     assert result["intent"] == "conversational"
-    assert isinstance(result["conversational"], ConversationalAnswer)
-    assert result["thesis"] is None
-    assert result["comparison"] is None
-    assert result["quick_fact"] is None
+    assert isinstance(result["answer"], ConversationalAnswer)
     # QNT-212: conversational now short-circuits classify→synthesize, so
     # plan/gather never run and ``reports`` is never written by the graph.
     # ``get`` defaults to {} for the same "no tool calls fired" assertion.
@@ -1246,11 +1232,11 @@ def test_conversational_failure_falls_back_to_deterministic_redirect(
     result = graph.invoke({"ticker": "NVDA", "question": "what can you do?"})
 
     assert result["intent"] == "conversational"
-    assert isinstance(result["conversational"], ConversationalAnswer)
+    assert isinstance(result["answer"], ConversationalAnswer)
     # Deterministic redirect mentions covered tickers + suggestions.
-    answer = result["conversational"].answer
+    answer = result["answer"].answer
     assert any(t in answer for t in ("NVDA", "AAPL", "MSFT"))
-    assert len(result["conversational"].suggestions) == 3
+    assert len(result["answer"].suggestions) == 3
 
 
 def test_thesis_synthesis_failure_falls_back_to_conversational_redirect(
@@ -1269,8 +1255,7 @@ def test_thesis_synthesis_failure_falls_back_to_conversational_redirect(
     result = _run(graph)
 
     assert result["intent"] == "thesis"
-    assert result["thesis"] is None
-    assert isinstance(result["conversational"], ConversationalAnswer)
+    assert isinstance(result["answer"], ConversationalAnswer)
 
 
 def test_comparison_skips_when_one_ticker_has_no_reports(
@@ -1296,8 +1281,7 @@ def test_comparison_skips_when_one_ticker_has_no_reports(
     result = graph.invoke({"ticker": "NVDA", "question": "Compare NVDA vs AAPL."})
 
     assert result["intent"] == "comparison"
-    assert result["comparison"] is None
-    assert isinstance(result["conversational"], ConversationalAnswer)
+    assert isinstance(result["answer"], ConversationalAnswer)
     # Structured runnable was NEVER invoked — fallback is deterministic.
     assert stub_llm.structured_invoke.call_count == 0
 
@@ -1388,7 +1372,7 @@ def test_build_graph_without_event_emitter_remains_no_op(
     graph = build_graph({"technical": _mock_tool("tech")})
     result = _run(graph)
     assert result["intent"] == "thesis"
-    assert isinstance(result["thesis"], Thesis)
+    assert isinstance(result["answer"], Thesis)
 
 
 # ─── QNT-298: plan_node / explore_supervisor_node emit plan_rationale ──────
@@ -1656,11 +1640,8 @@ def test_focused_intent_narrows_plan_to_company_and_matching_report(
         # Reports gathered match the plan.
         assert set(result["reports"]) == {"company", expected_report}
         # Focused payload populated; thesis/quick_fact/comparison are None.
-        assert isinstance(result["focused"], FocusedAnalysis)
-        assert result["focused"].focus == intent
-        assert result["thesis"] is None
-        assert result["quick_fact"] is None
-        assert result["comparison"] is None
+        assert isinstance(result["answer"], FocusedAnalysis)
+        assert result["answer"].focus == intent
 
 
 def test_question_named_ticker_rebases_focused_run(
@@ -1692,7 +1673,7 @@ def test_question_named_ticker_rebases_focused_run(
     assert result["analysis_ticker"] == "AAPL"
     company.assert_called_once_with("AAPL")
     technical.assert_called_once_with("AAPL")
-    assert isinstance(result["focused"], FocusedAnalysis)
+    assert isinstance(result["answer"], FocusedAnalysis)
 
 
 def test_focused_intent_falls_back_to_redirect_when_reports_empty(
@@ -1713,8 +1694,7 @@ def test_focused_intent_falls_back_to_redirect_when_reports_empty(
     graph = build_graph({})
     result = graph.invoke({"ticker": "NVDA", "question": "give me a fundamental analysis of NVDA"})
 
-    assert result["focused"] is None
-    assert isinstance(result["conversational"], ConversationalAnswer)
+    assert isinstance(result["answer"], ConversationalAnswer)
 
 
 def test_focused_intent_requires_matching_report(
@@ -1732,8 +1712,7 @@ def test_focused_intent_requires_matching_report(
     graph = build_graph({"company": _mock_tool("company")})
     result = graph.invoke({"ticker": "NVDA", "question": "give me a fundamental analysis of NVDA"})
 
-    assert result["focused"] is None
-    assert isinstance(result["conversational"], ConversationalAnswer)
+    assert isinstance(result["answer"], ConversationalAnswer)
     assert llm.structured_invoke.call_count == 0
 
 
@@ -1763,8 +1742,8 @@ def test_focused_intent_corrects_mismatched_focus_field(
     graph = build_graph({name: _mock_tool(name) for name in REPORT_TOOLS})
     result = graph.invoke({"ticker": "NVDA", "question": "technical analysis of NVDA"})
 
-    assert isinstance(result["focused"], FocusedAnalysis)
-    assert result["focused"].focus == "technical"
+    assert isinstance(result["answer"], FocusedAnalysis)
+    assert result["answer"].focus == "technical"
 
 
 def test_hint_from_intent_focused_resolves_to_real_bank_label() -> None:
@@ -2123,7 +2102,7 @@ def test_targeted_news_drops_focused_card_and_surfaces_sources(
     result = graph.invoke({"ticker": "NVDA", "question": "any news on NVDA and the Micron deal?"})
 
     # Focused card dropped; the focused-card LLM call was never made.
-    assert result["focused"] is None
+    assert result["answer"] is None
     llm.structured_invoke.assert_not_called()
     # Retrieved hits surfaced as structured provenance.
     sources = result["retrieved_sources"]
@@ -2164,7 +2143,7 @@ def test_broad_news_keeps_focused_card(monkeypatch: pytest.MonkeyPatch) -> None:
     result = graph.invoke({"ticker": "NVDA", "question": "give me a news read on NVDA"})
 
     search.assert_not_called()
-    assert isinstance(result["focused"], FocusedAnalysis)
+    assert isinstance(result["answer"], FocusedAnalysis)
     llm.structured_invoke.assert_called_once()
     assert not result.get("retrieved_sources")
 
@@ -2192,7 +2171,7 @@ def test_targeted_news_empty_hits_keeps_focused_card(monkeypatch: pytest.MonkeyP
     result = graph.invoke({"ticker": "NVDA", "question": "any litigation news on NVDA?"})
 
     search.assert_called_once()
-    assert isinstance(result["focused"], FocusedAnalysis)
+    assert isinstance(result["answer"], FocusedAnalysis)
     assert not result.get("retrieved_sources")
 
 
@@ -2801,7 +2780,7 @@ def test_targeted_earnings_drops_focused_card_and_surfaces_sources(
 
     search_earnings.assert_called_once_with("NVDA", question)
     # Focused card dropped; the focused-card LLM call was never made.
-    assert result["focused"] is None
+    assert result["answer"] is None
     llm.structured_invoke.assert_not_called()
     # Retrieved earnings hits surfaced as corpus-tagged provenance.
     sources = result["retrieved_sources"]

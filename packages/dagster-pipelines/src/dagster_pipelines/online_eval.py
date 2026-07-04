@@ -73,47 +73,60 @@ def _extract_question(trace_input: Any) -> str:
 
 
 def _extract_generated(trace_output: Any) -> str:
-    """Render the generated thesis from a Langfuse trace output to markdown.
+    """Render the generated answer from a Langfuse trace output to markdown.
 
     The LangGraph CallbackHandler records the final graph state dict as the
-    trace output. The state carries one of five answer shapes (thesis,
-    quick_fact, comparison, focused, conversational); we try each in the
-    same priority order the SSE handler uses and fall back to a plain string.
+    trace output. QNT-307: the answer lives in the single ``answer`` key (a
+    serialized payload dict with no discriminator field), so we render the answer
+    class whose EXACT field set matches the dict. The shapes overlap loosely -- a
+    QuickFactAnswer dict ``{answer, cited_value, source}`` validates as
+    ConversationalAnswer, which only requires ``answer`` and ignores extras -- so a
+    plain try-each-class-in-order would mis-render. Every answer shape has a
+    distinct field set, so ``keys == model_fields`` disambiguates. Falls back to a
+    plain string otherwise.
+
+    Trace back-compat: a PRE-QNT-307 trace carries the legacy per-shape slot keys
+    (``thesis`` / ``quick_fact`` / ...) and no ``answer`` key, so it hits the
+    string fallback. Online eval samples only the last 7 days, so old-shape traces
+    age out of the window within a week of deploy -- the degradation is transient.
     """
     if not trace_output:
         return ""
-    try:
-        from agent.comparison import ComparisonAnswer
-        from agent.conversational import ConversationalAnswer
-        from agent.focused import FocusedAnalysis
-        from agent.quick_fact import QuickFactAnswer
-        from agent.thesis import Thesis
+    answer = trace_output.get("answer") if isinstance(trace_output, dict) else None
+    if answer is not None:
+        try:
+            from agent.comparison import ComparisonAnswer
+            from agent.conversational import ConversationalAnswer
+            from agent.focused import FocusedAnalysis
+            from agent.quick_fact import QuickFactAnswer
+            from agent.thesis import Thesis
 
-        def _try_render(key: str, cls: type) -> str | None:
-            raw = trace_output.get(key) if isinstance(trace_output, dict) else None
-            if raw is None:
+            def _try_render(cls: type) -> str | None:
+                if isinstance(answer, cls):
+                    return answer.to_markdown()
+                # Exact field-set match: render as ``cls`` only when the dict's keys
+                # are exactly ``cls``'s fields -- the shapes' loose overlap (extras
+                # ignored on validate) would otherwise cross-match a wrong class.
+                fields = getattr(cls, "model_fields", None)
+                if isinstance(answer, dict) and fields is not None and set(answer) == set(fields):
+                    try:
+                        return cls(**answer).to_markdown()
+                    except Exception:
+                        return None
                 return None
-            if isinstance(raw, cls):
-                return raw.to_markdown()
-            if isinstance(raw, dict):
-                try:
-                    return cls(**raw).to_markdown()
-                except Exception:
-                    return None
-            return None
 
-        for key, cls in [
-            ("comparison", ComparisonAnswer),
-            ("conversational", ConversationalAnswer),
-            ("quick_fact", QuickFactAnswer),
-            ("focused", FocusedAnalysis),
-            ("thesis", Thesis),
-        ]:
-            rendered = _try_render(key, cls)
-            if rendered:
-                return rendered
-    except ImportError:
-        pass
+            for cls in (
+                ComparisonAnswer,
+                ConversationalAnswer,
+                QuickFactAnswer,
+                FocusedAnalysis,
+                Thesis,
+            ):
+                rendered = _try_render(cls)
+                if rendered:
+                    return rendered
+        except ImportError:
+            pass
 
     if isinstance(trace_output, str):
         return trace_output.strip()

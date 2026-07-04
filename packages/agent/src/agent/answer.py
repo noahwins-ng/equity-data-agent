@@ -1,6 +1,6 @@
-"""QNT-294 (AC2): the single discriminated-union answer payload.
+"""QNT-294 / QNT-307: the single discriminated-union answer payload.
 
-Replaces the eight optional ``AgentState`` answer slots (``thesis`` /
+Replaces the seven optional ``AgentState`` answer slots (``thesis`` /
 ``quick_fact`` / ``comparison`` / ``comparison_lean`` / ``conversational`` /
 ``focused`` / ``exploration``) with one ``answer`` field whose type is the union
 of every answer shape. A single field holds exactly one payload, so the
@@ -8,14 +8,18 @@ of every answer shape. A single field holds exactly one payload, so the
 (``_assistant_surface`` was a seven-branch if-chain, and every consumer
 re-implemented it) is now enforced by the type.
 
-``project_answer`` is the single writer of the answer state: it derives the
-matching legacy slot from the payload's concrete type and clears the rest, so no
-node hand-assembles the multi-key dict and cross-population is structurally
-impossible. The legacy slots remain as deprecated read-compat channels -- the
-checkpointer persists them, the SSE citation/emit ladder and the eval scorers
-still read them, and the followup path leans on a separately-hydrated
-``thesis`` channel -- so consumers migrate to ``answer`` incrementally rather
-than in one diff.
+``project_answer`` is the single writer of the answer state: it writes the one
+``answer`` field, so no node hand-assembles a multi-key dict and cross-population
+is structurally impossible. QNT-307 retired the seven legacy read-compat slots
+that QNT-294 kept while consumers migrated: every reader now reads ``answer``,
+the followup path reads a dedicated ``prior_answer`` channel (see
+``agent.nodes.classify``), and old SqliteSaver checkpoints that still carry the
+seven-key shape hydrate harmlessly (unknown channels are ignored; a missing
+``answer`` reads as None).
+
+``answer_slot`` maps a payload's concrete type to its SSE event name (the wire
+protocol still names cards ``thesis`` / ``quick_fact`` / ...), so the SSE emit
+ladder can derive the event name from the union without a discriminator field.
 """
 
 from __future__ import annotations
@@ -41,10 +45,12 @@ AnswerPayload = (
     | ExplorationAnswer
 )
 
-# Concrete type -> legacy AgentState slot name. The slot keys are the deprecated
-# read-compat channels; ``answer`` is the source of truth. followup reuses the
-# QuickFactAnswer shape, so it maps to the ``quick_fact`` slot.
-_SLOT_BY_TYPE: dict[type, str] = {
+# Concrete type -> SSE event name (the wire protocol still names cards
+# ``thesis`` / ``quick_fact`` / ...). ``answer`` is the single source of truth;
+# this map lets the SSE emit ladder derive the event name from the union without
+# a discriminator field. followup reuses the QuickFactAnswer shape, so it maps to
+# the ``quick_fact`` event.
+_EVENT_BY_TYPE: dict[type, str] = {
     Thesis: "thesis",
     QuickFactAnswer: "quick_fact",
     ComparisonAnswer: "comparison",
@@ -53,38 +59,31 @@ _SLOT_BY_TYPE: dict[type, str] = {
     FocusedAnalysis: "focused",
     ExplorationAnswer: "exploration",
 }
-ANSWER_SLOTS: tuple[str, ...] = tuple(_SLOT_BY_TYPE.values())
 
 
 def answer_slot(payload: object) -> str | None:
-    """Legacy slot name for a payload's shape, or None for a missing/foreign payload.
+    """SSE event name for a payload's shape, or None for a missing/foreign payload.
 
     Accepts ``object`` (not just ``AnswerPayload``) so callers holding a
     ``BaseModel``-narrowed value can dispatch without a cast -- an unrecognized
     type simply maps to None.
     """
-    return None if payload is None else _SLOT_BY_TYPE.get(type(payload))
+    return None if payload is None else _EVENT_BY_TYPE.get(type(payload))
 
 
 def project_answer(payload: AnswerPayload | None) -> dict[str, object]:
-    """State-write projection for a synthesized answer (QNT-294 AC2).
+    """State-write projection for a synthesized answer (QNT-294 / QNT-307).
 
-    Returns the ``answer`` field plus every legacy slot: all cleared to ``None``
-    except the one matching ``payload``'s concrete type. This is the single
-    place the legacy answer slots are written, so a node cannot populate two
-    answer shapes at once. Replaces the old ``_empty_payload()`` + set-one-slot
-    idiom. Does NOT carry ``confidence`` -- the caller adds it, since it is not
-    part of the answer payload.
+    Returns the single ``answer`` field. QNT-307 dropped the seven legacy slot
+    keys this used to also write; ``answer`` is now the sole write channel, so a
+    node cannot populate two answer shapes at once (the union enforces it).
+    Does NOT carry ``confidence`` -- the caller adds it, since it is not part of
+    the answer payload.
     """
-    slot = answer_slot(payload)
-    projected: dict[str, object] = {"answer": payload}
-    for name in ANSWER_SLOTS:
-        projected[name] = payload if name == slot else None
-    return projected
+    return {"answer": payload}
 
 
 __all__ = [
-    "ANSWER_SLOTS",
     "AnswerPayload",
     "answer_slot",
     "project_answer",

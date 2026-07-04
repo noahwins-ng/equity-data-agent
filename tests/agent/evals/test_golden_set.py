@@ -81,7 +81,7 @@ def stub_graph(monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str, Any]], No
     fixture.
     """
     state: dict[str, Any] = {
-        "thesis": _thesis(
+        "answer": _thesis(
             "RSI is 72.5 (source: technical). P/E 25 (source: fundamental).",
         ),
         "reports": {
@@ -147,7 +147,7 @@ class TestRunRecord:
     ) -> None:
         stub_graph(
             {
-                "thesis": _thesis("P/E is 999 (source: fundamental)."),
+                "answer": _thesis("P/E is 999 (source: fundamental)."),
                 "reports": {"fundamental": "P/E is 25"},
                 "errors": {},
             }
@@ -189,8 +189,7 @@ class TestRunRecord:
         paths."""
         stub_graph(
             {
-                "thesis": None,
-                "quick_fact": QuickFactAnswer(
+                "answer": QuickFactAnswer(
                     answer="RSI is 72.5 (source: technical).",
                     cited_value="72.5",
                     source="technical",
@@ -220,7 +219,7 @@ class TestRunRecord:
         # failing and masking which assertion is actually gating.
         stub_graph(
             {
-                "thesis": _thesis("All indicators agreeing (source: technical)."),
+                "answer": _thesis("All indicators agreeing (source: technical)."),
                 "reports": {"technical": "All indicators in agreement today."},
                 "errors": {},
             }
@@ -246,7 +245,7 @@ class TestRunRecord:
         """A thesis that does NOT contain the forbidden substring must pass."""
         stub_graph(
             {
-                "thesis": _thesis(
+                "answer": _thesis(
                     "RSI is 72.5, trend up (source: technical). MACD above signal line.",
                     supports=["RSI 72.5 (source: technical)"],
                 ),
@@ -275,7 +274,7 @@ class TestRunRecord:
         if challenges uses the same term correctly."""
         stub_graph(
             {
-                "thesis": make_thesis(
+                "answer": make_thesis(
                     supports=[
                         "RSI 71.6 overbought but bullish continuation in uptrend"
                         " (source: technical)"
@@ -309,7 +308,7 @@ class TestRunRecord:
         NOT fail -- challenges is the correct home for overbought RSI."""
         stub_graph(
             {
-                "thesis": make_thesis(
+                "answer": make_thesis(
                     supports=["Uptrend intact (source: technical)"],
                     challenges=["RSI pulling back from overbought territory (source: technical)"],
                     verdict_rationale="Uptrend label with overbought caution (source: technical).",
@@ -338,8 +337,7 @@ class TestRunRecord:
         fail the hallucination scorer the same way a thesis would."""
         stub_graph(
             {
-                "thesis": None,
-                "quick_fact": QuickFactAnswer(
+                "answer": QuickFactAnswer(
                     answer="RSI is 999 (source: technical).",
                     cited_value="999",
                     source="technical",

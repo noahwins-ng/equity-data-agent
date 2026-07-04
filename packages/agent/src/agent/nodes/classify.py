@@ -123,9 +123,29 @@ def classify_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) ->
             deps.event_emitter("intent", {"intent": intent})
         except Exception as exc:  # noqa: BLE001 — never let SSE plumbing crash the graph
             logger.warning("classify %s: event_emitter failed: %s (continuing)", ticker, exc)
+    # QNT-307: snapshot the prior turn's Thesis at the turn boundary, replacing
+    # the retired ``thesis`` slot the followup path used to lean on. classify is
+    # the entry node, so ``state.get("answer")`` here is the checkpointer-hydrated
+    # answer from the PRIOR turn (this turn has written nothing yet). This
+    # reproduces the old ``thesis``-slot lifetime EXACTLY -- only a Thesis is ever
+    # carried (every non-thesis intent went through project_answer, which nulled
+    # the slot), and a narrative-only followup (answer=None) preserves the earlier
+    # Thesis across the chain (followup returns never cleared it). Carrying a
+    # non-thesis payload here would feed it into build_followup_prompt's "earlier
+    # thesis" section and narrate's prior substrate -- a synthesis behaviour change
+    # the ticket puts out of scope. synthesize/narrate read ``prior_answer`` to
+    # reason over the earlier turn while they overwrite ``answer`` mid-run.
+    hydrated_answer = state.get("answer")
+    if isinstance(hydrated_answer, graph.Thesis):
+        prior_answer = hydrated_answer
+    elif hydrated_answer is None:
+        prior_answer = state.get("prior_answer")
+    else:
+        prior_answer = None
     return {
         "ticker": effective_ticker,
         "analysis_ticker": effective_ticker,
+        "prior_answer": prior_answer,
         "intent": intent,
         "classifier_source": classifier_source,
         "ambiguity_kind": ambiguity_kind,

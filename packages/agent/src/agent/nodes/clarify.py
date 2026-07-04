@@ -35,9 +35,9 @@ def clarify_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> 
     stack trace.
 
     Wired by the conditional edge from classify: only reachable when
-    ``state['ambiguity_kind']`` is set. Always exits through narrate;
-    narrate then short-circuits because ``state['conversational']`` is
-    populated (same gate the synthesize-fallback path uses).
+    ``state['ambiguity_kind']`` is set. Always exits through narrate; narrate
+    fires the deterministic clarify lead-in (gated on ``ambiguity_kind``, not on
+    the answer shape) above the clarify card ``answer`` holds.
     """
     ticker = state["ticker"]
     question = state.get("question", "")
@@ -64,10 +64,10 @@ def clarify_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> 
             ticker,
             ambiguity_kind,
         )
-        # QNT-294 (AC2): set answer + the conversational slot narrowly (not
-        # via project_answer) so a warm-thread clarify does not clear a
-        # hydrated prior card -- matching the pre-refactor single-key return.
-        return {"answer": fallback, "conversational": fallback}
+        # QNT-307: set only ``answer`` narrowly (not via project_answer, which
+        # carries no extra keys anyway) -- the clarify card is the fallback
+        # redirect; narrate speaks the deterministic lead-in above it.
+        return {"answer": fallback}
     # QNT-244: keep clarify suggestions concrete and in-scope. The
     # needs_second_ticker branch biases to comparison pairs; needs_ticker
     # to a balanced mix; needs_prior_turn legitimately carries none.
@@ -75,4 +75,4 @@ def clarify_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> 
         conversational, hint=graph._CLARIFY_SUGGESTION_HINT.get(str(ambiguity_kind))
     )
     logger.info("clarify %s: ambiguity_kind=%s clarify=ok", ticker, ambiguity_kind)
-    return {"answer": conversational, "conversational": conversational}
+    return {"answer": conversational}

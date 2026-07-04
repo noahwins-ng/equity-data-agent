@@ -859,9 +859,14 @@ def _history_before_current(
 
 
 def _prior_turn_context(state: AgentState, question: str) -> tuple[list[ConversationMessage], bool]:
-    """Return transcript context plus the canonical prior-turn boolean."""
+    """Return transcript context plus the canonical prior-turn boolean.
+
+    QNT-307: the ``answer`` union is the prior-turn signal (was the legacy
+    ``thesis`` slot). Runs at classify time, before ``prior_answer`` is set, so it
+    reads the checkpointer-hydrated ``answer`` from the earlier turn directly.
+    """
     history = _history_before_current(state.get("messages"), question)
-    return history, bool(history or state.get("reports") or state.get("thesis"))
+    return history, bool(history or state.get("reports") or state.get("answer"))
 
 
 def _append_user_message(
@@ -896,7 +901,7 @@ def _resolve_single_ticker_context(
     a followup that gestures at an EARLIER turn's ticker ("go back to NVDA"
     after the subject moved to AMZN) names NVDA, so it routes as a fresh NVDA
     ask and RE-GATHERS — it does not reuse NVDA's prior reports. ``reports`` /
-    ``reports_by_ticker`` / ``thesis`` are last-write-wins in the checkpoint
+    ``reports_by_ticker`` / ``answer`` are last-write-wins in the checkpoint
     (gather overwrites them on each non-followup turn; only the followup branch
     in plan_node deliberately preserves them), so the older ticker's reports are
     gone once a newer single-ticker turn lands.
@@ -922,16 +927,16 @@ def _strip_disclaimer(markdown: str) -> str:
 def _assistant_surface(state: AgentState, narrative: str | None) -> str | None:
     """Compact assistant transcript entry for the completed turn.
 
-    QNT-294 (AC2): dispatches on the single ``answer`` union instead of the old
-    seven-branch slot ladder. A followup narrative-only turn carries
-    ``answer=None`` but reuses the hydrated prior ``thesis`` as its substrate
+    QNT-294 / QNT-307: dispatches on the single ``answer`` union instead of the
+    old seven-branch slot ladder. A followup narrative-only turn carries
+    ``answer=None`` but reuses the prior turn's ``prior_answer`` as its substrate
     (the same fallback narrate uses), so fall back to it for the transcript
     anchor. The isinstance order preserves the old ladder's priority
     (conversational first, thesis last).
     """
     prefix = narrative.strip() if narrative else ""
 
-    payload = state.get("answer") or state.get("thesis")
+    payload = state.get("answer") or state.get("prior_answer")
     if isinstance(payload, ConversationalAnswer):
         return (prefix or str(getattr(payload, "answer", ""))).strip() or None
     if isinstance(payload, QuickFactAnswer):

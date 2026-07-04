@@ -16,7 +16,7 @@ from ._thesis_factory import make_comparison_section, make_thesis
 
 def test_compute_scores_clean_thesis_passes_both() -> None:
     state = {
-        "thesis": make_thesis(
+        "answer": make_thesis(
             supports=["RSI 65 (source: technical)"],
             challenges=["Multiple compression (source: fundamental)"],
         ),
@@ -34,7 +34,7 @@ def test_compute_scores_clean_thesis_passes_both() -> None:
 def test_compute_scores_flags_fabricated_number() -> None:
     """A thesis number not in any report fails the hallucination check."""
     state = {
-        "thesis": make_thesis(supports=["RSI 99 (source: technical)"]),
+        "answer": make_thesis(supports=["RSI 99 (source: technical)"]),
         "plan": ["technical", "fundamental"],
         "reports": {
             "technical": "RSI 65 reading.",
@@ -50,7 +50,7 @@ def test_compute_scores_flags_fabricated_number() -> None:
 def test_compute_scores_flags_missing_planned_tool() -> None:
     """Plan adherence fails when gather skipped a planned tool."""
     state = {
-        "thesis": make_thesis(),
+        "answer": make_thesis(),
         "plan": ["technical", "fundamental", "news"],
         "reports": {
             "technical": "RSI 65 reading. SMA50 cited.",
@@ -64,7 +64,7 @@ def test_compute_scores_flags_missing_planned_tool() -> None:
 def test_compute_scores_empty_plan_satisfies_adherence() -> None:
     """Conversational redirects produce empty plans; adherence is trivially OK."""
     state = {
-        "conversational": ConversationalAnswer(
+        "answer": ConversationalAnswer(
             answer="I focus on equity research questions.",
             suggestions=["Try a thesis question."],
         ),
@@ -78,7 +78,7 @@ def test_compute_scores_empty_plan_satisfies_adherence() -> None:
 def test_compute_scores_renders_quick_fact_shape() -> None:
     """Quick-fact answers route through to_markdown for the hallucination check."""
     state = {
-        "quick_fact": QuickFactAnswer(
+        "answer": QuickFactAnswer(
             answer="The RSI is 65.",
             cited_value="65",
             source="technical",
@@ -94,7 +94,7 @@ def test_compute_scores_renders_quick_fact_shape() -> None:
 def test_compute_scores_renders_comparison_shape() -> None:
     """Comparison answers flatten reports_by_ticker into the report corpus."""
     state = {
-        "comparison": ComparisonAnswer(
+        "answer": ComparisonAnswer(
             sections=[
                 make_comparison_section("NVDA", "Premium", "Uptrend"),
                 make_comparison_section("AAPL", "Inline", "Sideways"),
@@ -116,7 +116,7 @@ def test_compute_scores_comparison_partial_gather_flags_missing() -> None:
     """Comparison runs use per-ticker (intersection) adherence: a planned
     tool that one ticker fetched but the other didn't is still flagged."""
     state = {
-        "comparison": ComparisonAnswer(
+        "answer": ComparisonAnswer(
             sections=[
                 make_comparison_section("NVDA", "Premium", "Uptrend"),
                 make_comparison_section("AAPL", "Inline", "Sideways"),
@@ -145,7 +145,7 @@ def test_compute_scores_empty_state_returns_clean() -> None:
 def test_anchor_integrity_flags_out_of_range_cited_id() -> None:
     """QNT-305: a thesis citing R5 while only R1/R2 were retrieved is flagged."""
     state = {
-        "thesis": make_thesis(
+        "answer": make_thesis(
             supports=["Buyback expanded (source: news R5)"],
         ),
         "retrieved_sources": [{"id": "R1"}, {"id": "R2"}],
@@ -156,7 +156,7 @@ def test_anchor_integrity_flags_out_of_range_cited_id() -> None:
 
 def test_anchor_integrity_clean_when_ids_in_range() -> None:
     state = {
-        "thesis": make_thesis(
+        "answer": make_thesis(
             supports=["Buyback expanded (source: news R1)"],
             challenges=["Margin risk (source: fundamental R2)"],
         ),

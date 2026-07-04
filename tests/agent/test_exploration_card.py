@@ -139,5 +139,4 @@ def test_exploration_with_no_reports_falls_back(monkeypatch: pytest.MonkeyPatch)
     )
 
     assert result["intent"] == "exploration"
-    assert result["exploration"] is None
-    assert result["conversational"] is not None
+    assert result["answer"] is not None

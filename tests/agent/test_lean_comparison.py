@@ -94,7 +94,7 @@ def test_three_ticker_comparison_produces_lean_answer(
     result = graph.invoke({"ticker": "AAPL", "question": "Compare AAPL, MSFT and GOOGL."})
 
     assert result["intent"] == "comparison"
-    lean = result["comparison_lean"]
+    lean = result["answer"]
     assert isinstance(lean, LeanComparisonAnswer)
     assert [r.ticker for r in lean.rows] == ["AAPL", "MSFT", "GOOGL"]
     # QNT-224 follow-up: the report-derived labels ride through verbatim and
@@ -105,7 +105,6 @@ def test_three_ticker_comparison_produces_lean_answer(
     md = lean.to_markdown()
     assert "Premium" in md and "Uptrend" in md and "Trend (weekly)" in md
     # The rich two-ticker payload is NOT produced on this path.
-    assert result["comparison"] is None
     # The synthesize LLM (structured output) was never called for the lean path.
     stub_llm.structured_invoke.assert_not_called()
 
@@ -147,7 +146,7 @@ def test_four_ticker_comparison_is_lean(
 
     result = graph.invoke({"ticker": "AAPL", "question": "Compare AAPL, MSFT, GOOGL and AMZN."})
 
-    lean = result["comparison_lean"]
+    lean = result["answer"]
     assert isinstance(lean, LeanComparisonAnswer)
     assert [r.ticker for r in lean.rows] == ["AAPL", "MSFT", "GOOGL", "AMZN"]
 
@@ -175,10 +174,8 @@ def test_five_tickers_redirects_without_fetching_metrics(
         {"ticker": "AAPL", "question": "Compare AAPL, MSFT, GOOGL, AMZN and META."}
     )
 
-    assert result.get("comparison_lean") is None
-    assert result.get("comparison") is None
     # Deterministic conversational redirect landed instead.
-    assert result.get("conversational") is not None
+    assert result.get("answer") is not None
     # Metrics tool was never invoked for an over-cap set.
     assert calls == []
 
@@ -204,8 +201,7 @@ def test_two_ticker_path_stays_rich_and_unchanged(
 
     result = graph.invoke({"ticker": "NVDA", "question": "Compare NVDA vs AAPL on valuation."})
 
-    assert isinstance(result["comparison"], ComparisonAnswer)
-    assert result.get("comparison_lean") is None
+    assert isinstance(result["answer"], ComparisonAnswer)
     assert set(result["reports_by_ticker"]) == {"NVDA", "AAPL"}
 
 
@@ -233,8 +229,7 @@ def test_offpage_two_named_stays_rich_no_primary_inflation(
     # On /ticker/NVDA, but the user named exactly AAPL + MSFT.
     result = graph.invoke({"ticker": "NVDA", "question": "Compare AAPL and MSFT."})
 
-    assert isinstance(result["comparison"], ComparisonAnswer)
-    assert result.get("comparison_lean") is None
+    assert isinstance(result["answer"], ComparisonAnswer)
     # NVDA (the page primary) is NOT pulled into the comparison.
     assert set(result["reports_by_ticker"]) == {"AAPL", "MSFT"}
 

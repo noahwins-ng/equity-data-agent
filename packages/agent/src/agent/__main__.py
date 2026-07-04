@@ -19,11 +19,7 @@ from pathlib import Path
 from langchain_core.runnables import RunnableConfig
 from shared.tickers import TICKERS
 
-from agent.comparison import ComparisonAnswer
-from agent.conversational import ConversationalAnswer
 from agent.graph import build_graph
-from agent.quick_fact import QuickFactAnswer
-from agent.thesis import Thesis
 from agent.tools import default_report_tools
 from agent.tracing import flush as flush_langfuse
 from agent.tracing import make_callback_handler, propagate_attributes
@@ -52,10 +48,6 @@ def analyze(ticker: str, output: Path | None = None) -> int:
     with propagate_attributes(trace_name="agent-cli-analyze"):
         final_state = graph.invoke({"ticker": ticker}, config=config)
 
-    thesis_obj = final_state.get("thesis")
-    quick_fact_obj = final_state.get("quick_fact")
-    comparison_obj = final_state.get("comparison")
-    conversational_obj = final_state.get("conversational")
     intent = final_state.get("intent", "thesis")
     confidence = final_state.get("confidence", 0.0)
     errors = final_state.get("errors") or {}
@@ -64,22 +56,15 @@ def analyze(ticker: str, output: Path | None = None) -> int:
         for name, err in errors.items():
             print(f"[warn] {name}: {err}", file=sys.stderr)
 
-    # QNT-149 / QNT-156: render whichever shape the synthesize node
-    # populated. The CLI keeps its plain-markdown stdout contract — each
-    # shape's ``to_markdown`` mirrors what the chat panel shows, so callers
-    # piping to files don't have to branch on intent. Conversational is
-    # checked LAST because the deterministic fallback path also writes to
-    # ``state["conversational"]`` from a non-conversational intent.
-    if isinstance(comparison_obj, ComparisonAnswer):
-        rendered = comparison_obj.to_markdown().strip()
-    elif intent == "quick_fact" and isinstance(quick_fact_obj, QuickFactAnswer):
-        rendered = quick_fact_obj.to_markdown().strip()
-    elif isinstance(thesis_obj, Thesis):
-        rendered = thesis_obj.to_markdown().strip()
-    elif isinstance(conversational_obj, ConversationalAnswer):
-        rendered = conversational_obj.to_markdown().strip()
-    else:
-        rendered = ""
+    # QNT-149 / QNT-156 / QNT-307: render the synthesized shape from the single
+    # ``answer`` discriminated union. The CLI keeps its plain-markdown stdout
+    # contract — each shape's ``to_markdown`` mirrors what the chat panel shows,
+    # so callers piping to files don't have to branch on intent. ``answer`` is
+    # None only when no card was produced (no reports gathered / fallback), which
+    # the empty-render guard below already handles.
+    answer_obj = final_state.get("answer")
+    to_markdown = getattr(answer_obj, "to_markdown", None)
+    rendered = str(to_markdown()).strip() if callable(to_markdown) else ""
 
     if not rendered:
         print(f"No answer produced for {ticker} (no reports gathered).", file=sys.stderr)

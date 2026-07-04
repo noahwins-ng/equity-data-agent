@@ -67,7 +67,7 @@ class _FakeGraph:
             "intent": "followup" if len(self.calls) > 1 else "thesis",
             "messages": messages,
             "narrative": "The read stays balanced.",
-            "thesis": self.thesis,
+            "answer": self.thesis,
             "reports": {"company": "AAPL has a balanced setup"},
         }
 
@@ -164,7 +164,7 @@ def test_append_dialogue_history_writes_additive_columns(tmp_path: Path) -> None
 
 def test_render_payload_prefers_structured_markdown() -> None:
     thesis: Thesis = make_thesis(company_summary="Rendered company line.")
-    rendered = dialogue_eval._render_payload({"thesis": thesis})
+    rendered = dialogue_eval._render_payload({"answer": thesis})
     assert "Rendered company line." in rendered
 
 
