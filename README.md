@@ -143,7 +143,7 @@ flowchart TD
 
 - **Intent routing.** `classify` sorts each question into 9 response shapes; the router sends ambiguous asks (missing ticker, no prior turn) to a deterministic clarify step, greetings straight to synthesis, and broad exploratory asks to a zero-LLM exploration supervisor.
 - **Grounded RAG.** Two Qdrant corpora (news + SEC 8-K). Query-time hybrid retrieval (dense MiniLM + BM25, RRF-fused) with optional Cohere rerank; a keyword gate fires RAG only for targeted events (litigation, buybacks, M&A, …), and retrieved sources stream to the UI as provenance.
-- **Provider routing & tracing.** LiteLLM behind one alias: one-line model swap, automatic fallback chain (`llama-3.3-70b` -> `llama-4-scout` -> `gpt-oss-120b`), and per-node tiering (a small model runs classify/plan). Every request is a Langfuse trace with a prompt-version hash.
+- **Provider routing & tracing.** LiteLLM behind one alias: one-line model swap, automatic fallback chain (paid `deepseek-v4-flash` -> free `nemotron-3-ultra` anchor -> deterministic degrade), and per-node tiering (a small model runs classify/plan). Every request is a Langfuse trace with a prompt-version hash.
 - **Multi-turn continuity.** A checkpointer carries a compact transcript with per-intent history budgets, so follow-ups reuse prior reports without re-fetching.
 
 ### Evaluation & hallucination resistance
