@@ -86,17 +86,13 @@ def gather_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> d
                 return {"reports": {}, "errors": {}, "reports_by_ticker": {}}
             metrics_json = deps.comparison_metrics_tool(comparison_tickers)
             if graph._is_tool_error(metrics_json):
-                logger.warning(
-                    "gather %s: comparison-metrics failed: %s", ticker, metrics_json
-                )
+                logger.warning("gather %s: comparison-metrics failed: %s", ticker, metrics_json)
                 return {
                     "reports": {},
                     "errors": {"comparison_metrics": metrics_json},
                     "reports_by_ticker": {},
                 }
-            logger.info(
-                "gather %s: lean comparison metrics for %s", ticker, comparison_tickers
-            )
+            logger.info("gather %s: lean comparison metrics for %s", ticker, comparison_tickers)
             return {
                 "reports": {"comparison_metrics": metrics_json},
                 "errors": {},
