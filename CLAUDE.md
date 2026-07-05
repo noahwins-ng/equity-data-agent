@@ -111,6 +111,24 @@ Monorepo with 4 packages under `packages/`:
 - One branch per Linear issue
 - Use Linear's auto-generated branch names: `noahwinsdev/qnt-XX-description`
 
+### Issue Structure
+Every Linear issue body follows this skeleton (QNT-293 / QNT-318 are the model). Match it exactly when creating or rewriting a ticket:
+```
+## Context          — why this exists; the incident/precedent that motivates it
+## Scope            — what to build
+## Out of scope     — (optional) what it deliberately doesn't do, and who owns that
+## Acceptance Criteria
+- [ ] AC1 (code) -- <verifiable statement>
+- [ ] AC2 (dev execution) -- <needs a real command + output receipt>
+- [ ] AC3 (docs) -- <statement>
+## References        — related QNT tickets, ADRs, file paths
+```
+AC rules:
+- Heading is `## Acceptance Criteria` (not `## AC`).
+- Each AC is a **numbered checkbox** — `- [ ] AC1`, `AC2`, … — so it can be referenced as "AC4" in commits, PRs, and `docs/project-plan.md`.
+- Each AC carries a **class tag**: `(code)` / `(dev execution)` / `(prod execution)` / `(docs)` (slash combos like `(code/docs)` allowed). The tag drives `/sanity-check`: `dev`/`prod execution` ACs need a literal command+output receipt; `code`/`docs` are verified by reading the implementation.
+- Always set `project: "Equity Data Agent"` on create; keep bodies plain ASCII (Linear WAF). Updating a description can silently reset `milestone` — re-assert it.
+
 ### Commit Format
 ```
 QNT-XX: type(scope): description
