@@ -57,7 +57,7 @@ QNT-150's 60s client timeout (`LLM_REQUEST_TIMEOUT`, PR #177) was already live d
 
 **Easier**
 
-* The cache question is closed with hard evidence — no future re-attempt without a paid tier. Recorded in memory (`reference_groq_prompt_caching`).
+* The cache question is closed with hard evidence — no future re-attempt without a paid tier. Recorded in memory (`reference_groq_prompt_caching`). **Update (QNT-318 / [ADR-027](027-prompt-caching-declined-again-provider-and-privacy.md)):** it *was* re-attempted under paid inference and declined again — the free 8K-TPM wall is gone, but no privacy-compliant OpenRouter provider implicit-caches DeepSeek V4 Flash, and the one that does is excluded by our data-policy guardrail. The decline stands for a new reason; it is not permanent-on-the-free-wall.
 * Worst-case turn wall-clock is bounded by config, not luck: a Groq throttle reroutes to Scout instead of hanging to ~120s.
 * No quality risk: the hero synthesis call stays on the production-proven 70b; #12 only changes behavior under genuine throttle.
 
