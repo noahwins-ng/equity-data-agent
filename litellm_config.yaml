@@ -54,6 +54,34 @@ model_list:
       extra_body:
         reasoning:
           enabled: false
+        # QNT-318 / ADR-027: prefix caching. `deepseek-v4-flash` is served on
+        # OpenRouter by ~16 providers, EACH with its own KV cache, and by
+        # default OpenRouter load-balances across them — so consecutive
+        # synthesize calls hit different providers and the large stable prefix
+        # (SYSTEM_PROMPT + force-injected reports) never reuses a warm cache
+        # (measured: cached_tokens=0 unpinned). Pinning an ORDERED preference
+        # makes routing sticky to the first available provider, so its prefix
+        # cache warms and stays warm (measured live: Novita 100% cached prefix,
+        # 9,472/9,487 tokens, stable across calls). `allow_fallbacks: false`
+        # keeps routing inside this curated top-6 set (by OpenRouter token
+        # share). Order puts the three privacy-compliant providers FIRST
+        # (novita/deepinfra/gmicloud) so caching happens there; the three
+        # data-retaining providers (deepseek/alibaba/baidu) sit last as deep
+        # resilience only. `data_collection: allow` scopes the privacy
+        # relaxation to THIS alias (user decision, ADR-027 — the public-equity
+        # chat carries no PII; ADR-017), leaving the account default strict for
+        # the eval judge and every other alias. Cache reads bill ~0.2x input on
+        # these providers, cutting the input-dominated bill (ADR-026, ~12:1).
+        provider:
+          order:
+            - novita
+            - deepinfra
+            - gmicloud
+            - deepseek
+            - alibaba
+            - baidu
+          allow_fallbacks: false
+          data_collection: allow
       # QNT-223 (#12) / ADR-021: bound the throttled tail — carried forward. A
       # throttled primary call is aborted at 45s and falls through to the
       # fallback anchor (fallback-nemotron-ultra) within the SAME client call,

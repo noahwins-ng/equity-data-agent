@@ -47,7 +47,7 @@ Architecture Decision Records (ADRs). Read these to understand **why** we chose 
 - [024-defer-graph-module-monkeypatch-decoupling.md](decisions/024-defer-graph-module-monkeypatch-decoupling.md)
 - [025-paid-launch-primary-and-breaker-recalibration.md](decisions/025-paid-launch-primary-and-breaker-recalibration.md)
 - [026-paid-synthesis-economics-and-free-tier-simplification-dividend.md](decisions/026-paid-synthesis-economics-and-free-tier-simplification-dividend.md)
-- [027-prompt-caching-declined-again-provider-and-privacy.md](decisions/027-prompt-caching-declined-again-provider-and-privacy.md)
+- [027-prompt-caching-enabled-via-provider-pin.md](decisions/027-prompt-caching-enabled-via-provider-pin.md)
 
 ### [guides/](guides/)
 How to do common tasks. Operational runbooks.
