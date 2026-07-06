@@ -484,6 +484,87 @@ def test_gather_reports_concurrent_preserves_optional_and_error_contract() -> No
     assert "news" not in errors  # optional drop preserved under concurrency
 
 
+def test_gather_reports_multi_matches_serial_per_ticker_loop() -> None:
+    """QNT-321 (G-3 / AC1): the shared-pool multi-ticker gather returns
+    ``reports_by_ticker`` and a ticker-prefixed ``errors`` map byte-identical to
+    the old serial per-ticker ``_gather_reports`` loop -- across a clean tool, a
+    required-tool error, and an optional drop (``news``)."""
+
+    def _tools() -> dict[str, ToolFn]:
+        return {
+            "company": _mock_tool("co"),
+            "technical": _mock_tool("[error] http-500: down"),
+            "news": _mock_tool("[error] http-500: down"),
+        }
+
+    tickers = ["NVDA", "TSLA"]
+    plan = ["company", "technical", "news"]
+
+    # Serial baseline: the exact per-ticker loop gather_node ran before QNT-321.
+    serial_reports: dict[str, dict[str, str]] = {}
+    serial_errors: dict[str, str] = {}
+    for tk in tickers:
+        r, e = graph_module._gather_reports(tk, plan, _tools())
+        serial_reports[tk] = r
+        for tool_name, err in e.items():
+            serial_errors[f"{tk}.{tool_name}"] = err
+
+    multi_reports, multi_errors = graph_module._gather_reports_multi(tickers, plan, _tools())
+
+    assert multi_reports == serial_reports
+    assert multi_errors == serial_errors
+    # Pin the concrete shape too: optional news dropped, required technical tagged.
+    assert multi_reports == {
+        "NVDA": {"company": "co for NVDA"},
+        "TSLA": {"company": "co for TSLA"},
+    }
+    assert multi_errors == {
+        "NVDA.technical": "[error] http-500: down for NVDA",
+        "TSLA.technical": "[error] http-500: down for TSLA",
+    }
+
+
+def test_gather_reports_multi_caps_in_flight_at_four() -> None:
+    """QNT-321 (G-3 / AC1): every (ticker, tool) pair runs on ONE shared pool
+    bounded at ``_MAX_GATHER_WORKERS`` (4) -- so a 2-ticker x 4-tool gather (8
+    pairs) never holds more than 4 connections in flight at once. A counting fake
+    tool tracks the live count and its peak."""
+    import threading
+    import time
+
+    from agent import support as support_module
+
+    lock = threading.Lock()
+    counter = {"in_flight": 0, "peak": 0}
+
+    def _make(name: str) -> Callable[[str], str]:
+        def _tool(ticker: str) -> str:
+            with lock:
+                counter["in_flight"] += 1
+                counter["peak"] = max(counter["peak"], counter["in_flight"])
+            time.sleep(0.05)
+            with lock:
+                counter["in_flight"] -= 1
+            return f"## {name} for {ticker}"
+
+        return _tool
+
+    plan = ["company", "technical", "fundamental", "news"]
+    tools = {name: _make(name) for name in plan}
+    reports_by_ticker, errors = graph_module._gather_reports_multi(
+        ["NVDA", "TSLA"], plan=plan, tools=tools
+    )
+
+    assert errors == {}
+    assert set(reports_by_ticker) == {"NVDA", "TSLA"}
+    assert set(reports_by_ticker["NVDA"]) == set(plan)
+    assert counter["peak"] <= support_module._MAX_GATHER_WORKERS, (
+        f"in-flight exceeded the cap: peak={counter['peak']}"
+    )
+    # And it actually overlapped -- a serial loop would peak at 1.
+    assert counter["peak"] > 1, f"multi-gather did not run concurrently: peak={counter['peak']}"
+
+
 def test_synthesize_returns_none_when_structured_output_fails(
     stub_llm: _StructuredLLM,
 ) -> None:
@@ -2257,6 +2338,58 @@ def test_followup_with_needs_news_search_fires_search_and_folds_hits(
     ]
     # QNT-290: a flagged followup now visits plan/gather for the RAG branch.
     assert "gather" in result["intent_path"]
+
+
+def test_followup_rag_emits_retrieved_sources_before_narrate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-321 (G-9 / AC3): a flagged followup turn that fires RAG must emit
+    ``retrieved_sources`` through the event_emitter BEFORE the narrate bubble
+    streams its first ``narrative_chunk`` -- the same early-count guarantee the
+    cold path already had. Before this fix the followup branch returned without
+    the early emit, so the row count only landed post-graph (the flicker)."""
+    monkeypatch.setattr(
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("followup", "llm", True, False, "NVDA CEO buyback"),
+    )
+    llm = _news_focused_llm()
+    # Real .stream() so narrative_chunk actually fires and the ordering assertion
+    # is meaningful rather than vacuously skipped.
+    llm.stream = lambda *_a, **_kw: iter(  # type: ignore[attr-defined]
+        [AIMessage(content="On balance "), AIMessage(content="the read is cautious.")]
+    )
+    monkeypatch.setattr(graph_module, "get_llm", lambda *_a, **_kw: llm)
+    search = _recording_search_news(
+        [{"headline": "NVDA CEO addresses buyback", "source": "Reuters", "date": "2026-06-01"}]
+    )
+    emitted: list[tuple[str, dict[str, Any]]] = []
+    graph = build_graph(
+        {name: _mock_tool(name) for name in REPORT_TOOLS},
+        search_news_tool=search,
+        event_emitter=lambda e, d: emitted.append((e, dict(d))),
+    )
+    graph.invoke(
+        {
+            "ticker": "NVDA",
+            "question": "and what did the CEO say about it?",
+            # Prior-turn anchor so the followup doesn't route to clarify.
+            "reports": {"news": "## news\nprior digest\n"},
+        }
+    )
+
+    names = [e for e, _ in emitted]
+    assert "retrieved_sources" in names, (
+        f"followup RAG must emit retrieved_sources early; got {names}"
+    )
+    rs_idx = names.index("retrieved_sources")
+    assert emitted[rs_idx][1]["sources"][0]["id"] == "R1"
+    # The count must reach the client before the first narrate delta.
+    assert "narrative_chunk" in names, "narrate must stream for the ordering assertion to bite"
+    assert rs_idx < names.index("narrative_chunk"), (
+        "retrieved_sources must precede narrate on the followup path so the guard "
+        f"has the row count before anchors stream; got {names}"
+    )
 
 
 def test_followup_without_search_flags_gathers_nothing(

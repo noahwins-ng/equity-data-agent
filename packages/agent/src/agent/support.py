@@ -321,6 +321,69 @@ def _gather_reports(
     return reports, errors
 
 
+def _gather_reports_multi(
+    tickers: list[str], plan: list[str], tools: dict[str, ToolFn]
+) -> tuple[dict[str, dict[str, str]], dict[str, str]]:
+    """QNT-321 (G-3): gather the same ``plan`` for MULTIPLE tickers on ONE
+    shared bounded pool, and return ``(reports_by_ticker, errors)``.
+
+    The comparison caller used to loop tickers and call :func:`_gather_reports`
+    once per ticker -- N sequential parallel batches, so a rich 2-ticker gather
+    ran as two ~0.9s batches (~1.7s). The QNT-300 worker cap is about concurrent
+    connections, not batches, so fanning every ``(ticker, tool)`` pair onto one
+    pool capped at ``_MAX_GATHER_WORKERS`` holds the same max-4-in-flight bound
+    while overlapping across tickers, collapsing the 2-ticker gather to ~0.9s.
+
+    ``reports_by_ticker`` and the ticker-prefixed ``errors`` map are byte-for-
+    byte identical to the serial per-ticker loop: results are assembled in
+    ``tickers`` x ``plan`` order in a second pass, and the same retry /
+    optional-drop / error-map contract as :func:`_gather_reports` applies per
+    ticker (error keys are ``f"{ticker}.{tool}"``). ``_call_with_retry`` swallows
+    every tool exception, so no future raises.
+    """
+    # Kick off every (ticker, planned-tool) pair at once; a tool absent from the
+    # map needs no I/O and is resolved in the plan-order pass below.
+    runnable: list[tuple[str, str, ToolFn]] = [
+        (ticker, name, tools[name])
+        for ticker in tickers
+        for name in plan
+        if tools.get(name) is not None
+    ]
+    results: dict[tuple[str, str], tuple[str | None, str | None]] = {}
+    if runnable:
+        with ThreadPoolExecutor(max_workers=min(len(runnable), _MAX_GATHER_WORKERS)) as pool:
+            futures = {
+                pool.submit(_call_with_retry, tool, ticker, name): (ticker, name)
+                for ticker, name, tool in runnable
+            }
+            for future in as_completed(futures):
+                results[futures[future]] = future.result()
+
+    reports_by_ticker: dict[str, dict[str, str]] = {}
+    errors: dict[str, str] = {}
+    for ticker in tickers:
+        reports: dict[str, str] = {}
+        for name in plan:
+            optional = name in OPTIONAL_TOOLS
+            key = (ticker, name)
+            if key not in results:  # tool was not registered in the map
+                if not optional:
+                    errors[f"{ticker}.{name}"] = "tool-not-registered"
+                continue
+            result, error = results[key]
+            if result is None:
+                if not optional:
+                    errors[f"{ticker}.{name}"] = error or "failed-after-retries"
+                continue
+            if _is_tool_error(result):
+                if not optional:
+                    errors[f"{ticker}.{name}"] = result
+                continue
+            reports[name] = result
+        reports_by_ticker[ticker] = reports
+    return reports_by_ticker, errors
+
+
 # QNT-225/276: per-corpus body budget for a folded retrieved hit. A news body is
 # a short Finnhub summary -- 280 chars disambiguates an event from a name-drop
 # while bounding the added prompt cost (~5 hits/turn). An earnings chunk is up to

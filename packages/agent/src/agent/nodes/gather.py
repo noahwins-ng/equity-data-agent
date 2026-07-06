@@ -23,6 +23,35 @@ if TYPE_CHECKING:
     from agent.nodes.deps import GraphDeps
 
 
+def _emit_retrieved_sources(
+    deps: GraphDeps, ticker: str, retrieved_sources: list[dict[str, str]]
+) -> None:
+    """QNT-305 follow-up / QNT-321 (G-9): emit the retrieved-sources rows NOW.
+
+    gather runs before synthesize/narrate, so this reaches the client BEFORE the
+    narrate bubble streams. The frontend needs the row count during streaming:
+    the anchor-integrity guard can only tell an in-range id from a fabricated one
+    once it knows how many rows exist, and without the early count a hallucinated
+    Rn renders mid-stream and then vanishes when the count finally lands (a
+    jarring flicker). Shared by BOTH the cold and followup RAG branches -- the
+    followup branch (QNT-290 warm-thread retrieval) originally returned without
+    this emit, so its narrate streamed Rn anchors with no row count until the
+    post-graph emit: the exact flicker the early emit fixes, alive on the one path
+    that skipped it. The post-graph emit in agent_chat stays as the idempotent
+    safety net (updateRun overwrites with the same payload).
+    """
+    if deps.event_emitter is None or not retrieved_sources:
+        return
+    try:
+        deps.event_emitter("retrieved_sources", {"sources": retrieved_sources})
+    except Exception as exc:  # noqa: BLE001 — never let SSE plumbing crash gather
+        logger.warning(
+            "gather %s: early retrieved_sources emit failed: %s (continuing)",
+            ticker,
+            exc,
+        )
+
+
 def gather_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> dict[str, object]:  # noqa: ARG001 — config received for LangGraph contract; tools are HTTP, no LLM call
     ticker = state["ticker"]
     intent = state.get("intent", "thesis")
@@ -46,6 +75,9 @@ def gather_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> d
         # spec's gate to pick which corpus/corpora to actually fold.
         reports = dict(state.get("reports") or {})
         reports, retrieved_sources = deps.run_retrievals(state, reports)
+        # QNT-321 (G-9): emit before returning, same as the cold path -- else
+        # the warm-thread followup narrate flickers on unbounded Rn anchors.
+        _emit_retrieved_sources(deps, ticker, retrieved_sources)
         logger.info(
             "gather %s: followup RAG fired, reports=%s retrieved=%d",
             ticker,
@@ -99,17 +131,16 @@ def gather_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> d
                 "reports_by_ticker": {},
             }
 
-        reports_by_ticker: dict[str, dict[str, str]] = {}
-        errors: dict[str, str] = {}
+        # QNT-321 (G-3): fan every (ticker, tool) pair onto ONE shared bounded
+        # pool instead of looping tickers as N sequential parallel batches. The
+        # QNT-300 cap is about concurrent connections, so this holds the same
+        # max-4-in-flight bound while overlapping across tickers (~1.7s -> ~0.9s
+        # on a rich 2-ticker turn). reports_by_ticker and the ticker-prefixed
+        # errors map are byte-identical to the old serial loop.
         effective_tools = deps.effective_tools(intent)  # compact company on comparison
-        for cmp_ticker in comparison_tickers:
-            ticker_reports, ticker_errors = graph._gather_reports(cmp_ticker, plan, effective_tools)
-            reports_by_ticker[cmp_ticker] = ticker_reports
-            # Tag errors with the ticker prefix so a single tool failing
-            # for one ticker doesn't get confused with the same tool
-            # failing for the other in the surfaced error map.
-            for tool_name, err in ticker_errors.items():
-                errors[f"{cmp_ticker}.{tool_name}"] = err
+        reports_by_ticker, errors = graph._gather_reports_multi(
+            comparison_tickers, plan, effective_tools
+        )
 
         primary_reports = reports_by_ticker.get(comparison_tickers[0], {})
         logger.info(
@@ -142,24 +173,9 @@ def gather_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> d
     # on AAPL" leaves the flag False and keeps the canned digest.
     reports, retrieved_sources = deps.run_retrievals(state, reports)
 
-    # QNT-305 follow-up: emit the retrieved-sources rows NOW -- gather runs
-    # before synthesize/narrate, so this reaches the client BEFORE the narrate
-    # bubble streams. The frontend needs the row count during streaming: the
-    # anchor-integrity guard can only tell an in-range id from a fabricated
-    # one once it knows how many rows exist, and without the early count a
-    # hallucinated Rn renders mid-stream and then vanishes when the count
-    # finally lands (a jarring flicker). Mirrors the early card emit in
-    # synthesize_node; the post-graph emit in agent_chat stays as the
-    # idempotent safety net (updateRun overwrites with the same payload).
-    if deps.event_emitter is not None and retrieved_sources:
-        try:
-            deps.event_emitter("retrieved_sources", {"sources": retrieved_sources})
-        except Exception as exc:  # noqa: BLE001 — never let SSE plumbing crash gather
-            logger.warning(
-                "gather %s: early retrieved_sources emit failed: %s (continuing)",
-                ticker,
-                exc,
-            )
+    # QNT-305 follow-up / QNT-321 (G-9): emit the retrieved-sources rows NOW so
+    # the narrate bubble has the row count before it streams (see helper).
+    _emit_retrieved_sources(deps, ticker, retrieved_sources)
 
     logger.info(
         "gather %s: gathered=%s errors=%s",

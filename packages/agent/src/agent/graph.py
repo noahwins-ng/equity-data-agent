@@ -146,6 +146,7 @@ from agent.support import (  # noqa: F401
     _format_earnings_hits,
     _format_search_hits,
     _gather_reports,
+    _gather_reports_multi,
     _has_exploration_anchor,
     _has_named_exploration_lens,
     _hint_from_intent,
