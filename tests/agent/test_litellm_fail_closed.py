@@ -44,6 +44,7 @@ import pytest
 import yaml
 from agent.conversational import ConversationalAnswer
 from agent.graph import build_graph
+from agent.llm import _RESOLVED_MODEL_BY_ALIAS
 
 # Frontier / catastrophic-cost providers the chat path must never reach. These
 # bill 10-100x a metered OpenRouter route and (unlike OpenRouter) are not fenced
@@ -248,6 +249,38 @@ def test_litellm_config_has_no_anthropic_or_openai_string() -> None:
         "litellm_config.yaml contains an active reference to a paid "
         f"provider (anthropic anywhere, or openai not under groq/): "
         f"{real_violations}"
+    )
+
+
+# ─── Alias-map sync (QNT-326 G-13) ──────────────────────────────────────────
+
+
+def test_resolved_model_map_is_in_sync_with_litellm_config() -> None:
+    """``llm._RESOLVED_MODEL_BY_ALIAS`` is hand-synced with litellm_config.yaml.
+
+    That map stamps Langfuse traces with the real upstream model (QNT-182) --
+    LangChain only ever sees the alias -- so when it drifts, traces silently
+    attribute a run to the wrong model, the exact question the map exists to
+    answer. QNT-317 had to prune the dead Groq aliases by hand; nothing caught
+    a miss. This asserts every mapped alias still exists in the config's
+    ``model_list`` AND resolves to the same ``litellm_params.model`` string, so
+    a rename/retire in one place without the other trips here. Mutating any one
+    map entry (key or value) locally trips this test.
+    """
+    models = _models_by_alias(_load_config())
+    drift: list[str] = []
+    for alias, resolved_model in _RESOLVED_MODEL_BY_ALIAS.items():
+        config_model = models.get(alias)
+        if config_model is None:
+            drift.append(
+                f"{alias}: in _RESOLVED_MODEL_BY_ALIAS but not in litellm_config model_list"
+            )
+        elif config_model != resolved_model:
+            drift.append(f"{alias}: map says {resolved_model!r} but config says {config_model!r}")
+    assert not drift, (
+        "llm._RESOLVED_MODEL_BY_ALIAS has drifted from litellm_config.yaml -- "
+        "Langfuse traces will stamp the wrong upstream model (QNT-182). Fix the "
+        "map or the config:\n  " + "\n  ".join(drift)
     )
 
 

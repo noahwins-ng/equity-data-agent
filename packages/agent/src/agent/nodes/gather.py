@@ -52,6 +52,27 @@ def _emit_retrieved_sources(
         )
 
 
+def _comparison_rag_demand(state: AgentState) -> str:
+    """QNT-326 (G-14): the RAG corpora a comparison turn asked for but can't use.
+
+    comparison's ``IntentPolicy.rag_corpora`` is empty because
+    ``RetrievalSpec.fold`` cannot address ``reports_by_ticker`` yet, so a
+    targeted-event comparison ("compare NVDA and AMD on their antitrust
+    exposure") silently drops the classifier's ``needs_news_search`` /
+    ``needs_earnings_search`` flags. Returns the '+'-joined corpora those flags
+    requested ("news" / "earnings" / "news+earnings"), or ``""`` when neither
+    fired. This is a DETECTOR only -- no per-ticker fold is built (RAG-seams
+    lesson: ship the detector with the deferral); the returned string is the
+    demand counter for deciding whether the fold is worth building.
+    """
+    corpora: list[str] = []
+    if state.get("needs_news_search"):
+        corpora.append("news")
+    if state.get("needs_earnings_search"):
+        corpora.append("earnings")
+    return "+".join(corpora)
+
+
 def gather_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> dict[str, object]:  # noqa: ARG001 — config received for LangGraph contract; tools are HTTP, no LLM call
     ticker = state["ticker"]
     intent = state.get("intent", "thesis")
@@ -94,6 +115,18 @@ def gather_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> d
 
     if intent == "comparison":
         comparison_tickers = state.get("comparison_tickers", [])
+        # QNT-326 (G-14): record demand for a per-ticker RAG fold this turn
+        # wanted but can't serve (comparison's rag_corpora is empty). Same value
+        # on every return below so the log and the comparison_rag_demand trace
+        # tag agree; "" (no flags) leaves the tag off.
+        rag_demand = _comparison_rag_demand(state)
+        if rag_demand:
+            logger.info(
+                "gather %s: comparison RAG demand (%s) discarded -- no per-ticker "
+                "fold yet (QNT-326 G-14 detector)",
+                ticker,
+                rag_demand,
+            )
         if len(comparison_tickers) < graph._MIN_COMPARISON_TICKERS:
             # Fall through with empty bundle — synthesize will redirect.
             logger.info(
@@ -101,7 +134,12 @@ def gather_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> d
                 ticker,
                 comparison_tickers,
             )
-            return {"reports": {}, "errors": {}, "reports_by_ticker": {}}
+            return {
+                "reports": {},
+                "errors": {},
+                "reports_by_ticker": {},
+                "comparison_rag_demand": rag_demand,
+            }
 
         # QNT-224: 3-4 tickers take the lean metrics path — ONE fetch of a
         # compact metrics row per ticker, not a full bundle each. The JSON
@@ -115,7 +153,12 @@ def gather_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> d
                     "gather %s: 3-4 way comparison but no metrics tool wired — redirect",
                     ticker,
                 )
-                return {"reports": {}, "errors": {}, "reports_by_ticker": {}}
+                return {
+                    "reports": {},
+                    "errors": {},
+                    "reports_by_ticker": {},
+                    "comparison_rag_demand": rag_demand,
+                }
             metrics_json = deps.comparison_metrics_tool(comparison_tickers)
             if graph._is_tool_error(metrics_json):
                 logger.warning("gather %s: comparison-metrics failed: %s", ticker, metrics_json)
@@ -123,12 +166,14 @@ def gather_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> d
                     "reports": {},
                     "errors": {"comparison_metrics": metrics_json},
                     "reports_by_ticker": {},
+                    "comparison_rag_demand": rag_demand,
                 }
             logger.info("gather %s: lean comparison metrics for %s", ticker, comparison_tickers)
             return {
                 "reports": {"comparison_metrics": metrics_json},
                 "errors": {},
                 "reports_by_ticker": {},
+                "comparison_rag_demand": rag_demand,
             }
 
         # QNT-321 (G-3): fan every (ticker, tool) pair onto ONE shared bounded
@@ -153,6 +198,7 @@ def gather_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> d
             "reports": primary_reports,
             "errors": errors,
             "reports_by_ticker": reports_by_ticker,
+            "comparison_rag_demand": rag_demand,
         }
 
     # QNT-220 (#8): thesis gets the compact company variant when supplied.

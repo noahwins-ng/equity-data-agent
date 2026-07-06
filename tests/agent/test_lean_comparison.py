@@ -13,12 +13,15 @@ never hit a live API; the fake echoes a row per requested ticker.
 from __future__ import annotations
 
 import json
+import sqlite3
 
 import pytest
 from agent import graph as graph_module
 from agent.comparison import ComparisonAnswer, LeanComparisonAnswer
 from agent.graph import build_graph
 from langchain_core.messages import AIMessage
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.sqlite import SqliteSaver
 
 from ._thesis_factory import make_comparison_section
 from .test_graph import _mock_tool, _StructuredLLM
@@ -275,3 +278,114 @@ def test_lean_row_off_vocabulary_labels_normalize_to_none() -> None:
     assert row.valuation_label is None
     assert row.trend_daily is None
     assert row.trend_weekly is None
+
+
+# ─────────────── QNT-326 (G-14): comparison RAG demand detector ──────────────
+
+
+@pytest.mark.parametrize(
+    ("news", "earnings", "expected"),
+    [
+        (False, False, ""),
+        (True, False, "news"),
+        (False, True, "earnings"),
+        (True, True, "news+earnings"),
+    ],
+)
+def test_comparison_rag_demand_maps_flags(news: bool, earnings: bool, expected: str) -> None:
+    """The detector joins the flagged corpora a comparison turn asked for but
+    can't fold (comparison's rag_corpora is empty). "" when neither fired."""
+    from agent.nodes.gather import _comparison_rag_demand
+
+    state = {"needs_news_search": news, "needs_earnings_search": earnings}
+    assert _comparison_rag_demand(state) == expected  # type: ignore[arg-type]
+
+
+def test_flagged_comparison_turn_records_demand(
+    stub_llm: _StructuredLLM, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A targeted-event comparison ("... on their antitrust exposure") whose
+    classifier set needs_news_search records the discarded demand in state --
+    the signal the SSE handler stamps as comparison_rag_demand:news."""
+    monkeypatch.setattr(
+        graph_module,
+        "classify_intent_with_source",
+        lambda _q, **_: ("comparison", "llm", True, False, "antitrust exposure"),
+    )
+    stub_llm.invoke.return_value = AIMessage(content="fundamental")
+    stub_llm.structured_invoke.return_value = ComparisonAnswer(
+        sections=[
+            make_comparison_section("NVDA", "Premium", "Uptrend"),
+            make_comparison_section("AMD", "Inline", "Sideways"),
+        ],
+        differences="NVDA carries a richer multiple than AMD (source: fundamental).",
+    )
+    graph = build_graph({"fundamental": _mock_tool("fund")})
+
+    result = graph.invoke(
+        {"ticker": "NVDA", "question": "Compare NVDA and AMD on their antitrust exposure."}
+    )
+
+    assert isinstance(result["answer"], ComparisonAnswer)
+    assert result["comparison_rag_demand"] == "news"
+
+
+def test_unflagged_comparison_turn_records_no_demand(
+    stub_llm: _StructuredLLM, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Zero behaviour diff: a plain comparison (no search flags) records "" so
+    no comparison_rag_demand tag is stamped."""
+    _as_comparison(monkeypatch)
+    stub_llm.invoke.return_value = AIMessage(content="fundamental")
+    stub_llm.structured_invoke.return_value = ComparisonAnswer(
+        sections=[
+            make_comparison_section("NVDA", "Premium", "Uptrend"),
+            make_comparison_section("AAPL", "Inline", "Sideways"),
+        ],
+        differences="NVDA carries a richer multiple than AAPL (source: fundamental).",
+    )
+    graph = build_graph({"fundamental": _mock_tool("fund")})
+
+    result = graph.invoke({"ticker": "NVDA", "question": "Compare NVDA vs AAPL on valuation."})
+
+    assert result.get("comparison_rag_demand", "") == ""
+
+
+def test_comparison_rag_demand_does_not_bleed_across_turns(
+    stub_llm: _StructuredLLM, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: the demand marker must NOT persist across turns via the
+    checkpointer. Turn 1 is a flagged comparison (demand="news"); turn 2 on the
+    SAME thread is a conversational greeting that short-circuits and SKIPS gather
+    entirely -- so only classify_node's turn-boundary reset can clear the stale
+    value. Without the reset the SSE handler would stamp a false
+    comparison_rag_demand:news tag on the unrelated greeting turn."""
+
+    def fake_classify(question: str, **_: object) -> tuple[str, str, bool, bool, str]:
+        if question.strip().lower() == "hi":
+            return ("conversational", "heuristic", False, False, "")
+        return ("comparison", "llm", True, False, "antitrust exposure")
+
+    monkeypatch.setattr(graph_module, "classify_intent_with_source", fake_classify)
+    stub_llm.invoke.return_value = AIMessage(content="fundamental")
+    stub_llm.structured_invoke.return_value = ComparisonAnswer(
+        sections=[
+            make_comparison_section("NVDA", "Premium", "Uptrend"),
+            make_comparison_section("AMD", "Inline", "Sideways"),
+        ],
+        differences="NVDA carries a richer multiple than AMD (source: fundamental).",
+    )
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    graph = build_graph({"fundamental": _mock_tool("fund")}, checkpointer=SqliteSaver(conn))
+    config: RunnableConfig = {"configurable": {"thread_id": "bleed:NVDA"}}
+
+    first = graph.invoke(
+        {"ticker": "NVDA", "question": "Compare NVDA and AMD on their antitrust exposure."},
+        config=config,
+    )
+    assert first["comparison_rag_demand"] == "news"
+
+    # Turn 2: greeting short-circuits (classify -> synthesize), gather skipped.
+    second = graph.invoke({"ticker": "NVDA", "question": "hi"}, config=config)
+    assert second["intent"] == "conversational"
+    assert second["comparison_rag_demand"] == ""
