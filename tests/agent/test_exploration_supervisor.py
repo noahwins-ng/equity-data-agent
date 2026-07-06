@@ -131,7 +131,10 @@ def test_non_exploratory_thesis_keeps_existing_pipeline(
     result = build_graph(tools).invoke({"ticker": "AAPL", "question": "Give me an AAPL thesis."})
 
     assert result["intent_path"] == ["classify", "plan", "gather", "synthesize", "narrate"]
-    assert "supervisor_iterations" not in result
+    # QNT-323 (G-4): supervisor_iterations is a scratch key classify now resets
+    # to 0 every turn (was absent on non-exploration turns pre-reset); the
+    # supervisor didn't run, so it stays 0.
+    assert result["supervisor_iterations"] == 0
 
 
 def test_exploration_route_emits_one_stable_intent(
@@ -304,7 +307,10 @@ def test_warm_thread_news_angle_skips_exploration(
     assert result["intent_path"] == ["classify", "synthesize", "narrate"]
     assert result["intent"] == "followup"
     assert result.get("plan", []) == []
-    assert "supervisor_iterations" not in result
+    # QNT-323 (G-4): supervisor_iterations is a scratch key classify now resets
+    # to 0 every turn (was absent on non-exploration turns pre-reset); the
+    # supervisor didn't run, so it stays 0.
+    assert result["supervisor_iterations"] == 0
     assert tools["news"].call_count == 0
     assert tools["company"].call_count == 0
     assert tools["technical"].call_count == 0
@@ -332,7 +338,10 @@ def test_warm_thread_broad_interesting_followup_skips_exploration(
 
     assert result["intent_path"] == ["classify", "synthesize", "narrate"]
     assert result["intent"] == "followup"
-    assert "supervisor_iterations" not in result
+    # QNT-323 (G-4): supervisor_iterations is a scratch key classify now resets
+    # to 0 every turn (was absent on non-exploration turns pre-reset); the
+    # supervisor didn't run, so it stays 0.
+    assert result["supervisor_iterations"] == 0
     assert tools["news"].call_count == 0
     assert tools["company"].call_count == 0
     assert tools["technical"].call_count == 0
@@ -353,7 +362,10 @@ def test_named_lens_with_ticker_uses_focused_pipeline(
     assert result["intent_path"] == ["classify", "plan", "gather", "synthesize", "narrate"]
     assert result["intent"] == "news"
     assert result["plan"] == ["company", "news"]
-    assert "supervisor_iterations" not in result
+    # QNT-323 (G-4): supervisor_iterations is a scratch key classify now resets
+    # to 0 every turn (was absent on non-exploration turns pre-reset); the
+    # supervisor didn't run, so it stays 0.
+    assert result["supervisor_iterations"] == 0
     assert tools["company"].call_count == 1
     assert tools["news"].call_count == 1
     assert tools["technical"].call_count == 0
@@ -374,7 +386,10 @@ def test_named_lens_watch_prompt_uses_focused_pipeline(
     assert result["intent_path"] == ["classify", "plan", "gather", "synthesize", "narrate"]
     assert result["intent"] == "technical"
     assert result["plan"] == ["company", "technical"]
-    assert "supervisor_iterations" not in result
+    # QNT-323 (G-4): supervisor_iterations is a scratch key classify now resets
+    # to 0 every turn (was absent on non-exploration turns pre-reset); the
+    # supervisor didn't run, so it stays 0.
+    assert result["supervisor_iterations"] == 0
     assert tools["company"].call_count == 1
     assert tools["technical"].call_count == 1
     assert tools["news"].call_count == 0
