@@ -108,10 +108,15 @@ def test_non_followup_answer_none_does_not_borrow_prior() -> None:
 _ALLOWED_NARROW_RETURNS: dict[str, Counter[tuple[str, ...]]] = {
     "_synthesize_payload": Counter(
         {
-            # followup narrative-only ({"answer": None}), followup metric ask
-            # ({"answer": QuickFactAnswer}), focused RAG-drop ({"answer": None}) --
-            # all pair the narrow answer with this run's confidence.
-            ("answer", "confidence"): 3,
+            # QNT-320 (G-1): every narrow (answer, confidence) return also writes
+            # ``narrative_substrate`` -- synthesize owns the substrate decision on
+            # ALL paths (the two answer=None drop paths name a report / prior_answer;
+            # the followup metric-ask card-bearing path clears it to None). Writing it
+            # on every return keeps it a single-writer, always-fresh key with no
+            # cross-turn checkpointer staleness for narrate to guard against. Paths
+            # flowing through ``_answer`` clear it too, but spread ``project_answer``
+            # so they carry no explicit ``answer`` key and are not counted here.
+            ("answer", "confidence", "narrative_substrate"): 3,
         }
     ),
     "clarify_node": Counter(

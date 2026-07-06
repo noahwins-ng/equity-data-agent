@@ -180,25 +180,22 @@ def narrate_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> 
                 f"{payload_markdown}\n\n{retrieval_text}" if payload_markdown else retrieval_text
             )
 
-    # QNT-226/276: narrative-only substrate. When synthesize dropped the
+    # QNT-226/276/320: narrative-only substrate. When synthesize dropped the
     # focused card (search fired + hits, focused=None), no structured payload
     # exists, so feed the gathered report -- which now LEADS with the folded
     # RAG block -- as the substrate the narrator speaks from. Without this the
     # prompt would say "no structured payload -- speak from the prior turn"
     # and the narrator would invent an answer with nothing to ground it.
-    # news -> reports["news"]; fundamental (earnings) -> reports["fundamental"].
-    # The guards mirror the synthesize-side drop condition exactly so this
-    # only fires on the path synthesize dropped the card for. The runtime
-    # grounding check below runs against the same reports, so ADR-003 numeric
-    # grounding still applies to the spoken answer.
-    dropped_focus_report: str | None = None
-    if not payload_markdown and state.get("retrieved_sources"):
-        if intent == "news" and state.get("needs_news_search"):
-            dropped_focus_report = "news"
-        elif intent == "fundamental" and state.get("needs_earnings_search"):
-            dropped_focus_report = "fundamental"
-    if dropped_focus_report is not None:
-        report_body = (state.get("reports") or {}).get(dropped_focus_report)
+    # QNT-320 (G-1): synthesize owns the substrate decision and wrote the report
+    # name into ``narrative_substrate`` ("news" -> reports["news"]; "fundamental"
+    # -> reports["fundamental"]). narrate reads that key instead of re-deriving
+    # the needs_news_search / needs_earnings_search predicate that used to mirror
+    # the synthesize-side drop condition. The runtime grounding check below runs
+    # against the same reports, so ADR-003 numeric grounding still applies to the
+    # spoken answer.
+    substrate = state.get("narrative_substrate")
+    if not payload_markdown and substrate in ("news", "fundamental"):
+        report_body = (state.get("reports") or {}).get(substrate)
         if report_body:
             payload_markdown = str(report_body)
 

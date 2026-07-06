@@ -28,6 +28,8 @@ from unittest.mock import MagicMock
 import pytest
 from agent import graph as graph_module
 from agent.graph import build_graph
+from agent.nodes.deps import GraphDeps
+from agent.nodes.narrate import narrate_node
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 from langchain_core.messages import AIMessage
@@ -374,3 +376,91 @@ def test_fallback_redirect_skips_narrate(
     # narrate stayed silent — no narrative_chunk events, narrative=None.
     assert not any(event == "narrative_chunk" for event, _ in events)
     assert result.get("narrative") is None
+
+
+def _bare_deps() -> GraphDeps:
+    return GraphDeps(
+        tools={},
+        event_emitter=None,
+        compact_company_tool=None,
+        comparison_metrics_tool=None,
+        active_retrievals=(),
+    )
+
+
+def test_dropped_card_substrate_reads_from_state_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QNT-320 (G-1) AC3: on the focused RAG-drop path (answer=None) narrate picks
+    its substrate from the ``narrative_substrate`` key synthesize wrote -- it no
+    longer re-derives the needs_news_search / needs_earnings_search predicate that
+    used to mirror the synthesize-side drop condition.
+
+    The state below sets the key and the folded news report but deliberately leaves
+    ``needs_news_search`` / ``retrieved_sources`` UNSET, so a narrate prompt built
+    over ``reports['news']`` proves the substrate came from the key alone."""
+    captured: dict[str, Any] = {}
+
+    def _fake_prompt(**kwargs: Any) -> str:
+        captured.update(kwargs)
+        return "PROMPT"
+
+    monkeypatch.setattr(graph_module, "build_narrate_prompt", _fake_prompt)
+    stub = _StubLLM(stream_chunks=["ok."])
+    monkeypatch.setattr(graph_module, "get_llm", lambda *a, **kw: stub)
+
+    config: RunnableConfig = {"configurable": {"thread_id": "drop:NVDA"}}
+    news_report = "## news\nNVDA strikes Micron HBM4 supply deal\n"
+    narrate_node(
+        {
+            "ticker": "NVDA",
+            "question": "any news on the Micron deal?",
+            "intent": "news",
+            "answer": None,
+            "narrative_substrate": "news",
+            "reports": {"news": news_report},
+        },
+        config,
+        _bare_deps(),
+    )
+    assert captured["payload_markdown"] == news_report
+
+    # With the key absent, narrate does NOT fall back to the old predicate even
+    # when needs_news_search + retrieved_sources are present -- the mirrored
+    # re-derivation is gone, so the substrate stays empty.
+    captured.clear()
+    narrate_node(
+        {
+            "ticker": "NVDA",
+            "question": "any news on the Micron deal?",
+            "intent": "news",
+            "answer": None,
+            "needs_news_search": True,
+            "retrieved_sources": [{"headline": "H", "corpus": "news"}],
+            "reports": {"news": news_report},
+        },
+        config,
+        _bare_deps(),
+    )
+    assert captured["payload_markdown"] == ""
+
+
+def test_card_bearing_path_clears_narrative_substrate() -> None:
+    """QNT-320 regression: synthesize writes ``narrative_substrate`` on EVERY return
+    path -- a card-bearing path clears it to None. So a prior drop-card turn's
+    "news"/"fundamental" cannot persist through the checkpointer into a later
+    real-payload turn and get mis-read as substrate (the staleness class this
+    anti-drift ticket exists to prevent). Uses the deterministic no-reports fallback
+    so no LLM is involved."""
+    from agent.nodes.synthesize import _synthesize_payload
+
+    config: RunnableConfig = {"configurable": {"thread_id": "clear:TSLA"}}
+    result = _synthesize_payload(
+        {
+            "ticker": "TSLA",
+            "question": "thesis on TSLA?",
+            "intent": "thesis",
+            "reports": {},  # no reports -> deterministic domain_redirect fallback (no LLM)
+            "narrative_substrate": "news",  # stale value a prior drop-card turn left
+        },
+        config,
+    )
+    assert result["narrative_substrate"] is None

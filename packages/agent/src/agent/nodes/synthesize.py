@@ -41,7 +41,16 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
     # attach this run's confidence. Each branch below returns ``_answer(payload)``
     # so no branch hand-assembles the dict -- the union enforces exactly-one.
     def _answer(payload: graph.AnswerPayload | None) -> dict[str, object]:
-        return {**graph.project_answer(payload), "confidence": confidence}
+        # QNT-320 (G-1): a card-bearing path names no narrate substrate -- clear the
+        # key so a prior drop-card turn's "news"/"fundamental" can't persist through
+        # the checkpointer and be mis-read next turn. synthesize writes
+        # narrative_substrate on EVERY return path (fresh each turn), keeping it a
+        # true single-writer key with no cross-turn staleness for narrate to guard.
+        return {
+            **graph.project_answer(payload),
+            "confidence": confidence,
+            "narrative_substrate": None,
+        }
 
     # Helper: deterministic fallback when a path can't produce its
     # primary payload. Used by every branch below — the panel never
@@ -91,7 +100,14 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
             # QNT-307: clear this turn's card (answer=None). ``prior_answer`` is a
             # separate channel classify already set, so nulling ``answer`` here no
             # longer risks the prior-turn substrate the next followup reuses.
-            return {"answer": None, "confidence": followup_confidence}
+            # QNT-320 (G-1): narrate speaks from the prior turn's answer on this
+            # path (picked via _pick_payload) -- record the substrate so narrate
+            # reads the decision from state rather than re-deriving it.
+            return {
+                "answer": None,
+                "confidence": followup_confidence,
+                "narrative_substrate": "prior_answer",
+            }
         prompt = graph.build_followup_prompt(
             ticker,
             question,
@@ -113,7 +129,12 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
         # QNT-307: write this turn's card to ``answer``; ``prior_answer`` (the
         # earlier turn's substrate) is a separate channel classify owns, so this
         # write can no longer clobber the next followup's prior context.
-        return {"answer": followup, "confidence": followup_confidence}
+        # QNT-320 (G-1): card-bearing path -- clear narrative_substrate (see _answer).
+        return {
+            "answer": followup,
+            "confidence": followup_confidence,
+            "narrative_substrate": None,
+        }
 
     if intent == "conversational":
         # QNT-217: thread prior conversation into the conversational
@@ -259,7 +280,14 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
             )
             # QNT-307: no card this turn -- clear ``answer``; narrate speaks from
             # the retrieved sources.
-            return {"answer": None, "confidence": confidence}
+            # QNT-320 (G-1): record which folded report narrate speaks from
+            # (``focus_report`` is "news" / "fundamental" here) so narrate no
+            # longer re-derives the needs_*_search drop predicate.
+            return {
+                "answer": None,
+                "confidence": confidence,
+                "narrative_substrate": focus_report,
+            }
         prompt = graph.build_focused_prompt(
             intent,
             ticker,
