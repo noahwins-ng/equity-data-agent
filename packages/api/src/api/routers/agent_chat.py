@@ -1080,6 +1080,14 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
                     classifier_source = state_obj.get("classifier_source")
                     if isinstance(classifier_source, str) and classifier_source:
                         tags.append(f"classifier_source:{classifier_source}")
+                    # QNT-326 (G-14): a comparison turn that requested news/
+                    # earnings retrieval it can't serve (comparison's rag_corpora
+                    # is empty) tags the discarded demand so a Langfuse count on
+                    # comparison_rag_demand:* is the signal for a future
+                    # per-ticker fold. Absent/"" on turns with no such demand.
+                    comparison_rag_demand = state_obj.get("comparison_rag_demand")
+                    if isinstance(comparison_rag_demand, str) and comparison_rag_demand:
+                        tags.append(f"comparison_rag_demand:{comparison_rag_demand}")
                     grounding_rate = state_obj.get("grounding_rate")
                     if isinstance(grounding_rate, int | float):
                         rate = max(0.0, min(1.0, float(grounding_rate)))

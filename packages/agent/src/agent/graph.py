@@ -341,6 +341,18 @@ class AgentState(TypedDict):
     # rewrite was produced/survived the guardrail; gather falls back to the
     # raw question, which is today's behaviour, so this can only add recall.
     search_query: NotRequired[str]
+    # QNT-326 (G-14): demand detector for a future per-ticker comparison fold.
+    # comparison's IntentPolicy.rag_corpora is empty (RetrievalSpec.fold cannot
+    # address reports_by_ticker yet), so a targeted-event comparison ("compare
+    # NVDA and AMD on their antitrust exposure") silently discards the
+    # classifier's needs_news_search / needs_earnings_search flags. gather_node
+    # records the '+'-joined corpora a comparison turn asked for but couldn't use
+    # ("news" / "earnings" / "news+earnings") here; the SSE handler stamps it as
+    # a comparison_rag_demand trace tag. Detector only -- no fold is built; the
+    # tag is the demand signal for whether one is worth building. classify_node
+    # resets it to "" at the turn boundary so a prior comparison turn's demand
+    # doesn't bleed across the checkpointer into a later turn's tag.
+    comparison_rag_demand: NotRequired[str]
     # QNT-212: ordered list of node names actually visited this turn.
     # Each node writes the FULL accumulated list (not a single element with
     # a reducer) -- a reducer would also accumulate across turns out of the
