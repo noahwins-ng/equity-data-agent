@@ -56,15 +56,71 @@ def _time_call(fn: object, ticker: str) -> float:
     return time.perf_counter() - start
 
 
+def _gather_compare(ticker: str, partner: str, iters: int) -> None:
+    """QNT-321 (G-3, AC4): before/after on the rich 2-ticker comparison gather.
+
+    Times the exact orchestration change against the SAME live report tools
+    (QNT-300's method): the OLD serial per-ticker loop (``_gather_reports`` once
+    per ticker = two parallel batches) versus the NEW shared-pool
+    ``_gather_reports_multi`` (all 8 ``(ticker, tool)`` pairs on one pool capped
+    at 4). Both hold the same max-4-in-flight bound; the delta is purely the
+    cross-ticker overlap the shared pool unlocks."""
+    from agent.support import _gather_reports, _gather_reports_multi
+
+    plan = list(REPORT_TOOLS)
+    tickers = [ticker, partner]
+
+    def _serial() -> None:
+        for t in tickers:
+            _gather_reports(t, plan, REPORT_TOOLS)  # type: ignore[arg-type]
+
+    def _shared() -> None:
+        _gather_reports_multi(tickers, plan, REPORT_TOOLS)  # type: ignore[arg-type]
+
+    # Warm once so first-call TLS/connect cost is excluded from both.
+    _serial()
+    _shared()
+
+    before: list[float] = []
+    after: list[float] = []
+    for _ in range(iters):
+        s = time.perf_counter()
+        _serial()
+        before.append(time.perf_counter() - s)
+        s = time.perf_counter()
+        _shared()
+        after.append(time.perf_counter() - s)
+
+    print(f"{'gather (2-ticker)':<22}{'p50 (ms)':>12}{'p95 (ms)':>12}")
+    print("-" * 46)
+    print(f"{'BEFORE serial loop':<22}{_p(before, 0.50):>12.1f}{_p(before, 0.95):>12.1f}")
+    print(f"{'AFTER shared pool':<22}{_p(after, 0.50):>12.1f}{_p(after, 0.95):>12.1f}")
+    speedup = _p(before, 0.50) / _p(after, 0.50) if _p(after, 0.50) else 0.0
+    print(f"\np50 speedup: {speedup:.2f}x")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--iters", type=int, default=30, help="timed iterations per tool")
     parser.add_argument("--ticker", default="NVDA", help="primary ticker")
     parser.add_argument("--partner", default="AAPL", help="second comparison ticker")
+    parser.add_argument(
+        "--gather-compare",
+        action="store_true",
+        help="QNT-321 G-3: before/after the shared-pool comparison gather (skips per-tool table)",
+    )
     args = parser.parse_args()
 
     print(f"API_BASE_URL = {settings.API_BASE_URL}")
     print(f"ticker={args.ticker} partner={args.partner} iters={args.iters}\n")
+
+    if args.gather_compare:
+        # Warm up once per tool/ticker so first-call TLS/connect cost is excluded.
+        for fn in REPORT_TOOLS.values():
+            for t in (args.ticker, args.partner):
+                fn(t)
+        _gather_compare(args.ticker, args.partner, args.iters)
+        return
 
     # Warm up once per tool/ticker so first-call TLS/connect cost is excluded.
     for fn in REPORT_TOOLS.values():
