@@ -291,6 +291,21 @@ class AgentState(TypedDict):
     # non-thesis analytical turn. Typed as the union for assignment flexibility,
     # but only ever a Thesis or None in practice.
     prior_answer: NotRequired[AnswerPayload | None]
+    # QNT-320 (G-1): synthesize's decision about which substrate narrate speaks
+    # from on the paths it returns ``answer=None``. "news" / "fundamental" name
+    # the folded report on the focused RAG-drop path; "prior_answer" marks the
+    # narrative-only followup (narrate reaches the earlier turn via _pick_payload);
+    # None on a card-bearing turn. Written ONLY by synthesize, read ONLY by narrate
+    # -- replaces the needs_news_search / needs_earnings_search re-derivation narrate
+    # used to mirror off the synthesize-side drop condition.
+    narrative_substrate: NotRequired[str | None]
+    # QNT-320 (G-2): the routing decision classify_node computed for this turn
+    # (clarify / plan / synthesize / explore_supervisor). ``_classify_router`` is a
+    # pure read of this key -- the predicate calls that used to live in the router
+    # (followup_fires_search + a dead _should_route_exploration re-check) now happen
+    # once in classify_node, so the router can never drift from the intent classify
+    # actually committed to.
+    route: NotRequired[str]
     confidence: NotRequired[float]
     grounding_rate: NotRequired[float]
     grounding_unsupported: NotRequired[list[str]]
@@ -606,7 +621,8 @@ def build_graph(
     synthesize_node = partial(_synthesize_node_fn, deps=deps)
     narrate_node = partial(_narrate_node_fn, deps=deps)
     clarify_node = partial(_clarify_node_fn, deps=deps)
-    _classify_router = partial(_classify_router_fn, deps=deps)
+    # QNT-320 (G-2): the router is a pure state read now -- no deps to bind.
+    _classify_router = _classify_router_fn
 
     def _wrap_path(
         node_name: str, fn: Callable[..., dict[str, object]]

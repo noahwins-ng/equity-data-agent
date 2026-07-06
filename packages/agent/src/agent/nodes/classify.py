@@ -142,11 +142,25 @@ def classify_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) ->
         prior_answer = state.get("prior_answer")
     else:
         prior_answer = None
+    # QNT-320 (G-2): compute the routing decision ONCE here so ``_classify_router``
+    # is a pure state read. ``followup_fires_search`` reads this turn's freshly
+    # resolved intent + needs_*_search flags -- classify has not written its return
+    # yet, so overlay them onto ``state`` for the check.
+    followup_fires = intent == "followup" and deps.followup_fires_search(
+        {
+            **state,
+            "intent": intent,
+            "needs_news_search": needs_news_search,
+            "needs_earnings_search": needs_earnings_search,
+        }
+    )
+    route = _classify_route(intent, ambiguity_kind, followup_fires)
     return {
         "ticker": effective_ticker,
         "analysis_ticker": effective_ticker,
         "prior_answer": prior_answer,
         "intent": intent,
+        "route": route,
         "classifier_source": classifier_source,
         "ambiguity_kind": ambiguity_kind,
         "needs_news_search": needs_news_search,
@@ -172,34 +186,45 @@ def classify_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) ->
     }
 
 
-def _classify_router(state: AgentState, deps: GraphDeps) -> str:
-    """QNT-212/QNT-215: pick the next node from classify_node's output.
+def _classify_route(intent: str, ambiguity_kind: object, followup_fires: bool) -> str:
+    """QNT-212/QNT-215/QNT-290/QNT-320: the routing decision, computed once in
+    classify_node (:func:`_classify_router` is now a pure read of the result).
 
-    Ambiguity always wins -- a clarify run never burns the plan/gather
-    LLM call. Conversational short-circuits to synthesize unconditionally.
-    QNT-290: followup short-circuits to synthesize too UNLESS the
-    classifier flagged a targeted RAG need on this warm-thread turn
-    (``_followup_fires_search``) -- then it routes through plan/gather
-    like any other intent so the RAG branch can fire (plan_node still
-    returns an empty plan for followup, so no report re-fetch happens).
-    QNT-215 exploration owns broad anchored scan prompts even when the
-    classifier labels them as news, but named-lens, quick_fact,
-    comparison, clarify, and pure follow-up flows keep their existing
-    routes.
+    Ambiguity always wins -- a clarify run never burns the plan/gather LLM call.
+    Conversational short-circuits to synthesize unconditionally. QNT-290: followup
+    short-circuits too UNLESS the classifier flagged a targeted RAG need this
+    warm-thread turn (``followup_fires``) -- then it routes through plan/gather so
+    the RAG branch can fire (plan_node still returns an empty plan for followup, so
+    no report re-fetch happens). QNT-215 exploration owns broad anchored scan
+    prompts; every other intent (thesis / focused / quick_fact / comparison) plans.
+
+    QNT-320 (G-2): there is no second ``_should_route_exploration`` re-check here.
+    classify_node already rewrote the intent to "exploration" when that predicate
+    fired, so the old router's re-check could never be True for a non-exploration
+    intent -- it was dead code that read like a live path, and is deleted.
     """
-    if state.get("ambiguity_kind"):
+    if ambiguity_kind:
         return "clarify"
-    intent = state.get("intent", "thesis")
-    if intent == "followup" and deps.followup_fires_search(state):
+    if intent == "followup" and followup_fires:
         return "plan"
     if intent in graph._SHORT_CIRCUIT_INTENTS:
         return "synthesize"
     if intent == "exploration":
         return "explore_supervisor"
-    if intent in {"quick_fact", "comparison"}:
-        return "plan"
-    question = state.get("question", "")
-    _, has_prior_turn = graph._prior_turn_context(state, question)
-    if graph._should_route_exploration(intent, question, has_prior_turn=has_prior_turn):
-        return "explore_supervisor"
     return "plan"
+
+
+def _classify_router(state: graph.AgentState) -> str:
+    """QNT-320 (G-2): return the route classify_node computed into ``state['route']``.
+
+    A pure state read -- no predicate calls. Defaults to "plan" for a stubbed test
+    graph or old checkpoint that predates the key (classify runs first on every
+    real turn, so ``route`` is always present in practice).
+
+    The ``state`` hint is spelled ``graph.AgentState`` (the runtime-imported module)
+    rather than the ``TYPE_CHECKING``-only ``AgentState`` because, unlike the
+    partial-wrapped node functions, this router is registered directly on the graph
+    -- LangGraph resolves its annotations at build time, so the name must exist at
+    runtime.
+    """
+    return state.get("route", "plan")
