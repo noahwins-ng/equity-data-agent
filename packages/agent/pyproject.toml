@@ -12,7 +12,7 @@ dependencies = [
     # alone aren't enough.
     "langchain>=0.3.0",
     "langfuse>=2.0.0",
-    "httpx>=0.27.0",
+    "httpx>=0.28.1",
     # QNT-209: SqliteSaver for cross-request session memory (chat followup).
     "langgraph-checkpoint-sqlite>=2.0.0",
 ]
