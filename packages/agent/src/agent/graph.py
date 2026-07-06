@@ -378,6 +378,72 @@ class AgentState(TypedDict):
     intent_path: NotRequired[list[str]]
 
 
+# QNT-323 (G-4): the per-turn scratch/durable split, declared once as data.
+#
+# The checkpointer persists AgentState across turns on a warm thread, so a key
+# left unwritten this turn hydrates with the PRIOR turn's value. Every key is
+# therefore either per-turn SCRATCH (must be cleared at the turn boundary or a
+# stale value leaks in) or durable thread MEMORY (must survive). Before this the
+# split was a convention scattered across node return dicts and enforced by
+# comments: plan_node's followup branch had to return ONLY ``{"plan": []}`` or it
+# clobbered the hydrated reports; its conversational/no-tools branches had to
+# return the empty resets or a warm thread's stale reports leaked into a fresh
+# turn; gather_node and explore_supervisor_node repeated the dance per branch.
+# classify_node -- the turn-boundary node (it already resets ``intent_path`` via
+# _wrap_path, snapshots ``prior_answer``, appends the user message) -- now owns
+# the WHOLE reset via ``_turn_boundary_reset``. Downstream nodes carry only the
+# keys they actually produce; a meta-test (tests/agent/test_turn_boundary.py)
+# pins that no node other than classify writes a reset for a key it never
+# populates.
+#
+# SCRATCH (cleared every turn, intent-independent): a producer that runs
+# overwrites the reset with its real value; on a path that skips the producer,
+# the reset value is what the turn ends with -- never the prior turn's. This set
+# includes the single-writer keys that leak most quietly: ``plan_rationale``
+# (only plan / explore_supervisor write it, and plan's followup branch returns
+# ONLY ``{"plan": []}`` -- so a warm-thread followup would otherwise narrate the
+# prior turn's rationale, since build_narrate_prompt reads it unconditionally)
+# and ``supervisor_iterations`` (only explore_supervisor writes it, and the SSE
+# done event reports it every turn).
+_SCRATCH_RESET_BASE: dict[str, object] = {
+    "plan": [],
+    "plan_rationale": None,
+    "errors": {},
+    "reports_by_ticker": {},
+    "comparison_tickers": [],
+    "retrieved_sources": [],
+    "confidence": 0.0,
+    "grounding_rate": 1.0,
+    "grounding_unsupported": [],
+    "supervisor_iterations": 0,
+    "comparison_rag_demand": "",
+}
+# ``reports`` is the one intent-CONDITIONAL scratch member: a followup reuses the
+# prior turn's checkpointer-hydrated reports verbatim (the whole point of
+# QNT-209), so it is DURABLE on followup and SCRATCH on every other intent.
+# DURABLE (never reset here): ``messages`` (QNT-216 transcript, append-only),
+# ``prior_answer`` (QNT-307, snapshotted from the prior turn's ``answer``),
+# ``reports`` on followup, and the turn-scoped keys classify itself writes
+# (ticker/intent/route/needs_*_search/...). The full scratch key set, for the
+# meta-test:
+SCRATCH_RESET_KEYS: frozenset[str] = frozenset(_SCRATCH_RESET_BASE) | {"reports"}
+
+
+def _turn_boundary_reset(intent: str) -> dict[str, object]:
+    """QNT-323 (G-4): the per-turn scratch reset classify_node applies at the
+    turn boundary, given the resolved intent.
+
+    Returns a fresh dict (never the shared literal) so a caller merging it can't
+    mutate the module-level default. ``reports`` is included for every intent
+    EXCEPT followup -- followup reuses the hydrated reports (QNT-209), so clearing
+    them would defeat the path. See ``_SCRATCH_RESET_BASE`` for the split.
+    """
+    reset = dict(_SCRATCH_RESET_BASE)
+    if intent != "followup":
+        reset["reports"] = {}
+    return reset
+
+
 def _grounding_rate(result: HallucinationResult) -> float:
     """Fraction of answer numbers traceable to a fetched report."""
     total = len(result.thesis_numbers)

@@ -155,7 +155,17 @@ def classify_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) ->
         }
     )
     route = _classify_route(intent, ambiguity_kind, followup_fires)
+    # QNT-323 (G-4): classify owns the whole turn boundary. ``_turn_boundary_reset``
+    # clears every per-turn scratch key (plan / plan_rationale / errors /
+    # reports_by_ticker / comparison_tickers / retrieved_sources / confidence /
+    # grounding_* / supervisor_iterations / comparison_rag_demand, plus reports for
+    # non-followup intents) so a prior turn's value can't leak across the
+    # checkpointer into this one. Downstream
+    # nodes no longer carry defensive resets -- they return only what they
+    # produce, overwriting these within the same turn. The keys below are the ones
+    # classify itself produces; they never overlap the scratch set.
     return {
+        **graph._turn_boundary_reset(intent),
         "ticker": effective_ticker,
         "analysis_ticker": effective_ticker,
         "prior_answer": prior_answer,
@@ -172,16 +182,6 @@ def classify_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) ->
         # QNT-289: guardrailed self-contained retrieval query; "" ⇒ gather
         # falls back to the raw question.
         "search_query": search_query,
-        # QNT-326 (G-14): reset the comparison RAG demand marker at the turn
-        # boundary. State persists across turns via the checkpointer, and only
-        # gather's comparison branch writes this key -- a later followup /
-        # conversational / thesis turn on the same thread never rewrites it, and
-        # the short-circuit intents skip gather entirely, so without a reset here
-        # a prior comparison turn's "news" would bleed into the SSE handler's
-        # trace tag on an unrelated turn. classify runs first on every turn, so
-        # clearing it here (gather overwrites within the same comparison turn) is
-        # the single point that keeps the demand tag truthful.
-        "comparison_rag_demand": "",
         "messages": graph._append_user_message(history, question),
     }
 

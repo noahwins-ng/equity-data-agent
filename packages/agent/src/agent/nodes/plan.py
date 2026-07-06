@@ -28,11 +28,10 @@ def plan_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> dic
     question = state.get("question", "")
     intent = state.get("intent", "thesis")
 
-    # QNT-209: followup reuses the prior turn's hydrated reports — set
-    # plan empty so gather no-ops. Critically we return ONLY ``plan``
-    # here; including ``reports`` / ``reports_by_ticker`` in the return
-    # dict would clobber the checkpointer-hydrated state with empty
-    # values and defeat the whole point of the followup path.
+    # QNT-209: followup reuses the prior turn's hydrated reports — set plan
+    # empty so gather no-ops. QNT-323 (G-4): classify already reset the scratch
+    # keys and kept ``reports`` hydrated for followup, so plan carries ONLY the
+    # empty plan it produces here.
     if intent == "followup":
         logger.info("plan %s: skipped (followup)", ticker)
         return {"plan": []}
@@ -41,28 +40,18 @@ def plan_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> dic
     # comes from the LLM with no report context. We still pass through
     # plan_node so the graph topology stays linear; the gather node
     # then no-ops when ``plan`` is empty.
+    # QNT-323 (G-4): these paths produce only an empty plan; plan_rationale and
+    # comparison_tickers are classify's turn-boundary reset to own (both are in
+    # the scratch set), so carry only ``plan`` -- same shape as the followup
+    # branch above.
     if intent == "conversational":
         logger.info("plan %s: skipped (conversational)", ticker)
-        return {
-            "plan": [],
-            "plan_rationale": None,
-            "reports": {},
-            "errors": {},
-            "comparison_tickers": [],
-            "reports_by_ticker": {},
-        }
+        return {"plan": []}
 
     available = [t for t in graph.REPORT_TOOLS if t in deps.tools]
     if not available:
         logger.warning("plan %s: no tools registered", ticker)
-        return {
-            "plan": [],
-            "plan_rationale": None,
-            "reports": {},
-            "errors": {},
-            "comparison_tickers": [],
-            "reports_by_ticker": {},
-        }
+        return {"plan": []}
 
     # Comparison path resolves which two tickers to fetch upfront so the
     # gather node knows the scope. If we can't find two, we still emit a
@@ -160,11 +149,11 @@ def plan_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> dic
             deps.event_emitter("plan_rationale", {"text": plan_rationale})
         except Exception as exc:  # noqa: BLE001 — never let SSE plumbing crash the graph
             logger.warning("plan %s: event_emitter failed: %s (continuing)", ticker, exc)
+    # QNT-323 (G-4): carry only the keys plan produces (plan / plan_rationale /
+    # comparison_tickers). reports / errors / reports_by_ticker are gather's to
+    # populate; classify already reset them at the turn boundary.
     return {
         "plan": plan,
         "plan_rationale": plan_rationale,
-        "reports": {},
-        "errors": {},
         "comparison_tickers": comparison_tickers,
-        "reports_by_ticker": {},
     }

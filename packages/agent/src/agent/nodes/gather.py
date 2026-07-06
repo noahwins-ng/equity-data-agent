@@ -107,11 +107,13 @@ def gather_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> d
         )
         return {"reports": reports, "retrieved_sources": retrieved_sources}
 
-    # Conversational path: nothing to gather — keep state intact and
-    # let synthesize emit the prose answer.
+    # Conversational path: nothing to gather. QNT-323 (G-4): unreachable in
+    # practice (conversational short-circuits classify->synthesize, so gather
+    # never runs) and classify already reset the scratch keys; kept for topology
+    # symmetry and direct-call safety, producing nothing.
     if intent == "conversational":
         logger.info("gather %s: skipped (conversational)", ticker)
-        return {"reports": {}, "errors": {}, "reports_by_ticker": {}}
+        return {}
 
     if intent == "comparison":
         comparison_tickers = state.get("comparison_tickers", [])
@@ -129,17 +131,14 @@ def gather_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> d
             )
         if len(comparison_tickers) < graph._MIN_COMPARISON_TICKERS:
             # Fall through with empty bundle — synthesize will redirect.
+            # QNT-323 (G-4): carry only comparison_rag_demand; classify reset the
+            # empty reports/errors/reports_by_ticker at the turn boundary.
             logger.info(
                 "gather %s: comparison needs 2 tickers, got %s",
                 ticker,
                 comparison_tickers,
             )
-            return {
-                "reports": {},
-                "errors": {},
-                "reports_by_ticker": {},
-                "comparison_rag_demand": rag_demand,
-            }
+            return {"comparison_rag_demand": rag_demand}
 
         # QNT-224: 3-4 tickers take the lean metrics path — ONE fetch of a
         # compact metrics row per ticker, not a full bundle each. The JSON
@@ -153,26 +152,23 @@ def gather_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> d
                     "gather %s: 3-4 way comparison but no metrics tool wired — redirect",
                     ticker,
                 )
-                return {
-                    "reports": {},
-                    "errors": {},
-                    "reports_by_ticker": {},
-                    "comparison_rag_demand": rag_demand,
-                }
+                # QNT-323 (G-4): produce only the demand marker; classify reset
+                # the rest.
+                return {"comparison_rag_demand": rag_demand}
             metrics_json = deps.comparison_metrics_tool(comparison_tickers)
             if graph._is_tool_error(metrics_json):
                 logger.warning("gather %s: comparison-metrics failed: %s", ticker, metrics_json)
+                # QNT-323 (G-4): produce the error + demand marker only.
                 return {
-                    "reports": {},
                     "errors": {"comparison_metrics": metrics_json},
-                    "reports_by_ticker": {},
                     "comparison_rag_demand": rag_demand,
                 }
             logger.info("gather %s: lean comparison metrics for %s", ticker, comparison_tickers)
+            # QNT-323 (G-4): produce the lean metrics report + demand marker; the
+            # empty reports_by_ticker (so synthesize routes to the lean branch)
+            # comes from classify's turn-boundary reset.
             return {
                 "reports": {"comparison_metrics": metrics_json},
-                "errors": {},
-                "reports_by_ticker": {},
                 "comparison_rag_demand": rag_demand,
             }
 
@@ -229,10 +225,11 @@ def gather_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> d
         sorted(reports),
         sorted(errors),
     )
+    # QNT-323 (G-4): carry the keys this path produces; the empty
+    # reports_by_ticker (single-ticker path) comes from classify's reset.
     return {
         "reports": reports,
         "errors": errors,
-        "reports_by_ticker": {},
         "retrieved_sources": retrieved_sources,
     }
 
@@ -254,13 +251,14 @@ def explore_supervisor_node(
 
     if not available:
         logger.warning("explore_supervisor %s: no tools registered", ticker)
+        # QNT-323 (G-4): reports_by_ticker / comparison_tickers are never
+        # populated on the exploration path -- classify's reset owns them.
         return {
             "intent": "thesis",
             "plan": [],
             "plan_rationale": None,
             "reports": {},
             "errors": {},
-            "reports_by_ticker": {},
             "supervisor_iterations": 0,
         }
 
@@ -300,14 +298,14 @@ def explore_supervisor_node(
                 "explore_supervisor %s: event_emitter failed: %s (continuing)", ticker, exc
             )
 
+    # QNT-323 (G-4): carry only what exploration produces; classify's turn-boundary
+    # reset owns the empty reports_by_ticker / comparison_tickers.
     return {
         "intent": output_intent,
         "plan": plan,
         "plan_rationale": exploration_rationale,
         "reports": reports,
         "errors": errors,
-        "reports_by_ticker": {},
-        "comparison_tickers": [],
         "supervisor_iterations": len(plan),
         "confidence": graph._confidence_from_reports(reports, plan),
     }
