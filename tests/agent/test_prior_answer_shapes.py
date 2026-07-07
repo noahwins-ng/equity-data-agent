@@ -159,10 +159,65 @@ def test_classify_carries_prior_card_across_conversational_interlude(
     assert result["prior_answer"] is prior
 
 
-def test_classify_drops_quick_fact_answer(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A followup's own compact QuickFactAnswer is not a full analytical card, so
-    it is not carried (unchanged from QNT-307's non-thesis behaviour)."""
+def test_classify_quick_fact_from_fresh_quick_fact_maps_to_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A QuickFactAnswer left by a FRESH quick_fact turn (``_run_classify`` sets no
+    prior intent) is not carried -- that turn may have rebased to a new ticker, so
+    resurrecting a prior card would narrate a stale subject (QNT-307 behaviour)."""
     assert _run_classify(monkeypatch, _quick_fact()) is None
+
+
+def test_classify_carries_prior_card_across_metric_ask_followup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-349 follow-up: a QuickFactAnswer left by a metric-ask FOLLOWUP turn
+    (prior intent == followup, which names no ticker so it cannot rebase) carries
+    the earlier analytical card forward, so a "thesis -> what's the RSI? -> tell me
+    more" chain keeps narrating over the thesis rather than dropping to reports."""
+    monkeypatch.setattr(
+        graph_module,
+        "classify_intent_with_source",
+        lambda *a, **k: ("thesis", "stub", False, False, "", [], ""),
+    )
+    prior = _comparison()
+    state = cast(
+        AgentState,
+        {
+            "ticker": "TSLA",
+            "question": "tell me more",
+            "answer": _quick_fact(),
+            "intent": "followup",  # the PRIOR turn's intent (metric-ask followup)
+            "prior_answer": prior,
+        },
+    )
+    result = classify_node(state, {}, _deps())
+    assert result["prior_answer"] is prior
+
+
+def test_classify_quick_fact_from_rebased_quick_fact_drops_prior_card(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rebase guard: a QuickFactAnswer left by a FRESH quick_fact turn (prior
+    intent == quick_fact) must NOT carry the prior card forward even when one is
+    present -- that turn may have moved to a new ticker."""
+    monkeypatch.setattr(
+        graph_module,
+        "classify_intent_with_source",
+        lambda *a, **k: ("thesis", "stub", False, False, "", [], ""),
+    )
+    state = cast(
+        AgentState,
+        {
+            "ticker": "TSLA",
+            "question": "tell me more",
+            "answer": _quick_fact(),
+            "intent": "quick_fact",  # a fresh metric ask, possibly on a new ticker
+            "prior_answer": _comparison(),
+        },
+    )
+    result = classify_node(state, {}, _deps())
+    assert result["prior_answer"] is None
 
 
 def test_classify_preserves_prior_answer_on_narrative_only_turn(
