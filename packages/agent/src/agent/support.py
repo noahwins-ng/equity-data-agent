@@ -207,6 +207,25 @@ def _tools_from_thesis_plan(thesis_plan: ThesisPlan, available: list[str]) -> li
     return plan if len(plan) >= 2 else list(available)
 
 
+def _tools_from_folded_picks(picks: list[str], available: list[str]) -> list[str] | None:
+    """QNT-327 (v3 G-6): filter classify's folded ``report_picks`` to a valid plan.
+
+    Mirrors :func:`_tools_from_thesis_plan` (registry-order, force ``company``) but
+    is deliberately STRICTER on the empty-hand case: it returns ``None`` -- not the
+    over-fetch-everything fallback -- when the picks can't form a valid >=2-tool
+    plan, so plan_node falls back to the dedicated ThesisPlan call rather than
+    silently fetching all reports off a degenerate classify pick. The picks arrive
+    raw from the classify LLM (permissive :class:`agent.intent.IntentDecision`
+    field), so off-list tokens are dropped here, the same way search_query is
+    sanitized downstream of the classifier.
+    """
+    chosen = {p for p in picks if p in available}
+    plan = [tool for tool in available if tool in chosen]
+    if "company" in available and "company" not in plan:
+        plan.insert(0, "company")
+    return plan if len(plan) >= 2 else None
+
+
 def _parse_plan(raw: str, available: list[str], intent: Intent = "thesis") -> list[str]:
     """Return the subset of ``available`` named in ``raw``, preserving the
     order in ``available``. Falls back to the full list if parsing yields

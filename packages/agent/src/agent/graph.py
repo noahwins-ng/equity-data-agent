@@ -170,6 +170,7 @@ from agent.support import (  # noqa: F401
     _should_route_exploration,
     _strip_disclaimer,
     _strip_retrieved_block,
+    _tools_from_folded_picks,
     _tools_from_thesis_plan,
     _truncate_body,
     _with_coerced_suggestions,
@@ -361,6 +362,18 @@ class AgentState(TypedDict):
     # rewrite was produced/survived the guardrail; gather falls back to the
     # raw question, which is today's behaviour, so this can only add recall.
     search_query: NotRequired[str]
+    # QNT-327 (v3 G-6, spike): the thesis plan pick, folded out of the classify
+    # call so a thesis turn drops from four sequential LLM calls to three. Written
+    # by classify_node from classify_intent_with_source's ``report_picks`` /
+    # ``plan_rationale`` (non-empty ONLY on the llm path for a thesis intent), read
+    # by plan_node's thesis branch. When the picks form a valid >=2-tool plan,
+    # plan_node consumes them and skips the dedicated ThesisPlan LLM call;
+    # otherwise (heuristic/fallback classify, non-thesis intent, or a degenerate
+    # pick) it falls back to that call. Per-turn SCRATCH: reset at the turn
+    # boundary so a warm-thread turn that classifies via heuristic can't inherit
+    # the prior turn's picks out of the checkpointer.
+    folded_report_picks: NotRequired[list[str]]
+    folded_plan_rationale: NotRequired[str | None]
     # QNT-326 (G-14): demand detector for a future per-ticker comparison fold.
     # comparison's IntentPolicy.rag_corpora is empty (RetrievalSpec.fold cannot
     # address reports_by_ticker yet), so a targeted-event comparison ("compare
@@ -422,6 +435,11 @@ _SCRATCH_RESET_BASE: dict[str, object] = {
     "grounding_unsupported": [],
     "supervisor_iterations": 0,
     "comparison_rag_demand": "",
+    # QNT-327 (v3 G-6): the folded thesis plan pick classify_node forwards to
+    # plan_node. Reset here so a heuristic-classified warm-thread turn (no LLM,
+    # no picks) can't consume the prior turn's picks out of the checkpointer.
+    "folded_report_picks": [],
+    "folded_plan_rationale": None,
 }
 # ``reports`` is the one intent-CONDITIONAL scratch member: a followup reuses the
 # prior turn's checkpointer-hydrated reports verbatim (the whole point of

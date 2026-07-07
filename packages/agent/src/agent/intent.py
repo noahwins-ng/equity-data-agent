@@ -175,6 +175,40 @@ class IntentDecision(BaseModel):
             "the NVDA lawsuit?')."
         ),
     )
+    # QNT-327 (v3 G-6, spike): fold the thesis plan pick into the classify call so
+    # a thesis turn drops from four sequential LLM calls to three. Produced ONLY
+    # when intent == "thesis"; every other intent leaves these at their defaults,
+    # and plan_node falls back to the dedicated ThesisPlan call. The raw list is
+    # permissive by design -- plan_node filters it to registered tools and
+    # re-imposes the company + >=2-tool contract (mirroring the search_query
+    # sanitize-downstream pattern), so an off-list or degenerate pick can only
+    # trigger the fallback, never a bad plan.
+    report_picks: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Produce this ONLY when intent == 'thesis'; leave it empty ([]) for "
+            "every other intent. The report tools to fetch for the thesis, chosen "
+            "from exactly: 'company', 'fundamental', 'technical', 'news'. A broad "
+            "thesis ('give me a balanced thesis on NVDA', 'should I buy?') wants "
+            "the FULL picture -- pick all four. Narrow only when the user names a "
+            "specific lens: fundamental for valuation/earnings/margins, technical "
+            "for chart/trend/RSI/setup, news for headlines/catalysts/sentiment. "
+            "Always include 'company' -- it grounds the thesis in the business. "
+            "Pick at least two."
+        ),
+    )
+    plan_rationale: str = Field(
+        default="",
+        description=(
+            "Produce this ONLY when intent == 'thesis' and you filled report_picks; "
+            "leave it empty ('') otherwise. One or two analyst-voice sentences that "
+            "cite what the question is asking about and why those reports fit -- the "
+            "same voice the standalone planner uses, e.g. 'Your question is about "
+            "valuation, so I'll lean on fundamentals and the company profile.' For a "
+            "broad thesis, say the question asks for a full thesis, so all reports "
+            "are needed."
+        ),
+    )
 
 
 # Tokens that strongly suggest a single-metric lookup. Hits here force
@@ -1027,6 +1061,20 @@ and only makes sense given the prior turn ("what about the buyback?" after an \
 NVDA turn), resolve the missing ticker/entity from the conversation ("NVDA \
 buyback"). Leave 'search_query' as "" when neither search flag is True.
 
+Separately, ONLY when the 'intent' above is "thesis", set 'report_picks' to the \
+report tools to fetch for the thesis, chosen from exactly: "company", \
+"fundamental", "technical", "news". A broad thesis request ("give me a balanced \
+thesis on NVDA", "should I be cautious about META?") wants the full investment \
+picture -- pick all four. Narrow ONLY when the user names a specific lens: \
+"fundamental" for valuation / earnings / margins, "technical" for chart / trend \
+/ RSI / setup, "news" for headlines / catalysts / sentiment. Always include \
+"company"; it grounds the thesis in the business. Pick at least two. Then set \
+'plan_rationale' to one or two analyst-voice sentences citing what the question \
+asks and why those reports fit (e.g. "Your question is about valuation, so I'll \
+lean on fundamentals and the company profile."; for a broad thesis, say the \
+question asks for a full thesis, so all reports are needed). For EVERY non-thesis \
+intent, leave 'report_picks' empty ([]) and 'plan_rationale' empty ("").
+
 Recent conversation (for follow-up detection and for resolving 'search_query' \
 as described above ONLY; do not use it to change the 'intent' label, pick \
 tools, compute values, or switch which ticker this turn analyzes):
@@ -1042,9 +1090,9 @@ def classify_intent_with_source(
     config: RunnableConfig | None = None,
     has_prior_turn: bool = False,
     history: Sequence[ConversationMessage] | None = None,
-) -> tuple[Intent, ClassifierSource, bool, bool, str]:
+) -> tuple[Intent, ClassifierSource, bool, bool, str, list[str], str]:
     """Return ``(intent, source, needs_news_search, needs_earnings_search,
-    search_query)``.
+    search_query, report_picks, plan_rationale)``.
 
     ``source`` identifies which code path resolved the intent:
     - ``"heuristic"`` — keyword matcher decided without an LLM call
@@ -1086,6 +1134,15 @@ def classify_intent_with_source(
     QNT-216: ``history`` is rendered into the LLM classifier prompt only for
     the followup/ambiguity arm. The heuristic still handles obvious
     continuation phrasing without an LLM call.
+
+    QNT-327 (v3 G-6, spike): ``report_picks`` + ``plan_rationale`` fold the
+    thesis plan pick into this call so a thesis turn drops from four sequential
+    LLM calls to three. They are produced ONLY on the ``llm`` path for a
+    ``thesis`` intent; the ``heuristic`` and ``fallback`` paths (and every
+    non-thesis intent) return ``([], "")`` so plan_node falls back to the
+    dedicated ThesisPlan call. The picks are passed through raw here -- plan_node
+    filters them to registered tools and re-imposes the company + >=2-tool
+    contract, so an off-list or degenerate pick can only trigger the fallback.
     """
     # Keyword floor -- the fallback signal, also OR-ed under the LLM flag below.
     floor_news = _is_targeted_news(question)
@@ -1103,7 +1160,9 @@ def classify_intent_with_source(
             floor_query,
             question[:80],
         )
-        return heuristic, "heuristic", floor_news, floor_earnings, floor_query
+        # QNT-327: no LLM ran -> no folded plan picks; plan_node falls back to
+        # the dedicated ThesisPlan call for a heuristic-thesis turn.
+        return heuristic, "heuristic", floor_news, floor_earnings, floor_query, [], ""
 
     # QNT-220 (#7): the classifier is a small structured call -- tier it to the
     # fast/small alias rather than the 70b synthesis model.
@@ -1118,7 +1177,7 @@ def classify_intent_with_source(
         )
     except Exception as exc:  # noqa: BLE001 — bias to thesis on any failure
         logger.warning("classify llm failed, defaulting to thesis: %s", exc)
-        return "thesis", "fallback", floor_news, floor_earnings, floor_query
+        return "thesis", "fallback", floor_news, floor_earnings, floor_query, [], ""
 
     decision: IntentDecision | None = None
     if isinstance(response, IntentDecision):
@@ -1144,18 +1203,33 @@ def classify_intent_with_source(
             )
             or floor_query
         )
+        # QNT-327 (v3 G-6): fold the thesis plan pick out of this call. Only a
+        # thesis intent carries picks -- the schema instructs the model to leave
+        # them empty otherwise, but gate on the intent here too so a stray pick on
+        # a non-thesis intent (which plan_node never reads) can't leak into state.
+        report_picks = list(decision.report_picks) if decision.intent == "thesis" else []
+        plan_rationale = decision.plan_rationale.strip() if decision.intent == "thesis" else ""
         logger.info(
             "classify intent=%s needs_news_search=%s needs_earnings_search=%s "
-            "search_query=%r via=llm question=%r",
+            "search_query=%r report_picks=%s via=llm question=%r",
             decision.intent,
             needs_news_search,
             needs_earnings_search,
             search_query,
+            report_picks,
             question[:80],
         )
-        return decision.intent, "llm", needs_news_search, needs_earnings_search, search_query
+        return (
+            decision.intent,
+            "llm",
+            needs_news_search,
+            needs_earnings_search,
+            search_query,
+            report_picks,
+            plan_rationale,
+        )
     logger.warning("classify llm returned unexpected shape, defaulting to thesis")
-    return "thesis", "fallback", floor_news, floor_earnings, floor_query
+    return "thesis", "fallback", floor_news, floor_earnings, floor_query, [], ""
 
 
 def classify_intent(
@@ -1171,7 +1245,7 @@ def classify_intent(
     only need the intent. Use ``classify_intent_with_source`` when the
     classifier path (heuristic / llm / fallback) also matters.
     """
-    intent, _, _, _, _ = classify_intent_with_source(
+    intent, *_ = classify_intent_with_source(
         question,
         config=config,
         has_prior_turn=has_prior_turn,

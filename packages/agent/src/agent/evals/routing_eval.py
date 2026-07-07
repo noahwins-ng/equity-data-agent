@@ -187,7 +187,9 @@ def evaluate(fixture: RoutingFixture) -> RoutingOutcome:
     -- the runtime path, so the score reflects what the agent actually fires.
     """
     started = time.perf_counter()
-    intent, source, needs_news_search, needs_earnings_search, _search_query = (
+    # QNT-327: trailing *_ absorbs the folded report_picks / plan_rationale this
+    # eval does not score (it measures corpus routing + intent, not the plan pick).
+    intent, source, needs_news_search, needs_earnings_search, _search_query, *_ = (
         classify_intent_with_source(fixture.question)
     )
     elapsed_ms = int((time.perf_counter() - started) * 1000)

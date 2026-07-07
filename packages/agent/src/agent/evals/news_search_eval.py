@@ -192,7 +192,8 @@ def load_news_search_fixtures(
 def evaluate_flag(fixture: NewsSearchFixture) -> FlagOutcome:
     """Run the live classifier and capture the needs_news_search flag."""
     started = time.perf_counter()
-    intent, source, needs_news_search, _needs_earnings_search, _search_query = (
+    # QNT-327: trailing *_ absorbs the folded report_picks / plan_rationale.
+    intent, source, needs_news_search, _needs_earnings_search, _search_query, *_ = (
         classify_intent_with_source(fixture.question)
     )
     elapsed_ms = int((time.perf_counter() - started) * 1000)

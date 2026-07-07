@@ -47,6 +47,11 @@ def classify_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) ->
             needs_news_search,
             needs_earnings_search,
             search_query,
+            # QNT-327 (v3 G-6): the thesis plan pick folded out of the classify
+            # call (non-empty only on the llm path for a thesis intent); forwarded
+            # to plan_node, which consumes it or falls back to the ThesisPlan call.
+            folded_report_picks,
+            folded_plan_rationale,
         ) = graph.classify_intent_with_source(
             question,
             config=config,
@@ -60,6 +65,8 @@ def classify_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) ->
         needs_news_search = False
         needs_earnings_search = False
         search_query = ""
+        folded_report_picks = []
+        folded_plan_rationale = ""
     question_tickers = graph.extract_tickers(question)
     if (
         graph.has_comparison_phrase(question)
@@ -210,6 +217,11 @@ def classify_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) ->
         # QNT-289: guardrailed self-contained retrieval query; "" ⇒ gather
         # falls back to the raw question.
         "search_query": search_query,
+        # QNT-327 (v3 G-6): forward the folded thesis plan pick to plan_node.
+        # Empty on the heuristic/fallback paths and every non-thesis intent, in
+        # which case plan_node makes the dedicated ThesisPlan call as before.
+        "folded_report_picks": folded_report_picks,
+        "folded_plan_rationale": folded_plan_rationale,
         "messages": graph._append_user_message(history, question),
     }
 

@@ -103,7 +103,7 @@ def _run_classify(monkeypatch: pytest.MonkeyPatch, hydrated_answer: object | Non
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda *a, **k: ("thesis", "stub", False, False, ""),
+        lambda *a, **k: ("thesis", "stub", False, False, "", [], ""),
     )
     state = cast(
         AgentState, {"ticker": "TSLA", "question": "tell me more", "answer": hydrated_answer}
@@ -145,7 +145,7 @@ def test_classify_preserves_prior_answer_on_narrative_only_turn(
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda *a, **k: ("thesis", "stub", False, False, ""),
+        lambda *a, **k: ("thesis", "stub", False, False, "", [], ""),
     )
     prior = _comparison()
     state = cast(

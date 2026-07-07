@@ -171,7 +171,7 @@ def _run_classify_comparison(
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda *a, **k: ("comparison", "stub", False, False, ""),
+        lambda *a, **k: ("comparison", "stub", False, False, "", [], ""),
     )
     state = cast(AgentState, {"ticker": ticker, "question": question, "messages": messages})
     return classify_node(state, {}, _deps())

@@ -233,7 +233,8 @@ def load_search_query_fixtures(
 def evaluate(fixture: SearchQueryFixture) -> SearchQueryOutcome:
     """Run the live classifier (with the fixture's seeded history) and score it."""
     started = time.perf_counter()
-    intent, source, needs_news_search, needs_earnings_search, search_query = (
+    # QNT-327: trailing *_ absorbs the folded report_picks / plan_rationale.
+    intent, source, needs_news_search, needs_earnings_search, search_query, *_ = (
         classify_intent_with_source(
             fixture.question,
             has_prior_turn=bool(fixture.history),

@@ -283,6 +283,28 @@ uv run python -m agent.evals.routing_eval                 # offline scorecard + 
 uv run python -m agent.evals.routing_eval --only nvda-ceo-guidance
 ```
 
+### (g2) Plan-fold agreement eval — `plan_fold_eval.py` (QNT-327, v3 G-6 spike)
+
+QNT-327 folds the thesis plan pick into the classify call (`IntentDecision`
+gained optional `report_picks` / `plan_rationale`, `plan_node` consumes them and
+skips the dedicated `ThesisPlan` call) so a thesis turn drops from four sequential
+LLM calls to three. That is only shippable if the folded pick reproduces what the
+standalone planner would have chosen. For each golden question the LIVE classifier
+routes to `thesis`, this runs BOTH resolvers over the same report set — the folded
+`report_picks` (`_tools_from_folded_picks`) and the standalone `ThesisPlan`
+planner (`_tools_from_thesis_plan`) — and reports the plan-pick AGREEMENT rate
+(`AGREEMENT_FLOOR = 0.80`), plus the resolved intent per fixture so an
+intent-label drift from the fatter schema is visible. Pairs with `routing_eval`
+(intent accuracy unchanged) as the two-sided AC2 gate. Fires two live small
+structured calls per thesis fixture → needs LiteLLM, NOT pytest-collected; respect
+the clean-Groq-window rule before publishing numbers (contamination flagged via
+per-fixture latency).
+
+```bash
+uv run python -m agent.evals.plan_fold_eval               # live agreement scorecard + gate
+uv run python -m agent.evals.plan_fold_eval --only nvda-technical
+```
+
 ### (h) LLM-judged generation eval — `deepeval_eval.py` + `test_deepeval.py` (QNT-264)
 
 Evals (a)–(g) are deterministic or single-axis. This is the **LLM-judged nuance
