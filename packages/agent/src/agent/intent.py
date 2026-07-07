@@ -1068,15 +1068,17 @@ def classify_intent_with_source(
     QNT-289: ``search_query`` is the classifier's self-contained retrieval
     query (ticker/entity + topic, pronouns/ellipses resolved from history),
     guardrailed by :func:`sanitize_search_query` (length cap + context-aware
-    hallucinated-entity rejection). Empty when the LLM's rewrite was
-    empty/rejected -- callers fall back to the raw question, which is today's
-    behaviour, so this can only add recall, never regress it.
+    hallucinated-entity rejection).
 
-    QNT-322: the ``heuristic`` and ``fallback`` paths (no LLM rewrite ran) no
-    longer return ``""`` blindly -- :func:`_floor_search_query` composes a
-    deterministic ticker+topic query from the keyword floor that fired, so a
-    targeted follow-up that short-circuits the LLM still hands Qdrant a clean
-    query instead of the raw ellipsis. Still ``""`` when no floor fired.
+    QNT-322: EVERY path composes a deterministic ticker+topic query from the
+    keyword floor that fired (:func:`_floor_search_query`) so a targeted ask
+    never hands Qdrant the raw ellipsis. The ``heuristic`` and ``fallback``
+    paths (no LLM rewrite ran) return it directly; the ``llm`` path prefers the
+    model's own rewrite and falls back to the same floor query when that rewrite
+    is empty or rejected (QNT-322 follow-up -- closes the last asymmetry, where
+    a misclassify/skip left flag=True with an empty query). Still ``""`` when no
+    floor fired, in which case callers fall back to the raw question -- today's
+    behaviour, so this can only add recall, never regress it.
 
     QNT-181: ``config`` carries the LangGraph CallbackHandler so the
     LLM-fallback path's generation observation nests under the parent trace.
@@ -1128,8 +1130,19 @@ def classify_intent_with_source(
     if decision is not None:
         needs_news_search = decision.needs_news_search or floor_news
         needs_earnings_search = decision.needs_earnings_search or floor_earnings
-        search_query = sanitize_search_query(
-            decision.search_query, question=question, history_text=history_text
+        # QNT-322 follow-up: when the model's own rewrite is empty or rejected
+        # but a keyword floor fired, fall back to the SAME deterministic
+        # ticker+topic query the heuristic/fallback paths compose, rather than
+        # handing Qdrant the raw (often elliptical) question. Closes the last
+        # asymmetry -- the LLM path could still emit flag=True with an empty
+        # query when the small model misclassified or skipped the rewrite. The
+        # ``or`` keeps a valid model rewrite untouched; ``floor_query`` is
+        # non-empty only when a floor fired, so the flag/query invariant holds.
+        search_query = (
+            sanitize_search_query(
+                decision.search_query, question=question, history_text=history_text
+            )
+            or floor_query
         )
         logger.info(
             "classify intent=%s needs_news_search=%s needs_earnings_search=%s "
