@@ -36,6 +36,7 @@ from typing import Any
 from agent.citations import find_bad_anchors
 from agent.evals.hallucination import HallucinationResult
 from agent.evals.hallucination import check as check_hallucination
+from agent.graph import _runtime_report_texts
 from agent.tracing import langfuse
 
 logger = logging.getLogger(__name__)
@@ -66,16 +67,12 @@ def _flatten_reports(state: dict[str, Any]) -> list[str]:
     (``{ticker: {tool: body}}``) AND mirror the primary ticker's bundle into
     ``state["reports"]`` for non-comparison consumers. We flatten everything
     so a thesis number sourced from any per-ticker report counts as supported.
+
+    QNT-324: delegates to the graph's canonical assembler, which also folds the
+    prior card into the substrate on a followup turn -- so the online-eval scorer
+    treats a followup re-quoting a comparison card the same way narrate does.
     """
-    reports_by_ticker = state.get("reports_by_ticker") or {}
-    if reports_by_ticker:
-        flat: list[str] = []
-        for ticker_reports in reports_by_ticker.values():
-            if isinstance(ticker_reports, dict):
-                flat.extend(str(v) for v in ticker_reports.values())
-        return flat
-    reports = state.get("reports") or {}
-    return [str(v) for v in reports.values()] if isinstance(reports, dict) else []
+    return _runtime_report_texts(state)  # type: ignore[arg-type] — dict surface
 
 
 def _missing_planned_tools(state: dict[str, Any], planned: set[str]) -> set[str]:

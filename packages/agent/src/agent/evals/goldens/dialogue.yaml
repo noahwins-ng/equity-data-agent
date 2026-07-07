@@ -98,3 +98,21 @@ dialogues:
     expected_signals: [helpfulness, analyst_likeness, voice_match]
     anchors:
       pass: Agent should name a concrete risk watch item without over-claiming.
+
+  - id: nvda-compare-then-stronger
+    ticker: NVDA
+    turns:
+      - user: Compare NVDA vs AMD on valuation.
+      - user: which of those two looks stronger?
+    expected_signals: [analyst_likeness, exploration_quality, voice_match]
+    anchors:
+      pass: Followup should reason over the prior comparison card, not re-run the compare from scratch.
+
+  - id: tsla-explore-then-takeaway
+    ticker: TSLA
+    turns:
+      - user: What should I be watching on TSLA right now?
+      - user: so what's the takeaway?
+    expected_signals: [helpfulness, analyst_likeness, voice_match]
+    anchors:
+      pass: Followup should distil a takeaway from the prior exploration scan, not restate the scan.
