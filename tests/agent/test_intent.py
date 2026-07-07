@@ -845,3 +845,119 @@ def test_classify_prompt_carves_out_search_query_from_the_history_ban() -> None:
     disclaimer_start = _CLASSIFY_PROMPT.index("Recent conversation")
     disclaimer = _CLASSIFY_PROMPT[disclaimer_start : disclaimer_start + 300]
     assert "search_query" in disclaimer
+
+
+# ─── QNT-322 (G-10): context-aware hallucinated-entity guard ──────────────────
+
+
+def test_sanitize_keeps_user_supplied_entity_named_in_the_question() -> None:
+    """A ticker-shaped token outside TICKERS (SK) survives when the user named
+    the entity in the question -- the QNT-289 rewrite that resolves it from a
+    warm thread must not be killed for naming a real competitor."""
+    from agent.intent import sanitize_search_query
+
+    assert (
+        sanitize_search_query(
+            "NVDA SK Hynix partnership", question="what's the deal with SK Hynix?"
+        )
+        == "NVDA SK Hynix partnership"
+    )
+
+
+def test_sanitize_keeps_user_supplied_entity_named_in_history() -> None:
+    """The entity may live only in the classifier's history window (the exact
+    warm-thread ellipsis loss case) -- it still survives."""
+    from agent.intent import sanitize_search_query
+
+    assert (
+        sanitize_search_query(
+            "NVDA ASML supply chain",
+            history_text="user: how much does NVDA depend on ASML?",
+        )
+        == "NVDA ASML supply chain"
+    )
+
+
+def test_sanitize_rejects_invented_entity_absent_from_question_and_history() -> None:
+    """An invented ticker-shaped token that appears in NEITHER the question nor
+    the history is still a hallucination -- reject the whole rewrite."""
+    from agent.intent import sanitize_search_query
+
+    assert (
+        sanitize_search_query("NVDA SMCI partnership", question="what about the partnership?") == ""
+    )
+
+
+def test_sanitize_without_context_preserves_rejection() -> None:
+    """Regression: with no question/history supplied (the default), an
+    out-of-coverage entity still rejects -- the QNT-289 contract holds."""
+    from agent.intent import sanitize_search_query
+
+    assert sanitize_search_query("NVDA SK Hynix partnership") == ""
+
+
+# ─── QNT-322 (G-11): deterministic query on the no-LLM classify paths ─────────
+
+
+def test_heuristic_path_composes_ticker_plus_floor_topic() -> None:
+    """A heuristic short-circuit that also trips a keyword floor emits a
+    ticker+topic query instead of "" -- Qdrant gets a clean string, not the
+    raw question."""
+    from agent.intent import classify_intent_with_source
+
+    _intent, source, news, _earn, search_query = classify_intent_with_source(
+        "is NVDA overbought given the buyback?"
+    )
+    assert source == "heuristic"
+    assert news is True
+    assert search_query == "NVDA buyback"
+
+
+def test_heuristic_path_floor_query_without_ticker_uses_topic_only() -> None:
+    """A followup ellipsis that names no ticker composes the topic alone; the
+    ticker is applied downstream from resolved state."""
+    from agent.intent import classify_intent_with_source
+
+    _intent, source, news, _earn, search_query = classify_intent_with_source(
+        "why the buyback?", has_prior_turn=True
+    )
+    assert source == "heuristic"
+    assert news is True
+    assert search_query == "buyback"
+
+
+def test_heuristic_path_empty_query_when_no_floor_fires() -> None:
+    """No floor -> "" (AC2: empty only when no floor fired)."""
+    from agent.intent import classify_intent_with_source
+
+    _intent, source, news, earn, search_query = classify_intent_with_source("is NVDA overbought?")
+    assert source == "heuristic"
+    assert (news, earn) == (False, False)
+    assert search_query == ""
+
+
+def test_floor_search_query_over_length_cap_returns_empty() -> None:
+    """A pathological, punctuation-free qualifier run would push the composed
+    query past the tool-side cap -- guard it so the caller falls back to the
+    raw question instead of degrading to a "[]" search (review advisory)."""
+    from agent.intent import _QUERY_MAX_LEN, _floor_search_query
+
+    long_qualifier = "latest news on NVDA with " + "supply " * _QUERY_MAX_LEN
+    assert len(long_qualifier) > _QUERY_MAX_LEN
+    assert _floor_search_query(long_qualifier) == ""
+    # a normal qualifier still composes a ticker+topic query
+    assert _floor_search_query("latest news on NVDA with SK Hynix") == "NVDA sk hynix"
+
+
+def test_fallback_path_composes_floor_query(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The LLM-failure fallback path also composes the deterministic query --
+    the defect was symmetric across every no-LLM path (QNT-322 title)."""
+    _patch_llm_pipeline(monkeypatch, None, invoke_raises=RuntimeError("timeout"))
+    from agent.intent import classify_intent_with_source
+
+    _intent, source, news, _earn, search_query = classify_intent_with_source(
+        "what about the buyback?"
+    )
+    assert source == "fallback"
+    assert news is True
+    assert search_query == "buyback"

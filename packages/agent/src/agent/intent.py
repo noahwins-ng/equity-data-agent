@@ -490,17 +490,21 @@ _GENERIC_QUALIFIER_WORDS: frozenset[str] = frozenset(
 )
 
 
-def _has_specific_news_qualifier(question: str) -> bool:
-    """Return True for broad-news phrasing narrowed by an entity/topic.
+def _specific_news_qualifier_phrase(question: str) -> str | None:
+    """Return the entity/topic that narrows a broad-news ask, or None.
 
     Examples:
-    * "latest news on NVDA" -> False (overview)
-    * "latest news on NVDA with SK Hynix" -> True (RAG)
-    * "headlines on META about antitrust" -> True (RAG)
+    * "latest news on NVDA" -> None (overview)
+    * "latest news on NVDA with SK Hynix" -> "sk hynix" (RAG)
+    * "headlines on META about antitrust" -> "antitrust" (RAG)
+
+    QNT-322: the returned phrase is the topic half of the deterministic
+    ticker+topic query the heuristic/fallback paths compose (see
+    :func:`_floor_search_query`).
     """
     text = question.lower()
     if _matches_any(text, _NEWS_QUERY_TOKENS) is None:
-        return False
+        return None
     ticker_words = {ticker.lower() for ticker in TICKERS}
     for qualifier in _TARGETED_NEWS_QUALIFIERS:
         pattern = rf"(?<![A-Za-z0-9]){re.escape(qualifier)}\s+([^?.,;:!]+)"
@@ -512,8 +516,13 @@ def _has_specific_news_qualifier(question: str) -> bool:
                 if word not in ticker_words and word not in _GENERIC_QUALIFIER_WORDS
             ]
             if specific_words:
-                return True
-    return False
+                return " ".join(specific_words)
+    return None
+
+
+def _has_specific_news_qualifier(question: str) -> bool:
+    """Return True for broad-news phrasing narrowed by an entity/topic."""
+    return _specific_news_qualifier_phrase(question) is not None
 
 
 def _is_targeted_news(question: str) -> bool:
@@ -579,6 +588,37 @@ def _is_earnings_search(question: str) -> bool:
     the fundamental report.
     """
     return _matches_any(question.lower(), _EARNINGS_SEARCH_TOKENS) is not None
+
+
+def _floor_search_query(question: str) -> str:
+    """Deterministic ticker+topic retrieval query for the paths with no LLM
+    rewrite (``heuristic`` short-circuit and ``fallback``).
+
+    QNT-322 (G-11): the LLM classify path rewrites elliptical follow-ups into a
+    self-contained query (QNT-289); the heuristic/fallback paths used to return
+    ``""`` and hand Qdrant the raw (often elliptical) question instead. This
+    composes the same shape without an LLM call: the ticker the question names
+    (if any) plus the keyword floor that fired -- the matched news/earnings
+    token or the specific news-qualifier phrase. Returns ``""`` when no floor
+    matched, which is exactly when ``_is_targeted_news`` / ``_is_earnings_search``
+    are both False, so a caller can never emit a non-empty query while reporting
+    both search flags False -- OR when the composed string would exceed the
+    tool-side ``_QUERY_MAX_LEN`` cap (a pathological, punctuation-free qualifier
+    run), mirroring :func:`sanitize_search_query` so an over-long query falls
+    back to the raw question rather than degrading to "[]" hits.
+    """
+    text = question.lower()
+    topic = (
+        _matches_any(text, _TARGETED_NEWS_TOKENS)
+        or _matches_any(text, _EARNINGS_SEARCH_TOKENS)
+        or _specific_news_qualifier_phrase(question)
+    )
+    if topic is None:
+        return ""
+    tickers = extract_tickers(question)
+    ticker = tickers[0] if tickers else ""
+    query = f"{ticker} {topic}".strip()
+    return query if len(query) <= _QUERY_MAX_LEN else ""
 
 
 def route_search_corpora(needs_news_search: bool, needs_earnings_search: bool) -> tuple[str, ...]:
@@ -747,7 +787,14 @@ _NON_TICKER_ACRONYMS: frozenset[str] = frozenset(
 )
 
 
-def sanitize_search_query(search_query: str) -> str:
+def _token_in_context(token: str, *contexts: str) -> bool:
+    """True when ``token`` appears as a whole word in any context string
+    (case-insensitive). Word-boundary matched so "SK" doesn't hit "ask"."""
+    pattern = rf"(?<![A-Za-z0-9]){re.escape(token)}(?![A-Za-z0-9])"
+    return any(re.search(pattern, ctx, re.IGNORECASE) for ctx in contexts if ctx)
+
+
+def sanitize_search_query(search_query: str, *, question: str = "", history_text: str = "") -> str:
     """Guardrail the classifier's rewritten retrieval query before use.
 
     Returns the trimmed query when it passes both guards, or ``""`` when it
@@ -763,6 +810,11 @@ def sanitize_search_query(search_query: str) -> str:
       letters, excluding common finance acronyms) that is NOT in
       ``shared.tickers.TICKERS`` means the model named a company outside our
       coverage universe; reject rather than search on a ticker that isn't ours.
+      QNT-322 (G-10): a ticker-shaped token is only treated as hallucinated
+      when it appears in NEITHER the raw ``question`` nor the ``history_text``
+      rendered to the classifier -- a competitive entity named anywhere in the
+      thread (SK, TSMC, ASML), whether the user typed it or a prior assistant
+      turn surfaced it from real data, survives; an invented one still dies.
     """
     query = search_query.strip()
     if not query:
@@ -773,8 +825,11 @@ def sanitize_search_query(search_query: str) -> str:
         token = match.group(0)
         if token in _NON_TICKER_ACRONYMS:
             continue
-        if token not in _TICKERS_SET:
-            return ""
+        if token in _TICKERS_SET:
+            continue
+        if _token_in_context(token, question, history_text):
+            continue
+        return ""
     return query
 
 
@@ -1012,11 +1067,16 @@ def classify_intent_with_source(
 
     QNT-289: ``search_query`` is the classifier's self-contained retrieval
     query (ticker/entity + topic, pronouns/ellipses resolved from history),
-    guardrailed by :func:`sanitize_search_query` (length cap + hallucinated-
-    entity rejection). ``""`` on the ``heuristic``/``fallback`` paths (no LLM
-    judgment ran) or when the LLM's rewrite was empty/rejected -- callers fall
-    back to the raw question, which is today's behaviour, so this can only add
-    recall, never regress it.
+    guardrailed by :func:`sanitize_search_query` (length cap + context-aware
+    hallucinated-entity rejection). Empty when the LLM's rewrite was
+    empty/rejected -- callers fall back to the raw question, which is today's
+    behaviour, so this can only add recall, never regress it.
+
+    QNT-322: the ``heuristic`` and ``fallback`` paths (no LLM rewrite ran) no
+    longer return ``""`` blindly -- :func:`_floor_search_query` composes a
+    deterministic ticker+topic query from the keyword floor that fired, so a
+    targeted follow-up that short-circuits the LLM still hands Qdrant a clean
+    query instead of the raw ellipsis. Still ``""`` when no floor fired.
 
     QNT-181: ``config`` carries the LangGraph CallbackHandler so the
     LLM-fallback path's generation observation nests under the parent trace.
@@ -1028,29 +1088,35 @@ def classify_intent_with_source(
     # Keyword floor -- the fallback signal, also OR-ed under the LLM flag below.
     floor_news = _is_targeted_news(question)
     floor_earnings = _is_earnings_search(question)
+    # QNT-322 (G-11): deterministic ticker+topic query for the no-LLM paths.
+    # Non-empty iff a floor fired, so it never disagrees with the flags above.
+    floor_query = _floor_search_query(question)
 
     has_context = has_prior_turn or bool(history)
     heuristic = _heuristic_intent(question, has_prior_turn=has_context)
     if heuristic is not None:
-        logger.info("classify intent=%s via=heuristic question=%r", heuristic, question[:80])
-        return heuristic, "heuristic", floor_news, floor_earnings, ""
+        logger.info(
+            "classify intent=%s search_query=%r via=heuristic question=%r",
+            heuristic,
+            floor_query,
+            question[:80],
+        )
+        return heuristic, "heuristic", floor_news, floor_earnings, floor_query
 
     # QNT-220 (#7): the classifier is a small structured call -- tier it to the
     # fast/small alias rather than the 70b synthesis model.
     structured_llm = get_llm(temperature=0.0, model_alias=SMALL_NODE_ALIAS).with_structured_output(
         IntentDecision
     )
+    history_text = _render_history_for_classifier(history)
     try:
         response = structured_llm.invoke(
-            _CLASSIFY_PROMPT.format(
-                history=_render_history_for_classifier(history),
-                question=question.strip(),
-            ),
+            _CLASSIFY_PROMPT.format(history=history_text, question=question.strip()),
             config=config,
         )
     except Exception as exc:  # noqa: BLE001 — bias to thesis on any failure
         logger.warning("classify llm failed, defaulting to thesis: %s", exc)
-        return "thesis", "fallback", floor_news, floor_earnings, ""
+        return "thesis", "fallback", floor_news, floor_earnings, floor_query
 
     decision: IntentDecision | None = None
     if isinstance(response, IntentDecision):
@@ -1062,7 +1128,9 @@ def classify_intent_with_source(
     if decision is not None:
         needs_news_search = decision.needs_news_search or floor_news
         needs_earnings_search = decision.needs_earnings_search or floor_earnings
-        search_query = sanitize_search_query(decision.search_query)
+        search_query = sanitize_search_query(
+            decision.search_query, question=question, history_text=history_text
+        )
         logger.info(
             "classify intent=%s needs_news_search=%s needs_earnings_search=%s "
             "search_query=%r via=llm question=%r",
@@ -1074,7 +1142,7 @@ def classify_intent_with_source(
         )
         return decision.intent, "llm", needs_news_search, needs_earnings_search, search_query
     logger.warning("classify llm returned unexpected shape, defaulting to thesis")
-    return "thesis", "fallback", floor_news, floor_earnings, ""
+    return "thesis", "fallback", floor_news, floor_earnings, floor_query
 
 
 def classify_intent(
