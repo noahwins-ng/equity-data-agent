@@ -161,15 +161,24 @@ def classify_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) ->
     # (``ANALYTICAL_ANSWER_TYPES`` -- Thesis / Comparison / LeanComparison /
     # Focused / Exploration) so "which looks stronger?" after a comparison or
     # "what's the takeaway?" after an exploration follows up over the card the
-    # user is pointing at, not just hydrated reports. A ConversationalAnswer maps
-    # to None (chit-chat is never followup substrate). A narrative-only followup
-    # (answer=None) still preserves the earlier card across the chain (followup
-    # returns never cleared it). synthesize/narrate read ``prior_answer`` to
-    # reason over the earlier turn while they overwrite ``answer`` mid-run.
+    # user is pointing at, not just hydrated reports. QNT-349 follow-up: a prior
+    # ConversationalAnswer (what a non-analytical INTERLUDE -- a conversational or
+    # clarify turn -- leaves in ``answer``) CARRIES THE EARLIER CARD FORWARD rather
+    # than nulling it, so a thesis -> "hi" -> "tell me more" chain still follows up
+    # over the thesis. This makes the interlude fully state-transparent: R-1
+    # already preserves reports/reports_by_ticker across it via the turn-boundary
+    # reset, and prior_answer is the matching analytical-card channel. A
+    # narrative-only followup (answer=None) preserves it the same way. A
+    # QuickFactAnswer still maps to None -- a metric-ask followup's own compact card
+    # is not a full analysis to carry (pre-existing QNT-307 non-thesis behaviour).
+    # ``state.get("prior_answer")`` is None on a cold thread or when no earlier card
+    # exists, so a bare greeting with nothing behind it still yields None.
+    # synthesize/narrate read ``prior_answer`` to reason over the earlier turn while
+    # they overwrite ``answer`` mid-run.
     hydrated_answer = state.get("answer")
     if isinstance(hydrated_answer, graph.ANALYTICAL_ANSWER_TYPES):
         prior_answer = hydrated_answer
-    elif hydrated_answer is None:
+    elif hydrated_answer is None or isinstance(hydrated_answer, graph.ConversationalAnswer):
         prior_answer = state.get("prior_answer")
     else:
         prior_answer = None
