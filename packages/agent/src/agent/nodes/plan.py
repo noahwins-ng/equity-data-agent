@@ -73,7 +73,12 @@ def plan_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> dic
                 graph._MAX_COMPARISON_TICKERS,
             )
         else:
-            comparison_tickers = graph._resolve_comparison_tickers(ticker, question)
+            # QNT-325 (G-12): consume the pair classify resolved from the gate's
+            # pre-append history, rather than re-deriving history from
+            # ``state["messages"]`` -- which classify already appended-and-retrimmed,
+            # so a plan-side re-resolve could drop the oldest turn at the
+            # HISTORY_TURN_LIMIT boundary and disagree with the gate's defer.
+            comparison_tickers = list(state.get("comparison_tickers") or [])
             if len(comparison_tickers) < graph._MIN_COMPARISON_TICKERS:
                 logger.info(
                     "plan %s: comparison needs 2 tickers, found %s — synthesize will redirect",
