@@ -208,6 +208,24 @@ def classify_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) ->
         }
     )
     route = _classify_route(intent, ambiguity_kind, followup_fires)
+    # QNT-349 follow-up (v3 R-3): interludes perform no analysis, so they must not
+    # move the analysis anchor QNT-245's followup inheritance depends on
+    # (``_resolve_single_ticker_context`` reads ``analysis_ticker`` as the prior).
+    # Threads are ticker-agnostic and survive page navigation (QNT-245, one thread
+    # per ChatPanel mount), so a conversational/clarify turn sent from a DIFFERENT
+    # ticker page used to rebase the anchor to that page's ticker -- a later
+    # followup then ran labeled with the page ticker over the earlier ticker's
+    # preserved substrate. This is the fourth transparency channel after
+    # reports / reports_by_ticker / prior_answer (R-1/R-2/#504). ``ticker`` still
+    # carries ``effective_ticker`` -- the interlude turn itself answers in page
+    # context, and the request supplies ``ticker`` fresh each turn, so persisting
+    # it is harmless. Followup needs no arm here: its ``effective_ticker`` already
+    # inherited the prior anchor above, so writing it back is a no-op. A cold
+    # thread (no hydrated anchor) falls back to ``effective_ticker`` as before.
+    is_interlude = route == "clarify" or intent == "conversational"
+    analysis_ticker = (
+        (state.get("analysis_ticker") or effective_ticker) if is_interlude else effective_ticker
+    )
     # QNT-323 (G-4): classify owns the whole turn boundary. ``_turn_boundary_reset``
     # clears every per-turn scratch key (plan / plan_rationale / errors /
     # comparison_tickers / retrieved_sources / confidence / grounding_* /
@@ -222,7 +240,7 @@ def classify_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) ->
     return {
         **graph._turn_boundary_reset(intent, route),
         "ticker": effective_ticker,
-        "analysis_ticker": effective_ticker,
+        "analysis_ticker": analysis_ticker,
         "prior_answer": prior_answer,
         "intent": intent,
         # QNT-325 (G-12): the comparison pair resolved above, from the gate's

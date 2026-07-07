@@ -506,6 +506,81 @@ def test_clarify_interlude_then_followup_reaches_prior_reports(
     assert isinstance(third.get("prior_answer"), Thesis)
 
 
+# ─── QNT-349 R-3: interludes must not rebase the analysis anchor ─────────────────
+
+
+def test_interlude_does_not_rebase_analysis_ticker_across_page_switch(
+    stub_llm: _StubLLM,  # noqa: ARG001
+    saver: Any,
+) -> None:
+    """R-3: threads are ticker-agnostic and survive page navigation (QNT-245), so
+    an interlude sent from a DIFFERENT ticker page carries that page's ticker in
+    the request. The interlude performs no analysis, so it must not move
+    ``analysis_ticker`` -- otherwise the next followup inherits the PAGE ticker
+    and runs labeled AAPL over NVDA's preserved substrate."""
+    tools = _tools()
+    graph = build_graph(tools, checkpointer=saver)
+    config: RunnableConfig = {"configurable": {"thread_id": "r3:page-switch:conv"}}
+
+    first = graph.invoke({"ticker": "NVDA", "question": "give me an NVDA thesis"}, config=config)
+    assert first["intent"] == "thesis"
+    assert first["analysis_ticker"] == "NVDA"
+    assert first["reports"]
+
+    # Turn 2: user navigated to /ticker/AAPL; the panel sends ticker=AAPL with a
+    # bare greeting. The interlude answers in page context (ticker=AAPL) but must
+    # NOT rebase the analysis anchor.
+    second = graph.invoke({"ticker": "AAPL", "question": "hi"}, config=config)
+    assert second["intent"] == "conversational"
+    assert second["analysis_ticker"] == "NVDA"
+
+    for t in tools.values():
+        t.reset_mock()
+
+    # Turn 3: still on the AAPL page, a bare followup. It inherits the ORIGINAL
+    # anchor and runs as NVDA over NVDA's preserved reports -- not as AAPL.
+    third = graph.invoke({"ticker": "AAPL", "question": "tell me more"}, config=config)
+    assert third["intent"] == "followup"
+    assert third["ticker"] == "NVDA"
+    assert third["analysis_ticker"] == "NVDA"
+    assert _tool_calls(tools) == 0
+    assert third["reports"] == first["reports"]
+    assert third["answer"] is None  # not the no-context redirect
+    assert isinstance(third.get("prior_answer"), Thesis)
+
+
+def test_clarify_interlude_does_not_rebase_analysis_ticker_across_page_switch(
+    monkeypatch: pytest.MonkeyPatch,
+    saver: Any,
+) -> None:
+    """R-3, clarify variant: the clarify route is the other interlude. A bare
+    compare gesture sent from the AAPL page (one resolvable ticker on the thread)
+    clarifies -- and must leave the NVDA anchor untouched for the next followup."""
+    stub = _ClarifyInterludeStubLLM()
+    monkeypatch.setattr(graph_module, "get_llm", lambda *a, **kw: stub)
+    monkeypatch.setattr("agent.intent.get_llm", lambda *a, **kw: stub)
+
+    tools = _tools()
+    graph = build_graph(tools, checkpointer=saver)
+    config: RunnableConfig = {"configurable": {"thread_id": "r3:page-switch:clarify"}}
+
+    first = graph.invoke({"ticker": "NVDA", "question": "give me an NVDA thesis"}, config=config)
+    assert first["intent"] == "thesis"
+    assert first["analysis_ticker"] == "NVDA"
+
+    # Turn 2: from the AAPL page, a bare gesture that routes to clarify.
+    second = graph.invoke({"ticker": "AAPL", "question": "compare them"}, config=config)
+    assert second["route"] == "clarify"
+    assert second["analysis_ticker"] == "NVDA"
+
+    # Turn 3: the followup inherits the original anchor, not the page ticker.
+    third = graph.invoke({"ticker": "AAPL", "question": "tell me more"}, config=config)
+    assert third["intent"] == "followup"
+    assert third["ticker"] == "NVDA"
+    assert third["analysis_ticker"] == "NVDA"
+    assert third["reports"] == first["reports"]
+
+
 # ─── QNT-349 R-2: comparison -> followup grounds against the full bundle ─────────
 
 
