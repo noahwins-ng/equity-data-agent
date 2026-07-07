@@ -23,13 +23,17 @@ from unittest.mock import MagicMock
 
 import pytest
 from agent import graph as graph_module
+from agent.comparison import ComparisonAnswer
 from agent.graph import SCRATCH_RESET_KEYS, build_graph
+from agent.intent import IntentDecision
 from agent.nodes import clarify, gather, narrate, plan, synthesize
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite import SqliteSaver
+
+from ._thesis_factory import make_comparison_section
 
 # ─── AC2: meta-test — no node other than classify resets a foreign scratch key ──
 
@@ -240,6 +244,10 @@ def saver() -> Any:
     return SqliteSaver(conn)
 
 
+def _tool_calls(tools: dict[str, MagicMock]) -> int:
+    return sum(t.call_count for t in tools.values())
+
+
 def _tools() -> dict[str, MagicMock]:
     return {
         "technical": MagicMock(return_value="## technical\nRSI 78\n"),
@@ -337,3 +345,213 @@ def test_single_writer_scratch_keys_cleared_on_warm_thread(
     assert second["intent"] == "quick_fact"
     assert second.get("plan_rationale") is None
     assert second.get("supervisor_iterations") == 0
+
+
+# ─── QNT-349 R-1: an interlude turn must not wipe the thread substrate ───────────
+
+
+@pytest.mark.parametrize(
+    "followup_question,expects_card",
+    [
+        ("tell me more", False),  # narrative-only followup -> answer None, narrate speaks
+        ("elaborate on the RSI", True),  # metric-ask followup -> QuickFactAnswer card
+    ],
+    ids=["narrative-only", "metric-ask"],
+)
+def test_conversational_interlude_then_followup_reaches_prior_reports(
+    stub_llm: _StubLLM,  # noqa: ARG001
+    saver: Any,
+    followup_question: str,
+    expects_card: bool,
+) -> None:
+    """AC2 (R-1): thesis -> conversational ("hi") -> followup. The conversational
+    interlude routes to synthesize and skips plan/gather, so pre-QNT-349 its
+    turn-boundary reset wiped ``reports`` and nothing repopulated them -- the
+    followup then hit synthesize's no-context redirect ("I don't have a prior
+    turn..."). Now the conversational route preserves the substrate, so the
+    followup reaches the prior reports instead of the redirect.
+
+    Scope note: the stubbed narrate stream / QuickFactAnswer return canned output
+    regardless of prompt, so this fixture pins the STRUCTURAL claims (no redirect,
+    ``reports`` preserved verbatim, zero re-fetch) -- not answer content grounding.
+    The prior analytical CARD (``prior_answer``) is separately nulled across a
+    ConversationalAnswer interlude by pre-existing QNT-307 semantics (out of scope
+    here per the ticket); raw report facts still survive, which is what R-1 fixes."""
+    tools = _tools()
+    graph = build_graph(tools, checkpointer=saver)
+    config: RunnableConfig = {"configurable": {"thread_id": f"interlude:conv:{followup_question}"}}
+
+    first = graph.invoke({"ticker": "NVDA", "question": "give me an NVDA thesis"}, config=config)
+    assert first["intent"] == "thesis"
+    assert first["reports"]
+
+    # Turn 2: a bare greeting -- a non-analytical interlude (route=synthesize).
+    second = graph.invoke({"ticker": "NVDA", "question": "hi"}, config=config)
+    assert second["intent"] == "conversational"
+    # R-1: the interlude preserved the thread substrate rather than wiping it.
+    assert second["reports"] == first["reports"]
+
+    for t in tools.values():
+        t.reset_mock()
+
+    # Turn 3: a followup that must land on the prior reports, NOT the redirect.
+    third = graph.invoke({"ticker": "NVDA", "question": followup_question}, config=config)
+    assert third["intent"] == "followup"
+    assert _tool_calls(tools) == 0  # reused hydrated reports, no re-fetch
+    assert third["reports"] == first["reports"]
+    if expects_card:
+        # metric-ask -> a real QuickFactAnswer card (the redirect would be a
+        # ConversationalAnswer instead).
+        assert isinstance(third["answer"], QuickFactAnswer)
+    else:
+        # narrative-only -> answer cleared, narrate owns the spoken reply. The
+        # no-context redirect would leave a ConversationalAnswer here, so
+        # answer=None decisively rules it out.
+        assert third["answer"] is None
+        assert third.get("narrative_substrate") == "prior_answer"
+        assert third.get("narrative")  # the narrator actually spoke
+
+
+class _ClarifyInterludeStubLLM(_StubLLM):
+    """``_StubLLM`` plus an IntentDecision arm that labels the turn-2 gesture
+    ("compare them") a comparison, so the ambiguity gate -- one resolvable ticker
+    on a warm thread -- routes it to clarify. Turns 1/3 resolve via the heuristic
+    (thesis / followup) and never reach this arm."""
+
+    def with_structured_output(self, schema: type, **_kwargs: object) -> MagicMock:
+        if schema is IntentDecision:
+            m = MagicMock()
+            m.invoke = MagicMock(return_value=IntentDecision(intent="comparison"))
+            m.with_retry.return_value = m
+            return m
+        return super().with_structured_output(schema, **_kwargs)
+
+
+def test_clarify_interlude_then_followup_reaches_prior_reports(
+    monkeypatch: pytest.MonkeyPatch,
+    saver: Any,
+) -> None:
+    """AC2 (R-1): thesis -> clarify ("compare them", one ticker on the thread) ->
+    followup. The clarify route also skips plan/gather, so pre-QNT-349 it wiped
+    ``reports`` and the followup degraded to the no-context redirect. The clarify
+    route now preserves the substrate like a followup does."""
+    stub = _ClarifyInterludeStubLLM()
+    monkeypatch.setattr(graph_module, "get_llm", lambda *a, **kw: stub)
+    monkeypatch.setattr("agent.intent.get_llm", lambda *a, **kw: stub)
+
+    tools = _tools()
+    graph = build_graph(tools, checkpointer=saver)
+    config: RunnableConfig = {"configurable": {"thread_id": "interlude:clarify"}}
+
+    first = graph.invoke({"ticker": "NVDA", "question": "give me an NVDA thesis"}, config=config)
+    assert first["intent"] == "thesis"
+    assert first["reports"]
+
+    # Turn 2: a bare compare gesture with only NVDA on the thread -> clarify.
+    second = graph.invoke({"ticker": "NVDA", "question": "compare them"}, config=config)
+    assert second["intent"] == "comparison"
+    assert second["route"] == "clarify"
+    assert second.get("ambiguity_kind") == "needs_second_ticker"
+    # R-1: the clarify interlude preserved the substrate.
+    assert second["reports"] == first["reports"]
+
+    for t in tools.values():
+        t.reset_mock()
+
+    # Turn 3: the followup reaches the prior reports, not the redirect.
+    third = graph.invoke({"ticker": "NVDA", "question": "tell me more"}, config=config)
+    assert third["intent"] == "followup"
+    assert _tool_calls(tools) == 0
+    assert third["reports"] == first["reports"]
+    assert third["answer"] is None  # not the no-context redirect ConversationalAnswer
+    assert third.get("narrative")
+
+
+# ─── QNT-349 R-2: comparison -> followup grounds against the full bundle ─────────
+
+
+class _ComparisonFollowupStubLLM:
+    """Turn 1 returns a real ComparisonAnswer (NVDA vs AAPL) so it is snapshotted
+    as ``prior_answer`` and narrated over on turn 2. The narrate stream re-quotes
+    a second-ticker (AAPL) figure that lives only in AAPL's report bundle."""
+
+    def __init__(self) -> None:
+        self.invoke = MagicMock(return_value=AIMessage(content="technical, fundamental"))
+        card = ComparisonAnswer(
+            sections=[
+                make_comparison_section("NVDA", "Premium", "Uptrend"),
+                make_comparison_section("AAPL", "Discounted", "Sideways"),
+            ],
+            # Card quotes each ticker's RSI; the followup narrative below quotes
+            # AAPL's price (180), which lives ONLY in AAPL's technical report.
+            differences="NVDA RSI 71 runs hotter than AAPL RSI 44 (source: technical).",
+        )
+
+        def make_structured(schema: type) -> MagicMock:
+            m = MagicMock()
+            m.invoke = MagicMock(return_value=card if schema is ComparisonAnswer else None)
+            m.with_retry.return_value = m
+            return m
+
+        self._make_structured = make_structured
+
+    def with_structured_output(self, schema: type, **_kwargs: object) -> MagicMock:
+        return self._make_structured(schema)
+
+    def stream(self, *_args: Any, **_kwargs: Any) -> Any:
+        return iter([AIMessage(content="AAPL last changed hands near 180.")])
+
+
+def _ticker_reports_tools() -> dict[str, MagicMock]:
+    """Per-ticker report bodies: AAPL's technical report carries a figure (180)
+    that NVDA's does not, so grounding the followup against the primary bundle
+    alone would false-flag it."""
+
+    def technical(t: str) -> str:
+        rsi = "71" if t == "NVDA" else "44"
+        last = "120" if t == "NVDA" else "180"
+        return f"## technical\n{t} RSI {rsi}, last {last}\n"
+
+    return {
+        "technical": MagicMock(side_effect=technical),
+        "fundamental": MagicMock(side_effect=lambda t: f"## fundamental\n{t} P/E 50\n"),
+        "company": MagicMock(side_effect=lambda t: f"## company\n{t} business\n"),
+        "news": MagicMock(side_effect=lambda t: f"## news\n{t} headline\n"),
+    }
+
+
+def test_comparison_followup_grounds_against_full_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+    saver: Any,
+) -> None:
+    """AC3 (R-2): comparison -> followup. The followup narrates over the prior
+    ComparisonAnswer (both tickers' numbers). Pre-QNT-349, ``reports_by_ticker``
+    was always reset at the boundary, so the grounding check fell back to the
+    PRIMARY ticker's reports and false-flagged the second ticker's figures --
+    dropping grounding_rate + polluting grounding_unsupported. Preserving
+    ``reports_by_ticker`` on followup grounds against the full bundle it narrates
+    over, so a faithful second-ticker figure is supported."""
+    stub = _ComparisonFollowupStubLLM()
+    monkeypatch.setattr(graph_module, "get_llm", lambda *a, **kw: stub)
+    monkeypatch.setattr("agent.intent.get_llm", lambda *a, **kw: stub)
+
+    tools = _ticker_reports_tools()
+    graph = build_graph(tools, checkpointer=saver)
+    config: RunnableConfig = {"configurable": {"thread_id": "cmp-followup:grounding"}}
+
+    first = graph.invoke(
+        {"ticker": "NVDA", "question": "Compare NVDA and AAPL on technicals"}, config=config
+    )
+    assert first["intent"] == "comparison"
+    assert set(first["reports_by_ticker"]) == {"NVDA", "AAPL"}
+    assert isinstance(first["answer"], ComparisonAnswer)
+
+    # Turn 2: a narrative-only followup whose spoken answer re-quotes AAPL's 180
+    # (present in AAPL's preserved report bundle, absent from NVDA's).
+    second = graph.invoke({"ticker": "NVDA", "question": "tell me more"}, config=config)
+    assert second["intent"] == "followup"
+    # R-2: the per-ticker bundle survived the boundary...
+    assert set(second["reports_by_ticker"]) == {"NVDA", "AAPL"}
+    # ...so the second ticker's figure grounds cleanly rather than false-flagging.
+    assert second["grounding_rate"] == 1.0
+    assert "180" not in second.get("grounding_unsupported", [])

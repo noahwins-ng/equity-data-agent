@@ -188,15 +188,17 @@ def classify_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) ->
     route = _classify_route(intent, ambiguity_kind, followup_fires)
     # QNT-323 (G-4): classify owns the whole turn boundary. ``_turn_boundary_reset``
     # clears every per-turn scratch key (plan / plan_rationale / errors /
-    # reports_by_ticker / comparison_tickers / retrieved_sources / confidence /
-    # grounding_* / supervisor_iterations / comparison_rag_demand, plus reports for
-    # non-followup intents) so a prior turn's value can't leak across the
-    # checkpointer into this one. Downstream
+    # comparison_tickers / retrieved_sources / confidence / grounding_* /
+    # supervisor_iterations / comparison_rag_demand) so a prior turn's value can't
+    # leak across the checkpointer into this one. QNT-349 (R-1/R-2): the durable
+    # substrate (reports + reports_by_ticker) is cleared only on a fresh analytical
+    # turn -- a followup or a non-analytical interlude (clarify / conversational
+    # short-circuit) preserves it, so it takes the resolved ``route`` too. Downstream
     # nodes no longer carry defensive resets -- they return only what they
     # produce, overwriting these within the same turn. The keys below are the ones
     # classify itself produces; they never overlap the scratch set.
     return {
-        **graph._turn_boundary_reset(intent),
+        **graph._turn_boundary_reset(intent, route),
         "ticker": effective_ticker,
         "analysis_ticker": effective_ticker,
         "prior_answer": prior_answer,

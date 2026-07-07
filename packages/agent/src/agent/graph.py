@@ -427,7 +427,6 @@ _SCRATCH_RESET_BASE: dict[str, object] = {
     "plan": [],
     "plan_rationale": None,
     "errors": {},
-    "reports_by_ticker": {},
     "comparison_tickers": [],
     "retrieved_sources": [],
     "confidence": 0.0,
@@ -441,29 +440,59 @@ _SCRATCH_RESET_BASE: dict[str, object] = {
     "folded_report_picks": [],
     "folded_plan_rationale": None,
 }
-# ``reports`` is the one intent-CONDITIONAL scratch member: a followup reuses the
-# prior turn's checkpointer-hydrated reports verbatim (the whole point of
-# QNT-209), so it is DURABLE on followup and SCRATCH on every other intent.
+# QNT-349 (R-1/R-2): ``reports`` and ``reports_by_ticker`` are the intent/route-
+# CONDITIONAL scratch members -- the durable thread SUBSTRATE. A followup reuses
+# the prior turn's checkpointer-hydrated bundle verbatim (the whole point of
+# QNT-209/QNT-324), and a non-analytical INTERLUDE (a clarify or conversational-
+# short-circuit turn) skips plan/gather, so nothing would repopulate a wiped
+# bundle -- a later followup would then find the thread empty and wrongly redirect
+# (the R-1 regression). They are therefore DURABLE on a followup/interlude and
+# SCRATCH on every fresh analytical turn. (``reports_by_ticker`` was previously an
+# always-reset base member, which false-flagged the second ticker's numbers on a
+# comparison->followup once QNT-324 made the ComparisonAnswer the narrate
+# substrate -- R-2.)
+_SCRATCH_RESET_SUBSTRATE: dict[str, object] = {"reports": {}, "reports_by_ticker": {}}
 # DURABLE (never reset here): ``messages`` (QNT-216 transcript, append-only),
-# ``prior_answer`` (QNT-307, snapshotted from the prior turn's ``answer``),
-# ``reports`` on followup, and the turn-scoped keys classify itself writes
-# (ticker/intent/route/needs_*_search/...). The full scratch key set, for the
-# meta-test:
-SCRATCH_RESET_KEYS: frozenset[str] = frozenset(_SCRATCH_RESET_BASE) | {"reports"}
+# ``prior_answer`` (QNT-307, snapshotted from the prior turn's ``answer``), the
+# substrate on an interlude/followup, and the turn-scoped keys classify itself
+# writes (ticker/intent/route/needs_*_search/...). The full scratch key set, for
+# the meta-test:
+SCRATCH_RESET_KEYS: frozenset[str] = frozenset(_SCRATCH_RESET_BASE) | frozenset(
+    _SCRATCH_RESET_SUBSTRATE
+)
 
 
-def _turn_boundary_reset(intent: str) -> dict[str, object]:
-    """QNT-323 (G-4): the per-turn scratch reset classify_node applies at the
-    turn boundary, given the resolved intent.
+def _preserves_thread_substrate(intent: str, route: str) -> bool:
+    """QNT-349 (R-1/R-2): does this turn preserve the durable thread substrate
+    (``reports`` + ``reports_by_ticker``) across the boundary reset?
+
+    True for a followup (reuses the hydrated bundle verbatim -- QNT-209/QNT-324)
+    and for a non-analytical INTERLUDE: a clarify turn (route "clarify") or a
+    conversational short-circuit (route "synthesize") skips plan/gather, so
+    nothing would repopulate a wiped bundle and a later followup would find the
+    thread empty and wrongly emit the no-context redirect (the R-1 regression).
+    A fresh analytical turn (thesis / quick_fact / comparison / focused /
+    exploration -> route "plan" or "explore_supervisor") returns False so its
+    stale bundle is cleared. A followup that fires a targeted RAG search routes
+    to "plan" rather than short-circuiting, so the ``intent == "followup"`` arm
+    (not the route arm) carries it.
+    """
+    return intent == "followup" or route in {"clarify", "synthesize"}
+
+
+def _turn_boundary_reset(intent: str, route: str) -> dict[str, object]:
+    """QNT-323 (G-4) / QNT-349 (R-1/R-2): the per-turn scratch reset classify_node
+    applies at the turn boundary, given the resolved intent and route.
 
     Returns a fresh dict (never the shared literal) so a caller merging it can't
-    mutate the module-level default. ``reports`` is included for every intent
-    EXCEPT followup -- followup reuses the hydrated reports (QNT-209), so clearing
-    them would defeat the path. See ``_SCRATCH_RESET_BASE`` for the split.
+    mutate the module-level default. The durable substrate (``reports`` +
+    ``reports_by_ticker``) is cleared only on a fresh analytical turn; an
+    interlude or followup preserves it (see ``_preserves_thread_substrate`` and
+    ``_SCRATCH_RESET_SUBSTRATE``).
     """
     reset = dict(_SCRATCH_RESET_BASE)
-    if intent != "followup":
-        reset["reports"] = {}
+    if not _preserves_thread_substrate(intent, route):
+        reset.update(_SCRATCH_RESET_SUBSTRATE)
     return reset
 
 
