@@ -72,25 +72,53 @@ def _find_func(module: Any, name: str) -> ast.AST:
     raise AssertionError(f"{name} not found in {module.__name__}")
 
 
-def _scratch_writes(func_node: ast.AST) -> tuple[set[str], set[str]]:
-    """Return (populated, reset_only-candidates) scratch keys for a node.
+# QNT-323 follow-up: helpers unpacked (``**helper(...)``) into a node return dict
+# whose keys the AST walk cannot resolve statically. Each MUST be confirmed to
+# only POPULATE scratch keys, never reset one, before being listed here --
+# ``test_no_unreviewed_scratch_helper_unpacks`` fails loudly on any new unpack so
+# the blind spot can't hide a reset. Current members:
+#   _quick_fact_grounding -> {grounding_rate, grounding_unsupported, confidence},
+#     all computed from the answer markdown (populate, never reset).
+#   project_answer -> {"answer": ...} -- ``answer`` is not a scratch key at all.
+_REVIEWED_SCRATCH_UNPACK_HELPERS: frozenset[str] = frozenset(
+    {"_quick_fact_grounding", "project_answer"}
+)
+
+
+def _unpack_name(node: ast.AST) -> str:
+    """A readable name for a ``**unpack`` source (the called helper, or the name)."""
+    target = node.func if isinstance(node, ast.Call) else node
+    if isinstance(target, ast.Attribute):
+        return target.attr
+    if isinstance(target, ast.Name):
+        return target.id
+    return ast.dump(target)
+
+
+def _scratch_writes(func_node: ast.AST) -> tuple[set[str], set[str], set[str]]:
+    """Return (populated, reset-only-candidates, unpack-helpers) for a node.
 
     Walks every ``return {...}`` dict literal in the function (including nested
-    helpers). ``**unpack`` entries carry a ``None`` key and are skipped -- their
-    contents can't be resolved statically.
+    helpers). A ``**unpack`` entry carries a ``None`` key: its keys can't be
+    resolved statically, so instead of silently skipping it (the pre-follow-up
+    blind spot) we record the unpacked helper's name for the allowlist guard.
     """
     populated: set[str] = set()
     reset: set[str] = set()
+    unpacks: set[str] = set()
     for sub in ast.walk(func_node):
         if not (isinstance(sub, ast.Return) and isinstance(sub.value, ast.Dict)):
             continue
         for key, value in zip(sub.value.keys, sub.value.values):
+            if key is None:  # ``**unpack`` -- keys are opaque to the walk
+                unpacks.add(_unpack_name(value))
+                continue
             if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
                 continue
             if key.value not in SCRATCH_RESET_KEYS:
                 continue
             (reset if _is_reset_value(value) else populated).add(key.value)
-    return populated, reset
+    return populated, reset, unpacks
 
 
 @pytest.mark.parametrize("module,walked,name", _NODE_FUNCS, ids=[n for _, _, n in _NODE_FUNCS])
@@ -100,12 +128,30 @@ def test_no_node_resets_a_scratch_key_it_does_not_populate(
     """AC2: every scratch key a downstream node returns must be one it also
     populates with a real value somewhere -- a key it ONLY ever returns empty is
     a defensive reset that belongs to classify_node's turn boundary (QNT-323)."""
-    populated, reset = _scratch_writes(_find_func(module, walked))
+    populated, reset, _ = _scratch_writes(_find_func(module, walked))
     offenders = reset - populated
     assert not offenders, (
         f"{module.__name__}.{name} returns scratch key(s) {sorted(offenders)} only as a "
         f"reset and never populates them -- classify_node owns the turn-boundary reset "
         f"(QNT-323 G-4). Drop the defensive reset from this node's return dict."
+    )
+
+
+def test_no_unreviewed_scratch_helper_unpacks() -> None:
+    """QNT-323 follow-up: close the meta-test's one blind spot. A node return can
+    hide keys behind ``**helper(...)`` that the AST walk can't resolve; a helper
+    that returned a scratch key as a reset would slip past
+    ``test_no_node_resets_...``. Assert every unpacked helper across the walked
+    nodes is on the reviewed allowlist -- a new one fails here until someone
+    confirms it doesn't reset a scratch key and adds it (or inlines the keys)."""
+    seen: set[str] = set()
+    for module, walked, _name in _NODE_FUNCS:
+        seen |= _scratch_writes(_find_func(module, walked))[2]
+    unreviewed = seen - _REVIEWED_SCRATCH_UNPACK_HELPERS
+    assert not unreviewed, (
+        f"node return dicts unpack unreviewed helper(s) {sorted(unreviewed)} -- the meta-test "
+        f"cannot see their keys. Confirm each only POPULATES scratch keys (never resets one), "
+        f"then add it to _REVIEWED_SCRATCH_UNPACK_HELPERS, or inline the keys into the return."
     )
 
 
