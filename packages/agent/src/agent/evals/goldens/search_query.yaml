@@ -143,6 +143,26 @@ fixtures:
     ticker_terms: [intc, intel]
     topic_terms: [ceo]
 
+  # QNT-322 (G-10): uppercase-entity ellipsis. The competitive entity (SK
+  # Hynix) is ticker-shaped (SK = 2 uppercase) and lives ONLY in history; the
+  # question is elliptical. The rewrite is the sole string that names it, so
+  # the old guard -- which rejected any ticker-shaped token outside TICKERS --
+  # would kill it and fall back to the topic-less raw ellipsis. The sharpened
+  # guard keeps it because the entity appears in the classifier's history.
+  - id: nvda-sk-hynix-ellipsis
+    ticker: NVDA
+    kind: elliptical
+    history:
+      - role: user
+        content: "How is NVDA positioned in HBM memory supply?"
+      - role: assistant
+        content: "NVDA sources HBM3E mainly from SK Hynix, with Micron ramping as a second supplier."
+    question: "any update on that partnership?"
+    expected_needs_search: true
+    corpus: news
+    ticker_terms: [nvda, nvidia]
+    topic_terms: [sk hynix, hynix, partnership]
+
   # --- cold_targeted: no history; the question already names its own
   # ticker/topic. The rewrite must not degrade a question that's already
   # self-contained. ---
