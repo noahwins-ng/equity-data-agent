@@ -110,29 +110,48 @@ def plan_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> dic
         plan = graph._parse_plan(str(content), available, intent)
         plan_rationale = None
     elif intent == "thesis":
-        prompt = graph._build_thesis_plan_prompt(ticker, question, available)
-        # QNT-220 (#7): thesis-plan selection is a small structured call -> small alias.
-        # QNT-294 (AC5): shares the one _structured_call ladder; the planner is
-        # the non-linked, small-alias caller (no registered Langfuse prompt).
-        thesis_plan = graph._structured_call(
-            graph.ThesisPlan,
-            prompt,
-            config,
-            f"plan {ticker}",
-            llm=graph.get_llm(temperature=0.0, model_alias=graph.SMALL_NODE_ALIAS),
-            linked=False,
+        # QNT-327 (v3 G-6, spike): consume the plan pick folded out of the classify
+        # call when it forms a valid >=2-tool plan -- this drops the thesis path
+        # from four sequential LLM calls to three by skipping the dedicated
+        # ThesisPlan call below. classify only forwards picks on the llm path for a
+        # thesis intent; a heuristic/fallback classify (or a degenerate pick) leaves
+        # ``folded`` None and the dedicated planner runs as before, so this can only
+        # remove a round trip, never change the answer shape on the fallback path.
+        folded = graph._tools_from_folded_picks(
+            list(state.get("folded_report_picks") or []), available
         )
-        if thesis_plan is None:
-            logger.warning(
-                "plan %s: thesis plan unavailable for question %r; falling back to all tools",
+        if folded is not None:
+            plan = folded
+            plan_rationale = (state.get("folded_plan_rationale") or "").strip() or None
+            logger.info(
+                "plan %s: consumed folded classify picks %s (skipped ThesisPlan call)",
                 ticker,
-                question,
+                plan,
             )
-            plan = list(available)
-            plan_rationale = None
         else:
-            plan = graph._tools_from_thesis_plan(thesis_plan, available)
-            plan_rationale = thesis_plan.rationale.strip() or None
+            prompt = graph._build_thesis_plan_prompt(ticker, question, available)
+            # QNT-220 (#7): thesis-plan selection is a small structured call -> small alias.
+            # QNT-294 (AC5): shares the one _structured_call ladder; the planner is
+            # the non-linked, small-alias caller (no registered Langfuse prompt).
+            thesis_plan = graph._structured_call(
+                graph.ThesisPlan,
+                prompt,
+                config,
+                f"plan {ticker}",
+                llm=graph.get_llm(temperature=0.0, model_alias=graph.SMALL_NODE_ALIAS),
+                linked=False,
+            )
+            if thesis_plan is None:
+                logger.warning(
+                    "plan %s: thesis plan unavailable for question %r; falling back to all tools",
+                    ticker,
+                    question,
+                )
+                plan = list(available)
+                plan_rationale = None
+            else:
+                plan = graph._tools_from_thesis_plan(thesis_plan, available)
+                plan_rationale = thesis_plan.rationale.strip() or None
     else:
         plan = list(available)
         plan_rationale = None

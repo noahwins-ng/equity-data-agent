@@ -502,7 +502,7 @@ def test_with_source_heuristic_path() -> None:
     """A heuristic-matched question returns source='heuristic'."""
     from agent.intent import classify_intent_with_source
 
-    intent, source, _flag, _earn, _query = classify_intent_with_source("What's the RSI?")
+    intent, source, _flag, _earn, _query, *_ = classify_intent_with_source("What's the RSI?")
     assert intent == "quick_fact"
     assert source == "heuristic"
 
@@ -512,7 +512,7 @@ def test_with_source_llm_path(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_llm_pipeline(monkeypatch, IntentDecision(intent="thesis"))
     from agent.intent import classify_intent_with_source
 
-    intent, source, _flag, _earn, _query = classify_intent_with_source("Tell me about INTC")
+    intent, source, _flag, _earn, _query, *_ = classify_intent_with_source("Tell me about INTC")
     assert intent == "thesis"
     assert source == "llm"
 
@@ -522,7 +522,7 @@ def test_with_source_fallback_path_on_llm_exception(monkeypatch: pytest.MonkeyPa
     _patch_llm_pipeline(monkeypatch, None, invoke_raises=RuntimeError("timeout"))
     from agent.intent import classify_intent_with_source
 
-    intent, source, _flag, _earn, _query = classify_intent_with_source("Tell me about INTC")
+    intent, source, _flag, _earn, _query, *_ = classify_intent_with_source("Tell me about INTC")
     assert intent == "thesis"
     assert source == "fallback"
 
@@ -532,7 +532,7 @@ def test_with_source_fallback_path_on_unexpected_shape(monkeypatch: pytest.Monke
     _patch_llm_pipeline(monkeypatch, {"parsed": None, "parsing_error": "x"})
     from agent.intent import classify_intent_with_source
 
-    intent, source, _flag, _earn, _query = classify_intent_with_source("Tell me about INTC")
+    intent, source, _flag, _earn, _query, *_ = classify_intent_with_source("Tell me about INTC")
     assert intent == "thesis"
     assert source == "fallback"
 
@@ -543,9 +543,66 @@ def test_with_source_llm_include_raw_dict(monkeypatch: pytest.MonkeyPatch) -> No
     _patch_llm_pipeline(monkeypatch, {"parsed": decision, "raw": "..."})
     from agent.intent import classify_intent_with_source
 
-    intent, source, _flag, _earn, _query = classify_intent_with_source("Tell me about INTC")
+    intent, source, _flag, _earn, _query, *_ = classify_intent_with_source("Tell me about INTC")
     assert intent == "quick_fact"
     assert source == "llm"
+
+
+# ─── QNT-327: folded thesis plan pick (report_picks / plan_rationale) ─────────
+
+
+def test_folded_picks_surface_on_llm_thesis_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QNT-327 (v3 G-6): a thesis IntentDecision surfaces report_picks +
+    plan_rationale as the 6th/7th tuple elements on the llm path."""
+    _patch_llm_pipeline(
+        monkeypatch,
+        IntentDecision(
+            intent="thesis",
+            report_picks=["company", "fundamental"],
+            plan_rationale="Valuation-led read.",
+        ),
+    )
+    from agent.intent import classify_intent_with_source
+
+    intent, source, _news, _earn, _query, report_picks, plan_rationale = (
+        classify_intent_with_source("is AAPL a buy?")
+    )
+    assert (intent, source) == ("thesis", "llm")
+    assert report_picks == ["company", "fundamental"]
+    assert plan_rationale == "Valuation-led read."
+
+
+def test_folded_picks_suppressed_on_non_thesis_intent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The picks are gated on intent=='thesis': a stray pick on a non-thesis
+    decision (which plan_node never reads) is dropped so it can't leak into state."""
+    _patch_llm_pipeline(
+        monkeypatch,
+        IntentDecision(
+            intent="quick_fact",
+            report_picks=["company", "technical"],
+            plan_rationale="should be dropped",
+        ),
+    )
+    from agent.intent import classify_intent_with_source
+
+    intent, _source, _news, _earn, _query, report_picks, plan_rationale = (
+        classify_intent_with_source("what's AAPL's P/E?")
+    )
+    assert intent == "quick_fact"
+    assert report_picks == []
+    assert plan_rationale == ""
+
+
+def test_folded_picks_empty_on_heuristic_path() -> None:
+    """No LLM ran -> no folded picks; plan_node falls back to the ThesisPlan call."""
+    from agent.intent import classify_intent_with_source
+
+    # A thesis-token heuristic short-circuit (no LLM) still returns empty picks.
+    intent, source, _news, _earn, _query, report_picks, plan_rationale = (
+        classify_intent_with_source("give me a balanced thesis on NVDA")
+    )
+    assert source == "heuristic"
+    assert (report_picks, plan_rationale) == ([], "")
 
 
 # ─── QNT-280: semantic needs_news_search / needs_earnings_search flags ────────
@@ -556,7 +613,7 @@ def test_needs_news_search_honours_llm_flag_on_llm_path(monkeypatch: pytest.Monk
     _patch_llm_pipeline(monkeypatch, IntentDecision(intent="quick_fact", needs_news_search=True))
     from agent.intent import classify_intent_with_source
 
-    intent, source, needs_news_search, _earn, _query = classify_intent_with_source(
+    intent, source, needs_news_search, _earn, _query, *_ = classify_intent_with_source(
         "what did the CEO say about the buyback?"
     )
     assert (intent, source) == ("quick_fact", "llm")
@@ -576,7 +633,7 @@ def test_needs_news_search_semantic_flag_catches_topical_phrasing(
     assert _is_targeted_news(question) is False
     _patch_llm_pipeline(monkeypatch, IntentDecision(intent="news", needs_news_search=True))
 
-    intent, source, needs_news_search, _earn, _query = classify_intent_with_source(question)
+    intent, source, needs_news_search, _earn, _query, *_ = classify_intent_with_source(question)
     assert (intent, source) == ("news", "llm")
     assert needs_news_search is True
 
@@ -599,7 +656,7 @@ def test_needs_news_search_generic_ask_stays_off_when_both_signals_false(
     assert _is_targeted_news(question) is False  # floor stays off on a generic ask
     _patch_llm_pipeline(monkeypatch, IntentDecision(intent="news", needs_news_search=False))
 
-    intent, source, needs_news_search, _earn, _query = classify_intent_with_source(question)
+    intent, source, needs_news_search, _earn, _query, *_ = classify_intent_with_source(question)
     assert (intent, source) == ("news", "llm")
     assert needs_news_search is False
 
@@ -612,7 +669,7 @@ def test_needs_news_search_keyword_floor_rescues_llm_false(
     _patch_llm_pipeline(monkeypatch, IntentDecision(intent="news", needs_news_search=False))
     from agent.intent import classify_intent_with_source
 
-    intent, source, needs_news_search, _earn, _query = classify_intent_with_source(
+    intent, source, needs_news_search, _earn, _query, *_ = classify_intent_with_source(
         "any news on NVDA collaboration with Nokia?"
     )
     assert (intent, source) == ("news", "llm")
@@ -624,7 +681,7 @@ def test_needs_news_search_keyword_floor_on_heuristic_path() -> None:
     signal -- "any catalysts" is a heuristic news hit AND a targeted token."""
     from agent.intent import classify_intent_with_source
 
-    intent, source, needs_news_search, _earn, _query = classify_intent_with_source(
+    intent, source, needs_news_search, _earn, _query, *_ = classify_intent_with_source(
         "any catalysts for NVDA?"
     )
     assert source == "heuristic"
@@ -645,7 +702,7 @@ def test_needs_earnings_search_honours_llm_flag_on_llm_path(
         monkeypatch, IntentDecision(intent="fundamental", needs_earnings_search=True)
     )
 
-    intent, source, _news, needs_earnings_search, _query = classify_intent_with_source(question)
+    intent, source, _news, needs_earnings_search, _query, *_ = classify_intent_with_source(question)
     assert (intent, source) == ("fundamental", "llm")
     assert needs_earnings_search is True
 
@@ -660,7 +717,7 @@ def test_needs_earnings_search_keyword_floor_rescues_llm_false(
     )
     from agent.intent import classify_intent_with_source
 
-    _intent, source, _news, needs_earnings_search, _query = classify_intent_with_source(
+    _intent, source, _news, needs_earnings_search, _query, *_ = classify_intent_with_source(
         "what did management say about guidance?"
     )
     assert source == "llm"
@@ -771,7 +828,7 @@ def test_with_source_search_query_empty_on_heuristic_path() -> None:
     """The heuristic short-circuit never runs an LLM, so no rewrite exists."""
     from agent.intent import classify_intent_with_source
 
-    _intent, source, _news, _earn, search_query = classify_intent_with_source("What's the RSI?")
+    _intent, source, _news, _earn, search_query, *_ = classify_intent_with_source("What's the RSI?")
     assert source == "heuristic"
     assert search_query == ""
 
@@ -783,7 +840,9 @@ def test_with_source_search_query_empty_on_fallback_path(
     _patch_llm_pipeline(monkeypatch, None, invoke_raises=RuntimeError("timeout"))
     from agent.intent import classify_intent_with_source
 
-    _intent, source, _news, _earn, search_query = classify_intent_with_source("Tell me about INTC")
+    _intent, source, _news, _earn, search_query, *_ = classify_intent_with_source(
+        "Tell me about INTC"
+    )
     assert source == "fallback"
     assert search_query == ""
 
@@ -800,7 +859,7 @@ def test_with_source_search_query_carries_llm_rewrite(monkeypatch: pytest.Monkey
     )
     from agent.intent import classify_intent_with_source
 
-    _intent, source, _news, _earn, search_query = classify_intent_with_source(
+    _intent, source, _news, _earn, search_query, *_ = classify_intent_with_source(
         "what about the buyback?"
     )
     assert source == "llm"
@@ -824,7 +883,7 @@ def test_with_source_search_query_rejected_hallucinated_ticker_backstops_to_floo
     )
     from agent.intent import classify_intent_with_source
 
-    _intent, source, news, _earn, search_query = classify_intent_with_source(
+    _intent, source, news, _earn, search_query, *_ = classify_intent_with_source(
         "what about the buyback?"
     )
     assert source == "llm"
@@ -853,7 +912,7 @@ def test_llm_path_empty_rewrite_with_floor_backstops_to_floor_query(
     )
     from agent.intent import classify_intent_with_source
 
-    _intent, source, news, _earn, search_query = classify_intent_with_source(
+    _intent, source, news, _earn, search_query, *_ = classify_intent_with_source(
         "any news on the layoffs?"
     )
     assert source == "llm"
@@ -870,7 +929,7 @@ def test_llm_path_empty_rewrite_no_floor_stays_empty(monkeypatch: pytest.MonkeyP
     )
     from agent.intent import classify_intent_with_source
 
-    _intent, source, news, earn, search_query = classify_intent_with_source(
+    _intent, source, news, earn, search_query, *_ = classify_intent_with_source(
         "give me your read on the setup"
     )
     assert source == "llm"
@@ -953,7 +1012,7 @@ def test_heuristic_path_composes_ticker_plus_floor_topic() -> None:
     raw question."""
     from agent.intent import classify_intent_with_source
 
-    _intent, source, news, _earn, search_query = classify_intent_with_source(
+    _intent, source, news, _earn, search_query, *_ = classify_intent_with_source(
         "is NVDA overbought given the buyback?"
     )
     assert source == "heuristic"
@@ -966,7 +1025,7 @@ def test_heuristic_path_floor_query_without_ticker_uses_topic_only() -> None:
     ticker is applied downstream from resolved state."""
     from agent.intent import classify_intent_with_source
 
-    _intent, source, news, _earn, search_query = classify_intent_with_source(
+    _intent, source, news, _earn, search_query, *_ = classify_intent_with_source(
         "why the buyback?", has_prior_turn=True
     )
     assert source == "heuristic"
@@ -978,7 +1037,9 @@ def test_heuristic_path_empty_query_when_no_floor_fires() -> None:
     """No floor -> "" (AC2: empty only when no floor fired)."""
     from agent.intent import classify_intent_with_source
 
-    _intent, source, news, earn, search_query = classify_intent_with_source("is NVDA overbought?")
+    _intent, source, news, earn, search_query, *_ = classify_intent_with_source(
+        "is NVDA overbought?"
+    )
     assert source == "heuristic"
     assert (news, earn) == (False, False)
     assert search_query == ""
@@ -1003,7 +1064,7 @@ def test_fallback_path_composes_floor_query(monkeypatch: pytest.MonkeyPatch) -> 
     _patch_llm_pipeline(monkeypatch, None, invoke_raises=RuntimeError("timeout"))
     from agent.intent import classify_intent_with_source
 
-    _intent, source, news, _earn, search_query = classify_intent_with_source(
+    _intent, source, news, _earn, search_query, *_ = classify_intent_with_source(
         "what about the buyback?"
     )
     assert source == "fallback"

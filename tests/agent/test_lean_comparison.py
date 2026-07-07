@@ -76,7 +76,7 @@ def _as_comparison(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda _q, **_: ("comparison", "heuristic", False, False, ""),
+        lambda _q, **_: ("comparison", "heuristic", False, False, "", [], ""),
     )
 
 
@@ -310,7 +310,7 @@ def test_flagged_comparison_turn_records_demand(
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda _q, **_: ("comparison", "llm", True, False, "antitrust exposure"),
+        lambda _q, **_: ("comparison", "llm", True, False, "antitrust exposure", [], ""),
     )
     stub_llm.invoke.return_value = AIMessage(content="fundamental")
     stub_llm.structured_invoke.return_value = ComparisonAnswer(
@@ -361,10 +361,12 @@ def test_comparison_rag_demand_does_not_bleed_across_turns(
     value. Without the reset the SSE handler would stamp a false
     comparison_rag_demand:news tag on the unrelated greeting turn."""
 
-    def fake_classify(question: str, **_: object) -> tuple[str, str, bool, bool, str]:
+    def fake_classify(
+        question: str, **_: object
+    ) -> tuple[str, str, bool, bool, str, list[str], str]:
         if question.strip().lower() == "hi":
-            return ("conversational", "heuristic", False, False, "")
-        return ("comparison", "llm", True, False, "antitrust exposure")
+            return ("conversational", "heuristic", False, False, "", [], "")
+        return ("comparison", "llm", True, False, "antitrust exposure", [], "")
 
     monkeypatch.setattr(graph_module, "classify_intent_with_source", fake_classify)
     stub_llm.invoke.return_value = AIMessage(content="fundamental")

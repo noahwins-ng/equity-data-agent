@@ -340,7 +340,7 @@ def test_groq_quota_error_falls_back_to_conversational_redirect(
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda _q, **_: ("thesis", "heuristic", False, False, ""),
+        lambda _q, **_: ("thesis", "heuristic", False, False, "", [], ""),
     )
 
     # Minimal tool returning a non-empty report so synthesize doesn't

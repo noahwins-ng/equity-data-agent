@@ -430,7 +430,14 @@ def test_synthesize_node_invokes_llm_with_system_message(
         return f"report for {t}"
 
     graph = build_graph({name: tool for name in REPORT_TOOLS})
-    graph.invoke({"ticker": "NVDA", "question": "Is NVDA a buy?"})
+    # QNT-327: use a heuristic-thesis phrasing ("should i buy" token) so classify
+    # short-circuits WITHOUT an LLM call. This test patches only graph.get_llm, not
+    # intent.get_llm, so an LLM-path classify would escape to the live proxy; with
+    # the plan pick now foldable into that call (QNT-327), a reachable proxy would
+    # let classify fill report_picks and make plan SKIP the ThesisPlan call the
+    # schema_args assertion below expects. The heuristic path keeps classify off the
+    # network and the plan->synthesize topology deterministic regardless of proxy.
+    graph.invoke({"ticker": "NVDA", "question": "Should I buy NVDA?"})
 
     # Synthesize was called exactly once on the structured runnable; pull
     # the prompt off its call_args. QNT-181 routes via direct .invoke()

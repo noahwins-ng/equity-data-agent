@@ -66,7 +66,7 @@ def force_thesis_intent(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda *_args, **_kwargs: ("thesis", "heuristic", False, False, ""),
+        lambda *_args, **_kwargs: ("thesis", "heuristic", False, False, "", [], ""),
     )
 
 
@@ -211,6 +211,136 @@ def test_thesis_plan_uses_small_alias_synthesis_keeps_default(
 
     assert [a for s, a in bindings if s is ThesisPlan] == [SMALL_NODE_ALIAS]
     assert [a for s, a in bindings if s is Thesis] == [None]
+
+
+def _patch_classify_picks(
+    monkeypatch: pytest.MonkeyPatch, picks: list[str], rationale: str = ""
+) -> None:
+    """QNT-327: force the classify call to fold a thesis plan pick into state."""
+    monkeypatch.setattr(
+        graph_module,
+        "classify_intent_with_source",
+        lambda *_args, **_kwargs: ("thesis", "llm", False, False, "", picks, rationale),
+    )
+
+
+def test_folded_picks_consumed_and_skip_the_planner_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-327 (v3 G-6): when classify folds a valid plan pick into state, plan_node
+    consumes it and does NOT make the dedicated ThesisPlan call -- the whole point
+    of the fold (thesis drops from four sequential LLM calls to three)."""
+    _patch_classify_picks(
+        monkeypatch,
+        ["company", "fundamental"],
+        rationale="Your question is about valuation, so fundamentals carry the read.",
+    )
+    llm = _PlanAwareLLM(
+        ThesisPlan(tools=["company", "fundamental", "technical", "news"], rationale="unused")
+    )
+    _patch_llm(monkeypatch, llm)
+    tools = _tools()
+
+    result = build_graph(tools).invoke({"ticker": "AAPL", "question": "Is AAPL a buy?"})
+
+    assert result["plan"] == ["company", "fundamental"]
+    assert set(result["reports"]) == {"company", "fundamental"}
+    assert tools["technical"].call_count == 0
+    assert tools["news"].call_count == 0
+    # The standalone ThesisPlan planner was never bound/invoked.
+    assert llm.plan_runnable is None
+    assert result["plan_rationale"] == (
+        "Your question is about valuation, so fundamentals carry the read."
+    )
+
+
+def test_empty_folded_picks_falls_back_to_the_planner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A heuristic/fallback classify (or any non-thesis LLM turn) forwards no picks;
+    plan_node must fall back to the dedicated ThesisPlan call unchanged."""
+    _patch_classify_picks(monkeypatch, [])
+    llm = _PlanAwareLLM(ThesisPlan(tools=["company", "technical"], rationale="Chart-led read."))
+    _patch_llm(monkeypatch, llm)
+
+    result = build_graph(_tools()).invoke(
+        {"ticker": "TSLA", "question": "What's the setup on TSLA?"}
+    )
+
+    assert result["plan"] == ["company", "technical"]
+    # The planner ran (fold was empty), so its runnable was bound.
+    assert llm.plan_runnable is not None
+    assert result["plan_rationale"] == "Chart-led read."
+
+
+def test_degenerate_folded_picks_fall_back_to_the_planner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Off-list / single-tool picks can't form a valid >=2-tool plan; plan_node
+    treats that as no fold and runs the planner rather than over-fetching."""
+    _patch_classify_picks(monkeypatch, ["bogus", "not-a-tool"])
+    llm = _PlanAwareLLM(
+        ThesisPlan(tools=["company", "fundamental", "technical", "news"], rationale="Full thesis.")
+    )
+    _patch_llm(monkeypatch, llm)
+
+    result = build_graph(_tools()).invoke({"ticker": "NVDA", "question": "thesis on NVDA?"})
+
+    assert result["plan"] == list(REPORT_TOOLS)
+    assert llm.plan_runnable is not None
+
+
+def test_non_thesis_intent_ignores_folded_picks_in_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-327 review pin: plan_node consumes ``folded_report_picks`` ONLY on the
+    thesis branch. classify_node forwards whatever the classify tuple carries, and
+    a post-classify intent override (comparison / exploration reroute) can leave
+    picks in state alongside a NON-thesis intent -- those must stay inert. Here the
+    (impossible-in-prod but defensively-pinned) combo of a focused ``technical``
+    intent WITH picks must still take the deterministic focused plan, never the
+    folds."""
+    monkeypatch.setattr(
+        graph_module,
+        "classify_intent_with_source",
+        lambda *_a, **_k: (
+            "technical",
+            "llm",
+            False,
+            False,
+            "",
+            ["company", "fundamental", "news"],
+            "r",
+        ),
+    )
+    llm = _PlanAwareLLM()
+    _patch_llm(monkeypatch, llm)
+
+    result = build_graph(_tools()).invoke(
+        {"ticker": "AAPL", "question": "How do the technicals look on AAPL?"}
+    )
+
+    # Focused-technical deterministic plan -- NOT the folded [company, fundamental, news].
+    assert result["plan"] == ["company", "technical"]
+
+
+def test_tools_from_folded_picks_filters_forces_company_and_signals_fallback() -> None:
+    """QNT-327: pure seam -- registry order + forced company + None on degenerate."""
+    available = list(REPORT_TOOLS)
+    # Valid multi-tool pick: registry order preserved, company forced in.
+    assert graph_module._tools_from_folded_picks(["news", "technical"], available) == [
+        "company",
+        "technical",
+        "news",
+    ]
+    # Off-list tokens dropped; the two survivors still form a plan.
+    assert graph_module._tools_from_folded_picks(["fundamental", "ceo-gossip"], available) == [
+        "company",
+        "fundamental",
+    ]
+    # Degenerate: nothing valid but company -> None (signals plan_node to fall back).
+    assert graph_module._tools_from_folded_picks(["bogus"], available) is None
+    assert graph_module._tools_from_folded_picks([], available) is None
 
 
 def test_partial_thesis_prompt_names_supplied_reports_and_missing_aspect_rule() -> None:

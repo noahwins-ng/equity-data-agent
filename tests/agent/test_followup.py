@@ -429,7 +429,7 @@ def test_chained_flagged_followups_do_not_duplicate_retrieved_block(
     monkeypatch.setattr(
         graph_module,
         "classify_intent_with_source",
-        lambda _q, **_: ("followup", "llm", True, False, "NVDA buyback"),
+        lambda _q, **_: ("followup", "llm", True, False, "NVDA buyback", [], ""),
     )
     search = MagicMock(
         side_effect=[
