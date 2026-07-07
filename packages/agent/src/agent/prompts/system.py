@@ -1417,19 +1417,33 @@ def build_clarify_prompt(
     ]
 
 
+# QNT-324: the prior card carried by classify can now be any analytical shape,
+# so the followup prompt names it in the heading rather than assuming "thesis".
+# Keyed by concrete class name to keep this module schema-light (it imports no
+# answer shapes); an unrecognized payload falls back to the generic "answer".
+_PRIOR_ANSWER_LABEL: dict[str, str] = {
+    "Thesis": "thesis",
+    "ComparisonAnswer": "comparison",
+    "LeanComparisonAnswer": "comparison",
+    "FocusedAnalysis": "focused analysis",
+    "ExplorationAnswer": "exploration scan",
+}
+
+
 def build_followup_prompt(
     ticker: str,
     question: str,
     reports: dict[str, str],
-    prior_thesis: object | None,
+    prior_answer: object | None,
     history: list[ConversationMessage] | None = None,
 ) -> list[BaseMessage]:
     """Compose the followup prompt as a system + user message pair.
 
-    ``prior_thesis`` is the hydrated ``Thesis`` from the earlier turn on this
-    thread (or None if the thread only has non-thesis prior turns). When
-    present we flatten it via ``to_markdown`` so the LLM has the full v2
-    four-aspect framing to reference.
+    ``prior_answer`` is the hydrated analytical card from the earlier turn on
+    this thread (Thesis / Comparison / Focused / Exploration -- QNT-324; or None
+    if the thread has no analytical prior turn). When present we flatten it via
+    ``to_markdown`` under a shape-labelled heading so the LLM knows which kind of
+    card it is following up on.
     """
     if reports:
         report_body = "\n\n".join(
@@ -1440,15 +1454,16 @@ def build_followup_prompt(
         report_body = "(no reports available)"
 
     prior_section = ""
-    to_md: Any = getattr(prior_thesis, "to_markdown", None)
+    to_md: Any = getattr(prior_answer, "to_markdown", None)
     if callable(to_md):
         try:
             prior_md = str(to_md())
         except Exception:  # noqa: BLE001 — never let formatting kill the followup
             prior_md = ""
         if prior_md:
+            label = _PRIOR_ANSWER_LABEL.get(type(prior_answer).__name__, "answer")
             prior_section = (
-                "\n# Prior turn (your earlier thesis on this ticker)\n"
+                f"\n# Prior turn (your earlier {label} on this ticker)\n"
                 f"{_sanitize_report_body(prior_md)}\n"
             )
 

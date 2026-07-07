@@ -123,20 +123,22 @@ def classify_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) ->
             deps.event_emitter("intent", {"intent": intent})
         except Exception as exc:  # noqa: BLE001 — never let SSE plumbing crash the graph
             logger.warning("classify %s: event_emitter failed: %s (continuing)", ticker, exc)
-    # QNT-307: snapshot the prior turn's Thesis at the turn boundary, replacing
-    # the retired ``thesis`` slot the followup path used to lean on. classify is
-    # the entry node, so ``state.get("answer")`` here is the checkpointer-hydrated
-    # answer from the PRIOR turn (this turn has written nothing yet). This
-    # reproduces the old ``thesis``-slot lifetime EXACTLY -- only a Thesis is ever
-    # carried (every non-thesis intent went through project_answer, which nulled
-    # the slot), and a narrative-only followup (answer=None) preserves the earlier
-    # Thesis across the chain (followup returns never cleared it). Carrying a
-    # non-thesis payload here would feed it into build_followup_prompt's "earlier
-    # thesis" section and narrate's prior substrate -- a synthesis behaviour change
-    # the ticket puts out of scope. synthesize/narrate read ``prior_answer`` to
+    # QNT-307/QNT-324: snapshot the prior turn's analytical card at the turn
+    # boundary, replacing the retired ``thesis`` slot the followup path used to
+    # lean on. classify is the entry node, so ``state.get("answer")`` here is the
+    # checkpointer-hydrated answer from the PRIOR turn (this turn has written
+    # nothing yet). QNT-307 carried only a Thesis, reproducing the legacy slot's
+    # lifetime; QNT-324 (G-5) generalizes to any analytical shape
+    # (``ANALYTICAL_ANSWER_TYPES`` -- Thesis / Comparison / LeanComparison /
+    # Focused / Exploration) so "which looks stronger?" after a comparison or
+    # "what's the takeaway?" after an exploration follows up over the card the
+    # user is pointing at, not just hydrated reports. A ConversationalAnswer maps
+    # to None (chit-chat is never followup substrate). A narrative-only followup
+    # (answer=None) still preserves the earlier card across the chain (followup
+    # returns never cleared it). synthesize/narrate read ``prior_answer`` to
     # reason over the earlier turn while they overwrite ``answer`` mid-run.
     hydrated_answer = state.get("answer")
-    if isinstance(hydrated_answer, graph.Thesis):
+    if isinstance(hydrated_answer, graph.ANALYTICAL_ANSWER_TYPES):
         prior_answer = hydrated_answer
     elif hydrated_answer is None:
         prior_answer = state.get("prior_answer")

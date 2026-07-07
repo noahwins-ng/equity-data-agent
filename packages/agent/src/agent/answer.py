@@ -45,6 +45,21 @@ AnswerPayload = (
     | ExplorationAnswer
 )
 
+# QNT-324: the analytical answer shapes a followup can point back at. classify
+# snapshots one of these as ``prior_answer`` at the turn boundary so a followup
+# ("which looks stronger?" after a comparison, "so what's the takeaway?" after an
+# exploration) reasons over the card the user is pointing at. A prior
+# ``ConversationalAnswer`` (chit-chat) or ``QuickFactAnswer`` (a followup's own
+# compact card, not a full analysis) is deliberately NOT carried -- only a full
+# analytical card is substrate for the next turn.
+ANALYTICAL_ANSWER_TYPES: tuple[type, ...] = (
+    Thesis,
+    ComparisonAnswer,
+    LeanComparisonAnswer,
+    FocusedAnalysis,
+    ExplorationAnswer,
+)
+
 # Concrete type -> SSE event name (the wire protocol still names cards
 # ``thesis`` / ``quick_fact`` / ...). ``answer`` is the single source of truth;
 # this map lets the SSE emit ladder derive the event name from the union without
@@ -84,6 +99,7 @@ def project_answer(payload: AnswerPayload | None) -> dict[str, object]:
 
 
 __all__ = [
+    "ANALYTICAL_ANSWER_TYPES",
     "AnswerPayload",
     "answer_slot",
     "project_answer",

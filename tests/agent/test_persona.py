@@ -125,7 +125,7 @@ def test_marker_present_in_rendered_focused_prompt() -> None:
 
 
 def test_marker_present_in_rendered_followup_prompt() -> None:
-    messages = build_followup_prompt("NVDA", "why?", {"technical": "x"}, prior_thesis=None)
+    messages = build_followup_prompt("NVDA", "why?", {"technical": "x"}, prior_answer=None)
     assert ANALYST_VOICE_ADR in _system_message(messages)
 
 

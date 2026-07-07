@@ -33,7 +33,7 @@ from agent.evals.dialogue_judge import score as judge_score_fn
 from agent.evals.hallucination import HallucinationResult
 from agent.evals.hallucination import check as check_hallucination
 from agent.evals.spine import append_suite_history, suite_history_path
-from agent.graph import build_graph
+from agent.graph import _runtime_report_texts, build_graph
 from agent.llm import current_model_info, set_temperature_override
 from agent.tools import default_report_tools, get_company_report_compact
 from agent.tracing import flush as flush_langfuse
@@ -346,15 +346,11 @@ def _render_payload(state: dict[str, Any]) -> str:
 
 
 def _flatten_reports(state: dict[str, Any]) -> list[str]:
-    reports_by_ticker = state.get("reports_by_ticker") or {}
-    if reports_by_ticker:
-        flat: list[str] = []
-        for ticker_reports in reports_by_ticker.values():
-            if isinstance(ticker_reports, dict):
-                flat.extend(str(v) for v in ticker_reports.values())
-        return flat
-    reports = state.get("reports") or {}
-    return [str(v) for v in reports.values()] if isinstance(reports, dict) else []
+    # QNT-324: delegate to the graph's canonical assembler so the eval's numeric
+    # check sees the same grounding substrate narrate does -- including the prior
+    # card on a followup turn (a comparison's second-ticker reports_by_ticker is
+    # cleared by then, so re-quoting it must not read as unsupported).
+    return _runtime_report_texts(state)  # type: ignore[arg-type] — dict surface
 
 
 def _transcript_from_state(state: dict[str, Any], fallback_turns: tuple[str, ...]) -> str:

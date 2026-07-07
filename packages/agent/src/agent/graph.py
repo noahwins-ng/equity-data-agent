@@ -52,7 +52,12 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ValidationError
 from shared.tickers import TICKERS  # noqa: F401
 
-from agent.answer import AnswerPayload, answer_slot, project_answer  # noqa: F401
+from agent.answer import (  # noqa: F401
+    ANALYTICAL_ANSWER_TYPES,
+    AnswerPayload,
+    answer_slot,
+    project_answer,
+)
 from agent.citations import strip_bad_anchors_in_obj  # noqa: F401
 from agent.comparison import ComparisonAnswer, LeanComparisonAnswer  # noqa: F401
 from agent.conversational import (  # noqa: F401
@@ -468,15 +473,32 @@ def _composite_confidence(
 
 
 def _runtime_report_texts(state: AgentState) -> list[str]:
-    """Return report bodies gathered for this run, including comparison reports."""
+    """Return report bodies gathered for this run, including comparison reports.
+
+    QNT-324: on a followup, the prior turn's card (``prior_answer``) is also a
+    grounding source. The card was numerically grounded when it was produced, and
+    the reports that backed a non-thesis card (e.g. a comparison's second-ticker
+    ``reports_by_ticker``) are cleared by the turn-boundary reset -- so a followup
+    that faithfully re-quotes the card must not read as unsupported. Numbers the
+    narrator invents beyond the card + surviving reports still are.
+    """
     reports_by_ticker = state.get("reports_by_ticker") or {}
     if reports_by_ticker:
-        flat: list[str] = []
+        texts: list[str] = []
         for ticker_reports in reports_by_ticker.values():
-            flat.extend(str(report) for report in ticker_reports.values())
-        return flat
-    reports = state.get("reports") or {}
-    return [str(report) for report in reports.values()]
+            if isinstance(ticker_reports, dict):
+                texts.extend(str(report) for report in ticker_reports.values())
+    else:
+        reports = state.get("reports") or {}
+        texts = [str(report) for report in reports.values()] if isinstance(reports, dict) else []
+    if state.get("intent") == "followup":
+        prior_card_md = getattr(state.get("prior_answer"), "to_markdown", None)
+        if callable(prior_card_md):
+            try:
+                texts = [*texts, str(prior_card_md())]
+            except Exception:  # noqa: BLE001 — never let formatting break grounding
+                pass
+    return texts
 
 
 def _runtime_grounding_check(answer: str, reports: list[str]) -> tuple[HallucinationResult, float]:
@@ -779,6 +801,7 @@ def build_graph(
 
 
 __all__ = [
+    "ANALYTICAL_ANSWER_TYPES",
     "INTENT_POLICIES",
     "OPTIONAL_TOOLS",
     "REPORT_TOOLS",

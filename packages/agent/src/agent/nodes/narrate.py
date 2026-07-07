@@ -251,6 +251,10 @@ def narrate_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> 
     grounding_answer = "\n\n".join(
         text for text in (final_narrative, payload_markdown, prior_thesis_markdown) if text
     )
+    # QNT-324: _runtime_report_texts folds the prior card into the grounding
+    # substrate on a followup (the card is itself grounded material), so a
+    # followup faithfully re-quoting a comparison's second-ticker figures -- whose
+    # reports_by_ticker the turn-boundary reset cleared -- is not flagged.
     grounding_result, grounding_rate = graph._runtime_grounding_check(
         grounding_answer,
         graph._runtime_report_texts(state),
