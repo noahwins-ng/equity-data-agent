@@ -801,6 +801,7 @@ def _detect_ambiguity(
     has_prior_turn: bool,
     has_context_ticker: bool = False,
     context_ticker: str | None = None,
+    history: list[ConversationMessage] | None = None,
 ) -> AmbiguityKind | None:
     """Return the kind of ambiguity in ``question`` for ``intent``, or None.
 
@@ -839,18 +840,19 @@ def _detect_ambiguity(
             return "needs_second_ticker"
         if gesture == "view":
             return "needs_ticker"
-    if intent == "comparison" and not question_tickers:
-        return "needs_second_ticker"
-    context_upper = (context_ticker or "").upper()
-    context_adds_second_ticker = (
-        has_context_ticker and context_upper in TICKERS and (context_upper not in question_tickers)
-    )
-    if (
-        intent == "comparison"
-        and len(question_tickers) < _MIN_COMPARISON_TICKERS
-        and not (context_adds_second_ticker or has_prior_turn)
-    ):
-        return "needs_second_ticker"
+    if intent == "comparison":
+        # QNT-325 (G-12): the gate defers exactly when the resolver can assemble
+        # a pair from the same inputs it will use downstream -- named tickers, the
+        # URL-context ticker, and (new) the transcript history. Delegating to the
+        # resolver keeps the gate and plan_node from ever disagreeing: a warm
+        # thread that named the pair earlier ("compare those two" after discussing
+        # NVDA and AMD) resolves and proceeds; a cold "compare them" or a one-ticker
+        # thread still yields fewer than two and clarifies.
+        resolved = _resolve_comparison_tickers(
+            (context_ticker or "") if has_context_ticker else "", question, history
+        )
+        if len(resolved) < _MIN_COMPARISON_TICKERS:
+            return "needs_second_ticker"
     if intent in _TICKER_REQUIRING_INTENTS and not question_tickers and not has_prior_turn:
         return "needs_ticker"
     if intent == "followup" and not has_prior_turn:
@@ -858,7 +860,35 @@ def _detect_ambiguity(
     return None
 
 
-def _resolve_comparison_tickers(primary: str, question: str) -> list[str]:
+def _history_tickers(history: list[ConversationMessage] | None) -> list[str]:
+    """Distinct tickers the USER named across ``history``, most-recent first (QNT-325).
+
+    Iterates the compact transcript newest turn first and runs
+    :func:`extract_tickers` over each USER turn's content, keeping the first
+    occurrence of each symbol. "Most recent wins" so a warm-thread gesture
+    ("compare those two") fills from the tickers the thread most recently
+    discussed. Only user turns count: an assistant answer about AMD that names
+    NVDA as valuation colour ("AMD trades at a discount to NVDA") must not seed
+    NVDA as a comparison side the user never asked for -- a false pairing is
+    worse than a clarify, so the fill draws only on what the user actually typed.
+    """
+    if not history:
+        return []
+    seen: list[str] = []
+    for message in reversed(history):
+        if message.get("role") != "user":
+            continue
+        for ticker in extract_tickers(str(message.get("content", ""))):
+            if ticker not in seen:
+                seen.append(ticker)
+    return seen
+
+
+def _resolve_comparison_tickers(
+    primary: str,
+    question: str,
+    history: list[ConversationMessage] | None = None,
+) -> list[str]:
     """Return up to 4 tickers to compare, in user-named order (QNT-224).
 
     Ticker symbols mentioned in ``question`` come first (in the order the
@@ -873,15 +903,33 @@ def _resolve_comparison_tickers(primary: str, question: str) -> list[str]:
     3-4 the lean metrics table. Five or more named tickers are handled
     upstream (plan_node) as a conversational redirect, so they never reach
     this cap.
+
+    QNT-325 (G-12): when the question and URL context still leave the pair
+    short, fill the remaining gap from transcript ``history`` (most-recent
+    distinct tickers, deduped against what is already chosen), mirroring how
+    :func:`_resolve_single_ticker_context` inherits the prior analysis ticker
+    for followups. A bare gesture ("compare those two") names no ticker, so the
+    URL ``primary`` is NOT one of "those two" unless it was actually discussed
+    (then it is already in ``history``); history is therefore the only fill
+    source for a gesture, and clarify stays the fallback when history yields
+    fewer than two. A false pairing is worse than a clarify, so this never
+    fabricates a second side the transcript does not support.
     """
     chosen: list[str] = list(extract_tickers(question))
     primary_upper = primary.upper()
     if (
-        primary_upper in TICKERS
+        chosen
+        and primary_upper in TICKERS
         and primary_upper not in chosen
         and len(chosen) < _MIN_COMPARISON_TICKERS
     ):
         chosen.append(primary_upper)
+    if len(chosen) < _MIN_COMPARISON_TICKERS:
+        for ticker in _history_tickers(history):
+            if ticker not in chosen:
+                chosen.append(ticker)
+                if len(chosen) >= _MIN_COMPARISON_TICKERS:
+                    break
     return chosen[:_MAX_COMPARISON_TICKERS]
 
 

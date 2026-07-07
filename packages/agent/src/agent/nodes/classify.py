@@ -80,6 +80,11 @@ def classify_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) ->
         needs_earnings_search,
         search_query,
     )
+    # QNT-325 (G-12): the URL-context ticker as a comparison side, resolved once so
+    # the ambiguity gate and the comparison_tickers forwarding below feed the
+    # resolver the SAME ``primary`` -- "" when the URL ticker isn't covered. Sharing
+    # one local keeps the two call sites from drifting apart on a future edit.
+    context_primary = ticker if ticker.upper() in graph.TICKERS else ""
     # QNT-212: heuristic ambiguity check on the resolved intent. Drives
     # the conditional edge below: a non-None ambiguity_kind routes to
     # clarify; None falls through to the existing plan/synthesize path
@@ -88,8 +93,12 @@ def classify_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) ->
         intent,
         question,
         has_prior_turn=has_prior_turn,
-        has_context_ticker=ticker.upper() in graph.TICKERS,
-        context_ticker=ticker,
+        has_context_ticker=bool(context_primary),
+        context_ticker=context_primary,
+        # QNT-325 (G-12): pass the transcript so a warm-thread comparison gesture
+        # resolves its pair from history instead of clarifying. ``history`` is the
+        # prior turns (current user turn excluded) from _prior_turn_context above.
+        history=history,
     )
     if ambiguity_kind is not None:
         logger.info(
@@ -98,6 +107,19 @@ def classify_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) ->
             ambiguity_kind,
             intent,
         )
+    # QNT-325 (G-12): resolve the comparison pair ONCE here, from the same
+    # pre-append ``history`` the ambiguity gate just used, and carry it in state
+    # so plan_node consumes it verbatim. plan_node must NOT re-derive history from
+    # ``state["messages"]``: classify's return appends the current turn and
+    # re-trims to HISTORY_TURN_LIMIT, which drops the OLDEST turn when history was
+    # already at the cap -- so a plan-side re-resolve could see a shorter window
+    # than the gate and disagree (defer, then redirect on <2). Resolving once and
+    # forwarding the result keeps the gate and plan in lockstep.
+    comparison_tickers = (
+        graph._resolve_comparison_tickers(context_primary, question, history)
+        if intent == "comparison"
+        else []
+    )
     effective_ticker = graph._resolve_single_ticker_context(
         current_ticker=ticker,
         question=question,
@@ -172,6 +194,10 @@ def classify_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) ->
         "analysis_ticker": effective_ticker,
         "prior_answer": prior_answer,
         "intent": intent,
+        # QNT-325 (G-12): the comparison pair resolved above, from the gate's
+        # pre-append history. plan_node reads this (with its >MAX redirect guard)
+        # instead of re-deriving history from the window-shifted messages.
+        "comparison_tickers": comparison_tickers,
         "route": route,
         "classifier_source": classifier_source,
         "ambiguity_kind": ambiguity_kind,
