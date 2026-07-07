@@ -125,10 +125,38 @@ def test_classify_snapshots_analytical_shape(
     assert isinstance(_run_classify(monkeypatch, payload), shape)
 
 
-def test_classify_drops_conversational_answer(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Chit-chat is never followup substrate -- a prior ConversationalAnswer
-    maps to None."""
+def test_classify_conversational_answer_with_no_prior_card_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A prior ConversationalAnswer is not itself substrate; with nothing behind
+    it (cold thread / bare greeting) the snapshot is None."""
     assert _run_classify(monkeypatch, _conversational()) is None
+
+
+def test_classify_carries_prior_card_across_conversational_interlude(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-349 follow-up: a non-analytical interlude (conversational / clarify,
+    ``answer=ConversationalAnswer``) must carry the earlier analytical card
+    forward -- otherwise a thesis -> "hi" -> "tell me more" chain loses the card
+    the followup should narrate over, even though R-1 preserves its reports."""
+    monkeypatch.setattr(
+        graph_module,
+        "classify_intent_with_source",
+        lambda *a, **k: ("thesis", "stub", False, False, "", [], ""),
+    )
+    prior = _comparison()
+    state = cast(
+        AgentState,
+        {
+            "ticker": "TSLA",
+            "question": "tell me more",
+            "answer": _conversational(),
+            "prior_answer": prior,
+        },
+    )
+    result = classify_node(state, {}, _deps())
+    assert result["prior_answer"] is prior
 
 
 def test_classify_drops_quick_fact_answer(monkeypatch: pytest.MonkeyPatch) -> None:

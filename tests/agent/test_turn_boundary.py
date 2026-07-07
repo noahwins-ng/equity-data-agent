@@ -399,6 +399,10 @@ def test_conversational_interlude_then_followup_reaches_prior_reports(
     assert third["intent"] == "followup"
     assert _tool_calls(tools) == 0  # reused hydrated reports, no re-fetch
     assert third["reports"] == first["reports"]
+    # QNT-349 follow-up: the prior thesis CARD survives the conversational
+    # interlude too (carried through prior_answer), so the followup narrates over
+    # the earlier analysis rather than reasoning from raw reports alone.
+    assert isinstance(third.get("prior_answer"), Thesis)
     if expects_card:
         # metric-ask -> a real QuickFactAnswer card (the redirect would be a
         # ConversationalAnswer instead).
@@ -465,6 +469,9 @@ def test_clarify_interlude_then_followup_reaches_prior_reports(
     assert third["reports"] == first["reports"]
     assert third["answer"] is None  # not the no-context redirect ConversationalAnswer
     assert third.get("narrative")
+    # QNT-349 follow-up: the prior thesis CARD also survives the clarify interlude,
+    # so the followup narrates over it, not just the raw reports.
+    assert isinstance(third.get("prior_answer"), Thesis)
 
 
 # ─── QNT-349 R-2: comparison -> followup grounds against the full bundle ─────────
