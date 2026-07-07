@@ -416,6 +416,38 @@ def test_conversational_interlude_then_followup_reaches_prior_reports(
         assert third.get("narrative")  # the narrator actually spoke
 
 
+def test_metric_ask_followup_then_followup_keeps_prior_card(
+    stub_llm: _StubLLM,  # noqa: ARG001
+    saver: Any,
+) -> None:
+    """QNT-349 follow-up: thesis -> metric-ask followup ("elaborate on the RSI",
+    which writes a compact QuickFactAnswer) -> "tell me more". The middle turn's
+    QuickFactAnswer must not sever the thread: because it was a FOLLOWUP (names no
+    ticker, cannot rebase), the third turn still carries the original thesis card
+    forward and narrates over it rather than dropping to reports alone."""
+    tools = _tools()
+    graph = build_graph(tools, checkpointer=saver)
+    config: RunnableConfig = {"configurable": {"thread_id": "metric-followup:chain"}}
+
+    first = graph.invoke({"ticker": "NVDA", "question": "give me an NVDA thesis"}, config=config)
+    assert first["intent"] == "thesis"
+    assert isinstance(first["answer"], Thesis)
+
+    # Turn 2: a metric-ask followup -> QuickFactAnswer, narrating over the thesis.
+    second = graph.invoke({"ticker": "NVDA", "question": "elaborate on the RSI"}, config=config)
+    assert second["intent"] == "followup"
+    assert isinstance(second["answer"], QuickFactAnswer)
+    assert isinstance(second.get("prior_answer"), Thesis)
+
+    # Turn 3: another followup. The prior thesis CARD survives the middle metric
+    # ask (carried because turn 2 was a followup, not a rebasing quick_fact).
+    third = graph.invoke({"ticker": "NVDA", "question": "tell me more"}, config=config)
+    assert third["intent"] == "followup"
+    assert third["answer"] is None
+    assert isinstance(third.get("prior_answer"), Thesis)
+    assert third.get("narrative")
+
+
 class _ClarifyInterludeStubLLM(_StubLLM):
     """``_StubLLM`` plus an IntentDecision arm that labels the turn-2 gesture
     ("compare them") a comparison, so the ambiguity gate -- one resolvable ticker

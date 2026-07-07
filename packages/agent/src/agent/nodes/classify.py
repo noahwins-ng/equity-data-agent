@@ -161,24 +161,37 @@ def classify_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) ->
     # (``ANALYTICAL_ANSWER_TYPES`` -- Thesis / Comparison / LeanComparison /
     # Focused / Exploration) so "which looks stronger?" after a comparison or
     # "what's the takeaway?" after an exploration follows up over the card the
-    # user is pointing at, not just hydrated reports. QNT-349 follow-up: a prior
-    # ConversationalAnswer (what a non-analytical INTERLUDE -- a conversational or
-    # clarify turn -- leaves in ``answer``) CARRIES THE EARLIER CARD FORWARD rather
-    # than nulling it, so a thesis -> "hi" -> "tell me more" chain still follows up
-    # over the thesis. This makes the interlude fully state-transparent: R-1
-    # already preserves reports/reports_by_ticker across it via the turn-boundary
-    # reset, and prior_answer is the matching analytical-card channel. A
-    # narrative-only followup (answer=None) preserves it the same way. A
-    # QuickFactAnswer still maps to None -- a metric-ask followup's own compact card
-    # is not a full analysis to carry (pre-existing QNT-307 non-thesis behaviour).
-    # ``state.get("prior_answer")`` is None on a cold thread or when no earlier card
-    # exists, so a bare greeting with nothing behind it still yields None.
+    # user is pointing at, not just hydrated reports. QNT-349 follow-up: a turn that
+    # does NOT itself produce a fresh analytical card CARRIES THE EARLIER CARD
+    # FORWARD rather than nulling it, so the followup keeps narrating over the
+    # original analysis. Three such continuation cases of the same thread:
+    #   - answer is None: a narrative-only followup (it wrote no card this turn);
+    #   - a ConversationalAnswer: a non-analytical INTERLUDE (a conversational or
+    #     clarify turn -- neither rebases the ticker), so "thesis -> hi -> tell me
+    #     more" still follows up over the thesis;
+    #   - a QuickFactAnswer produced by a FOLLOWUP turn (prior intent == followup):
+    #     a metric-ask followup ("elaborate on the RSI") is a continuation, not a
+    #     new subject -- a followup names no ticker so it cannot rebase, so carrying
+    #     the earlier card is safe. A QuickFactAnswer from a FRESH quick_fact
+    #     ("what's AAPL's RSI?") still maps to None: that turn rebased to a new
+    #     ticker, so resurrecting the prior card would narrate a stale subject.
+    # Together this makes the whole interlude/followup path state-transparent,
+    # matching R-1's reports/reports_by_ticker preservation (prior_answer is the
+    # matching analytical-card channel). ``state.get("prior_answer")`` is None on a
+    # cold thread / when no earlier card exists, so a bare greeting with nothing
+    # behind it still yields None. ``state.get("intent")`` here is the PRIOR turn's
+    # intent (this turn has not written yet; intent is not a scratch-reset key).
     # synthesize/narrate read ``prior_answer`` to reason over the earlier turn while
     # they overwrite ``answer`` mid-run.
     hydrated_answer = state.get("answer")
+    prior_turn_was_followup = state.get("intent") == "followup"
     if isinstance(hydrated_answer, graph.ANALYTICAL_ANSWER_TYPES):
         prior_answer = hydrated_answer
-    elif hydrated_answer is None or isinstance(hydrated_answer, graph.ConversationalAnswer):
+    elif (
+        hydrated_answer is None
+        or isinstance(hydrated_answer, graph.ConversationalAnswer)
+        or (isinstance(hydrated_answer, graph.QuickFactAnswer) and prior_turn_was_followup)
+    ):
         prior_answer = state.get("prior_answer")
     else:
         prior_answer = None
