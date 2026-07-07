@@ -807,12 +807,13 @@ def test_with_source_search_query_carries_llm_rewrite(monkeypatch: pytest.Monkey
     assert search_query == "NVDA buyback"
 
 
-def test_with_source_search_query_rejected_hallucinated_ticker_falls_back_to_empty(
+def test_with_source_search_query_rejected_hallucinated_ticker_backstops_to_floor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A rewrite naming a ticker outside TICKERS is rejected -- the caller
-    (gather) falls back to the raw question, never regressing cold-turn
-    retrieval."""
+    """A rewrite naming a ticker outside TICKERS is rejected -- the hallucinated
+    ticker never reaches Qdrant. QNT-322 follow-up: instead of an empty query
+    (raw-question fallback), the LLM path now backstops to the deterministic
+    floor query, since a floor fired on "buyback"."""
     _patch_llm_pipeline(
         monkeypatch,
         IntentDecision(
@@ -823,10 +824,57 @@ def test_with_source_search_query_rejected_hallucinated_ticker_falls_back_to_emp
     )
     from agent.intent import classify_intent_with_source
 
-    _intent, source, _news, _earn, search_query = classify_intent_with_source(
+    _intent, source, news, _earn, search_query = classify_intent_with_source(
         "what about the buyback?"
     )
     assert source == "llm"
+    assert news is True
+    # safety property preserved: the out-of-coverage ticker is gone ...
+    assert "SMCI" not in search_query
+    # ... replaced by the deterministic floor topic (no ticker in the question,
+    # so topic-only; the covered ticker is applied downstream from state).
+    assert search_query == "buyback"
+
+
+def test_llm_path_empty_rewrite_with_floor_backstops_to_floor_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exact live-eval miss (meta-layoffs / intc-ceo): the small model
+    misclassified/skipped the rewrite (empty search_query) but a keyword floor
+    fired. The LLM path now composes the floor query instead of "" -- no path
+    emits flag=True with an empty query."""
+    _patch_llm_pipeline(
+        monkeypatch,
+        IntentDecision(
+            intent="conversational",
+            needs_news_search=False,
+            search_query="",
+        ),
+    )
+    from agent.intent import classify_intent_with_source
+
+    _intent, source, news, _earn, search_query = classify_intent_with_source(
+        "any news on the layoffs?"
+    )
+    assert source == "llm"
+    assert news is True  # floor rescued the flag ("layoffs")
+    assert search_query == "layoffs"  # ... and now the query, too
+
+
+def test_llm_path_empty_rewrite_no_floor_stays_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No floor + empty model rewrite -> still "" (raw-question fallback). The
+    backstop only fills when a floor actually fired."""
+    _patch_llm_pipeline(
+        monkeypatch,
+        IntentDecision(intent="thesis", needs_news_search=False, search_query=""),
+    )
+    from agent.intent import classify_intent_with_source
+
+    _intent, source, news, earn, search_query = classify_intent_with_source(
+        "give me your read on the setup"
+    )
+    assert source == "llm"
+    assert (news, earn) == (False, False)
     assert search_query == ""
 
 
