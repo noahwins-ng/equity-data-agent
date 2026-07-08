@@ -22,7 +22,7 @@ from agent.comparison import ComparisonAnswer, LeanComparisonAnswer, LeanCompari
 from agent.conversational import ConversationalAnswer
 from agent.exploration import ExplorationAnswer
 from agent.focused import FocusedAnalysis
-from agent.graph import AgentState, build_followup_prompt
+from agent.graph import AgentState, build_followup_prompt, build_narrate_prompt
 from agent.nodes.classify import classify_node
 from agent.nodes.deps import GraphDeps
 from agent.quick_fact import QuickFactAnswer
@@ -272,6 +272,51 @@ def test_followup_prompt_omits_prior_section_when_none() -> None:
     user_msg = messages[-1].content
     assert isinstance(user_msg, str)
     assert "your earlier" not in user_msg
+
+
+# ── QNT-350 (P-3): narrate prior-block heading names the prior card's shape ────
+
+
+@pytest.mark.parametrize(
+    ("factory", "label"),
+    [
+        pytest.param(_thesis, "thesis", id="thesis"),
+        pytest.param(_comparison, "comparison", id="comparison"),
+        pytest.param(_focused, "focused analysis", id="focused"),
+        pytest.param(_exploration, "exploration scan", id="exploration"),
+    ],
+)
+def test_narrate_prior_block_names_prior_card_shape(factory: Any, label: str) -> None:
+    """On a narrative-only followup the narrator reads the prior card; its
+    heading must name the card's shape, not a hardcoded 'thesis' (QNT-350 P-3).
+    A prior comparison narrated as an 'earlier thesis' mislabels the substrate."""
+    payload = factory()
+    messages = build_narrate_prompt(
+        intent="followup",
+        ticker="NVDA",
+        question="why?",
+        payload_markdown="",
+        prior_thesis_markdown=payload.to_markdown(),
+        prior_answer=payload,
+    )
+    user_msg = messages[-1].content
+    assert isinstance(user_msg, str)
+    assert f"your earlier {label} on this ticker" in user_msg
+
+
+def test_narrate_prior_block_falls_back_to_thesis_without_card() -> None:
+    """Back-compat: a bare prior markdown with no card object keeps the generic
+    'thesis' heading rather than mislabelling to 'answer'."""
+    messages = build_narrate_prompt(
+        intent="followup",
+        ticker="NVDA",
+        question="why?",
+        payload_markdown="",
+        prior_thesis_markdown="some prior read",
+    )
+    user_msg = messages[-1].content
+    assert isinstance(user_msg, str)
+    assert "your earlier thesis on this ticker" in user_msg
 
 
 # ── Grounding substrate: the prior card grounds a followup (QNT-324) ──────────

@@ -39,10 +39,10 @@ the eval is the empirical check.
 
 from __future__ import annotations
 
-import re
 from typing import Any, Literal, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from shared.tickers import TICKERS
 
 # Canonical tool registry. The graph (`agent.graph`) imports this rather than
 # duplicating it; the prompt's citation list and aspect headings hardcode
@@ -608,12 +608,14 @@ def build_comparison_prompt(
 
     body = "\n\n".join(blocks)
     task_question = question or f"Compare {' and '.join(tickers)} side-by-side."
-    question_text = question.upper()
-    named_in_question = [
-        ticker
-        for ticker in tickers
-        if re.search(rf"(?<![A-Z]){re.escape(ticker)}(?![A-Z])", question_text)
-    ]
+    # QNT-350 (P-1): resolve which tickers the user actually named with the same
+    # alias-aware parser upstream extract_tickers uses, so a company-name mention
+    # ("nvidia") counts as named and is not falsely disclosed as context-derived.
+    # Imported locally to avoid an agent.intent <-> agent.prompts import cycle.
+    from agent.intent import extract_tickers
+
+    named_tickers = set(extract_tickers(question))
+    named_in_question = [ticker for ticker in tickers if ticker in named_tickers]
     context_note = ""
     if question and len(named_in_question) < len(tickers):
         context_tickers = [ticker for ticker in tickers if ticker not in named_in_question]
@@ -639,22 +641,22 @@ def build_comparison_prompt(
 # context -- there's no report block.
 CONVERSATIONAL_SYSTEM_PROMPT = (
     ANALYST_VOICE_BLOCK
-    + """You are the conversational front door of an \
+    + f"""You are the conversational front door of an \
 investment-research agent. The user said hi, asked what you can do, or asked \
 something clearly off-topic. Answer briefly and redirect to your actual \
 capabilities -- do NOT fabricate equities content.
 
 # What the agent CAN do
-* Cover ten US public equities: NVDA, AAPL, MSFT, GOOGL, AMZN, META, TSLA, \
-MU, AMD, INTC.
+* Cover these US public equities: {", ".join(TICKERS)}.
 * Pull pre-computed report types per ticker: company (business context), \
 technical (price action, RSI, MACD, moving averages across daily/weekly/\
 monthly), fundamental (P/E, EPS, revenue, margins across quarterly/annual/\
 TTM), and news (recent headlines).
-* Produce four answer shapes: a four-aspect thesis with Overweight / \
+* Produce five answer shapes: a four-aspect thesis with Overweight / \
 Neutral / Underweight verdict, a single short answer for one-metric \
-questions, a side-by-side comparison of two tickers, and focused-analysis \
-deep dives (fundamental, technical, news).
+questions, a side-by-side comparison of two tickers, focused-analysis \
+deep dives (fundamental, technical, news), and a broad exploration scan \
+of what stands out across a ticker's lenses.
 
 # Hard rules
 1. NEVER include numbers, percentages, prices, or dates in your answer. \
@@ -680,10 +682,11 @@ assistant phrasing like "I can help with information". For off-domain asks: \
 a polite "I don't know that" + a redirect. NO digits. The grader treats any \
 digit as a regression.
 * suggestions: 0 or 3 example questions the user could ask instead. Each \
-must be a complete question targeting one of the ten covered tickers and \
-one of the supported shapes (thesis / quick fact / comparison / focused). \
-For capability asks, provide exactly 3 concrete starter questions. Empty \
-list is fine only for a simple "hi" -- the user doesn't need redirection.
+must be a complete question targeting one of the covered tickers and \
+one of the supported shapes (thesis / quick fact / comparison / focused / \
+exploration). For capability asks, provide exactly 3 concrete starter \
+questions. Empty list is fine only for a simple "hi" -- the user doesn't \
+need redirection.
 
 Do not produce a thesis. Do not invent metrics. Do not write digits.
 """
@@ -1281,6 +1284,7 @@ def build_narrate_prompt(
     question: str,
     payload_markdown: str,
     prior_thesis_markdown: str | None = None,
+    prior_answer: object | None = None,
     plan_rationale: str | None = None,
     history: list[ConversationMessage] | None = None,
     is_clarify: bool = False,
@@ -1291,12 +1295,15 @@ def build_narrate_prompt(
     that just landed -- the narrator reads it the same way a human would
     read the card on the page. For the conversational-followup path the
     structured payload is empty; ``prior_thesis_markdown`` carries the
-    prior turn's thesis (via :meth:`Thesis.to_markdown`) so the narrator
-    has something to react to.
+    prior turn's rendered card (via ``to_markdown``) so the narrator has
+    something to react to, and ``prior_answer`` is the hydrated card itself,
+    used only to label the prior block with its shape (QNT-350 P-3) -- a prior
+    comparison is headed "your earlier comparison", not "thesis".
     """
     if prior_thesis_markdown:
+        label = _prior_answer_label(prior_answer) if prior_answer is not None else "thesis"
         prior_block = (
-            "\n# Prior turn (your earlier thesis on this ticker)\n"
+            f"\n# Prior turn (your earlier {label} on this ticker)\n"
             f"{_sanitize_report_body(prior_thesis_markdown)}\n"
         )
     else:
@@ -1430,6 +1437,17 @@ _PRIOR_ANSWER_LABEL: dict[str, str] = {
 }
 
 
+def _prior_answer_label(prior_answer: object | None) -> str:
+    """Human shape-word for a hydrated prior card (QNT-324/350).
+
+    Keyed by class name so this module stays schema-light (it imports no answer
+    shapes); an unrecognized payload falls back to the generic ``answer``.
+    Shared by ``build_followup_prompt`` and ``build_narrate_prompt`` so a prior
+    comparison/focused/exploration card is never mislabelled as a thesis.
+    """
+    return _PRIOR_ANSWER_LABEL.get(type(prior_answer).__name__, "answer")
+
+
 def build_followup_prompt(
     ticker: str,
     question: str,
@@ -1461,7 +1479,7 @@ def build_followup_prompt(
         except Exception:  # noqa: BLE001 — never let formatting kill the followup
             prior_md = ""
         if prior_md:
-            label = _PRIOR_ANSWER_LABEL.get(type(prior_answer).__name__, "answer")
+            label = _prior_answer_label(prior_answer)
             prior_section = (
                 f"\n# Prior turn (your earlier {label} on this ticker)\n"
                 f"{_sanitize_report_body(prior_md)}\n"

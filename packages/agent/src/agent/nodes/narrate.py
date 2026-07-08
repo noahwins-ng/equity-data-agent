@@ -145,12 +145,14 @@ def narrate_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> 
     # reacts to. For other intents the payload above already carries
     # everything narrate needs.
     prior_thesis_markdown: str | None = None
+    prior_answer_obj: object | None = None
     if intent == "followup" and not payload_markdown:
         prior_thesis = state.get("prior_answer")
         prior_to_md: Any = getattr(prior_thesis, "to_markdown", None)
         if callable(prior_to_md):
             try:
                 prior_thesis_markdown = graph._strip_disclaimer(str(prior_to_md()))
+                prior_answer_obj = prior_thesis
             except Exception:  # noqa: BLE001
                 prior_thesis_markdown = None
 
@@ -205,6 +207,7 @@ def narrate_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> 
         question=question,
         payload_markdown=payload_markdown,
         prior_thesis_markdown=prior_thesis_markdown,
+        prior_answer=prior_answer_obj,
         plan_rationale=state.get("plan_rationale"),
         history=graph._history_before_current(
             state.get("messages"), question, max_turns=history_budget
