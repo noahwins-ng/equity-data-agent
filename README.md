@@ -1,6 +1,6 @@
 # Equity Data Agent
 
-> Production-style AI/data engineering project for US equities. The agent writes
+> Production-deployed AI/data engineering project for US equities. The agent writes
 > an investment thesis but is **not allowed to invent or calculate numbers** —
 > Dagster computes them, FastAPI prints them into report strings, and LangGraph
 > reasons over those reports. An eval checks every number in the answer against
@@ -13,7 +13,7 @@
 
 ## Highlights
 
-A 30-second scan, split by discipline. Every cell is backed by a section below.
+A 30-second scan across both disciplines. The lead is AI engineering — the grounded, eval-guarded agent — resting on a data platform built to make that grounding guarantee possible. Every cell is backed by a section below.
 
 | Data engineering | AI engineering |
 |---|---|
@@ -48,11 +48,11 @@ Beyond the two pillars above:
 |---|---|
 | Product engineering | Next.js 16 app: watchlist, ticker detail, charting, fundamentals, news, persistent SSE chat panel |
 | Production ops | Hetzner Docker Compose + Vercel + Cloudflare tunnel; deploy gates with auto-rollback, autoheal, alerts, runbooks |
-| Engineering process | 22 ADRs, 7 phase retros, 1,200+ tests, security scanners, model-bench history |
+| Engineering process | 27 ADRs, 7 phase retros, 1,700+ tests, security scanners, model-bench history |
 
 ![Phases](https://img.shields.io/badge/phases-7%2F7%20complete-2ea44f)
-![Tests](https://img.shields.io/badge/tests-1200%2B%20passing-2ea44f)
-![ADRs](https://img.shields.io/badge/ADRs-22-1f6feb)
+![Tests](https://img.shields.io/badge/tests-1700%2B%20passing-2ea44f)
+![ADRs](https://img.shields.io/badge/ADRs-27-1f6feb)
 ![Golden set](https://img.shields.io/badge/golden__set-41%20questions-1f6feb)
 ![Prod](https://img.shields.io/badge/prod-live-success)
 
@@ -160,12 +160,21 @@ Two concerns, kept separate: **provenance** (numbers are copied from reports, no
 - retrieval IR metrics ([`retrieval_eval.py`](packages/agent/src/agent/evals/retrieval_eval.py): recall@k / MRR / nDCG);
 - LLM-judged RAGAS + G-Eval ([`deepeval_eval.py`](packages/agent/src/agent/evals/deepeval_eval.py), off the hot path) and RAG routing ([`news_search_eval.py`](packages/agent/src/agent/evals/news_search_eval.py)).
 
-Latest clean-window golden run (`groq/llama-3.3-70b-versatile`): **tool_call 40/40, hallucination 38/40, cosine 0.41**. Both flags were scorer false positives on glued magnitude units (e.g. `$2.5T`) — fixed by sharpening the scorer, not loosening the contract ([#411](https://github.com/noahwins-ng/equity-data-agent/pull/411)). The suite earns its keep by disqualifying production-candidate models (Qwen3-32B fabrications and leaked `<think>` blocks; GPT-OSS-120B once the golden set grew) — full comparison and the quality-before-capacity rationale in [`docs/model-bench-2026-04.md`](docs/model-bench-2026-04.md).
+**Results** — latest clean-window run on the current primary (`deepseek-v4-flash` via OpenRouter, [ADR-025](docs/decisions/025-paid-launch-primary-and-breaker-recalibration.md)); full history in [`docs/model-bench-2026-04.md`](docs/model-bench-2026-04.md):
+
+| Suite | Latest | Per-PR CI gate |
+|---|---|---|
+| Golden regression — tool-call / grounding / answer-cosine | 40/41 · 40/41 · 0.43 | dev harness (directional) |
+| Retrieval (hybrid + Cohere rerank) — recall@5 / recall@20 | 0.53 / 0.76 | blocking (floors 0.45 / 0.68) |
+| Retrieval — MRR / nDCG@10 | 0.94 / 0.79 | blocking (floors 0.85 / 0.70) |
+| Number grounding (frozen artifacts) | pass | blocking — red on any unsupported numeric |
+
+Economics: ~`$0.002` per thesis on the paid DeepSeek primary ([ADR-026](docs/decisions/026-paid-synthesis-economics-and-free-tier-simplification-dividend.md)); the earlier "near-zero free-tier" framing is retired. Golden flags seen in earlier runs were scorer false positives on glued magnitude units (e.g. `$2.5T`) — fixed by sharpening the scorer, not loosening the contract ([#411](https://github.com/noahwins-ng/equity-data-agent/pull/411)). The suite earns its keep by disqualifying production-candidate models (Qwen3-32B fabrications and leaked `<think>` blocks; GPT-OSS-120B once the golden set grew).
 
 ### Where this breaks at scale
 
 - **Bench breadth** — one prompt revision × 41 questions is directional, not a leaderboard.
-- **Free-tier ceilings** — Groq/Gemini TPD/RPD caps; real traffic means paid tiers or self-hosting.
+- **Fallback on free tiers** — the primary is paid (DeepSeek), but the Nemotron fallback anchor and the Groq small-tier still inherit RPD/TPD caps; sustained load leans further into paid inference or self-hosting.
 - **Retrieval depth** — reranking is query-time only, and one MiniLM-384 embedder serves both corpora.
 - **No fine-tuning** — behaviour is prompt- and routing-shaped.
 
@@ -212,7 +221,7 @@ Standard data-engineering patterns under Dagster-native names:
 |---|---|
 | Frontend | Next.js 16, React 19, Tailwind, TradingView Lightweight Charts, Vercel |
 | API | FastAPI, SSE, Pydantic settings, SlowAPI rate limits, Sentry |
-| Agent | LangGraph, LangChain, LiteLLM, Groq default, Gemini override, Cohere rerank, Langfuse |
+| Agent | LangGraph, LangChain, LiteLLM, paid DeepSeek primary, Groq small-tier, Nemotron fallback, Cohere rerank, Langfuse |
 | Data | Dagster, ClickHouse, Qdrant Cloud, Pandera, yfinance, Finnhub, SEC Edgar |
 | Eval | pytest harness, ir-measures, DeepEval (RAGAS + G-Eval), LLM-as-judge |
 | Infra | uv workspaces, Docker Compose, Hetzner CX41, Cloudflare named tunnel |
@@ -227,11 +236,18 @@ Backend on a Hetzner VPS (Docker Compose); frontend on Vercel. FastAPI is reache
 - **Observability & alerts** — UptimeRobot, Sentry, Langfuse, Prometheus/Grafana, cAdvisor, node_exporter, Dozzle; Discord alerts for Dagster failures, container events, and infra. Failure-mode [runbook](docs/guides/ops-runbook.md).
 - **Secrets** — SOPS-encrypted, decrypted at deploy time.
 
-Key tradeoffs: [ADR-003 Intelligence vs. Math](docs/decisions/003-intelligence-vs-math.md) · [ADR-011 LLM Routing](docs/decisions/011-llm-routing-groq-default-gemini-override.md) · [ADR-017 Public Chat, No Auth](docs/decisions/017-public-chat-truly-public-no-auth.md) · [ADR-018 Cloudflare Tunnel](docs/decisions/018-cloudflare-quick-tunnel-for-https-ingress.md).
+Key tradeoffs: [ADR-003 Intelligence vs. Math](docs/decisions/003-intelligence-vs-math.md) · [ADR-025 Paid Inference Primary](docs/decisions/025-paid-launch-primary-and-breaker-recalibration.md) · [ADR-017 Public Chat, No Auth](docs/decisions/017-public-chat-truly-public-no-auth.md) · [ADR-018 Cloudflare Tunnel](docs/decisions/018-cloudflare-quick-tunnel-for-https-ingress.md).
 
 ## Quick Start
 
-Prerequisites: Python 3.12+, [`uv`](https://docs.astral.sh/uv/), Docker, Node, and provider API keys.
+Prerequisites: Python 3.12+, [`uv`](https://docs.astral.sh/uv/), Docker, Node.
+
+Minimum keys to run a thesis: an `OPENROUTER_API_KEY` (the DeepSeek primary) is the only required LLM key; RAG news search additionally needs a Qdrant Cloud URL/key and a Cohere key. The warehouse is reachable two ways — tunnel to a running ClickHouse, or start a throwaway local one (the `.env.example` default assumes the maintainer's SSH tunnel, so a fresh clone should take the local path):
+
+```bash
+docker run -d -p 8123:8123 clickhouse/clickhouse-server:24-alpine
+make migrate && make seed   # DDL + a fast 30-day x 3-ticker seed
+```
 
 ```bash
 git clone https://github.com/noahwins-ng/equity-data-agent.git
@@ -250,9 +266,26 @@ uv run python -m agent analyze NVDA
 
 Checks: `make lint` · `make test` · `npm --prefix frontend run lint` · `uv run python -m agent.evals`
 
+## Where to Look in the Code
+
+Straight to the load-bearing work:
+
+| What | Where |
+|---|---|
+| Agent graph (classify -> route -> synthesize -> narrate) | [`packages/agent/src/agent/graph.py`](packages/agent/src/agent/graph.py) |
+| Intent router + deterministic clarify gate | [`packages/agent/src/agent/intent.py`](packages/agent/src/agent/intent.py) |
+| Number-grounding / hallucination scorer | [`packages/agent/src/agent/evals/hallucination.py`](packages/agent/src/agent/evals/hallucination.py) |
+| Retrieval pipeline (hybrid dense+BM25 RRF, rerank) | [`packages/shared/src/shared/retrieval.py`](packages/shared/src/shared/retrieval.py) |
+| Data asset checks (dbt-test equivalent) | [`packages/dagster-pipelines/.../asset_checks/`](packages/dagster-pipelines/src/dagster_pipelines/asset_checks) |
+| Pandera source contracts | [`packages/shared/src/shared/contracts.py`](packages/shared/src/shared/contracts.py) |
+
 ## Documentation
 
 - [`docs/INDEX.md`](docs/INDEX.md) — documentation map.
 - [`docs/project-requirement.md`](docs/project-requirement.md) — current requirements and architecture spec.
 - [`docs/architecture/system-overview.md`](docs/architecture/system-overview.md) — system boundaries and data flow.
 - [`docs/decisions/`](docs/decisions/) — ADRs · [`docs/retros/`](docs/retros/) — phase retrospectives · [`docs/guides/ops-runbook.md`](docs/guides/ops-runbook.md) — failure-mode catalog.
+
+---
+
+Built by Noah Ng. Licensed under [MIT](LICENSE).
