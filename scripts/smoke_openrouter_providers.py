@@ -74,9 +74,10 @@ from langchain_openai import ChatOpenAI
 from shared.config import settings
 
 # The ordered top-6 provider set pinned on equity-agent/default in
-# litellm_config.yaml (QNT-318 / ADR-027). Kept in the same order for readability;
-# this smoke pins each one INDIVIDUALLY, so order does not affect the result.
-PINNED_PROVIDERS = ["novita", "deepinfra", "gmicloud", "deepseek", "alibaba", "baidu"]
+# litellm_config.yaml (QNT-318 / ADR-027; reordered QNT-351 to deepseek-first —
+# the only implicit-caching endpoint). Kept in pin order for readability; this
+# smoke pins each one INDIVIDUALLY, so order does not affect the result.
+PINNED_PROVIDERS = ["deepseek", "baidu", "alibaba", "novita", "gmicloud", "deepinfra"]
 
 # The proxy alias the agent uses; resolves to openrouter/deepseek/deepseek-v4-flash
 # with reasoning disabled + the QNT-318 provider pin.

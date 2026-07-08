@@ -51,37 +51,75 @@ model_list:
       # budget, and uniform narrate grounding misses. Disabling it (verified:
       # reasoning_tokens -> 0, clean content) restores the fast non-reasoning
       # model the ADR-025 economics assume. See ADR-025.
+      # QNT-351: cap synthesize output verbosity. The QNT-258 flip grew the
+      # structured synthesize payload from ~410 output tokens median to ~920
+      # (range 390-2430), and the 1500-2430 outliers are the slow-decode latency
+      # tail (more tokens x ~80 tok/s decode). 1500 sits just above the normal
+      # synthesize ceiling (median 920, p-high ~1400) so normal payloads and
+      # narrate (~197 median) are untouched, and pulls in the outlier band. A
+      # truncated structured payload fails to parse and `_structured_call`
+      # fail-closes to the deterministic fallback (bounded blast radius), which
+      # is the accepted trade for cutting the runaway tail. Derived from the prod
+      # output-token distribution (Langfuse default-alias generations 07-04..08).
+      # Also inherited by the recursive equity-agent/small -> equity-agent/default
+      # fallback (classify/plan on Groq throttle), but those outputs are tiny
+      # (classify ~11 tokens, ThesisPlan 2-4 tool names) so 1500 never binds there.
+      max_tokens: 1500
       extra_body:
         reasoning:
           enabled: false
-        # QNT-318 / ADR-027: prefix caching. `deepseek-v4-flash` is served on
-        # OpenRouter by ~16 providers, EACH with its own KV cache, and by
-        # default OpenRouter load-balances across them — so consecutive
-        # synthesize calls hit different providers and the large stable prefix
-        # (SYSTEM_PROMPT + force-injected reports) never reuses a warm cache
-        # (measured: cached_tokens=0 unpinned). Pinning an ORDERED preference
-        # makes routing sticky to the first available provider, so its prefix
-        # cache warms and stays warm (measured live: Novita 100% cached prefix,
-        # 9,472/9,487 tokens, stable across calls). `allow_fallbacks: false`
-        # keeps routing inside this curated top-6 set (by OpenRouter token
-        # share). Order puts the three privacy-compliant providers FIRST
-        # (novita/deepinfra/gmicloud) so caching happens there; the three
-        # data-retaining providers (deepseek/alibaba/baidu) sit last as deep
-        # resilience only. `data_collection: allow` scopes the privacy
-        # relaxation to THIS alias (user decision, ADR-027 — the public-equity
-        # chat carries no PII; ADR-017), leaving the account default strict for
-        # the eval judge and every other alias. Cache reads bill ~0.2x input on
-        # these providers, cutting the input-dominated bill (ADR-026, ~12:1).
+        # QNT-318 -> QNT-351 / ADR-027 (amended): prefix caching via a sticky
+        # provider pin. `deepseek-v4-flash` is served on OpenRouter by ~16
+        # providers, EACH with its own KV cache; unpinned, OpenRouter
+        # load-balances so consecutive synthesize calls hit different providers
+        # and the large stable prefix (SYSTEM_PROMPT + force-injected reports)
+        # never reuses a warm cache (measured: cached_tokens=0). Pinning an
+        # ORDERED preference makes routing sticky to the first available
+        # provider so its prefix cache warms and stays warm.
+        #
+        # QNT-351 REVERSAL of the QNT-318 premise: OpenRouter endpoint metadata
+        # (/models/deepseek/deepseek-v4-flash/endpoints, supports_implicit_caching)
+        # now reports implicit caching FALSE for Novita and EVERY provider except
+        # first-party DeepSeek (TRUE). Novita's cache never warmed organically in
+        # prod (07-04..08: 27 of 33 structured calls cached_tokens=0; the only
+        # hits were back-to-back bursts). So first-party DeepSeek leads: it is the
+        # ONLY implicit-caching endpoint, near-top decode (p50 71 tok/s), best
+        # uptime (99.90), and cache reads bill 0.0028/M ~= 0.02x input (vs Novita
+        # 0.2x that never materialized). Measured live: back-to-back deepseek
+        # calls warm ~84-95% of the prefix, dropping call-2 cost ~14x.
+        #
+        # Reaching first-party DeepSeek needed an ACCOUNT-level privacy relaxation
+        # (QNT-351 user decision), NOT just this per-request `data_collection:
+        # allow` — the endpoint sits behind an account guardrail that a raw
+        # `only:[deepseek]` call 404s on ("No endpoints available matching your
+        # guardrail restrictions and data policy") until openrouter.ai/settings/
+        # privacy admits data-collection providers. This REVERSES ADR-027's
+        # rejected "relax the account-level data policy" alternative: the account
+        # default is now relaxed, widening routing eligibility account-wide (incl.
+        # the DeepEval judge). `data_collection: allow` is kept here to keep the
+        # intent explicit at the alias. Public-equity chat carries no PII (ADR-017).
+        #
+        # Remaining order re-derived from live endpoint stats (throughput_last_30m
+        # p50 / uptime / input price / quant), as pure resilience reached only if
+        # DeepSeek is down: baidu (p50 70, cheapest input 0.098/M, fp8) ->
+        # alibaba (p50 60, 99.57 up) -> novita (p50 53, fp8) -> gmicloud (p50 22,
+        # 90.86 up — kept but deep) -> deepinfra LAST (p50 17, fp4: slowest +
+        # quantized). `allow_fallbacks: false` keeps routing inside this curated
+        # set; if all six are down the litellm fallback to the Nemotron anchor
+        # fires. `require_parameters: true` makes OpenRouter route only to
+        # endpoints that honor the request's response_format/json_schema (all 16
+        # advertise structured_outputs, but QNT-258 proved advertise != enforce).
         provider:
           order:
-            - novita
-            - deepinfra
-            - gmicloud
             - deepseek
-            - alibaba
             - baidu
+            - alibaba
+            - novita
+            - gmicloud
+            - deepinfra
           allow_fallbacks: false
           data_collection: allow
+          require_parameters: true
       # QNT-223 (#12) / ADR-021: bound the throttled tail — carried forward. A
       # throttled primary call is aborted at 45s and falls through to the
       # fallback anchor (fallback-nemotron-ultra) within the SAME client call,
