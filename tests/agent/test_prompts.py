@@ -23,6 +23,7 @@ from agent import graph as graph_module
 from agent.graph import REPORT_TOOLS, ThesisPlan, build_graph
 from agent.prompts import (
     COMPARISON_SYSTEM_PROMPT,
+    CONVERSATIONAL_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     THESIS_ASPECTS,
     build_comparison_prompt,
@@ -561,6 +562,50 @@ def test_comparison_prompt_discloses_context_ticker_when_question_names_one() ->
     user_text = messages[-1].content
     assert isinstance(user_text, str)
     assert "NVDA came from the current page or thread context" in user_text
+
+
+def test_comparison_prompt_no_disclosure_when_alias_names_both_tickers() -> None:
+    """QNT-350 (P-1): the named-in-question check resolves company-name aliases
+    the same way upstream extract_tickers does. "compare nvidia and amd" names
+    BOTH tickers, so neither is falsely disclosed as page/thread context."""
+    messages = build_comparison_prompt(
+        ["NVDA", "AMD"],
+        "compare nvidia and amd",
+        {"NVDA": {"company": "Nvidia report"}, "AMD": {"company": "AMD report"}},
+    )
+    user_text = messages[-1].content
+    assert isinstance(user_text, str)
+    assert "came from the current page or thread context" not in user_text
+
+
+def test_comparison_prompt_discloses_genuinely_context_filled_ticker() -> None:
+    """QNT-350 (P-1): a ticker the user did NOT name (page/thread context) still
+    earns its disclosure note -- the alias fix must not suppress the real case."""
+    messages = build_comparison_prompt(
+        ["NVDA", "AMD"],
+        "compare with amd",
+        {"NVDA": {"company": "Nvidia report"}, "AMD": {"company": "AMD report"}},
+    )
+    user_text = messages[-1].content
+    assert isinstance(user_text, str)
+    assert "NVDA came from the current page or thread context" in user_text
+
+
+def test_conversational_prompt_ticker_list_derives_from_registry() -> None:
+    """QNT-350 (P-2): the covered-ticker sentence is built from
+    shared.tickers.TICKERS, not a hardcoded prose list that drifts on a swap."""
+    from shared.tickers import TICKERS
+
+    assert ", ".join(TICKERS) in CONVERSATIONAL_SYSTEM_PROMPT
+    for ticker in TICKERS:
+        assert ticker in CONVERSATIONAL_SYSTEM_PROMPT
+
+
+def test_conversational_prompt_names_exploration_shape() -> None:
+    """QNT-350 (P-2): exploration is a real user-reachable answer shape and must
+    appear in the capability copy alongside the other four."""
+    assert "five answer shapes" in CONVERSATIONAL_SYSTEM_PROMPT
+    assert "exploration" in CONVERSATIONAL_SYSTEM_PROMPT.lower()
 
 
 def test_system_prompt_prior_session_delta_rule_present() -> None:
