@@ -217,6 +217,7 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
             history=graph._history_before_current(
                 state.get("messages"), question, max_turns=history_budget
             ),
+            errors=errors,
         )
         comparison = graph._structured_call(
             graph.ComparisonAnswer, prompt, config, "comparison-prompt"
@@ -244,6 +245,7 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
             history=graph._history_before_current(
                 state.get("messages"), question, max_turns=history_budget
             ),
+            errors=errors,
         )
         exploration = graph._structured_call(
             graph.ExplorationAnswer, prompt, config, "exploration-prompt"
