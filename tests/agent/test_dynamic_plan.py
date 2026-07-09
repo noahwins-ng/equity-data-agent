@@ -352,7 +352,11 @@ def test_partial_thesis_prompt_names_supplied_reports_and_missing_aspect_rule() 
 
     system_message = str(prompt[0].content)
     user_message = str(prompt[1].content)
-    assert 'summary`` to "Not fetched for this question."' in system_message
+    # QNT-355 (H-2): the missing-aspect rule now branches -- a report that
+    # simply was not planned still falls back to "Not fetched for this
+    # question.", while a report whose fetch FAILED is named as unavailable.
+    assert 'write "Not fetched for this question."' in system_message
+    assert "The <name> report was unavailable this turn." in system_message
     assert "Base the verdict only on the supplied reports." in system_message
     assert "Supplied reports: company, fundamental" in user_message
     assert "technical report" not in user_message

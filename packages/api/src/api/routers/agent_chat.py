@@ -154,6 +154,7 @@ from agent.graph import (
     RETRIEVAL_SPECS,
     analytical_followup_suggestions,
     build_graph,
+    parse_as_of,
 )
 from agent.llm import (
     ServedModelTracker,
@@ -258,14 +259,6 @@ _RETRIEVAL_FETCHERS: dict[str, Callable[[str, str], str]] = {
 }
 
 
-# QNT-299: report templates append a uniform ``AS_OF: YYYY-MM-DD`` footer
-# (see api.formatters.format_as_of_footer) as the LAST line of the report
-# body. Anchored to the end of the body (rather than a bare search) so a
-# folded RAG hit or a headline snippet earlier in the body can never be
-# misread as the report's own footer -- only the literal trailing line counts.
-_AS_OF_PATTERN = re.compile(r"AS_OF: (\d{4}-\d{2}-\d{2})\s*$")
-
-
 def _report_bundles(
     reports: dict[str, str], reports_by_ticker: dict[str, dict[str, str]]
 ) -> list[dict[str, str]]:
@@ -296,10 +289,10 @@ def _extract_data_as_of(bundles: list[dict[str, str]]) -> str | None:
     graph, or a comparison_metrics JSON blob that carries no footer line).
     """
     dates = [
-        m.group(1)
+        as_of.isoformat()
         for bundle in bundles
         for body in bundle.values()
-        if (m := _AS_OF_PATTERN.search(body))
+        if (as_of := parse_as_of(body)) is not None
     ]
     return min(dates) if dates else None
 

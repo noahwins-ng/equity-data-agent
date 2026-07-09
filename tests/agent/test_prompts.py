@@ -27,9 +27,10 @@ from agent.prompts import (
     SYSTEM_PROMPT,
     THESIS_ASPECTS,
     build_comparison_prompt,
+    build_quick_fact_prompt,
     build_synthesis_prompt,
 )
-from agent.prompts.system import _sanitize_report_body
+from agent.prompts.system import QUICK_FACT_SYSTEM_PROMPT, _sanitize_report_body
 from agent.thesis import Thesis
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
@@ -329,6 +330,54 @@ def test_build_synthesis_prompt_uses_default_question() -> None:
     purpose statement."""
     messages = build_synthesis_prompt("NVDA", "", {"technical": "x"})
     assert "Provide a balanced investment thesis." in str(messages[1].content)
+
+
+# ─── QNT-355 (H-2): fetch-failure surfaced to the synthesize prompt ──────────
+
+
+def test_build_synthesis_prompt_renders_failed_fetch_line() -> None:
+    """AC2: a required report whose fetch failed this turn (recorded in
+    ``state['errors']``) is named on an explicit ``Failed to fetch:`` line so
+    the model can tell "the fetch broke" from "I chose not to look"."""
+    messages = build_synthesis_prompt(
+        ticker="NVDA",
+        question="Is NVDA a buy?",
+        reports={"technical": "RSI 62"},
+        errors={"fundamental": "[error] http: 503"},
+    )
+    user_content = str(messages[1].content)
+    assert "Failed to fetch: fundamental" in user_content
+
+
+def test_build_synthesis_prompt_omits_failed_fetch_line_when_no_errors() -> None:
+    """The failed-fetch line only renders when a fetch actually failed -- a
+    clean turn must not print an empty ``Failed to fetch:`` line."""
+    messages = build_synthesis_prompt(
+        ticker="NVDA",
+        question="Is NVDA a buy?",
+        reports={"technical": "RSI 62"},
+    )
+    assert "Failed to fetch:" not in str(messages[1].content)
+
+
+def test_build_quick_fact_prompt_renders_failed_fetch_line() -> None:
+    """AC2: the quick_fact user message surfaces the same failed-fetch line."""
+    messages = build_quick_fact_prompt(
+        ticker="NVDA",
+        question="What's the P/E?",
+        reports={"technical": "RSI 62"},
+        errors={"fundamental": "[error] http: 503"},
+    )
+    assert "Failed to fetch: fundamental" in str(messages[1].content)
+
+
+def test_system_prompt_instructs_naming_the_failed_report() -> None:
+    """AC2: both synthesize prompts must instruct the model to NAME an
+    unavailable report rather than defaulting to "not fetched"."""
+    assert "Failed to fetch:" in SYSTEM_PROMPT
+    assert "unavailable this turn" in SYSTEM_PROMPT
+    assert "Failed to fetch:" in QUICK_FACT_SYSTEM_PROMPT
+    assert "unavailable this turn" in QUICK_FACT_SYSTEM_PROMPT
 
 
 def test_build_synthesis_prompt_uses_fenced_delimiters_not_h2() -> None:

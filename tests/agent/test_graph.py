@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
+from datetime import date, timedelta
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -38,8 +39,10 @@ from agent.graph import (
     _parse_plan,
     _quick_fact_cited_value_supported,
     _quick_fact_grounding,
+    _reports_freshness,
     _runtime_grounding_check,
     build_graph,
+    parse_as_of,
 )
 from agent.quick_fact import QuickFactAnswer
 from agent.thesis import Thesis
@@ -375,6 +378,133 @@ def test_composite_confidence_covers_each_factor() -> None:
     assert _composite_confidence(0.5, 1.0, 1.0) == 0.5
     assert _composite_confidence(1.0, 0.5, 1.0) == 0.5
     assert _composite_confidence(1.0, 1.0, 0.5) == 0.5
+
+
+# ─── QNT-355 (H-1): AS_OF freshness folded into composite confidence ──────────
+
+
+def _report_with_as_of(body: str, days_ago: int) -> str:
+    """A report body ending in an AS_OF footer dated ``days_ago`` days back."""
+    as_of = (date.today() - timedelta(days=days_ago)).isoformat()
+    return f"{body}\nAS_OF: {as_of}"
+
+
+def test_parse_as_of_reads_trailing_footer_only() -> None:
+    """The parser anchors to the trailing footer -- an AS_OF-looking line
+    earlier in the body (e.g. a folded headline) is not the report's date."""
+    assert parse_as_of("RSI 62\nAS_OF: 2026-07-01") == date(2026, 7, 1)
+    assert parse_as_of("mentions AS_OF: 2020-01-01 mid-body\nAS_OF: 2026-07-01") == date(2026, 7, 1)
+    assert parse_as_of("RSI 62 (no footer)") is None
+    assert parse_as_of("AS_OF: N/M (no dated data available)") is None
+    # Total by contract: a pattern-matching but calendar-invalid date yields
+    # None, never a ValueError -- the narrate/SSE call sites are un-guarded.
+    assert parse_as_of("RSI 62\nAS_OF: 2026-13-45") is None
+
+
+def test_reports_freshness_fresh_reports_are_neutral() -> None:
+    """Reports within their cadence (technical today, fundamental 45 days --
+    inside a quarter) leave freshness neutral at 1.0."""
+    state: AgentState = {
+        "ticker": "NVDA",
+        "reports": {
+            "technical": _report_with_as_of("RSI 62", 0),
+            "fundamental": _report_with_as_of("P/E 28", 45),
+        },
+    }
+    assert _reports_freshness(state) == 1.0
+
+
+def test_reports_freshness_stale_report_decays() -> None:
+    """A month-old daily technical report is well past its ~5-day cadence, so
+    freshness drops below 1.0."""
+    state: AgentState = {
+        "ticker": "NVDA",
+        "reports": {"technical": _report_with_as_of("RSI 62", 30)},
+    }
+    assert _reports_freshness(state) < 1.0
+
+
+def test_reports_freshness_stalest_report_caps_the_factor() -> None:
+    """The stalest report bounds the whole answer -- a fresh technical does not
+    rescue a badly stale fundamental."""
+    state: AgentState = {
+        "ticker": "NVDA",
+        "reports": {
+            "technical": _report_with_as_of("RSI 62", 0),
+            "fundamental": _report_with_as_of("P/E 28", 300),
+        },
+    }
+    freshness = _reports_freshness(state)
+    assert freshness < 1.0
+    # ~100-day horizon / 300-day age
+    assert freshness == pytest.approx(100 / 300, abs=0.01)
+
+
+def test_reports_freshness_neutral_when_no_footer() -> None:
+    """No parseable footer (stub graph / canned digest) is never penalised."""
+    state: AgentState = {"ticker": "NVDA", "reports": {"technical": "RSI 62"}}
+    assert _reports_freshness(state) == 1.0
+
+
+def test_reports_freshness_reads_comparison_bundles() -> None:
+    """A comparison turn stores per-ticker bundles in reports_by_ticker; the
+    stalest side across every ticker caps freshness."""
+    state: AgentState = {
+        "ticker": "NVDA",
+        "reports_by_ticker": {
+            "NVDA": {"technical": _report_with_as_of("RSI 62", 0)},
+            "AMD": {"technical": _report_with_as_of("RSI 40", 40)},
+        },
+    }
+    assert _reports_freshness(state) < 1.0
+
+
+def test_backdated_reports_lower_composite_confidence_vs_fresh() -> None:
+    """AC3 receipt: identical coverage + grounding, but backdated AS_OF
+    fixtures yield a lower composite confidence than fresh ones."""
+    fresh: AgentState = {
+        "ticker": "NVDA",
+        "reports": {"fundamental": _report_with_as_of("P/E 28", 10)},
+    }
+    stale: AgentState = {
+        "ticker": "NVDA",
+        "reports": {"fundamental": _report_with_as_of("P/E 28", 400)},
+    }
+    fresh_conf = _composite_confidence(1.0, 1.0, _reports_freshness(fresh))
+    stale_conf = _composite_confidence(1.0, 1.0, _reports_freshness(stale))
+    assert fresh_conf == 1.0
+    assert stale_conf < fresh_conf
+
+
+# ─── QNT-355 (H-2): required-tool failure named in the synthesize prompt ─────
+
+
+def _error_tool(kind: str) -> ToolFn:
+    """A never-raise tool that degrades to the ``[error] ...`` contract string,
+    simulating a required report whose fetch failed after retries."""
+
+    def tool(ticker: str) -> str:
+        return f"[error] {kind}: simulated failure for {ticker}"
+
+    return tool
+
+
+def test_required_tool_failure_reaches_synthesize_prompt(stub_llm: _StructuredLLM) -> None:
+    """AC3 receipt: a required report whose fetch fails is recorded in
+    ``errors`` AND surfaced to the synthesize prompt as a ``Failed to fetch:``
+    line, so the model can name it as unavailable this turn."""
+    stub_llm.invoke.return_value = AIMessage(content="technical, fundamental, news")
+    tools = {name: _mock_tool(name) for name in REPORT_TOOLS}
+    tools["fundamental"] = _error_tool("http")
+    graph = build_graph(tools)
+
+    result = _run(graph)
+
+    assert "fundamental" in result["errors"]
+    assert "fundamental" not in result["reports"]
+    synthesize_prompt = stub_llm.structured_invoke.call_args.args[0]
+    user_message = str(synthesize_prompt[-1].content)
+    assert "Failed to fetch: fundamental" in user_message
 
 
 def test_missing_news_tool_is_silently_skipped(stub_llm: _StructuredLLM) -> None:
