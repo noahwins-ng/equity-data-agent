@@ -3,12 +3,14 @@
 Each tool fetches a pre-rendered text report from the FastAPI layer and
 returns the body as a string for LLM consumption. Tools never raise —
 every failure path (HTTP error, unreachable endpoint, timeout, unknown
-ticker) returns a descriptive error string so the synthesize prompt can
-note the gap the way it already notes missing reports. The retry /
-error-recording machinery in ``agent.graph._gather_reports`` is still
-exercised if a tool throws for any other reason (import failure, URL
-construction bug), so the never-raise contract is the first line of
-defence, not the only one.
+ticker) returns a descriptive ``[error] <kind>: <detail>`` string.
+``agent.support._gather_reports`` records that string in ``state["errors"]``,
+which ``_build_user_message`` surfaces to the synthesize prompt as a
+"Failed to fetch: <name>" line (QNT-355) -- so the model names a report whose
+fetch broke as unavailable this turn, distinct from a report that was simply
+not planned. The retry / error-recording machinery is still exercised if a
+tool throws for any other reason (import failure, URL construction bug), so
+the never-raise contract is the first line of defence, not the only one.
 
 Tool-contract block (ADR-003 / QNT-57 Phase 4 lesson):
 

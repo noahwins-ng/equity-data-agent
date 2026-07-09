@@ -28,6 +28,7 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
     ticker = state["ticker"]
     question = state.get("question", "")
     reports = state.get("reports", {})
+    errors = state.get("errors", {})
     plan = state.get("plan", [])
     intent = state.get("intent", "thesis")
     confidence = graph._confidence_from_reports(reports, plan)
@@ -327,6 +328,7 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
             history=graph._history_before_current(
                 state.get("messages"), question, max_turns=history_budget
             ),
+            errors=errors,
         )
         quick_fact = graph._structured_call(
             graph.QuickFactAnswer, prompt, config, "quick-fact-prompt"
@@ -350,6 +352,7 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
         history=graph._history_before_current(
             state.get("messages"), question, max_turns=history_budget
         ),
+        errors=errors,
     )
     # ``_structured_call(Thesis, ...)`` forces the LLM into the four-section
     # schema. Errors from a misbehaving provider (Gemini occasionally

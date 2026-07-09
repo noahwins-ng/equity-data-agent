@@ -44,6 +44,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable
+from datetime import date
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from langchain_core.exceptions import OutputParserException
@@ -505,6 +506,88 @@ def _grounding_rate(result: HallucinationResult) -> float:
     return round(supported / total, 2)
 
 
+# QNT-355 (H-1): the AS_OF footer parser. QNT-299 appends a uniform
+# ``AS_OF: YYYY-MM-DD`` line (see api.formatters.format_as_of_footer) as the LAST
+# line of every report body; this is its single reader. Anchored to end-of-body
+# (rather than a bare search) so a folded RAG hit or headline snippet earlier in
+# the body can never be misread as the report's own footer. Also consumed by the
+# SSE data_as_of surface (api.routers.agent_chat), which imports it from here --
+# so AS_OF has exactly two touch-points: the formatter (writer) and this parser.
+_AS_OF_PATTERN = re.compile(r"AS_OF: (\d{4}-\d{2}-\d{2})\s*$")
+
+
+def parse_as_of(body: str) -> date | None:
+    """Return the report body's AS_OF footer date, or None when it has no
+    parseable footer (a stubbed test graph, an ``N/M`` no-data footer, or a
+    comparison_metrics JSON blob that carries no footer line).
+
+    Total by contract: a footer whose digits match the pattern but form an
+    invalid calendar date (``2026-13-45``) yields None rather than raising, so
+    the two un-guarded call sites (the narrate freshness tail and the SSE
+    data_as_of surface) can never crash a turn on a malformed body.
+    """
+    m = _AS_OF_PATTERN.search(body)
+    if not m:
+        return None
+    try:
+        return date.fromisoformat(m.group(1))
+    except ValueError:
+        return None
+
+
+# QNT-355 (H-1): per-report-type "fresh horizon" in days -- the age within which
+# a report is fully fresh (freshness 1.0). Technical/news refresh daily (a few
+# days' tolerance covers a weekend or holiday gap); the fundamental snapshot and
+# the static company context refresh at ~quarterly cadence, so a month-old
+# fundamental is still fresh while a month-old daily technical is not.
+_FRESHNESS_HORIZON_DAYS: dict[str, int] = {
+    "technical": 5,
+    "news": 5,
+    "fundamental": 100,
+    "company": 100,
+}
+_DEFAULT_FRESHNESS_HORIZON_DAYS = 100
+
+
+def _freshness_factor(report_key: str, as_of: date, today: date) -> float:
+    """Freshness in (0, 1] for one report given its AS_OF date.
+
+    Neutral (1.0) within the report type's expected refresh cadence, then a
+    reciprocal decay beyond it (``horizon / age``): a report twice its horizon
+    old scores 0.5, three times 0.33, and so on.
+    """
+    horizon = _FRESHNESS_HORIZON_DAYS.get(report_key, _DEFAULT_FRESHNESS_HORIZON_DAYS)
+    age_days = (today - as_of).days
+    if age_days <= horizon:
+        return 1.0
+    return round(horizon / age_days, 2)
+
+
+def _reports_freshness(state: AgentState) -> float:
+    """QNT-355 (H-1): freshness factor for :func:`_composite_confidence`, read
+    from the AS_OF footer of every report gathered this turn.
+
+    The stalest report caps the whole answer (mirrors the SSE data_as_of
+    oldest-date rule -- a thesis is only as fresh as its weakest report, a
+    comparison only as fresh as its stalest side). 1.0 when no gathered report
+    carries a parseable footer, so a stubbed test graph or a canned digest is
+    never penalised for staleness it can't express.
+    """
+    reports_by_ticker = state.get("reports_by_ticker") or {}
+    bundles = (
+        list(reports_by_ticker.values()) if reports_by_ticker else [state.get("reports") or {}]
+    )
+    today = date.today()
+    factors = [
+        _freshness_factor(str(name), as_of, today)
+        for bundle in bundles
+        if isinstance(bundle, dict)
+        for name, body in bundle.items()
+        if (as_of := parse_as_of(str(body))) is not None
+    ]
+    return min(factors) if factors else 1.0
+
+
 def _composite_confidence(
     coverage: float,
     grounding_rate: float = 1.0,
@@ -513,8 +596,11 @@ def _composite_confidence(
     """Answer-groundedness score = coverage x grounding x freshness.
 
     ``coverage`` is report availability, ``grounding_rate`` is numeric support,
-    and ``freshness`` is reserved for report as-of dates. Until report templates
-    expose a uniform as-of date, freshness is neutral at 1.0.
+    and ``freshness`` (QNT-355) decays each gathered report's AS_OF footer past
+    its expected refresh cadence -- daily for technical/news, ~quarterly for
+    fundamental -- with the stalest report capping the factor (see
+    :func:`_reports_freshness`). Callers that gathered no dated report pass the
+    neutral 1.0.
     """
     return round(max(0.0, min(1.0, coverage * grounding_rate * freshness)), 2)
 
@@ -622,7 +708,7 @@ def _quick_fact_grounding(state: AgentState, quick_fact: QuickFactAnswer) -> dic
             elif cited_value not in unsupported:
                 unsupported.append(cited_value)
     grounding_rate = 1.0 if total == 0 else round((total - len(unsupported)) / total, 2)
-    confidence = _composite_confidence(coverage, grounding_rate)
+    confidence = _composite_confidence(coverage, grounding_rate, _reports_freshness(state))
     combined = HallucinationResult(
         ok=not unsupported,
         unsupported=tuple(unsupported),

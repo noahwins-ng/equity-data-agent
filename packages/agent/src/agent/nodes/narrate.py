@@ -262,7 +262,9 @@ def narrate_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> 
         grounding_answer,
         graph._runtime_report_texts(state),
     )
-    confidence = graph._composite_confidence(coverage, grounding_rate)
+    confidence = graph._composite_confidence(
+        coverage, grounding_rate, graph._reports_freshness(state)
+    )
     if grounding_result.ok:
         logger.info(
             "narrate %s: grounding_rate=%s confidence=%s",
