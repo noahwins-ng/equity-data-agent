@@ -33,6 +33,7 @@ from shared.tickers import TICKER_METADATA, TICKERS
 from api.clickhouse import get_client
 from api.formatters import (
     format_as_of_footer,
+    format_currency,
     format_pct,
     format_ratio,
     format_signed_pct,
@@ -70,6 +71,12 @@ _RATIO_COLUMNS = (
     "fcf_yoy_pct",
     "net_margin_pct",
     "gross_margin_pct",
+    "gross_margin_bps_yoy",
+    "net_margin_bps_yoy",
+    "ebitda_margin_pct",
+    "revenue_ttm",
+    "net_income_ttm",
+    "fcf_ttm",
     "roe",
     "roa",
     "fcf_yield",
@@ -232,14 +239,28 @@ def _pe_label(
     )
 
 
-def _margin_line(value: float | None, prior: float | None, label: str) -> str:
-    """Format a percentage metric with optional prior-period delta."""
+def _margin_line(
+    value: float | None,
+    prior: float | None,
+    label: str,
+    bps_yoy: float | None = None,
+) -> str:
+    """Format a percentage metric with optional prior-period delta and bps-YoY suffix.
+
+    ``bps_yoy`` (net/gross_margin_bps_yoy, computed by the asset — QNT-354) is the
+    year-over-year margin change in basis points, appended as ``; +120 bps YoY`` so
+    the agent can quote "net margin expanded 120 bps YoY" without subtracting the two
+    percentages itself (ADR-003). Only quarterly/annual rows carry it; TTM rows leave
+    it None and the suffix is suppressed.
+    """
     if value is None or not math.isfinite(value):
         return f"{label}: {format_pct(value)}"
     line = f"{label}: {format_pct(value)}"
     if prior is not None and math.isfinite(prior):
         direction = "expanding" if value > prior else "contracting" if value < prior else "steady"
         line += f" (prior period {format_pct(prior)}, {direction})"
+    if bps_yoy is not None and math.isfinite(bps_yoy):
+        line += f"; {'+' if bps_yoy >= 0 else ''}{bps_yoy:.0f} bps YoY"
     return line
 
 
@@ -271,6 +292,54 @@ def _fetch_rows(ticker: str) -> list[dict[str, Any]]:
     """
     result = client.query(query, parameters={"ticker": ticker})
     return [dict(zip(result.column_names, row, strict=True)) for row in result.result_rows]
+
+
+def _fetch_market_cap(ticker: str) -> float | None:
+    """Return the latest reported market cap from ``equity_raw.fundamentals``.
+
+    Market cap is the one SCALE figure not carried on the fundamental_summary row
+    (that table holds ratios + TTM absolutes, not market cap). Pulled from the raw
+    fundamentals snapshot (newest period_end) so the SCALE block can print it.
+    """
+    client = get_client()
+    query = """
+        SELECT market_cap
+        FROM equity_raw.fundamentals FINAL
+        WHERE ticker = %(ticker)s
+        ORDER BY period_end DESC
+        LIMIT 1
+    """
+    result = client.query(query, parameters={"ticker": ticker})
+    rows = result.result_rows
+    if not rows:
+        return None
+    # market_cap is non-nullable Float64 and defaults to 0.0 when yfinance's
+    # info lacks marketCap (fundamentals.py). Treat the 0-sentinel as missing so
+    # SCALE renders N/M rather than a misleading "$0" (formatters.py convention).
+    value = rows[0][0]
+    return value if value and value > 0 else None
+
+
+def _scale_lines(ttm_latest: dict[str, Any] | None, market_cap: float | None) -> list[str]:
+    """Build the ## SCALE block: absolute revenue / net income / FCF (TTM) + market cap.
+
+    Revenue/net income/FCF come from the latest TTM row's absolute columns
+    (revenue_ttm / net_income_ttm / fcf_ttm — the only period_type carrying them);
+    market cap is the raw snapshot (QNT-354, report-v1 C-4). Rendered once at the top
+    so "what is NVDA's revenue / market cap" — natural quick_fact asks — answer with a
+    cited value instead of "not available in the supplied reports".
+    """
+
+    def _val(key: str) -> float | None:
+        return ttm_latest.get(key) if ttm_latest else None
+
+    return [
+        "## SCALE",
+        f"Revenue (TTM): {format_currency(_val('revenue_ttm'), precision=0)}",
+        f"Net income (TTM): {format_currency(_val('net_income_ttm'), precision=0)}",
+        f"Free cash flow (TTM): {format_currency(_val('fcf_ttm'), precision=0)}",
+        f"Market cap: {format_currency(market_cap, precision=0)}",
+    ]
 
 
 def _fetch_peer_medians(peers: list[str]) -> dict[str, float | None]:
@@ -459,6 +528,14 @@ def _render_period_section(
     ps_hist = _hist("price_to_sales")
 
     scope = label.lower()
+    # EBITDA margin is emitted by the asset only on TTM rows (single point-in-time
+    # yfinance EBITDA over TTM revenue); render the line only where present.
+    ebitda_margin = latest.get("ebitda_margin_pct")
+    ebitda_line = (
+        _margin_line(ebitda_margin, _p("ebitda_margin_pct"), f"EBITDA margin ({scope})")
+        if ebitda_margin is not None and math.isfinite(ebitda_margin)
+        else None
+    )
     return [
         f"## {label}",
         f"As of {period_end.isoformat()} ({scope}, {days_old} days old)",
@@ -499,8 +576,19 @@ def _render_period_section(
         _GROWTH_REFERENCE,
         "",
         f"### {label} PROFITABILITY",
-        _margin_line(latest["gross_margin_pct"], _p("gross_margin_pct"), f"Gross margin ({scope})"),
-        _margin_line(latest["net_margin_pct"], _p("net_margin_pct"), f"Net margin ({scope})"),
+        _margin_line(
+            latest["gross_margin_pct"],
+            _p("gross_margin_pct"),
+            f"Gross margin ({scope})",
+            bps_yoy=latest.get("gross_margin_bps_yoy"),
+        ),
+        _margin_line(
+            latest["net_margin_pct"],
+            _p("net_margin_pct"),
+            f"Net margin ({scope})",
+            bps_yoy=latest.get("net_margin_bps_yoy"),
+        ),
+        *([ebitda_line] if ebitda_line else []),
         _margin_line(latest["roe"], _p("roe"), f"ROE ({scope})"),
         _margin_line(latest["roa"], _p("roa"), f"ROA ({scope})"),
         _PROFITABILITY_REFERENCE,
@@ -590,11 +678,16 @@ def build_fundamental_report(ticker: str) -> str:
         n_peers,
     )
 
+    ttm_rows = by_period["ttm"]
+    scale_lines = _scale_lines(ttm_rows[0] if ttm_rows else None, _fetch_market_cap(ticker))
+
     lines = [
         f"# FUNDAMENTAL REPORT — {ticker}",
         f"As of {period_end.isoformat()} (quarterly, {days_old} days old) — {sector}, {industry}",
         _PERIOD_DISCLAIMER,
         _VALUATION_LABEL_RULE,
+        "",
+        *scale_lines,
         "",
         *peer_lines,
         "",

@@ -90,6 +90,8 @@ def _install_fake(monkeypatch: pytest.MonkeyPatch, canned: dict[str, _FakeResult
     """
     if "argMax" not in canned:
         canned = {"argMax": _EMPTY_PEER_RESULT, **canned}
+    if "equity_raw.fundamentals" not in canned:
+        canned = {**canned, "equity_raw.fundamentals": _MARKET_CAP_RESULT}
     if "technical_indicators_weekly" not in canned:
         canned = {**canned, "technical_indicators_weekly": _EMPTY_TECH_RESULT}
     if "technical_indicators_monthly" not in canned:
@@ -357,12 +359,22 @@ _FUND_COLS = (
     "fcf_yoy_pct",
     "net_margin_pct",
     "gross_margin_pct",
+    "gross_margin_bps_yoy",
+    "net_margin_bps_yoy",
+    "ebitda_margin_pct",
+    "revenue_ttm",
+    "net_income_ttm",
+    "fcf_ttm",
     "roe",
     "roa",
     "fcf_yield",
     "debt_to_equity",
     "current_ratio",
 )
+
+# The SCALE block queries equity_raw.fundamentals for the latest market cap
+# (the one figure not on a fundamental_summary row). Fixture: NVDA-scale.
+_MARKET_CAP_RESULT = _FakeResult(("market_cap",), [(3_000_000_000_000.0,)])
 
 
 def _fund_row(**overrides: Any) -> tuple[Any, ...]:
@@ -379,6 +391,12 @@ def _fund_row(**overrides: Any) -> tuple[Any, ...]:
         "fcf_yoy_pct": 15.0,
         "net_margin_pct": 25.0,
         "gross_margin_pct": 60.0,
+        "gross_margin_bps_yoy": 150.0,
+        "net_margin_bps_yoy": 120.0,
+        "ebitda_margin_pct": None,
+        "revenue_ttm": None,
+        "net_income_ttm": None,
+        "fcf_ttm": None,
         "roe": 22.0,
         "roa": 12.0,
         "fcf_yield": 3.5,
@@ -629,6 +647,102 @@ def test_fundamental_renders_quarterly_annual_ttm_sections(
     assert "P/E (quarterly):" in report
     assert "P/E (annual):" in report
     assert "P/E (ttm):" in report
+
+
+# ---------- fundamental SCALE + margin bps (QNT-354) ----------
+
+
+def _ttm_row(**overrides: Any) -> tuple[Any, ...]:
+    base = {
+        "period_type": "ttm",
+        "revenue_ttm": 130_500_000_000.0,
+        "net_income_ttm": 72_880_000_000.0,
+        "fcf_ttm": 60_850_000_000.0,
+        "ebitda_margin_pct": 61.5,
+        # bps-YoY columns are never emitted on TTM rows.
+        "gross_margin_bps_yoy": None,
+        "net_margin_bps_yoy": None,
+    }
+    base.update(overrides)
+    return _fund_row(**base)
+
+
+def test_fundamental_scale_block_renders_absolute_figures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC1: SCALE block prints absolute revenue / net income / FCF (TTM) + market cap."""
+    rows = [_fund_row(period_type="quarterly"), _ttm_row()]
+    _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, rows)})
+    report = build_fundamental_report("NVDA")
+    assert "## SCALE" in report
+    assert "Revenue (TTM): $130,500,000,000" in report
+    assert "Net income (TTM): $72,880,000,000" in report
+    assert "Free cash flow (TTM): $60,850,000,000" in report
+    assert "Market cap: $3,000,000,000,000" in report
+
+
+def test_fundamental_scale_block_nm_without_ttm_or_market_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SCALE degrades to N/M when there is no TTM row and no market cap row."""
+    _install_fake(
+        monkeypatch,
+        {
+            "fundamental_summary": _FakeResult(_FUND_COLS, [_fund_row(period_type="quarterly")]),
+            "equity_raw.fundamentals": _FakeResult(("market_cap",), []),
+        },
+    )
+    report = build_fundamental_report("NVDA")
+    assert "## SCALE" in report
+    assert "Revenue (TTM): N/M" in report
+    assert "Market cap: N/M" in report
+
+
+def test_fundamental_scale_market_cap_zero_sentinel_renders_nm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """market_cap is non-nullable and defaults to 0.0 when yfinance omits it;
+    the 0-sentinel must render N/M, not a misleading "$0"."""
+    _install_fake(
+        monkeypatch,
+        {
+            "fundamental_summary": _FakeResult(_FUND_COLS, [_fund_row(period_type="quarterly")]),
+            "equity_raw.fundamentals": _FakeResult(("market_cap",), [(0.0,)]),
+        },
+    )
+    report = build_fundamental_report("NVDA")
+    assert "Market cap: N/M" in report
+
+
+def test_fundamental_profitability_carries_bps_yoy_suffix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC2: gross/net margin lines carry the pre-computed bps-YoY suffix."""
+    rows = [
+        _fund_row(period_type="quarterly", net_margin_bps_yoy=120.0, gross_margin_bps_yoy=-40.0)
+    ]
+    _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, rows)})
+    report = build_fundamental_report("NVDA")
+    assert "Net margin (quarterly): 25.0%" in report
+    assert "+120 bps YoY" in report
+    assert "-40 bps YoY" in report
+
+
+def test_fundamental_ttm_section_renders_ebitda_margin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC2: TTM section renders ebitda_margin_pct where the asset emits it."""
+    rows = [_fund_row(period_type="quarterly"), _ttm_row(ebitda_margin_pct=61.5)]
+    _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, rows)})
+    report = build_fundamental_report("NVDA")
+    assert "EBITDA margin (ttm): 61.5%" in report
+    # Quarterly section (no ebitda_margin_pct) omits the EBITDA line.
+    quarterly_block = report.split("## TTM")[0]
+    assert "EBITDA margin" not in quarterly_block
+    # The asset never emits bps-YoY on TTM rows, so the TTM PROFITABILITY
+    # section must carry no bps-YoY suffix (invariant lock).
+    ttm_block = report.split("## TTM")[1]
+    assert "bps YoY" not in ttm_block
 
 
 def test_fundamental_renders_premium_inline_discounted_label(
