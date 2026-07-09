@@ -24,13 +24,19 @@ from agent.graph import REPORT_TOOLS, ThesisPlan, build_graph
 from agent.prompts import (
     COMPARISON_SYSTEM_PROMPT,
     CONVERSATIONAL_SYSTEM_PROMPT,
+    EXPLORATION_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     THESIS_ASPECTS,
     build_comparison_prompt,
+    build_exploration_prompt,
     build_quick_fact_prompt,
     build_synthesis_prompt,
 )
-from agent.prompts.system import QUICK_FACT_SYSTEM_PROMPT, _sanitize_report_body
+from agent.prompts.system import (
+    QUICK_FACT_SYSTEM_PROMPT,
+    _failed_fetch_by_ticker,
+    _sanitize_report_body,
+)
 from agent.thesis import Thesis
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
@@ -378,6 +384,77 @@ def test_system_prompt_instructs_naming_the_failed_report() -> None:
     assert "unavailable this turn" in SYSTEM_PROMPT
     assert "Failed to fetch:" in QUICK_FACT_SYSTEM_PROMPT
     assert "unavailable this turn" in QUICK_FACT_SYSTEM_PROMPT
+
+
+# ─── QNT-355 follow-up: fetch failures for exploration + comparison ──────────
+
+
+def test_build_exploration_prompt_renders_failed_fetch_line() -> None:
+    """Exploration uses the single-ticker gather (bare error names), so it
+    reuses the same failed-fetch line as thesis/quick_fact."""
+    messages = build_exploration_prompt(
+        ticker="NVDA",
+        question="What stands out?",
+        reports={"technical": "RSI 62"},
+        errors={"news": "[error] http: 503"},
+    )
+    assert "Failed to fetch: news" in str(messages[1].content)
+
+
+def test_build_exploration_prompt_omits_failed_fetch_line_when_no_errors() -> None:
+    messages = build_exploration_prompt(
+        ticker="NVDA",
+        question="What stands out?",
+        reports={"technical": "RSI 62"},
+    )
+    assert "Failed to fetch:" not in str(messages[1].content)
+
+
+def test_exploration_prompt_instructs_naming_the_failed_lens() -> None:
+    assert "Failed to fetch:" in EXPLORATION_SYSTEM_PROMPT
+    assert "unavailable this turn" in EXPLORATION_SYSTEM_PROMPT
+
+
+def test_failed_fetch_by_ticker_groups_multi_keys() -> None:
+    """Comparison errors are keyed ``{ticker}.{name}``; grouping splits on the
+    first dot into per-ticker bare names, and a dotless key is skipped."""
+    grouped = _failed_fetch_by_ticker(
+        {"NVDA.fundamental": "e", "NVDA.news": "e", "AMD.technical": "e", "bogus": "e"}
+    )
+    assert grouped == {"NVDA": ["fundamental", "news"], "AMD": ["technical"]}
+
+
+def test_build_comparison_prompt_renders_per_ticker_failed_fetch_line() -> None:
+    """The failed-fetch line lands inside the failing ticker's own reports
+    block, so the model attributes the outage to the right side."""
+    messages = build_comparison_prompt(
+        tickers=["NVDA", "AMD"],
+        question="Compare NVDA and AMD.",
+        reports_by_ticker={
+            "NVDA": {"technical": "RSI 62"},
+            "AMD": {"technical": "RSI 40", "fundamental": "P/E 30"},
+        },
+        errors={"NVDA.fundamental": "[error] http: 503"},
+    )
+    user_content = str(messages[1].content)
+    # The line is scoped to NVDA's block, before AMD's section starts.
+    nvda_block, _, amd_block = user_content.partition("## Reports for AMD")
+    assert "Failed to fetch: fundamental" in nvda_block
+    assert "Failed to fetch:" not in amd_block
+
+
+def test_build_comparison_prompt_omits_failed_fetch_line_when_no_errors() -> None:
+    messages = build_comparison_prompt(
+        tickers=["NVDA", "AMD"],
+        question="Compare NVDA and AMD.",
+        reports_by_ticker={"NVDA": {"technical": "x"}, "AMD": {"technical": "y"}},
+    )
+    assert "Failed to fetch:" not in str(messages[1].content)
+
+
+def test_comparison_prompt_instructs_naming_the_failed_report() -> None:
+    assert "Failed to fetch:" in COMPARISON_SYSTEM_PROMPT
+    assert "unavailable this turn" in COMPARISON_SYSTEM_PROMPT
 
 
 def test_build_synthesis_prompt_uses_fenced_delimiters_not_h2() -> None:
