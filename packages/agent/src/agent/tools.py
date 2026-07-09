@@ -137,7 +137,7 @@ def get_technical_report(ticker: str) -> str:
 
 
 def get_fundamental_report(ticker: str) -> str:
-    """Fundamental report: latest P/E, revenue, and earnings surprises."""
+    """Fundamental report: valuation multiples, growth, margins, and absolute scale."""
     return _report_tool("fundamental", ticker)
 
 

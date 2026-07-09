@@ -254,6 +254,37 @@ questions:
 
       **Value:** <RSI value> (source: technical)
 
+  # QNT-354: absolute-scale quick facts. Before the SCALE block landed the
+  # fundamental report carried no absolute revenue / market cap, so these asks
+  # returned "not available in the supplied reports"; now they answer with the
+  # cited figure from the ## SCALE block.
+  - id: nvda-quickfact-revenue
+    ticker: NVDA
+    question: "What's NVDA's revenue?"
+    expected_tools:
+      - fundamental
+    expected_intent: quick_fact
+    reference_thesis: |
+      A useful answer states NVDA's absolute revenue verbatim from the
+      ## SCALE block (Revenue (TTM)) and cites (source: fundamental) inline.
+      It must NOT say the figure is unavailable. No thesis sections, no
+      padding with technical or news context.
+
+      **Value:** <revenue> (source: fundamental)
+
+  - id: nvda-quickfact-market-cap
+    ticker: NVDA
+    question: "What's NVDA's market cap?"
+    expected_tools:
+      - fundamental
+    expected_intent: quick_fact
+    reference_thesis: |
+      A useful answer states NVDA's market cap verbatim from the ## SCALE
+      block (Market cap) and cites (source: fundamental) inline. It must NOT
+      say the figure is unavailable. No thesis sections, no padding.
+
+      **Value:** <market cap> (source: fundamental)
+
   # QNT-156: comparison golden — now four-aspect per ticker (QNT-208).
   - id: nvda-vs-aapl-fundamental
     ticker: NVDA
