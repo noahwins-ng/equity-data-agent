@@ -333,6 +333,33 @@ def _fetch_market_cap(ticker: str) -> float | None:
     return value if value and value > 0 else None
 
 
+def _fetch_next_earnings_date(ticker: str) -> date | None:
+    """Return the next scheduled earnings date for ``ticker`` or None (QNT-357 follow-up).
+
+    Mirrors the company report's CONTEXT NOW ``Next earnings`` line. The company
+    report already carries the date on every intent that fetches it (thesis /
+    comparison / exploration / focused fundamental-technical-news), but a bare
+    ``quick_fact`` "when does X report earnings" is the one path that strips the
+    company report (structured.py narrows it away) and routes to the fundamental
+    lens on the "earnings" keyword — so the date has to live here too to answer
+    that literal ask. Same ``>= today()`` staleness guard as company.py: the
+    weekly refresh can lag a just-passed date, and serving it verbatim would
+    assert a past date as upcoming, so a stale row degrades to N/A.
+    """
+    client = get_client()
+    result = client.query(
+        """
+        SELECT next_earnings_date
+        FROM equity_raw.earnings_calendar FINAL
+        WHERE ticker = %(ticker)s AND next_earnings_date >= today()
+        LIMIT 1
+        """,
+        parameters={"ticker": ticker},
+    )
+    rows = result.result_rows
+    return rows[0][0] if rows else None
+
+
 def _scale_lines(ttm_latest: dict[str, Any] | None, market_cap: float | None) -> list[str]:
     """Build the ## SCALE block: absolute revenue / net income / FCF (TTM) + market cap.
 
@@ -694,6 +721,13 @@ def build_fundamental_report(ticker: str) -> str:
     ttm_rows = by_period["ttm"]
     scale_lines = _scale_lines(ttm_rows[0] if ttm_rows else None, _fetch_market_cap(ticker))
 
+    next_earnings = _fetch_next_earnings_date(ticker)
+    earnings_line = (
+        f"Next earnings: {next_earnings.isoformat()}"
+        if next_earnings is not None
+        else "Next earnings: N/A (no scheduled date)"
+    )
+
     lines = [
         f"# FUNDAMENTAL REPORT — {ticker}",
         f"As of {period_end.isoformat()} (quarterly, {days_old} days old) — {sector}, {industry}",
@@ -701,6 +735,7 @@ def build_fundamental_report(ticker: str) -> str:
         _VALUATION_LABEL_RULE,
         "",
         *scale_lines,
+        earnings_line,
         "",
         *peer_lines,
         "",
