@@ -1,10 +1,10 @@
 # Portfolio screenshots
 
-This directory holds the four screenshots embedded in the repo `README.md` (the hero shot plus the "Screenshots" section). The README references them by filename; missing files render as broken images on GitHub, so capture all four before the next deploy.
+This directory holds the five screenshots embedded in the repo `README.md` (the hero shot plus the "Screenshots" section). The README references them by filename; missing files render as broken images on GitHub, so capture all five before the next deploy.
 
 Each screenshot has a single canonical filename and a single canonical capture command — pick a representative ticker (NVDA is the default for the bench) and follow the recipe.
 
-> **Refresh status (2026-06-22):** `terminal-live.png` and `dagster-lineage.svg` are stale — see the per-item notes below. `langfuse-trace.png` and `cli-thesis.png` are current. Two more (`rag-provenance.png`, `dagster-asset-checks.png`) are planned but not yet captured — see §5–§6.
+> **Refresh status (2026-07-11):** all five embedded screenshots are current — `terminal-live.png`, `rag-provenance.png`, `langfuse-trace.png`, `dagster-lineage.svg`, and `dagster-asset-checks.png` were captured/refreshed 2026-07-11. The former `cli-thesis.png` was dropped from the README (redundant with the hero terminal shot).
 
 ## 1. `langfuse-trace.png`
 
@@ -35,21 +35,7 @@ Navigate: top nav → **Assets** → **Asset graph** → toggle the `equity_pipe
 
 SVG keeps the graph crisp at any width and renders inline on GitHub. If you fall back to PNG, target 1600 px wide minimum and crop tightly — the graph is wide.
 
-## 3. `cli-thesis.png`
-
-A representative CLI thesis showing the structured Setup / Bull Case / Bear Case / Verdict layout that landed in [QNT-133](https://linear.app/noahwins/issue/QNT-133).
-
-```bash
-uv run python -m agent analyze NVDA | tee docs/screenshots/cli-thesis.txt
-```
-
-Then take a high-DPI terminal screenshot of the rendered output (most native macOS terminals: ⌘⇧4 then space then click the terminal window). Save as `docs/screenshots/cli-thesis.png`.
-
-Pick a ticker whose thesis includes both bull and bear bullets so the asymmetry-handling design is visible — NVDA, AAPL, and V have all produced balanced theses on recent runs; TSLA tends to produce 0-bull / 3-bear theses (also a fine demo of the "forced symmetry" guard, see QNT-133's ticket body).
-
-The committed `.txt` mirror lets you regenerate the screenshot later with consistent formatting.
-
-## 4. `terminal-live.png`
+## 3. `terminal-live.png`
 
 The hero shot (top of the README, reused in the "Screenshots" section): the three-pane terminal — watchlist (left), ticker detail (center: quote header, price chart, technicals / fundamentals / news cards), and the persistent chat panel (right).
 
@@ -62,7 +48,7 @@ The hero shot (top of the README, reused in the "Screenshots" section): the thre
 
 Frame it so all three panes are visible — the persistent three-pane workspace is the point.
 
-## 5. `rag-provenance.png` (planned — not yet captured)
+## 4. `rag-provenance.png`
 
 The chat panel rendering retrieved-sources provenance (citation links/chips under an answer) — backs the grounded-RAG claim in the README's AI Engineering section, which currently has no image.
 
@@ -72,9 +58,9 @@ Capture from the live site:
 2. Ask a targeted-event prompt that fires RAG, e.g. `What's the latest on TSLA litigation?` or `Any buyback news on AAPL?`
 3. Once the answer streams with the retrieved-sources list, screenshot the chat panel (1200 px wide minimum) and save as `docs/screenshots/rag-provenance.png`.
 
-Not yet referenced in the repo `README.md` — add the `![...]` embed (AI Engineering or Screenshots section) once captured.
+Embedded in the repo `README.md` "Screenshots" section.
 
-## 6. `dagster-asset-checks.png` (planned — not yet captured)
+## 5. `dagster-asset-checks.png`
 
 The Dagster asset-checks view showing passed/failed domain-bounded checks (RSI 0-100, P/E band, MACD coherence, etc.) — backs the "37 domain-bounded asset checks (dbt-test equivalent)" claim, the strongest DE differentiator with no image today.
 
@@ -84,7 +70,7 @@ make dev-dagster   # http://localhost:3000 (tunnel up), or SSH-tunnel to prod Da
 
 Navigate: top nav → **Assets** → pick an asset with checks (e.g. `fundamental_summary` or `technical_indicators_daily`) → the **Checks** tab (or the global asset-checks list). Frame several checks with pass/fail status and a bound description visible. Screenshot 1600 px wide minimum and save as `docs/screenshots/dagster-asset-checks.png`.
 
-Not yet referenced in the repo `README.md` — add the `![...]` embed once captured.
+Embedded in the repo `README.md` "Screenshots" section.
 
 ## Re-capture cadence
 
