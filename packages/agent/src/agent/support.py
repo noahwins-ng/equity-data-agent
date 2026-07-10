@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
+from shared.retrieval import NEWS_BODY_SNIPPET_CHARS
 from shared.tickers import TICKERS
 
 from agent.comparison import ComparisonAnswer, LeanComparisonAnswer, LeanComparisonRow
@@ -411,7 +412,7 @@ def _gather_reports_multi(
 # discarded ~two thirds of every retrieved chunk before the LLM saw it, so
 # earnings preserves the full chunk. Whole sentences aren't guaranteed; we cut on
 # a word boundary and add an ellipsis.
-_NEWS_BODY_MAX_CHARS = 280
+_NEWS_BODY_MAX_CHARS = NEWS_BODY_SNIPPET_CHARS  # QNT-356: pin to the shared budget
 _EARNINGS_BODY_MAX_CHARS = 900
 
 

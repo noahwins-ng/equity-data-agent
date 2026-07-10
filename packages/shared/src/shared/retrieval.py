@@ -23,6 +23,13 @@ from collections.abc import Mapping, Sequence
 
 logger = logging.getLogger(__name__)
 
+# QNT-356 (C-8): the news-body snippet budget, shared by the canned digest
+# (api.templates.news) and the folded RAG hit (agent.support._NEWS_BODY_MAX_CHARS).
+# QNT-225 established 280 chars as what disambiguates an event from a name-drop in
+# a short Finnhub summary; pinning both consumers to one constant keeps the digest
+# and the fold from drifting apart silently.
+NEWS_BODY_SNIPPET_CHARS = 280
+
 # Reciprocal-rank-fusion constant. 60 is the value from the original Cormack
 # et al. RRF paper and the Qdrant/Elastic defaults; it damps the contribution of
 # deep-rank hits so a doc ranked #1 by one retriever dominates a doc ranked #40
@@ -214,6 +221,7 @@ def contextualized_text(context: str, chunk: str) -> str:
 
 
 __all__ = [
+    "NEWS_BODY_SNIPPET_CHARS",
     "RRF_K",
     "bm25_ranking",
     "cohere_rerank",
