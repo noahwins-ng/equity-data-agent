@@ -143,10 +143,18 @@ def _should_route_exploration(
 
 
 def _minimum_exploration_tools(question: str, available: list[str]) -> int:
-    """Broad exploratory asks need a second lens before synthesis."""
+    """Broad exploratory asks need complementary lenses before synthesis.
+
+    A news-led "what should I watch" scan takes a THIRD lens (QNT-357 follow-up):
+    news + technical give the momentum read, but the company report carries the
+    one dated forward catalyst (its CONTEXT NOW ``Next earnings`` line), which is
+    exactly what a "what to watch" ask leads with. Non-news-led scans already put
+    company in their top two, so two lenses suffice there.
+    """
     if not available:
         return 0
-    return min(2, len(available))
+    floor = 3 if _is_news_led_exploration(question) else 2
+    return min(floor, len(available))
 
 
 def _is_news_led_exploration(question: str) -> bool:
@@ -181,7 +189,9 @@ def _deterministic_exploration_plan(question: str, available: list[str]) -> list
     if not available:
         return []
     if _is_news_led_exploration(question):
-        preferred = ("news", "technical", "fundamental", "company")
+        # company is the 3rd lens (see _minimum_exploration_tools): news + technical
+        # for momentum, then company for the dated earnings catalyst (QNT-357).
+        preferred = ("news", "technical", "company", "fundamental")
     else:
         preferred = ("company", "news", "technical", "fundamental")
     ordered = [name for name in preferred if name in available]
