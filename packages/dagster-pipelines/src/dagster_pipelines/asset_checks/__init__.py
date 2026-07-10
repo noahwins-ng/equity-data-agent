@@ -1,3 +1,6 @@
+from dagster_pipelines.asset_checks.earnings_calendar_checks import (
+    earnings_calendar_date_in_window,
+)
 from dagster_pipelines.asset_checks.earnings_embeddings_checks import (
     earnings_embeddings_all_releases_indexed,
     earnings_embeddings_dimension,
@@ -98,10 +101,13 @@ ALL_ASSET_CHECKS = [
     # earnings_embeddings
     earnings_embeddings_all_releases_indexed,
     earnings_embeddings_dimension,
+    # earnings_calendar
+    earnings_calendar_date_in_window,
 ]
 
 __all__ = [
     "ALL_ASSET_CHECKS",
+    "earnings_calendar_date_in_window",
     "earnings_embeddings_all_releases_indexed",
     "earnings_embeddings_dimension",
     "earnings_releases_has_rows",

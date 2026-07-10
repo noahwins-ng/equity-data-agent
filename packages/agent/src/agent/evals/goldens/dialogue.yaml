@@ -16,6 +16,17 @@ dialogues:
     anchors:
       pass: Answer should give actionable watch items without pretending to know future prices.
 
+  - id: aapl-watch-earnings-date
+    ticker: AAPL
+    turns:
+      - user: What's the next thing on the calendar for AAPL?
+    expected_signals: [helpfulness, non_hallucination, voice_match]
+    anchors:
+      pass: >-
+        Answer should name the next earnings date from the company report's
+        CONTEXT NOW block with a (source: company) citation, not invent any
+        other dated event.
+
   - id: nvda-thesis-narrative-numbers
     ticker: NVDA
     turns:

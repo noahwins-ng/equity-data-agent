@@ -415,6 +415,20 @@ def test_exploration_prompt_instructs_naming_the_failed_lens() -> None:
     assert "unavailable this turn" in EXPLORATION_SYSTEM_PROMPT
 
 
+def test_exploration_prompt_permits_dated_events_the_report_states() -> None:
+    """QNT-357 relaxed rule 4: the forward-calendar ban is now scoped to events
+    no report states — a dated catalyst the report DOES carry (the CONTEXT NOW
+    'Next earnings' date) may be named verbatim, so the exploration scan can
+    surface the one real upcoming catalyst it previously had to suppress."""
+    text = EXPLORATION_SYSTEM_PROMPT
+    # The blanket "reports carry no dated catalysts" premise is gone.
+    assert "carry no dated catalysts" not in text
+    # The relaxed rule explicitly allows the earnings-date catalyst.
+    assert "Next earnings" in text
+    # And still forbids inventing a calendar beyond what the report states.
+    assert "invent a forward calendar" in text
+
+
 def test_failed_fetch_by_ticker_groups_multi_keys() -> None:
     """Comparison errors are keyed ``{ticker}.{name}``; grouping splits on the
     first dot into per-ticker bare names, and a dotless key is skipped."""

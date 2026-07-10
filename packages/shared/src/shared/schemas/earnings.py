@@ -29,3 +29,19 @@ class EarningsReleaseRow(BaseModel):
     url: str  # EX-99.1 document URL on www.sec.gov/Archives
     body: str  # cleaned narrative text
     fetched_at: datetime | None = None
+
+
+class EarningsCalendarRow(BaseModel):
+    """Maps to equity_raw.earnings_calendar.
+
+    One row per ticker holding the next scheduled earnings date from the
+    yfinance calendar (QNT-357). This is the only dated forward catalyst in
+    the warehouse — the report surfaces it verbatim so the exploration path can
+    name the one upcoming event an analyst would lead with. ReplacingMergeTree
+    on ``ticker`` (versioned by ``fetched_at``) keeps re-runs idempotent: each
+    weekly poll replaces the ticker's single row with the freshest estimate.
+    """
+
+    ticker: str
+    next_earnings_date: date
+    fetched_at: datetime | None = None

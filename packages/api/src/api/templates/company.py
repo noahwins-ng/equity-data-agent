@@ -69,6 +69,39 @@ def _fetch_latest_quarterly(ticker: str) -> dict[str, Any] | None:
     }
 
 
+def _fetch_next_earnings_date(ticker: str) -> date | None:
+    """Return the next scheduled earnings date for ``ticker`` or None (QNT-357).
+
+    The warehouse's only dated forward catalyst — surfaced verbatim so the
+    exploration path can name the one upcoming event. Missing/unreachable rows
+    fall back to None so the CONTEXT NOW line degrades to N/A like its siblings.
+
+    The ``>= today()`` guard filters a stale row: the asset only writes a
+    still-future date, but it refreshes weekly while today advances daily, so a
+    just-passed earnings date can sit in the table for up to a poll interval.
+    Serving it verbatim would assert a past date as upcoming (ADR-012 renders
+    the line as-is, and the relaxed exploration rule lets the agent cite it), so
+    a stale date degrades to N/A until the next weekly poll refreshes it.
+    """
+    try:
+        client = get_client()
+        result = client.query(
+            """
+            SELECT next_earnings_date
+            FROM equity_raw.earnings_calendar FINAL
+            WHERE ticker = %(ticker)s AND next_earnings_date >= today()
+            LIMIT 1
+            """,
+            parameters={"ticker": ticker},
+        )
+    except Exception as exc:
+        logger.warning("company.CONTEXT_NOW earnings-date fetch failed for %s: %s", ticker, exc)
+        return None
+    if not result.result_rows:
+        return None
+    return result.result_rows[0][0]
+
+
 def _fetch_daily_trend(ticker: str) -> str | None:
     """Return the daily TREND label (Uptrend / Sideways / Downtrend) or None."""
     try:
@@ -105,6 +138,7 @@ def _fetch_daily_trend(ticker: str) -> str | None:
 def _context_now_lines(ticker: str) -> list[str]:
     fundamentals = _fetch_latest_quarterly(ticker)
     trend = _fetch_daily_trend(ticker)
+    next_earnings = _fetch_next_earnings_date(ticker)
     lines: list[str] = ["## CONTEXT NOW"]
 
     if fundamentals is None:
@@ -128,6 +162,11 @@ def _context_now_lines(ticker: str) -> list[str]:
         lines.append("Daily trend: N/A (no recent indicator rows)")
     else:
         lines.append(f"Daily trend: {trend}")
+
+    if next_earnings is None:
+        lines.append("Next earnings: N/A (no scheduled date)")
+    else:
+        lines.append(f"Next earnings: {next_earnings.isoformat()}")
     return lines
 
 
