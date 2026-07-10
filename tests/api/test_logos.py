@@ -17,8 +17,12 @@ reaching arbitrary internal endpoints. Two scenarios matter:
 
 from __future__ import annotations
 
+import base64
+
+import httpx
 import pytest
-from api.routers.logos import _FINNHUB_CDN_HOST_PATTERN
+from api.routers import logos as logos_module
+from api.routers.logos import _FINNHUB_CDN_HOST_PATTERN, _fetch_logo_data_url
 
 
 @pytest.mark.parametrize(
@@ -80,3 +84,68 @@ def test_max_logo_bytes_accommodates_observed_real_logos() -> None:
         f"observed {largest_observed} bytes with headroom for future "
         f"larger logos (recommended >= {int(largest_observed * headroom_factor)})"
     )
+
+
+class _FakeResponse:
+    def __init__(self, *, json_data=None, content=b"", headers=None):
+        self._json = json_data
+        self.content = content
+        self.headers = headers or {"content-type": "image/png"}
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self):
+        return self._json
+
+
+class _ScriptedClient:
+    """httpx.Client stand-in that plays back a scripted sequence of GET
+    results (either a _FakeResponse or an Exception to raise)."""
+
+    def __init__(self, script: list) -> None:
+        self._script = script
+        self.calls = 0
+
+    def get(self, url, params=None):
+        result = self._script[self.calls]
+        self.calls += 1
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+def test_transient_failure_retries_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A timeout on the first profile2 fetch must not permanently blank the
+    logo — the fetch retries and succeeds. This is the QNT prod regression:
+    a single boot-time blip was caching None for the pod's whole lifetime
+    (NVDA/MSFT one boot, AMD the next), then freezing into the Vercel build.
+    """
+    monkeypatch.setattr(logos_module, "_RETRY_BACKOFF_SECONDS", 0)  # no real sleep
+    monkeypatch.setattr(logos_module.settings, "FINNHUB_API_KEY", "test-key")
+    png = b"\x89PNG\r\n\x1a\nfake-bytes"
+    good_url = "https://static2.finnhub.io/file/stock_logo/AMD.png"
+    client = _ScriptedClient(
+        [
+            httpx.ReadTimeout("boom"),  # attempt 1: transient profile2 timeout
+            _FakeResponse(json_data={"logo": good_url}),  # attempt 2: profile2 ok
+            _FakeResponse(content=png),  # attempt 2: image bytes ok
+        ]
+    )
+
+    result = _fetch_logo_data_url("AMD", client)  # type: ignore[arg-type]
+
+    expected = f"data:image/png;base64,{base64.b64encode(png).decode()}"
+    assert result == expected
+    assert client.calls == 3
+
+
+def test_hard_failure_does_not_burn_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A missing ``logo`` field is terminal — return None on the first
+    attempt without spending retries on a ticker Finnhub simply has no
+    logo for."""
+    monkeypatch.setattr(logos_module.settings, "FINNHUB_API_KEY", "test-key")
+    client = _ScriptedClient([_FakeResponse(json_data={"logo": ""})])
+
+    assert _fetch_logo_data_url("XYZ", client) is None  # type: ignore[arg-type]
+    assert client.calls == 1
