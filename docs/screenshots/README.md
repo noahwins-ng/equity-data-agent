@@ -62,7 +62,7 @@ Embedded in the repo `README.md` "Screenshots" section.
 
 ## 5. `dagster-asset-checks.png`
 
-The Dagster asset-checks view showing passed/failed domain-bounded checks (RSI 0-100, P/E band, MACD coherence, etc.) — backs the "37 domain-bounded asset checks (dbt-test equivalent)" claim, the strongest DE differentiator with no image today.
+The Dagster asset-checks view showing passed/failed domain-bounded checks (RSI 0-100, P/E band, MACD coherence, etc.) — backs the "38 domain-bounded asset checks (dbt-test equivalent)" claim, the strongest DE differentiator with no image today.
 
 ```bash
 make dev-dagster   # http://localhost:3000 (tunnel up), or SSH-tunnel to prod Dagster
