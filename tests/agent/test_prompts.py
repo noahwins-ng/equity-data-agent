@@ -865,6 +865,18 @@ def test_focused_prompt_per_focus_verdict_branches_present() -> None:
     assert "catalyst lists to empty arrays" in text
 
 
+def test_prompts_quote_consensus_line_not_majority_rule() -> None:
+    """QNT-353 AC3: the multi-timeframe verdict is now computed in the technical
+    report's "Multi-timeframe consensus" line. Both synthesis prompts must quote
+    that line and must NOT re-derive it by counting timeframes themselves
+    (ADR-012 -- the counting is quasi-arithmetic that belongs in the report)."""
+    from agent.prompts.system import FOCUSED_SYSTEM_PROMPT
+
+    for text in (SYSTEM_PROMPT, FOCUSED_SYSTEM_PROMPT):
+        assert "Multi-timeframe consensus" in text
+        assert "majority rule" not in text
+
+
 def test_comparison_prompt_allows_ranking_without_arithmetic_threshold() -> None:
     """QNT-208: comparison ranking exception. The COMPARISON_SYSTEM_PROMPT
     must allow naming the more expensive ticker on material multi-metric

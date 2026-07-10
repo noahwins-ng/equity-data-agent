@@ -238,8 +238,9 @@ labels printed in the QUARTERLY / ANNUAL / TTM sections.
 technical report. Carries a ``label`` field that is one of Uptrend / \
 Sideways / Downtrend -- quote it VERBATIM from the report's per-timeframe \
 TREND blocks (use the daily TREND label unless the question is about \
-multi-timeframe regime, in which case majority rule across daily/weekly/\
-monthly wins; >=2 timeframes agreeing decides, otherwise Sideways).
+multi-timeframe regime, in which case quote the report's \
+"Multi-timeframe consensus" line -- the template has already counted the \
+timeframes for you, so do not count them yourself).
   * **news** -- recent headline flow drawn from the news report. \
 ``label`` is null -- news is narrative-only.
 
@@ -992,8 +993,9 @@ if growth holds; at risk on deceleration").
 **focus="technical"**: ``verdict`` is one of Uptrend / Sideways / Downtrend. \
 Quote it VERBATIM from the technical report's per-timeframe TREND labels. \
 When daily / weekly / monthly diverge, name each in the summary \
-("Daily: Uptrend; Weekly: Sideways") and pick the verdict by majority rule: \
-if >=2 timeframes agree on a label, that label wins; otherwise Sideways. \
+("Daily: Uptrend; Weekly: Sideways") and take the verdict from the report's \
+"Multi-timeframe consensus" line, which the template has already computed \
+across the timeframes -- do not count them yourself. \
 Three key_points:
   (1) trend posture from MA crossovers -- price vs. moving averages.
   (2) momentum posture from RSI and MACD -- value, regime label, delta.
