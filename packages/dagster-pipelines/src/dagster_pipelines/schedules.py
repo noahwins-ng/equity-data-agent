@@ -54,6 +54,12 @@ earnings_releases_job = define_asset_job(
     tags=DEPLOY_WINDOW_RUN_RETRY_TAGS,
 )
 
+earnings_calendar_job = define_asset_job(
+    name="earnings_calendar_job",
+    selection=AssetSelection.assets("earnings_calendar"),
+    tags=DEPLOY_WINDOW_RUN_RETRY_TAGS,
+)
+
 
 # ── Schedules ─────────────────────────────────────────────────
 
@@ -198,5 +204,34 @@ def earnings_releases_schedule(context: ScheduleEvaluationContext):
     for ticker in TICKERS:
         yield RunRequest(
             run_key=f"earnings_releases_{ticker}_{ts}",
+            partition_key=ticker,
+        )
+
+
+# Next-earnings-date estimates drift as the release approaches, so a weekly poll
+# keeps the report's forward catalyst current without over-fetching. Sun 20:00 ET
+# is clear of every other schedule (ohlcv weekday 17:00 + monthly 1st 06:00,
+# fundamentals Sun 22:00, news daily 02:00, earnings_releases Sat 23:00), so its
+# 10-partition fan-out never overlaps another job's window. One yfinance request
+# per partition, I/O-bound like fundamentals; runs drain 3-at-a-time under
+# max_concurrent_runs: 3 (QNT-113) at mem_limit: 3g (QNT-116) — slower, not unsafe
+# (concurrency pre-flight per docs/patterns.md).
+@schedule(
+    job=earnings_calendar_job,
+    cron_schedule="0 20 * * 0",  # 20:00 ET, Sunday
+    execution_timezone="America/New_York",
+    default_status=DefaultScheduleStatus.RUNNING,
+)
+def earnings_calendar_schedule(context: ScheduleEvaluationContext):
+    """Weekly next-earnings-date refresh via the yfinance calendar (QNT-357).
+
+    Reads one calendar field per ticker and upserts the earliest future earnings
+    date. Idempotent on ReplacingMergeTree, so a re-poll replaces the ticker's
+    single row with the freshest estimate.
+    """
+    ts = context.scheduled_execution_time.isoformat() if context.scheduled_execution_time else ""
+    for ticker in TICKERS:
+        yield RunRequest(
+            run_key=f"earnings_calendar_{ticker}_{ts}",
             partition_key=ticker,
         )

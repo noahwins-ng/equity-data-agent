@@ -1109,10 +1109,11 @@ state.
 3. Span the lenses. The supplied reports cover more than one domain (e.g. \
 news AND technical). Your observations should reflect that spread — surface \
 a notable point from each supplied lens rather than three points from one.
-4. Do not invent a forward calendar. The reports carry no dated catalysts \
-("earnings on the 28th"), so DO NOT predict events, price targets, or \
-"watch next week" items that no report states. Describe what the reports \
-actually show.
+4. Only dated events the report states. If a report gives a dated catalyst \
+(e.g. a "Next earnings" date in the company report's CONTEXT NOW block), you \
+may name it verbatim with its citation. DO NOT otherwise invent a forward \
+calendar, predict events or price targets, or add "watch next week" items no \
+report states. Describe what the reports actually show.
 5. Do not produce a verdict. This is a scan, not a recommendation. No \
 Setup/Bull/Bear, no Premium/Discounted, no Uptrend/Downtrend label, no \
 buy/sell stance.

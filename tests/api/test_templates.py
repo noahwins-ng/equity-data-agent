@@ -1409,6 +1409,7 @@ def _company_install(
     pe: float | None = 25.0,
     rev_yoy: float | None = 12.0,
     daily_rows: list[tuple[Any, ...]] | None = None,
+    next_earnings: date | None = date(2099, 8, 15),
 ) -> None:
     """Set up fakes so the company CONTEXT NOW block can render without a tunnel."""
     fund_rows = (
@@ -1421,11 +1422,13 @@ def _company_install(
             _daily_row(as_of=date(2026, 4, 16), close=185.0),
             _daily_row(as_of=date(2026, 4, 15), close=183.0),
         ]
+    earnings_rows = [(next_earnings,)] if next_earnings is not None else []
     _install_fake(
         monkeypatch,
         {
             "fundamental_summary": _FakeResult(_FUND_COLS, fund_rows),
             "technical_indicators_daily": _tech_result(daily_rows),
+            "earnings_calendar": _FakeResult(("next_earnings_date",), earnings_rows),
         },
     )
 
@@ -1478,7 +1481,7 @@ def test_company_context_now_renders_with_data(monkeypatch: pytest.MonkeyPatch) 
     """AC4: ## CONTEXT NOW block appears with at least one cited number."""
     from api.templates.company import build_company_report
 
-    _company_install(monkeypatch, pe=25.0, rev_yoy=12.0)
+    _company_install(monkeypatch, pe=25.0, rev_yoy=12.0, next_earnings=date(2099, 8, 15))
     report = build_company_report("NVDA")
     assert "## CONTEXT NOW" in report
     # P/E cited verbatim
@@ -1487,6 +1490,8 @@ def test_company_context_now_renders_with_data(monkeypatch: pytest.MonkeyPatch) 
     assert "Latest revenue YoY: +12.00%" in report
     # Trend label derived from daily data
     assert "Daily trend:" in report
+    # QNT-357: next earnings date rendered verbatim (ADR-012)
+    assert "Next earnings: 2099-08-15" in report
 
 
 def test_company_context_now_handles_missing_fundamentals(
@@ -1505,6 +1510,7 @@ def test_company_context_now_handles_missing_fundamentals(
                     _daily_row(as_of=date(2026, 4, 15), close=183.0),
                 ]
             ),
+            "earnings_calendar": _FakeResult(("next_earnings_date",), []),
         },
     )
     report = build_company_report("NVDA")
@@ -1513,6 +1519,8 @@ def test_company_context_now_handles_missing_fundamentals(
     # Trend should still be cited (daily rows present) — a cited "trend label"
     # satisfies AC4 by itself.
     assert "Daily trend:" in report
+    # QNT-357: no scheduled date degrades to N/A like its siblings.
+    assert "Next earnings: N/A" in report
 
 
 # ---------- company compact profile (QNT-220 #8) ----------

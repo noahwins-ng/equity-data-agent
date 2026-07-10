@@ -1,4 +1,4 @@
-from shared.schemas.earnings import EarningsReleaseRow
+from shared.schemas.earnings import EarningsCalendarRow, EarningsReleaseRow
 from shared.schemas.fundamental_summary import FundamentalSummaryRow
 from shared.schemas.fundamentals import FundamentalsRow
 from shared.schemas.indicators import (
@@ -20,4 +20,5 @@ __all__ = [
     "TechnicalIndicatorsMonthlyRow",
     "NewsRawRow",
     "EarningsReleaseRow",
+    "EarningsCalendarRow",
 ]
