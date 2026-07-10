@@ -1019,6 +1019,79 @@ def test_comparison_intent_emits_comparison_event_not_thesis(
     assert done_data["citations_count"] >= 2
 
 
+def test_narrowed_axis_comparison_streams_done_with_null_aspects(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QNT-358 regression: a narrowed axis comparison omits (None) the aspects
+    it did not gather. The done-event citation counter must skip None aspects --
+    before the fix it raised ``AttributeError: 'NoneType' has no attribute
+    'summary'`` at stream end, truncating the SSE (ERR_INCOMPLETE_CHUNKED_ENCODING
+    in the browser) even though the card and narration had already rendered."""
+    from agent.comparison import ComparisonAnswer, ComparisonSection
+
+    def _tech_only(ticker: str) -> ComparisonSection:
+        return ComparisonSection(
+            ticker=ticker,
+            company=AspectView(
+                label=None,
+                summary=f"{ticker} context (source: company).",
+                supports=[],
+                challenges=[],
+            ),
+            technical=AspectView(
+                label="Sideways",
+                summary=f"{ticker} TREND Sideways (source: technical).",
+                supports=[f"{ticker} close above SMA-20 (source: technical)."],
+                challenges=[],
+            ),
+            # fundamental / news deliberately omitted -> default None (not gathered).
+        )
+
+    comparison = ComparisonAnswer(
+        sections=[_tech_only("NVDA"), _tech_only("AMD")],
+        differences="AMD's daily trend is cleaner than NVDA's (source: technical).",
+    )
+    assert comparison.sections[0].fundamental is None  # guard the premise
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:  # noqa: ARG001
+        graph = MagicMock()
+        graph.invoke.return_value = {
+            "ticker": "NVDA",
+            "intent": "comparison",
+            "plan": ["company", "technical"],
+            "reports": {"technical": "stub"},
+            "reports_by_ticker": {
+                "NVDA": {"company": "stub", "technical": "stub"},
+                "AMD": {"company": "stub", "technical": "stub"},
+            },
+            "errors": {},
+            "answer": comparison,
+            "confidence": 1.0,
+        }
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    r = client.post(
+        "/api/v1/agent/chat",
+        json={"ticker": "NVDA", "message": "Compare NVDA vs AMD on technical momentum."},
+    )
+    frames = _parse_sse(r.text)
+    events = [name for name, _ in frames]
+
+    # The stream must complete: a done event, not a truncated body.
+    assert events[-1] == "done", f"stream did not complete cleanly: {events}"
+    done_data = frames[-1][1]
+    assert done_data["intent"] == "comparison"
+    # Citations still counted across the gathered (non-None) aspects + differences.
+    assert done_data["citations_count"] >= 2
+    cmp_data = next(data for name, data in frames if name == "comparison")
+    # The wire payload carries the omitted aspects as null.
+    assert cmp_data["sections"][0]["fundamental"] is None
+    assert cmp_data["sections"][0]["technical"] is not None
+
+
 def test_lean_comparison_emits_comparison_lean_event_and_counts_cells(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -473,7 +473,11 @@ def get_judge_llm(temperature: float = 0.0, model_alias: str | None = None) -> C
     )
 
 
-def get_llm(temperature: float = 0.2, model_alias: str | None = None) -> ChatOpenAI:
+def get_llm(
+    temperature: float = 0.2,
+    model_alias: str | None = None,
+    max_tokens: int | None = None,
+) -> ChatOpenAI:
     """Return a ChatOpenAI bound to a LiteLLM alias.
 
     Alias precedence (highest first):
@@ -486,6 +490,15 @@ def get_llm(temperature: float = 0.2, model_alias: str | None = None) -> ChatOpe
        calls run on a small/fast model. ``None`` (synthesize/narrate) falls
        through to the provider default.
     3. provider default — ``EQUITY_AGENT_PROVIDER`` lookup.
+
+    QNT-358: ``max_tokens`` overrides the alias's configured output cap for one
+    call. ``equity-agent/default`` pins ``max_tokens: 1500`` in
+    ``litellm_config.yaml`` (calibrated on the single-ticker thesis
+    distribution, QNT-351); the no-axis full-matrix comparison is structurally
+    ~2x a thesis and needs a larger budget, which it requests per-call here
+    (LiteLLM lets a request-level ``max_tokens`` override the model default).
+    ``None`` leaves the alias's configured cap untouched, so every other caller
+    is unchanged.
     """
     if _MODEL_OVERRIDE is not None:
         alias = _MODEL_OVERRIDE
@@ -512,11 +525,23 @@ def get_llm(temperature: float = 0.2, model_alias: str | None = None) -> ChatOpe
         _TEMPERATURE_OVERRIDE if _TEMPERATURE_OVERRIDE is not None else temperature
     )
 
+    # QNT-358: per-call output-budget override (None = keep the alias's
+    # litellm_config.yaml default). Routed through ``extra_body`` as the literal
+    # ``max_tokens`` key, NOT the ChatOpenAI ``max_tokens=`` field: recent
+    # langchain_openai serialises that field as ``max_completion_tokens``, a
+    # DIFFERENT key from the config's ``max_tokens: 1500``, so both are sent and
+    # the provider still truncates at the lower config cap. Sending literal
+    # ``max_tokens`` in the request body overrides the same key the config sets
+    # (verified live against the proxy: request max_tokens > config max_tokens
+    # raises the completion ceiling). ``None`` sends no override.
+    extra_body = {"max_tokens": max_tokens} if max_tokens is not None else None
+
     return ChatOpenAI(
         model=alias,
         base_url=settings.LITELLM_BASE_URL,
         api_key="litellm-proxy",  # pyright: ignore[reportArgumentType]  # proxy ignores; real keys server-side
         temperature=effective_temperature,
+        extra_body=extra_body,
         # QNT-150: bound every LLM call so a hung LiteLLM proxy / stalled
         # provider can't keep an SSE chat connection open forever.
         timeout=settings.LLM_REQUEST_TIMEOUT,

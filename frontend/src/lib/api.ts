@@ -374,12 +374,16 @@ export type QuickFactPayload = {
 // thesis card (was: a single ``key_values`` list).
 export type ComparisonSource = "company" | "technical" | "fundamental" | "news";
 
+// QNT-358: the non-company aspects are optional — an axis-focused comparison
+// ("compare TSLA vs AMD on technical momentum") narrows the plan to
+// company + one axis for both tickers, so the other aspects arrive null. The
+// card renders only the aspects present. company stays required (grounding).
 export type ComparisonSection = {
   ticker: string;
   company: AspectView;
-  fundamental: AspectView;
-  technical: AspectView;
-  news: AspectView;
+  fundamental: AspectView | null;
+  technical: AspectView | null;
+  news: AspectView | null;
 };
 
 export type ComparisonPayload = {

@@ -88,17 +88,30 @@ def plan_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> dic
 
     # Thesis uses a structured-output planner so focused questions avoid
     # irrelevant report calls while still carrying a rationale narrate can
-    # optionally surface. Comparison still fetches every available tool:
-    # the same plan is run against two tickers, so narrowing can starve
-    # one side of the contrast. Quick_fact keeps its older comma-list
-    # planner because it only needs a tiny single-metric selection.
+    # optionally surface. Quick_fact keeps its older comma-list planner
+    # because it only needs a tiny single-metric selection.
     #
     # QNT-176: focused-analysis intents narrow deterministically to
     # ``["company", <matching_report>]``. The user named the domain
     # explicitly; the plan-LLM has nothing to disambiguate.
+    #
+    # QNT-358: comparison narrows the SAME way when the question names one
+    # axis -- mirroring the focused path. The pre-QNT-358 comment here warned
+    # that narrowing "can starve one side of the contrast", but that concern
+    # was about ASYMMETRIC (per-ticker LLM) narrowing; a DETERMINISTIC narrow
+    # to ``["company", <axis>]`` runs identically against BOTH tickers, so
+    # neither side is starved. No axis named keeps the full four-aspect plan.
     if intent in graph._FOCUSED_REPORT:
         wanted = ("company", graph._FOCUSED_REPORT[intent])
         plan = [t for t in available if t in wanted]
+        plan_rationale = None
+    elif intent == "comparison":
+        axis = graph.comparison_axis(question)
+        if axis is not None and axis in available:
+            wanted = ("company", axis)
+            plan = [t for t in available if t in wanted]
+        else:
+            plan = list(available)
         plan_rationale = None
     elif intent == "quick_fact":
         prompt = graph._build_plan_prompt(ticker, question, available, intent)

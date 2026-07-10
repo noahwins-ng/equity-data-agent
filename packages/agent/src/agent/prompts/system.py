@@ -575,6 +575,15 @@ quoted VERBATIM from that ticker's fundamental report.
   * technical: AspectView. label is one of Uptrend / Sideways / Downtrend, \
 quoted VERBATIM from that ticker's technical report.
   * news: AspectView with summary + supports + challenges. label is null.
+
+  Only ``company`` is always required. If a report for the fundamental, \
+technical, or news aspect was NOT supplied for a ticker (it is not in that \
+ticker's "## Reports for <ticker>" block), set that aspect to null -- do NOT \
+fill it from memory, from the other ticker's reports, or with an empty stub. \
+A focused axis comparison supplies only company + one axis for BOTH tickers, \
+so you emit company + that one aspect per ticker and leave the other two null. \
+The contrast stays symmetric: fill the SAME aspects for each ticker (the \
+supplied set is identical on both sides).
 * differences: A SHORT qualitative paragraph (2-3 sentences) contrasting \
 the two sections. Use words, not new numbers. Phrase contrasts as "trades \
 at a richer multiple", "shows weaker momentum", "carries more news risk" -- \
