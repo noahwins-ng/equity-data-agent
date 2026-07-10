@@ -8,7 +8,6 @@
 
 [![Live demo](https://img.shields.io/badge/live%20demo-equity--data--agent--ynr2.vercel.app-success?style=for-the-badge)](https://equity-data-agent-ynr2.vercel.app)
 
-<!-- TODO(screenshots): refresh terminal-live.png — captured May 9, predates the mid-June ticker swap, so the watchlist still shows V/JPM/UNH instead of MU/AMD/INTC (contradicts the universe listed below) and predates the RAG/earnings chat cards. Re-capture from the live site per docs/screenshots/README.md. -->
 ![Equity Data Agent live terminal](docs/screenshots/terminal-live.png)
 
 ## Highlights
@@ -199,12 +198,11 @@ Standard data-engineering patterns under Dagster-native names:
 
 **Live terminal** — watchlist, ticker detail, charting, fundamentals, news, and chat in one persistent workspace.
 
-<!-- TODO(screenshots): same file as the hero — refresh terminal-live.png (stale watchlist: V/JPM/UNH → MU/AMD/INTC). -->
 ![Live terminal](docs/screenshots/terminal-live.png)
 
-**CLI thesis** — the same agent produces a structured thesis from the terminal.
+**Grounded RAG provenance** — a targeted-event answer streaming with its retrieved-source citations in the chat panel.
 
-![CLI thesis](docs/screenshots/cli-thesis.png)
+![RAG provenance](docs/screenshots/rag-provenance.png)
 
 **Langfuse trace** — request-level trace with LangGraph spans, model metadata, token usage, and eval scores.
 
@@ -212,8 +210,11 @@ Standard data-engineering patterns under Dagster-native names:
 
 **Dagster asset graph** — asset lineage from raw OHLCV to derived indicators.
 
-<!-- TODO(screenshots): refresh dagster-lineage.svg — captured Apr 27, missing the earnings_releases_raw + earnings_embeddings assets (now 12 assets, not 10). Re-export per docs/screenshots/README.md. -->
 ![Dagster lineage](docs/screenshots/dagster-lineage.svg)
+
+**Dagster asset checks** — domain-bounded data tests (RSI 0-100, P/E band, MACD coherence) with pass/fail status.
+
+![Dagster asset checks](docs/screenshots/dagster-asset-checks.png)
 
 ## Stack
 
