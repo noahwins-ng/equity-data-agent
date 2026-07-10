@@ -52,7 +52,7 @@ Beyond the two pillars above:
 ![Phases](https://img.shields.io/badge/phases-7%2F7%20complete-2ea44f)
 ![Tests](https://img.shields.io/badge/tests-1700%2B%20passing-2ea44f)
 ![ADRs](https://img.shields.io/badge/ADRs-27-1f6feb)
-![Golden set](https://img.shields.io/badge/golden__set-41%20questions-1f6feb)
+![Golden set](https://img.shields.io/badge/golden__set-44%20questions-1f6feb)
 ![Prod](https://img.shields.io/badge/prod-live-success)
 
 ## Architecture
@@ -154,7 +154,7 @@ The guarantee is deliberately narrow:
 Two concerns, kept separate: **provenance** (numbers are copied from reports, not computed by the LLM) and **correctness** (evals + an LLM judge check the cited numbers actually answer the question). Enforcement is layered — architecture ([ADR-003](docs/decisions/003-intelligence-vs-math.md)) keeps arithmetic out of the agent, the prompt requires every number to cite its report, and a CI eval suite guards it:
 
 - numeric grounding ([`hallucination.py`](packages/agent/src/agent/evals/hallucination.py)) — every numeric literal traced to a report;
-- golden-set regression ([`golden_set.py`](packages/agent/src/agent/evals/golden_set.py)) — 41 questions across all 10 tickers;
+- golden-set regression ([`golden_set.py`](packages/agent/src/agent/evals/golden_set.py)) — 44 questions across all 10 tickers;
 - tool-call ([`tool_calls.py`](packages/agent/src/agent/evals/tool_calls.py)) and dialogue ([`dialogue_eval.py`](packages/agent/src/agent/evals/dialogue_eval.py), a 5-axis LLM judge);
 - retrieval IR metrics ([`retrieval_eval.py`](packages/agent/src/agent/evals/retrieval_eval.py): recall@k / MRR / nDCG);
 - LLM-judged RAGAS + G-Eval ([`deepeval_eval.py`](packages/agent/src/agent/evals/deepeval_eval.py), off the hot path) and RAG routing ([`news_search_eval.py`](packages/agent/src/agent/evals/news_search_eval.py)).
@@ -163,16 +163,19 @@ Two concerns, kept separate: **provenance** (numbers are copied from reports, no
 
 | Suite | Latest | Per-PR CI gate |
 |---|---|---|
-| Golden regression — tool-call / grounding / answer-cosine | 40/41 · 40/41 · 0.43 | dev harness (directional) |
+| Golden regression (2026-07-04) — tool-call / grounding / answer-cosine | 40/41 · 40/41 · 0.43 | dev harness (directional) |
 | Retrieval (hybrid + Cohere rerank) — recall@5 / recall@20 | 0.53 / 0.76 | blocking (floors 0.45 / 0.68) |
 | Retrieval — MRR / nDCG@10 | 0.94 / 0.79 | blocking (floors 0.85 / 0.70) |
 | Number grounding (frozen artifacts) | pass | blocking — red on any unsupported numeric |
+| Grounding ablation (2026-07-11) — fabricated-number rate, grounding on → off | 0.0% → 86.9% | illustrative (not gated) |
+
+**What grounding buys.** Strip report-grounding from the *same* model over the same 44-question set — no report injection, no cite-every-number rule — and it invents **299 of 344** figures (86.9%) against reports it never saw, versus the constrained agent's **0 of 619** (0.0%): only 1 of 44 unconstrained answers is fully clean, against all 44 constrained. The intelligence-vs-math split isn't decoration — it's the gap between 0 and 87% invented numbers. Reproduce: `uv run python -m agent.evals.baseline_eval` ([`baseline_eval.py`](packages/agent/src/agent/evals/baseline_eval.py)).
 
 Economics: ~`$0.002` per thesis on the paid DeepSeek primary ([ADR-026](docs/decisions/026-paid-synthesis-economics-and-free-tier-simplification-dividend.md)); the earlier "near-zero free-tier" framing is retired. Golden flags seen in earlier runs were scorer false positives on glued magnitude units (e.g. `$2.5T`) — fixed by sharpening the scorer, not loosening the contract ([#411](https://github.com/noahwins-ng/equity-data-agent/pull/411)). The suite earns its keep by disqualifying production-candidate models (Qwen3-32B fabrications and leaked `<think>` blocks; GPT-OSS-120B once the golden set grew).
 
 ### Where this breaks at scale
 
-- **Bench breadth** — one prompt revision × 41 questions is directional, not a leaderboard.
+- **Bench breadth** — one prompt revision × 44 questions is directional, not a leaderboard.
 - **Fallback on free tiers** — the primary is paid (DeepSeek), but the Nemotron fallback anchor and the Groq small-tier still inherit RPD/TPD caps; sustained load leans further into paid inference or self-hosting.
 - **Retrieval depth** — reranking is query-time only, and one MiniLM-384 embedder serves both corpora.
 - **No fine-tuning** — behaviour is prompt- and routing-shaped.
