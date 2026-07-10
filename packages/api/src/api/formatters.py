@@ -67,11 +67,18 @@ def format_currency(
     precision: int = 2,
     na_reason: str = "data unavailable",
 ) -> str:
-    """Format a USD amount with thousands separators."""
+    """Format a USD amount with thousands separators.
+
+    The sign leads the currency symbol (``-$500`` not ``$-500``) — the
+    conventional accounting placement, and the only sensible reading now that
+    format_currency is used on values that can legitimately be negative
+    (net income / FCF in the SCALE block, QNT-354).
+    """
     if _is_missing(value):
         return f"N/M ({na_reason})"
     assert value is not None
-    return f"${value:,.{precision}f}"
+    sign = "-" if value < 0 else ""
+    return f"{sign}${abs(value):,.{precision}f}"
 
 
 def pe_na_reason(eps: float | None) -> str:

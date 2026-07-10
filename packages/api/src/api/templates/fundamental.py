@@ -295,27 +295,40 @@ def _fetch_rows(ticker: str) -> list[dict[str, Any]]:
 
 
 def _fetch_market_cap(ticker: str) -> float | None:
-    """Return the latest reported market cap from ``equity_raw.fundamentals``.
+    """Return current market cap as ``latest_close * shares_outstanding``.
 
-    Market cap is the one SCALE figure not carried on the fundamental_summary row
-    (that table holds ratios + TTM absolutes, not market cap). Pulled from the raw
-    fundamentals snapshot (newest period_end) so the SCALE block can print it.
+    Market cap is the one SCALE figure not carried on the fundamental_summary
+    row. It is derived here the SAME way the report's valuation multiples are
+    (``compute_fundamental_ratios`` uses ``latest_close`` from ohlcv_raw times
+    ``shares_outstanding`` — fundamental_summary.py) rather than from the stored
+    ``equity_raw.fundamentals.market_cap`` yfinance snapshot, so the printed
+    market cap agrees with the P/S x revenue the SCALE block now sits beside
+    (the snapshot is a weekly point-in-time value that drifts from the daily
+    close). The multiply lives in SQL, not Python, per ADR-003. Missing on
+    either side collapses the scalar subquery to 0, caught by the sentinel guard.
     """
     client = get_client()
     query = """
-        SELECT market_cap
-        FROM equity_raw.fundamentals FINAL
-        WHERE ticker = %(ticker)s
-        ORDER BY period_end DESC
-        LIMIT 1
+        SELECT
+            (SELECT close
+             FROM equity_raw.ohlcv_raw FINAL
+             WHERE ticker = %(ticker)s
+             ORDER BY date DESC
+             LIMIT 1)
+            *
+            (SELECT shares_outstanding
+             FROM equity_raw.fundamentals FINAL
+             WHERE ticker = %(ticker)s
+             ORDER BY period_end DESC
+             LIMIT 1) AS market_cap
     """
     result = client.query(query, parameters={"ticker": ticker})
     rows = result.result_rows
     if not rows:
         return None
-    # market_cap is non-nullable Float64 and defaults to 0.0 when yfinance's
-    # info lacks marketCap (fundamentals.py). Treat the 0-sentinel as missing so
-    # SCALE renders N/M rather than a misleading "$0" (formatters.py convention).
+    # A missing close or shares collapses the scalar subquery product to 0;
+    # treat that (and any non-positive) as missing so SCALE renders N/M rather
+    # than a misleading "$0" (formatters.py convention).
     value = rows[0][0]
     return value if value and value > 0 else None
 
