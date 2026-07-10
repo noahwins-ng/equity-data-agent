@@ -9,7 +9,7 @@ the live SSH tunnel and run in CI. The shape of the query result matches what
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -1125,17 +1125,18 @@ def test_signal_verdict_v2_profitability_breaks_tie_to_bullish() -> None:
 # ---------- news ----------
 
 
-_NEWS_COLS = ("published_at", "source", "headline", "body_snippet")
+_NEWS_COLS = ("published_at", "source", "publisher_name", "headline", "body_snippet")
 
 
 def _news_row(
     *,
     published: datetime,
     source: str = "finnhub",
+    publisher_name: str = "Yahoo",
     headline: str = "headline",
     body_snippet: str = "",
 ) -> tuple[Any, ...]:
-    return (published, source, headline, body_snippet)
+    return (published, source, publisher_name, headline, body_snippet)
 
 
 def test_news_unknown_ticker_404() -> None:
@@ -1163,13 +1164,13 @@ def test_news_renders_headlines_without_sentiment(monkeypatch: pytest.MonkeyPatc
     rows = [
         _news_row(
             published=datetime(2026, 4, 16, tzinfo=UTC),
-            source="finnhub",
+            publisher_name="CNBC",
             headline="NVDA hits new high",
             body_snippet="Earnings blew past estimates as data centre demand surged",
         ),
         _news_row(
             published=datetime(2026, 4, 15, tzinfo=UTC),
-            source="reuters",
+            publisher_name="Reuters",
             headline="Analyst flags margin risk",
             body_snippet="Bears pointed to compressing margins",
         ),
@@ -1181,10 +1182,10 @@ def test_news_renders_headlines_without_sentiment(monkeypatch: pytest.MonkeyPatc
     # Sentiment is removed
     assert "Sentiment:" not in report
     assert "## SIGNAL" not in report
-    # Sources roll-up rendered
+    # Outlet (publisher_name) roll-up rendered — not the finnhub feed label.
     assert "## SOURCES" in report
-    assert "finnhub: 1" in report
-    assert "reuters: 1" in report
+    assert "CNBC: 1" in report
+    assert "Reuters: 1" in report
     # QNT-299: as-of footer uses the newest headline's own date, not "today".
     assert report.rstrip().endswith("AS_OF: 2026-04-16")
 
@@ -1207,6 +1208,196 @@ def test_news_header_advertises_window(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake(monkeypatch, {"news_raw": _FakeResult(_NEWS_COLS, [])})
     report = build_news_report("NVDA")
     assert "Lookback: last 14 days, up to 20 headlines" in report
+
+
+def test_news_snippet_budget_pinned_to_fold(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC1: the digest snippet budget is the shared constant (280), pinned to the
+    RAG fold's news-body budget so they cannot drift silently."""
+    from agent.support import _NEWS_BODY_MAX_CHARS
+    from shared.retrieval import NEWS_BODY_SNIPPET_CHARS
+
+    assert NEWS_BODY_SNIPPET_CHARS == 280
+    assert _NEWS_BODY_MAX_CHARS == NEWS_BODY_SNIPPET_CHARS
+    # The digest's SQL substring truncates at exactly the shared budget.
+    captured: dict[str, Any] = {}
+
+    def fake_client() -> Any:
+        class _C:
+            def query(self, query: str, parameters: dict[str, Any]) -> _FakeResult:
+                captured["query"] = query
+                return _FakeResult(_NEWS_COLS, [])
+
+        return _C()
+
+    monkeypatch.setattr(news_module, "get_client", fake_client)
+    build_news_report("NVDA")
+    assert f"substring(body, 1, {NEWS_BODY_SNIPPET_CHARS})" in captured["query"]
+
+
+def test_news_dedups_near_duplicate_headlines(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC2: near-dup headlines from several outlets collapse to one bullet with an
+    'also covered by N sources' suffix; a distinct story stays separate."""
+    rows = [
+        # One wire story republished across three outlets (headline reworded /
+        # re-cased slightly -- normalisation makes the token sets near-identical).
+        # The ingestion feed (source) is finnhub for all; breadth keys off the
+        # publisher_name outlet.
+        _news_row(
+            published=datetime(2026, 4, 16, tzinfo=UTC),
+            publisher_name="Reuters",
+            headline="Nvidia unveils new Blackwell Ultra AI chip",
+            body_snippet="Reuters take on the launch",
+        ),
+        _news_row(
+            published=datetime(2026, 4, 16, tzinfo=UTC),
+            publisher_name="Bloomberg",
+            headline="Nvidia Unveils New Blackwell Ultra AI Chip",
+            body_snippet="Bloomberg take on the launch",
+        ),
+        _news_row(
+            published=datetime(2026, 4, 15, tzinfo=UTC),
+            publisher_name="CNBC",
+            headline="Nvidia unveils new Blackwell Ultra AI chip.",
+            body_snippet="CNBC take on the launch",
+        ),
+        _news_row(
+            published=datetime(2026, 4, 14, tzinfo=UTC),
+            publisher_name="Benzinga",
+            headline="Analyst flags margin risk at Nvidia",
+            body_snippet="Bears point to compressing margins",
+        ),
+    ]
+    _install_fake(monkeypatch, {"news_raw": _FakeResult(_NEWS_COLS, rows)})
+    report = build_news_report("NVDA")
+
+    headlines_block = report.split("## SOURCES")[0]
+    # The three near-dup chip stories collapse to a single representative bullet
+    # (the newest, Reuters) carrying the coverage-breadth suffix for the 2 others.
+    assert "[Reuters] Nvidia unveils new Blackwell Ultra AI chip" in headlines_block
+    assert "(also covered by 2 sources)" in headlines_block
+    assert headlines_block.count("Blackwell") == 1
+    # Only the representative's snippet renders for the collapsed story.
+    assert "Bloomberg take on the launch" not in headlines_block
+    assert "CNBC take on the launch" not in headlines_block
+    # The distinct story survives as its own bullet with no suffix.
+    assert "Analyst flags margin risk at Nvidia" in headlines_block
+    # SOURCES roll-up reflects per-outlet article volume (publisher_name).
+    assert "Reuters: 1" in report
+    assert "Bloomberg: 1" in report
+    assert "Benzinga: 1" in report
+
+
+def test_news_single_source_dup_collapses_without_suffix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two near-identical headlines from the SAME outlet collapse to one bullet,
+    but with no 'also covered by' suffix (no coverage breadth to report)."""
+    rows = [
+        _news_row(
+            published=datetime(2026, 4, 16, tzinfo=UTC),
+            publisher_name="Yahoo",
+            headline="Nvidia announces new AI chip lineup today",
+            body_snippet="first",
+        ),
+        _news_row(
+            published=datetime(2026, 4, 16, tzinfo=UTC),
+            publisher_name="Yahoo",
+            headline="Nvidia announces new AI chip lineup",
+            body_snippet="second",
+        ),
+    ]
+    _install_fake(monkeypatch, {"news_raw": _FakeResult(_NEWS_COLS, rows)})
+    report = build_news_report("NVDA")
+    headlines_block = report.split("## SOURCES")[0]
+    assert "also covered by" not in headlines_block
+    assert "first" in headlines_block
+    assert "second" not in headlines_block
+
+
+def test_news_dedup_keeps_distinct_but_similar_stories_separate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Headlines that share most tokens but differ in a KEY discriminator must NOT
+    merge -- merging would hide a materially different story. Q3-vs-Q4 earnings
+    (Jaccard 0.71) and a same-day rise-vs-fall reversal (0.60) both sit below the
+    0.8 threshold and stay as separate bullets with no 'also covered by' suffix."""
+    rows = [
+        _news_row(
+            published=datetime(2026, 4, 16, 12, 0, tzinfo=UTC),
+            publisher_name="Reuters",
+            headline="Nvidia Reports Record Q3 2026 Earnings",
+        ),
+        _news_row(
+            published=datetime(2026, 4, 16, 11, 0, tzinfo=UTC),
+            publisher_name="Bloomberg",
+            headline="Nvidia Reports Record Q4 2026 Earnings",
+        ),
+        _news_row(
+            published=datetime(2026, 4, 16, 10, 0, tzinfo=UTC),
+            publisher_name="CNBC",
+            headline="Nvidia shares rise on strong data center demand",
+        ),
+        _news_row(
+            published=datetime(2026, 4, 16, 9, 0, tzinfo=UTC),
+            publisher_name="Yahoo",
+            headline="Nvidia shares fall on weak data center demand",
+        ),
+    ]
+    _install_fake(monkeypatch, {"news_raw": _FakeResult(_NEWS_COLS, rows)})
+    report = build_news_report("NVDA")
+    headlines_block = report.split("## SOURCES")[0]
+    # All four survive as their own bullets; none collapse.
+    assert "Q3 2026 Earnings" in headlines_block
+    assert "Q4 2026 Earnings" in headlines_block
+    assert "shares rise on strong" in headlines_block
+    assert "shares fall on weak" in headlines_block
+    assert "also covered by" not in headlines_block
+    assert headlines_block.count("\n- ") == 4
+
+
+def test_news_dedup_frees_slots_for_crowded_out_stories(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C-9: collapsing a syndicated story frees its slots for the next distinct
+    story. Dedup runs over the fetch pool, so a distinct story a raw LIMIT-20 would
+    crowd out still renders. The five copies of story A occupy the newest slots; a
+    raw top-20 would show A x5 + only 15 distinct, dropping distinct 16-19."""
+    from api.templates import news as news_module_local
+
+    rows = [
+        # 5 outlets, one syndicated story, newest timestamps.
+        _news_row(
+            published=datetime(2026, 4, 20, 12, i, tzinfo=UTC),
+            publisher_name=pub,
+            headline="Nvidia unveils Blackwell Ultra AI accelerator",
+            body_snippet=f"copy from {pub}",
+        )
+        for i, pub in enumerate(["Reuters", "Bloomberg", "CNBC", "Yahoo", "Benzinga"])
+    ] + [
+        # 20 genuinely distinct stories (token-disjoint so they don't cluster),
+        # progressively older so they follow the syndicated cluster.
+        _news_row(
+            published=datetime(2026, 4, 19, 12, 0, tzinfo=UTC) - timedelta(hours=k),
+            publisher_name="Yahoo",
+            headline=f"story{k} alpha{k} bravo{k} charlie{k}",
+            body_snippet=f"body {k}",
+        )
+        for k in range(1, 21)
+    ]
+    assert len(rows) == 25
+    _install_fake(monkeypatch, {"news_raw": _FakeResult(_NEWS_COLS, rows)})
+    report = build_news_report("NVDA")
+    headlines_block = report.split("## SOURCES")[0]
+
+    # The syndicated story collapses to one bullet + a 4-outlet breadth suffix.
+    assert headlines_block.count("Blackwell Ultra AI accelerator") == 1
+    assert "(also covered by 4 sources)" in headlines_block
+    # Exactly _MAX_HEADLINES bullets render (1 cluster + 19 distinct = 20).
+    assert headlines_block.count("\n- ") == news_module_local._MAX_HEADLINES
+    # Distinct story 19 would be dropped by a raw LIMIT-20 (A x5 + 15 distinct);
+    # dedup backfills it. Story 20 is the one that legitimately falls off the cap.
+    assert "story19 alpha19" in headlines_block
+    assert "story20 alpha20" not in headlines_block
 
 
 # ---------- company ----------
