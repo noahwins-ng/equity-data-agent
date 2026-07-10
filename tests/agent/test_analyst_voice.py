@@ -15,7 +15,12 @@ Pins the two rules the 2026-07 live-sample assessment SUPPORTED
 from __future__ import annotations
 
 import pytest
-from agent.analyst_voice import find_filler, has_filler
+from agent.analyst_voice import (
+    find_filler,
+    find_scaffolding_leak,
+    has_filler,
+    has_scaffolding_leak,
+)
 from agent.evals.dialogue_eval import _apply_deterministic_filler_gate
 from agent.evals.dialogue_judge import DialogueAxisScore, DialogueJudgeScore
 from agent.prompts import NARRATE_FALSIFIER_RULE, build_narrate_prompt
@@ -69,6 +74,64 @@ def test_find_filler_empty_is_clean() -> None:
     assert not has_filler("")
 
 
+# ─── QNT-359: report-scaffolding leak detector ──────────────────────────────
+
+# One sample per banned pattern so a regression on any single pattern fails.
+SCAFFOLDING_SAMPLES = [
+    # "carries a <token> label" -- the headline Symptom A leak.
+    "NVDA carries a Premium label at a stretched multiple (source: fundamental).",
+    "The name carried an Inline label last quarter (source: fundamental).",
+    # bare "<token> label" as a noun.
+    "The fundamental report label undervalued does not hold here.",
+    "This is a discounted label read (source: fundamental).",
+    # "label <verb> <token>" -- the falsifier-rule leak seen on a live NVDA turn.
+    "The read holds while the fundamental label stays Premium (source: fundamental).",
+    "It flips if that label moves to Inline or Discounted (source: fundamental).",
+    "The call holds while the label stays Uptrend (source: technical).",
+    # "the <domain> label" as a scaffolding noun.
+    "The fundamental label is doing the work here (source: fundamental).",
+    # "the <domain> report" as a scaffolding noun.
+    "The fundamental report says the multiple is rich (source: fundamental).",
+    "Per the technical report, momentum is cooling (source: technical).",
+    "The news report lists three catalysts (source: news).",
+]
+
+CLEAN_SCAFFOLDING_SAMPLES = [
+    # Bare "premium" adjective -- the SANCTIONED translation, must pass.
+    "NVDA is trading rich, at a premium to peers and its own history (source: fundamental).",
+    # "carries a richer multiple" -- comparison prose with no "label" word.
+    "NVDA carries a richer multiple than AAPL (source: fundamental).",
+    # "the report" without a domain qualifier is not the banned scaffolding.
+    "This turns cautious if it loses the SMA-50 the report prints (source: technical).",
+    # citation form, not "the fundamental report".
+    "The multiple is rich versus peers (source: fundamental).",
+    # "the trend is up" -- translated Uptrend, must pass.
+    "The trend is up and momentum holds (source: technical).",
+    # "label" as a VERB next to an unrelated adjective -- must NOT false-fire
+    # (the old open-window pattern flagged this).
+    "Bulls would label this a fair premium given the growth runway ahead.",
+    "You could label it cheap, but the setup stays sideways for now.",
+]
+
+
+@pytest.mark.parametrize("text", SCAFFOLDING_SAMPLES)
+def test_find_scaffolding_leak_flags_each_pattern(text: str) -> None:
+    assert has_scaffolding_leak(text), f"expected scaffolding leak detected in: {text!r}"
+    assert find_scaffolding_leak(text), "find_scaffolding_leak must return the matched phrase(s)"
+
+
+@pytest.mark.parametrize("text", CLEAN_SCAFFOLDING_SAMPLES)
+def test_find_scaffolding_leak_passes_translated_prose(text: str) -> None:
+    assert not has_scaffolding_leak(text), (
+        f"false positive on clean prose: {find_scaffolding_leak(text)!r}"
+    )
+
+
+def test_find_scaffolding_leak_empty_is_clean() -> None:
+    assert find_scaffolding_leak("") == []
+    assert not has_scaffolding_leak("")
+
+
 # ─── D-6: eval-path gate ───────────────────────────────────────────────────
 
 
@@ -91,6 +154,19 @@ def test_filler_gate_zeroes_voice_match_on_filler() -> None:
     assert gated.voice_match.score == 0.0
     assert "filler" in gated.voice_match.rationale.lower()
     # Other axes are untouched -- the gate is voice-only.
+    assert gated.analyst_likeness.score == 1.0
+
+
+def test_filler_gate_zeroes_voice_match_on_scaffolding_leak() -> None:
+    """QNT-359: a report-scaffolding leak caps voice_match at 0 through the same
+    deterministic gate as filler."""
+    score = _full_score(1.0)
+    gated = _apply_deterministic_filler_gate(
+        score, "**Constructive.** NVDA carries a Premium label (source: fundamental)."
+    )
+    assert gated is not None
+    assert gated.voice_match.score == 0.0
+    assert "scaffolding" in gated.voice_match.rationale.lower()
     assert gated.analyst_likeness.score == 1.0
 
 

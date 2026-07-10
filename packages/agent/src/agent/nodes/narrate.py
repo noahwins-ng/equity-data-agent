@@ -201,6 +201,22 @@ def narrate_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> 
         if report_body:
             payload_markdown = str(report_body)
 
+    # QNT-359 (fix B): when the payload carries a valuation label, the model is
+    # shown the LABEL (Premium/Inline/Discounted) but not the peer-median number
+    # that justifies it -- so a spoken "X% above the sector median" gets
+    # fabricated and the runtime grounding check below flags it. Fold the
+    # fundamental report's peer/valuation section (which grounding already grades
+    # against) into the substrate the model actually sees, so any comparison
+    # magnitude it speaks is quotable-verbatim. Kept tight -- the peer section
+    # only, not the whole report.
+    peer_substrate = graph._narrate_peer_substrate(state, payload_markdown)
+    if peer_substrate:
+        payload_markdown = (
+            f"{payload_markdown}\n\n"
+            "Peer/valuation context backing the valuation label (quote this "
+            f"magnitude; do not invent one):\n{peer_substrate}"
+        )
+
     prompt = graph.build_narrate_prompt(
         intent=str(intent),
         ticker=ticker,

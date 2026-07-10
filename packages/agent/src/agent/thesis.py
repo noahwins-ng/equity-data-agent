@@ -232,10 +232,14 @@ class Thesis(BaseModel):
     )
     verdict_rationale: str = Field(
         description=(
-            "Two to three sentences naming which aspect labels shaped the "
-            "verdict. Must mention at least one aspect's label verbatim "
-            "(Premium, Inline, Discounted, Uptrend, Sideways, or "
-            "Downtrend). Cite (source: ...) for any numeric claim."
+            "Two to three sentences of analyst prose explaining the verdict. "
+            "Speak the aspect reads in words, not in the closed-vocab label "
+            "tokens (those live in each aspect's ``label`` field and drive the "
+            "pill): do NOT write Premium / Inline / Discounted / Uptrend / "
+            "Sideways / Downtrend as nouns, and do NOT name 'the fundamental / "
+            "technical report' as scaffolding. Translate -- 'the multiple is "
+            "rich versus peers and its own history' -- and cite (source: ...) "
+            "for any numeric claim."
         ),
     )
 

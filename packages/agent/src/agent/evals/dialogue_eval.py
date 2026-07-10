@@ -22,7 +22,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from shared.config import settings
 from shared.tickers import TICKERS
 
-from agent.analyst_voice import find_filler
+from agent.analyst_voice import find_filler, find_scaffolding_leak
 from agent.evals.dialogue_judge import (
     AGENT_UNDER_TEST_RESOLVED_MODEL,
     JUDGE_MODEL_ALIAS,
@@ -396,15 +396,19 @@ def _apply_deterministic_filler_gate(
     never writes ("it's important to note", a leading "Overall,") is a voice
     failure by definition, so it overrides whatever the LLM judge scored on
     ``voice_match``. Enforced on every fixture regardless of the judge outcome.
+
+    QNT-359: the same gate also fires on report-scaffolding leaks -- a machine
+    label token or a report name surfacing in user-facing prose ("carries a
+    Premium label", "the fundamental report") is the same class of voice defect.
     """
     if score is None:
         return score
-    filler = find_filler(narrative)
-    if not filler:
+    hits = find_filler(narrative) + find_scaffolding_leak(narrative)
+    if not hits:
         return score
     score.voice_match.score = 0.0
     score.voice_match.rationale = (
-        f"Deterministic filler check failed: banned analyst-voice filler: {', '.join(filler)}."
+        f"Deterministic voice check failed: banned filler/scaffolding phrase(s): {', '.join(hits)}."
     )
     return score
 

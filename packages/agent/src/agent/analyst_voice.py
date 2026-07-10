@@ -48,6 +48,63 @@ _BANNED_FILLER_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
+# QNT-359: report-scaffolding leak patterns. A closed-vocab label (Premium /
+# Inline / Discounted, Uptrend / Sideways / Downtrend) is a machine token that
+# drives the frontend pill and the deterministic verdict math -- it was never
+# meant to be a word the user reads. The prompt teaches the model to translate it
+# to analyst prose; this set is the hard, permanent tripwire that catches the
+# leak shapes when a prompt hope fails: naming the label token as a common noun
+# ("carries a Premium label", "the fundamental label stays Premium", a bare
+# "Premium label") and calling a report by name as scaffolding ("the fundamental
+# report"). High-precision by construction: every anchor pins the scaffolding
+# word ("label" / "report") next to a closed-vocab or domain token, so a bare
+# adjective ("trading at a premium", "carries a richer multiple", "the trend is
+# up") never fires.
+_CLOSED_VOCAB = r"(?:premium|inline|discounted|uptrend|sideways|downtrend)"
+
+# The linking verbs the falsifier-rule leak puts between "label" and the token
+# ("label stays Premium", "label moves to Inline", "label is Uptrend"). Anchoring
+# on these -- rather than an open word window -- is what keeps "Bulls would label
+# this a fair premium" (a verb use of "label" next to an unrelated adjective) from
+# false-firing.
+_LABEL_LINK_VERB = (
+    r"(?:stays?|is|are|was|were|remains?|becomes?|"
+    r"moves?\s+to|flips?\s+to|shifts?\s+to|turns?\s+to|goes?\s+to)"
+)
+
+_BANNED_SCAFFOLDING_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # "carries a Premium label" / "carry an Inline label" / "carried a ... label".
+    re.compile(r"\bcarr(?:ies|y|ied)\s+an?\s+\w+\s+label\b", re.I),
+    # A closed-vocab token used as a noun with "label": "Premium label".
+    re.compile(rf"\b{_CLOSED_VOCAB}\s+label\b", re.I),
+    # "the label stays Premium" / "label moves to Inline" -- the falsifier leak.
+    re.compile(rf"\blabel\s+{_LABEL_LINK_VERB}\s+(?:the\s+)?{_CLOSED_VOCAB}\b", re.I),
+    # "the fundamental/technical/news/company report" -- or "... label" -- as a
+    # scaffolding noun ("the fundamental label", "per the technical report").
+    re.compile(r"\bthe\s+(?:fundamental|technical|news|company)\s+(?:report|label)\b", re.I),
+)
+
+
+def find_scaffolding_leak(text: str) -> list[str]:
+    """Return the verbatim report-scaffolding phrases in ``text`` (QNT-359).
+
+    Flags a machine label token or report name leaking into user-facing prose --
+    "carries a Premium label", "the fundamental report". Empty when clean.
+    """
+    if not text:
+        return []
+    hits: list[str] = []
+    for pattern in _BANNED_SCAFFOLDING_PATTERNS:
+        for match in pattern.finditer(text):
+            hits.append(match.group(0).strip())
+    return hits
+
+
+def has_scaffolding_leak(text: str) -> bool:
+    """Return True if ``text`` leaks a machine label token or a report name."""
+    return bool(find_scaffolding_leak(text))
+
+
 def find_filler(text: str) -> list[str]:
     """Return the verbatim filler phrases found in ``text`` (empty if clean).
 
@@ -69,4 +126,9 @@ def has_filler(text: str) -> bool:
     return bool(find_filler(text))
 
 
-__all__ = ["find_filler", "has_filler"]
+__all__ = [
+    "find_filler",
+    "find_scaffolding_leak",
+    "has_filler",
+    "has_scaffolding_leak",
+]

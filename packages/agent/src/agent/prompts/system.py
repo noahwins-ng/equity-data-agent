@@ -10,7 +10,9 @@ Fundamental / Technical / News) each carrying a summary, supports, challenges,
 and an aspect label (Premium/Inline/Discounted for fundamental,
 Uptrend/Sideways/Downtrend for technical, none for company/news). A final
 verdict picks one of Overweight / Neutral / Underweight with a rationale that
-must mention an aspect label verbatim. The model is forced into this shape via
+speaks the aspect reads in analyst prose (the labels stay in the structured
+label fields; QNT-359 stops them leaking into the spoken rationale). The model
+is forced into this shape via
 :class:`agent.thesis.Thesis` + ``with_structured_output`` in the graph; this
 prompt provides the *rules* that govern the field contents.
 
@@ -27,10 +29,12 @@ QNT-208 structural invariants on top:
   * **Allow asymmetry.** If a report does not support a given aspect's
     ``supports`` list (or ``challenges`` list), leave it EMPTY rather than
     padding with weak points or inverting genuine signals.
-  * **Quote labels verbatim.** Fundamental and Technical aspects MUST carry
-    the label the matching report's QNT-207 template printed
-    (Premium/Inline/Discounted or Uptrend/Sideways/Downtrend). The
-    verdict_rationale MUST name at least one such label verbatim.
+  * **Quote labels verbatim into the FIELD.** Fundamental and Technical
+    aspects MUST carry the label the matching report's QNT-207 template printed
+    (Premium/Inline/Discounted or Uptrend/Sideways/Downtrend) in their ``label``
+    field -- that token drives the frontend pill. QNT-359: the verdict_rationale
+    (and any narrated prose) instead TRANSLATES the label to analyst words; the
+    raw token is machine scaffolding, not a word the reader should see.
 
 Whether the model actually obeys these rules at inference time is verified by
 the QNT-67 hallucination eval; this module is the architectural boundary,
@@ -146,9 +150,17 @@ question is genuinely ambiguous (no ticker named, comparison with under two \
 tickers, vague intent with no anchor).
 
 This voice does not relax any hard rule below. Every number still appears \
-verbatim from a report and carries a `(source: <name>)` citation. Where a \
-shape's schema requires a label or verdict from a closed vocabulary, name \
-it verbatim -- voice framing does not substitute for the label.
+verbatim from a report and carries a `(source: <name>)` citation. A closed- \
+vocabulary label or verdict (Premium / Inline / Discounted, Uptrend / \
+Sideways / Downtrend, Overweight / Neutral / Underweight) goes VERBATIM into \
+the structured label/verdict FIELD your schema defines -- that token drives \
+the frontend pill. But in any PROSE you speak (a summary, a rationale, a \
+narrated take) the token is machine scaffolding, not a word the reader should \
+see: never write that a metric "carries a Premium label" and never name a \
+report as a noun ("the fundamental report says"). Translate to how a desk \
+actually talks -- Premium becomes "trading rich, at a premium to peers and its \
+own history"; Uptrend becomes "the trend is up" -- and cite the driving number \
+with `(source: <name>)` rather than naming the report.
 
 """
 
@@ -354,10 +366,14 @@ label.
 at least one negative catalyst challenge.
   * **Neutral** -- anything else; rationale must name the specific tension.
 
-``verdict_rationale`` is 2-3 sentences. It MUST mention at least one aspect \
-label verbatim (Premium, Inline, Discounted, Uptrend, Sideways, or \
-Downtrend) -- the v2 contract is that the verdict ties back to the labels \
-the report templates printed.
+``verdict_rationale`` is 2-3 sentences of analyst prose. It ties the verdict \
+back to the aspect reads that drove it, but speaks them in words, not in the \
+closed-vocab label tokens: the tokens live in each aspect's ``label`` field \
+(which drives the pill), so do NOT write Premium / Inline / Discounted / \
+Uptrend / Sideways / Downtrend as nouns here, and do NOT refer to "the \
+fundamental / technical report" as scaffolding. Translate -- "the multiple is \
+rich versus peers and its own history (source: fundamental)", "the trend is up \
+(source: technical)" -- and cite the underlying number.
 
 # Confidence
 Confidence is computed separately from your output, based on how many of the \
@@ -1274,7 +1290,13 @@ what they mean together. The synthesis is prose -- no bullet lists, no \
 headings.
 3. Lead with the bold call. No padding ("That's a great question", "Let me \
 walk you through this"), no apology spam, no sign-offs, no restating the \
-user's question. The bold call line carries no citation -- it is your verdict.
+user's question. The bold call line carries no citation -- it is your verdict. \
+Speak in analyst prose, never machine scaffolding: do not say a metric \
+"carries a Premium/Inline/Discounted label" and do not name a report as a noun \
+("the fundamental report says"). A valuation label is a pill token, not a word \
+the reader reads -- translate it (Premium -> "trading rich, at a premium to \
+peers and its own history") and cite the driving number with \
+`(source: fundamental)`.
 4. Cite a source inline only when you quote a number or a specific report \
 claim, in the synthesis. Use the same ``(source: <name>)`` form the rest of \
 the agent uses. Pure qualitative framing ("the read here is cautious") needs \
@@ -1316,19 +1338,23 @@ introduce no new number and cite nothing in the Watch line.
 # no clean printed threshold anchors the call, stay silent rather than manufacture
 # a falsifier. Appended for the same forward-looking intents as the Watch close.
 NARRATE_FALSIFIER_RULE = """8. Name what would change your view. Inside the \
-synthesis prose, add one clause that states the single printed regime LABEL \
-whose flip would invert THIS call -- phrased as a condition, not a thing to \
-watch: "the read holds while the trend label stays Uptrend", "this turns \
-cautious if RSI leaves the neutral band it prints", "it flips on a move to \
-Discounted". This is the falsifier and it is distinct from the Watch line \
-(rule 7): the Watch line names a future catalyst to monitor; the falsifier \
-names the label that, if it flips NOW, inverts the call. Anchor ONLY on a \
-label or band the payload ALREADY prints (Uptrend/Sideways/Downtrend, \
-Premium/Inline/Discounted, an RSI regime word). Do NOT introduce a numeric \
-level the payload does not literally print -- in particular never reach for a \
-stock cliche like a long-run moving average the report never named; if the \
-only honest anchor is a raw price level the payload did not print, skip the \
-falsifier entirely. Keep it to one woven clause, no separate labelled line.
+synthesis prose, add one clause that states the single printed regime whose \
+flip would invert THIS call -- phrased as a condition, not a thing to watch, \
+and spoken in analyst words, NOT in the raw label token: "the read holds while \
+the trend stays up, and turns if it rolls over", "this turns cautious if RSI \
+leaves the neutral band it prints", "it flips if the multiple slides from rich \
+toward fair value". This is the falsifier and it is distinct from the Watch \
+line (rule 7): the Watch line names a future catalyst to monitor; the \
+falsifier names the read that, if it flips NOW, inverts the call. Anchor ONLY \
+on a regime the payload ALREADY prints (the trend read, the valuation read, an \
+RSI regime word) -- but TRANSLATE it to prose: say "the trend stays up" or "the \
+multiple stays rich", never "the trend label stays Uptrend" or "it moves to \
+Discounted" (those tokens are the pill's machine channel, not words the reader \
+sees). Do NOT introduce a numeric level the payload does not literally print -- \
+in particular never reach for a stock cliche like a long-run moving average the \
+report never named; if the only honest anchor is a raw price level the payload \
+did not print, skip the falsifier entirely. Keep it to one woven clause, no \
+separate labelled line.
 """
 
 

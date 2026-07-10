@@ -82,17 +82,22 @@ def test_system_prompt_allows_asymmetry() -> None:
 
 
 def test_system_prompt_verdict_rule_names_closed_set() -> None:
-    """QNT-208: the verdict is a closed Overweight / Neutral / Underweight
-    set and the rationale must name an aspect label verbatim. Pin both so a
-    prompt edit cannot quietly drop either invariant."""
+    """QNT-208 / QNT-359: the verdict is a closed Overweight / Neutral /
+    Underweight set, and the aspect-label vocabulary stays present so the
+    label FIELDS can be quoted verbatim. QNT-359: the verdict_rationale now
+    TRANSLATES those labels to prose instead of naming them verbatim -- pin
+    that the rule tells the model not to write the tokens as nouns."""
     text = SYSTEM_PROMPT
     assert "Overweight" in text
     assert "Neutral" in text
     assert "Underweight" in text
     assert "verdict_rationale" in text
-    # Per-aspect labels the rationale must mention verbatim.
+    # The closed-vocab label words remain in the prompt (the label FIELDS quote
+    # them verbatim; the rationale rule lists them as tokens NOT to write).
     for label in ("Premium", "Inline", "Discounted", "Uptrend", "Sideways", "Downtrend"):
         assert label in text, f"missing verdict-label vocabulary: {label}"
+    # QNT-359: the rationale translates rather than names the label verbatim.
+    assert "do NOT write Premium" in text
 
 
 def test_system_prompt_forbids_label_line_in_bullets() -> None:
