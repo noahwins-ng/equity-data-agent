@@ -372,8 +372,9 @@ _FUND_COLS = (
     "current_ratio",
 )
 
-# The SCALE block queries equity_raw.fundamentals for the latest market cap
-# (the one figure not on a fundamental_summary row). Fixture: NVDA-scale.
+# The SCALE block derives market cap as latest_close * shares_outstanding
+# (matching the report's valuation multiples), a single scalar the fake serves
+# via the equity_raw.fundamentals substring in the query. Fixture: NVDA-scale.
 _MARKET_CAP_RESULT = _FakeResult(("market_cap",), [(3_000_000_000_000.0,)])
 
 
@@ -701,8 +702,8 @@ def test_fundamental_scale_block_nm_without_ttm_or_market_cap(
 def test_fundamental_scale_market_cap_zero_sentinel_renders_nm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """market_cap is non-nullable and defaults to 0.0 when yfinance omits it;
-    the 0-sentinel must render N/M, not a misleading "$0"."""
+    """A missing close or shares collapses the close*shares scalar subquery to
+    0; the 0-sentinel must render N/M, not a misleading "$0"."""
     _install_fake(
         monkeypatch,
         {

@@ -66,6 +66,10 @@ class TestFormatCurrency:
     def test_formats_with_dollar_and_thousands(self) -> None:
         assert format_currency(1234567.89) == "$1,234,567.89"
 
+    def test_negative_sign_leads_the_currency_symbol(self) -> None:
+        # -$500M, not $-500M (accounting placement; QNT-354 SCALE net income/FCF).
+        assert format_currency(-500_000_000, precision=0) == "-$500,000,000"
+
     def test_none_gets_na_reason(self) -> None:
         assert format_currency(None) == "N/M (data unavailable)"
 
