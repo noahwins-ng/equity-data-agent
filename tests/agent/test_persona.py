@@ -89,6 +89,15 @@ def test_narrate_prompt_rejects_user_requested_unsupported_numbers() -> None:
     assert "unless that exact value appears" in NARRATE_SYSTEM_PROMPT
 
 
+def test_narrate_prompt_forbids_rounding_digits() -> None:
+    """QNT-359 follow-up: a live NVDA thesis turn rounded a shown +85.23% YoY
+    to "+85%", which the grounding check flagged as unsupported (the shortened
+    token is absent from the reports). Rule 1 must forbid rounding so narrate
+    copies a shown figure exactly."""
+    assert "copy it EXACTLY as printed" in NARRATE_SYSTEM_PROMPT
+    assert "never round, truncate, or drop a decimal" in NARRATE_SYSTEM_PROMPT
+
+
 def _system_message(messages: list) -> str:
     """Extract the SystemMessage content from a build_*_prompt result."""
     for m in messages:
