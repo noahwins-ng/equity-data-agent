@@ -219,8 +219,27 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
             ),
             errors=errors,
         )
+        # QNT-358 (AC4): every comparison is a TWO-ticker shape that overruns the
+        # thesis-calibrated QNT-351 1500 cap, so the whole comparison path gets
+        # the two-ticker output budget (a ceiling: a narrowed comparison bills
+        # only its smaller actual output). Live measurement (AC5) showed even a
+        # narrowed two-aspect comparison truncates at 1500 on a verbose pair, so
+        # this is not scoped to the full matrix -- see _COMPARISON_MAX_TOKENS.
+        #
+        # QNT-358 (AC3): the comparison call keeps the DEFAULT strict json_schema
+        # method. Verified live against the pinned DeepSeek/OpenRouter provider:
+        # the optional (nullable) AspectView fields compile to anyOf-with-null and
+        # the provider fills exactly the supplied aspects on both tickers,
+        # consistently. function_calling was tested as the ticket's fallback and
+        # FAILED THE OTHER WAY -- it dropped the nullable axis aspect (rendering
+        # company only) or returned incomplete tool-call args -- so json_schema is
+        # the correct choice here, not function_calling.
         comparison = graph._structured_call(
-            graph.ComparisonAnswer, prompt, config, "comparison-prompt"
+            graph.ComparisonAnswer,
+            prompt,
+            config,
+            "comparison-prompt",
+            llm=graph.get_llm(max_tokens=graph._COMPARISON_MAX_TOKENS),
         )
         if comparison is None:
             return _fallback("I had trouble building that comparison.")

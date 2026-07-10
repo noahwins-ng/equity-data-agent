@@ -43,10 +43,16 @@ export function ComparisonCard({
               <div className="font-mono text-[11px] uppercase tracking-wider text-zinc-300">
                 {section.ticker}
               </div>
+              {/* QNT-358: a narrowed axis comparison omits the non-axis
+                  aspects (null) — render only the aspects that were gathered. */}
               <AspectBlock title="Company" aspect={section.company} />
-              <AspectBlock title="Fundamental" aspect={section.fundamental} />
-              <AspectBlock title="Technical" aspect={section.technical} />
-              <AspectBlock title="News" aspect={section.news} />
+              {section.fundamental && (
+                <AspectBlock title="Fundamental" aspect={section.fundamental} />
+              )}
+              {section.technical && (
+                <AspectBlock title="Technical" aspect={section.technical} />
+              )}
+              {section.news && <AspectBlock title="News" aspect={section.news} />}
             </div>
           ))}
         </div>

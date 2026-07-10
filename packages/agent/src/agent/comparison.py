@@ -60,20 +60,35 @@ class ComparisonSection(BaseModel):
     company: AspectView = Field(
         description="Business context aspect drawn from this ticker's company report.",
     )
-    fundamental: AspectView = Field(
+    # QNT-358: the non-company aspects are OPTIONAL. When the comparison
+    # question names one axis, the plan narrows to ``["company", <axis>]`` for
+    # BOTH tickers, so only that axis's report is gathered -- omit (leave null)
+    # the aspects whose report was not supplied, mirroring the thesis's
+    # "leave a non-supplied aspect empty" rule. A no-axis comparison gathers
+    # all four and fills every aspect as before. ``company`` stays required:
+    # it is always-included grounding.
+    fundamental: AspectView | None = Field(
+        default=None,
         description=(
             "Valuation / earnings aspect drawn from this ticker's "
-            "fundamental report. Label is Premium / Inline / Discounted."
+            "fundamental report. Label is Premium / Inline / Discounted. "
+            "Null when no fundamental report was supplied for this ticker."
         ),
     )
-    technical: AspectView = Field(
+    technical: AspectView | None = Field(
+        default=None,
         description=(
             "Price-action / indicator aspect drawn from this ticker's "
-            "technical report. Label is Uptrend / Sideways / Downtrend."
+            "technical report. Label is Uptrend / Sideways / Downtrend. "
+            "Null when no technical report was supplied for this ticker."
         ),
     )
-    news: AspectView = Field(
-        description="Headline-flow aspect drawn from this ticker's news report. Narrative only.",
+    news: AspectView | None = Field(
+        default=None,
+        description=(
+            "Headline-flow aspect drawn from this ticker's news report. "
+            "Narrative only. Null when no news report was supplied for this ticker."
+        ),
     )
 
 
@@ -112,12 +127,18 @@ class ComparisonAnswer(BaseModel):
         parts: list[str] = []
         for section in self.sections:
             parts.append(f"## {section.ticker}")
+            # QNT-358: skip an aspect whose report was not gathered (None) --
+            # the narrowed axis-comparison omits the three non-axis aspects.
+            # to_markdown is a followup/narrate grounding substrate (QNT-324),
+            # so it must tolerate the optional AspectView fields.
             for heading, aspect in (
                 ("Company", section.company),
                 ("Fundamental", section.fundamental),
                 ("Technical", section.technical),
                 ("News", section.news),
             ):
+                if aspect is None:
+                    continue
                 parts.extend(render_aspect_block(heading, aspect, level=3))
 
         parts.append("## Differences")

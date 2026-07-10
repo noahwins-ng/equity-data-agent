@@ -111,6 +111,25 @@ def test_temperature_override_unset_uses_call_arg(monkeypatch):
     assert get_llm().temperature == 0.2
 
 
+def test_max_tokens_override_routes_through_extra_body(monkeypatch):
+    """QNT-358: the per-call output-budget override MUST travel as the literal
+    ``max_tokens`` key in ``extra_body`` -- the ChatOpenAI ``max_tokens=`` field
+    serialises as ``max_completion_tokens``, a different key from the config's
+    ``max_tokens: 1500``, so it would NOT override the cap and the comparison
+    payload would silently truncate (the QNT-351 fail-close this ticket fixes).
+    This is the code-level tripwire for that regression."""
+    from shared import config as cfg
+
+    monkeypatch.setattr(cfg.settings, "EQUITY_AGENT_PROVIDER", "groq")
+    # With an override: the literal max_tokens key lands in extra_body, and the
+    # field-level max_tokens (-> max_completion_tokens) stays unset.
+    llm = get_llm(max_tokens=3000)
+    assert llm.extra_body == {"max_tokens": 3000}
+    assert llm.max_tokens is None
+    # Without an override every other caller is untouched (no extra_body).
+    assert get_llm().extra_body is None
+
+
 # ─── QNT-220 (#7) per-node model tiering ────────────────────────────────────
 
 

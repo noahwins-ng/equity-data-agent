@@ -73,6 +73,7 @@ from agent.intent import (  # noqa: F401
     ClassifierSource,
     Intent,
     classify_intent_with_source,
+    comparison_axis,
     extract_tickers,
     has_comparison_phrase,
 )
@@ -184,6 +185,25 @@ if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
 
 logger = logging.getLogger(__name__)
+
+# QNT-358 (AC4): per-call output budget for the comparison synthesize call.
+# The QNT-351 ``max_tokens: 1500`` cap in litellm_config.yaml was calibrated on
+# the SINGLE-ticker thesis output distribution (median ~920, p-high ~1400). EVERY
+# comparison is a TWO-ticker shape, so it is structurally larger than a thesis
+# and fail-closes the thesis-calibrated cap. AC4 scoped this budget to the
+# no-axis full matrix, but live measurement (QNT-358 AC5) showed even a NARROWED
+# two-aspect comparison (company + one axis for both tickers) can exceed 1500 on
+# a verbose pair (NVDA vs AAPL fundamentals truncated at completion_tokens=1500
+# -> fallback), because the 2-ticker overhead alone lifts it past the thesis
+# ceiling. So the budget applies to the whole comparison path, sized for the
+# largest (full-matrix) shape at ~2x the thesis p-high. max_tokens is a ceiling,
+# not a target -- a narrowed comparison bills only its (smaller) actual output,
+# so one budget for both shapes adds no cost and removes a truncation cliff. The
+# QNT-351 deterministic fallback still catches a genuine runaway past this
+# ceiling (bounded blast radius). Re-derive from the comparison output
+# distribution once prod traffic accrues (Langfuse default-alias generations,
+# intent=comparison).
+_COMPARISON_MAX_TOKENS = 3000
 
 
 def _structured_call[T: BaseModel](

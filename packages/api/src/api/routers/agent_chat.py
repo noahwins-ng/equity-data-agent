@@ -423,6 +423,10 @@ def _count_comparison_citations(comparison: ComparisonAnswer | None) -> int:
     texts: list[str] = [comparison.differences]
     for section in comparison.sections:
         for aspect in (section.company, section.fundamental, section.technical, section.news):
+            # QNT-358: the non-company aspects are optional -- a narrowed axis
+            # comparison omits (None) the aspects it did not gather. Skip them.
+            if aspect is None:
+                continue
             texts.append(aspect.summary)
             texts.extend(aspect.supports)
             texts.extend(aspect.challenges)

@@ -705,6 +705,84 @@ def has_comparison_phrase(question: str) -> bool:
     return _matches_any(question.lower(), _COMPARISON_TOKENS) is not None
 
 
+# QNT-358: deterministic axis detector for the comparison plan. When a
+# comparison question names exactly ONE report axis ("compare TSLA vs AMD on
+# technical momentum"), plan_node narrows the (symmetric) plan to
+# ``["company", <axis>]`` -- the same three focus axes the single-ticker
+# focused path already has, with company riding along as grounding. This is a
+# distinct token set from the single-ticker ``_FUNDAMENTAL_TOKENS`` /
+# ``_TECHNICAL_ANALYSIS_TOKENS`` / ``_NEWS_TOKENS`` above: those are tuned to
+# fire the focused INTENT (deliberately conservative, deferring the ambiguous
+# middle to the LLM), whereas the intent here is already resolved to
+# ``comparison`` -- so this set can afford the plainer axis words ("valuation",
+# "momentum", "headlines") a user naturally uses to name the contrast axis.
+# Whole-word matched via :func:`_matches_any`.
+_COMPARISON_AXIS_TOKENS: dict[str, tuple[str, ...]] = {
+    "fundamental": (
+        "fundamental",
+        "fundamentals",
+        "valuation",
+        "valuations",
+        "earnings",
+        "margin",
+        "margins",
+        "p/e",
+        "pe ratio",
+        "eps",
+        "revenue",
+        "multiple",
+        "multiples",
+        "balance sheet",
+        "cash flow",
+    ),
+    "technical": (
+        "technical",
+        "technicals",
+        "momentum",
+        "chart",
+        "charts",
+        "chart setup",
+        "rsi",
+        "macd",
+        "trend",
+        "trends",
+        "moving average",
+        "overbought",
+        "oversold",
+        "price action",
+    ),
+    "news": (
+        "news",
+        "headline",
+        "headlines",
+        "catalyst",
+        "catalysts",
+        "sentiment",
+        "developments",
+    ),
+}
+
+
+def comparison_axis(question: str) -> str | None:
+    """Return the single report axis a comparison question names, or None.
+
+    QNT-358: ``"fundamental"`` / ``"technical"`` / ``"news"`` when the question
+    names exactly one axis; ``None`` when it names zero (a bare "compare NVDA vs
+    AMD" wants the full four-aspect matrix) OR more than one (a cross-domain ask
+    like "on fundamentals and technicals" is not a single-axis narrow -- mirrors
+    the single-ticker focused heuristic's ``len(hits) == 1`` gate). ``company``
+    is never an axis on its own -- it is always-included grounding, matching the
+    single-ticker focused path.
+    """
+    text = question.lower()
+    hits = [
+        axis
+        for axis, tokens in _COMPARISON_AXIS_TOKENS.items()
+        if _matches_any(text, tokens) is not None
+    ]
+    return hits[0] if len(hits) == 1 else None
+
+
 # Short questions are more likely quick-fact. Tuned conservatively: a 12-word
 # question can still be open-ended, so this is one signal among several.
 _SHORT_QUESTION_WORD_LIMIT = 12
@@ -1262,6 +1340,7 @@ __all__ = [
     "_is_earnings_search",
     "classify_intent",
     "classify_intent_with_source",
+    "comparison_axis",
     "extract_tickers",
     "has_comparison_phrase",
     "route_search_corpora",

@@ -575,6 +575,26 @@ questions:
       oversold) rather than raw ordering -- a higher RSI is not "stronger
       momentum" when that reading is overbought.
 
+  # QNT-358: news-axis comparison golden. A focused axis comparison narrows the
+  # plan to company + news for BOTH tickers, so the card renders only the
+  # Company + News aspects per ticker (fundamental / technical omitted).
+  - id: nvda-amd-news-comparison
+    ticker: NVDA
+    question: "Compare NVDA vs AMD on recent news and catalysts -- who has the stronger story?"
+    expected_tools:
+      - news
+    expected_intent: comparison
+    reference_thesis: |
+      A useful answer renders one section per ticker carrying ONLY the Company
+      and News aspects (fundamental / technical omitted -- the question named
+      the news axis, so those reports were not gathered). The News aspect for
+      each ticker summarises the running story with cited headlines
+      (source: news) split into what argues constructive vs cautious; Company
+      grounds each in that ticker's business context (source: company). The
+      differences paragraph contrasts the two catalysts qualitatively -- no
+      cross-ticker arithmetic, no new numbers -- and closes with one relative
+      preference tied to the news posture.
+
   # ----- conversational --------------------------------------------------
 
   - id: conversational-off-domain-coding
