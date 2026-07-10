@@ -348,8 +348,8 @@ questions:
       the trend direction drawn from moving-average alignment, the current
       RSI bucket, and the MACD posture relative to its signal line -- all
       VERBATIM from the technical report. Verdict is one of Uptrend /
-      Sideways / Downtrend quoted from the report's per-timeframe TREND
-      labels (majority rule across daily / weekly / monthly). 2-5 key-point
+      Sideways / Downtrend quoted from the report's Multi-timeframe consensus
+      line across daily / weekly / monthly. 2-5 key-point
       bullets cite underlying values with (source: technical) or (source:
       company). Cited values list surfaces RSI, MACD, SMA-50, or close
       price (1-4 entries). NO P/E / earnings talk.

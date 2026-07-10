@@ -55,6 +55,9 @@ def _reset_client_cache() -> Iterable[None]:
     clickhouse_module.get_client.cache_clear()
 
 
+# Column order mirrors the _fetch_rows SELECT: as_of, *_INDICATOR_COLUMNS,
+# close, volume. QNT-353 widened _INDICATOR_COLUMNS with sma_200, bb_pct_b,
+# adx_14, atr_14, macd_bullish_cross, so the tuple grows here too.
 _TECH_COLS = (
     "as_of",
     "rsi_14",
@@ -63,9 +66,14 @@ _TECH_COLS = (
     "macd_hist",
     "sma_20",
     "sma_50",
+    "sma_200",
     "bb_upper",
     "bb_middle",
     "bb_lower",
+    "bb_pct_b",
+    "adx_14",
+    "atr_14",
+    "macd_bullish_cross",
     "close",
     "volume",
 )
@@ -75,6 +83,56 @@ def _tech_result(rows: list[tuple[Any, ...]]) -> _FakeResult:
     return _FakeResult(_TECH_COLS, rows)
 
 
+def _tech_row(**overrides: Any) -> tuple[Any, ...]:
+    """Build a technical result row from named columns (QNT-353).
+
+    The widened column set makes positional tuples error-prone; tests name only
+    the columns they care about and inherit sensible defaults for the rest.
+    """
+    base = {
+        "as_of": date(2026, 4, 16),
+        "rsi_14": 55.0,
+        "macd": 1.0,
+        "macd_signal": 0.5,
+        "macd_hist": 0.5,
+        "sma_20": 180.0,
+        "sma_50": 175.0,
+        "sma_200": 170.0,
+        "bb_upper": 200.0,
+        "bb_middle": 180.0,
+        "bb_lower": 160.0,
+        "bb_pct_b": 0.6,
+        "adx_14": 27.0,
+        "atr_14": 4.5,
+        "macd_bullish_cross": 0,
+        "close": 185.0,
+        "volume": 1000,
+    }
+    base.update(overrides)
+    return tuple(base[c] for c in _TECH_COLS)
+
+
+# QNT-353 daily price-context query (52-week range + window-return anchors +
+# 20-day avg volume). Keyed on the unique ``high_52w`` column in _install_fake.
+_PRICE_CTX_COLS = (
+    "high_52w",
+    "low_52w",
+    "adj_now",
+    "adj_1m",
+    "adj_3m",
+    "adj_1y",
+    "adj_ytd",
+    "avg_volume_20",
+)
+
+
+def _price_ctx(**overrides: Any) -> _FakeResult:
+    base = {c: None for c in _PRICE_CTX_COLS}
+    base.update(overrides)
+    return _FakeResult(_PRICE_CTX_COLS, [tuple(base[c] for c in _PRICE_CTX_COLS)])
+
+
+_EMPTY_PRICE_CTX = _price_ctx()
 _EMPTY_PEER_RESULT = _FakeResult(("pe_ratio", "ev_ebitda", "price_to_sales"), [])
 _EMPTY_TECH_RESULT = _tech_result([])
 
@@ -96,6 +154,11 @@ def _install_fake(monkeypatch: pytest.MonkeyPatch, canned: dict[str, _FakeResult
         canned = {**canned, "technical_indicators_weekly": _EMPTY_TECH_RESULT}
     if "technical_indicators_monthly" not in canned:
         canned = {**canned, "technical_indicators_monthly": _EMPTY_TECH_RESULT}
+    if "high_52w" not in canned:
+        canned = {**canned, "high_52w": _EMPTY_PRICE_CTX}
+    # The price-context query calls argMax(); prepend its unique high_52w key so
+    # the fake matches it before the fundamental peer-median "argMax" key.
+    canned = {"high_52w": canned["high_52w"], **canned}
     fake = lambda: _FakeClient(canned)  # noqa: E731
     monkeypatch.setattr(clickhouse_module, "get_client", fake)
     monkeypatch.setattr(technical_module, "get_client", fake)
@@ -122,10 +185,56 @@ def test_technical_empty_rows_404(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_technical_bullish_overbought_rendering(monkeypatch: pytest.MonkeyPatch) -> None:
     rows = [
-        (date(2026, 4, 16), 72.5, 3.9, 0.9, 3.0, 180.0, 175.0, 200.0, 180.0, 160.0, 198.0, 1000),
-        (date(2026, 4, 15), 69.0, 3.1, 0.2, 2.9, 179.0, 174.5, 196.0, 179.0, 162.0, 195.0, 900),
+        _tech_row(
+            as_of=date(2026, 4, 16),
+            rsi_14=72.5,
+            macd=3.9,
+            macd_signal=0.9,
+            macd_hist=3.0,
+            sma_20=180.0,
+            sma_50=175.0,
+            sma_200=170.0,
+            bb_upper=200.0,
+            bb_middle=180.0,
+            bb_lower=160.0,
+            bb_pct_b=0.83,
+            adx_14=31.0,
+            atr_14=4.5,
+            macd_bullish_cross=1,
+            close=198.0,
+            volume=1000,
+        ),
+        _tech_row(
+            as_of=date(2026, 4, 15),
+            rsi_14=69.0,
+            macd=3.1,
+            macd_signal=0.2,
+            macd_hist=2.9,
+            sma_20=179.0,
+            sma_50=174.5,
+            bb_upper=196.0,
+            bb_middle=179.0,
+            bb_lower=162.0,
+            close=195.0,
+            volume=900,
+        ),
     ]
-    _install_fake(monkeypatch, {"technical_indicators_daily": _tech_result(rows)})
+    _install_fake(
+        monkeypatch,
+        {
+            "technical_indicators_daily": _tech_result(rows),
+            "high_52w": _price_ctx(
+                high_52w=220.0,
+                low_52w=150.0,
+                adj_now=198.0,
+                adj_1m=188.0,
+                adj_3m=180.0,
+                adj_1y=165.0,
+                adj_ytd=190.0,
+                avg_volume_20=800.0,
+            ),
+        },
+    )
     report = build_technical_report("NVDA")
 
     assert "# TECHNICAL REPORT — NVDA" in report
@@ -145,6 +254,23 @@ def test_technical_bullish_overbought_rendering(monkeypatch: pytest.MonkeyPatch)
     assert "### DAILY TREND" in report
     assert "Uptrend" in report
     assert "## SIGNAL" not in report
+    # QNT-353 AC1 — widened indicator lines with canonical thresholds in-body.
+    # Terser daily forms (comparison token budget): %B folds onto the Bollinger
+    # line, ADX/ATR/SMA-200/MACD-cross compact.
+    assert "SMA-200 (daily): close above SMA-200 (170.00) +16.47%; 50/200 golden cross" in report
+    assert "ADX-14 (daily): 31.0 — trending (≥ 25 trending, < 20 weak)" in report
+    assert "ATR-14 (daily): 4.50 (2.3% of close)" in report
+    assert "; %B 0.83 (0 = lower band, 1 = upper band)" in report
+    assert "MACD bullish cross (daily): yes — crossed above signal on the latest bar" in report
+    # QNT-353 AC2 — 52-week range + PERFORMANCE + volume, all pre-computed.
+    assert (
+        "52-week (daily): 52-week range 150.00 - 220.00; close -10.00% from the 52-week high"
+        in report
+    )
+    assert "Performance (daily): 1m +5.32%; 3m +10.00%; YTD +4.21%; 1y +20.00%" in report
+    assert "Volume (daily): 1,000 shares - 1.25x the 20-day average" in report
+    # QNT-353 AC3 — multi-timeframe consensus computed in the template header.
+    assert "Multi-timeframe consensus: Sideways (daily Uptrend, weekly N/M, monthly N/M" in report
     # QNT-299: machine-parseable as-of footer, uses the DAILY section's date.
     assert report.rstrip().endswith("AS_OF: 2026-04-16")
 
@@ -152,7 +278,25 @@ def test_technical_bullish_overbought_rendering(monkeypatch: pytest.MonkeyPatch)
 def test_technical_null_indicators_render_as_nm(monkeypatch: pytest.MonkeyPatch) -> None:
     # Early history: everything except close is null.
     rows = [
-        (date(2026, 4, 16), None, None, None, None, None, None, None, None, None, 100.0, 500),
+        _tech_row(
+            as_of=date(2026, 4, 16),
+            rsi_14=None,
+            macd=None,
+            macd_signal=None,
+            macd_hist=None,
+            sma_20=None,
+            sma_50=None,
+            sma_200=None,
+            bb_upper=None,
+            bb_middle=None,
+            bb_lower=None,
+            bb_pct_b=None,
+            adx_14=None,
+            atr_14=None,
+            macd_bullish_cross=None,
+            close=100.0,
+            volume=500,
+        ),
     ]
     _install_fake(monkeypatch, {"technical_indicators_daily": _tech_result(rows)})
     report = build_technical_report("NVDA")
@@ -163,6 +307,12 @@ def test_technical_null_indicators_render_as_nm(monkeypatch: pytest.MonkeyPatch)
     assert "Bollinger(20,2) (daily): N/M" in report
     # TREND must not fabricate a verdict with no data
     assert "N/M (insufficient history; need SMA-20, SMA-50" in report
+    # QNT-353: the widened indicator lines also degrade to N/M with no history.
+    # %B folds onto the Bollinger line, which is itself N/M with no bands.
+    assert "SMA-200 (daily): N/M (insufficient history; needs 200 bars)" in report
+    assert "ADX-14 (daily): N/M (insufficient history; ≥ 25 trending, < 20 weak)" in report
+    assert "ATR-14 (daily): N/M" in report
+    assert "MACD bullish cross (daily): N/M" in report
 
 
 @pytest.mark.parametrize(
@@ -187,19 +337,13 @@ def test_technical_rsi_label_always_cites_canonical_thresholds(
     """QNT-136 regression guard: every non-N/M RSI bucket must print both the
     70 (overbought) and 30 (oversold) thresholds in the report body."""
     rows = [
-        (
-            date(2026, 4, 16),
-            rsi_value,
-            3.9,
-            0.9,
-            3.0,
-            180.0,
-            175.0,
-            200.0,
-            180.0,
-            160.0,
-            198.0,
-            1000,
+        _tech_row(
+            as_of=date(2026, 4, 16),
+            rsi_14=rsi_value,
+            macd=3.9,
+            macd_signal=0.9,
+            macd_hist=3.0,
+            close=198.0,
         ),
     ]
     _install_fake(monkeypatch, {"technical_indicators_daily": _tech_result(rows)})
@@ -211,7 +355,7 @@ def test_technical_rsi_label_always_cites_canonical_thresholds(
 def test_technical_header_freshness(monkeypatch: pytest.MonkeyPatch) -> None:
     """Header carries timeframe + days-old count."""
     rows = [
-        (date(2026, 4, 16), 72.5, 3.9, 0.9, 3.0, 180.0, 175.0, 200.0, 180.0, 160.0, 198.0, 1000),
+        _tech_row(as_of=date(2026, 4, 16), rsi_14=72.5, macd=3.9, close=198.0),
     ]
     _install_fake(monkeypatch, {"technical_indicators_daily": _tech_result(rows)})
     report = build_technical_report("NVDA")
@@ -223,7 +367,7 @@ def test_technical_header_freshness(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _daily_row(*, as_of: date, close: float, prior_close: float | None = None) -> tuple[Any, ...]:
-    return (as_of, 55.0, 1.0, 0.5, 0.5, 180.0, 175.0, 200.0, 180.0, 160.0, close, 1000)
+    return _tech_row(as_of=as_of, close=close)
 
 
 def test_technical_renders_all_three_timeframes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -234,12 +378,62 @@ def test_technical_renders_all_three_timeframes(monkeypatch: pytest.MonkeyPatch)
         _daily_row(as_of=date(2026, 4, 15), close=184.0),
     ]
     weekly_rows = [
-        (date(2026, 4, 13), 60.0, 2.0, 0.5, 0.5, 178.0, 172.0, 205.0, 182.0, 160.0, 187.0, 5000),
-        (date(2026, 4, 6), 58.0, 1.8, 0.4, 0.4, 175.0, 170.0, 200.0, 180.0, 158.0, 184.0, 4900),
+        _tech_row(
+            as_of=date(2026, 4, 13),
+            rsi_14=60.0,
+            macd=2.0,
+            sma_20=178.0,
+            sma_50=172.0,
+            bb_upper=205.0,
+            bb_middle=182.0,
+            bb_lower=160.0,
+            close=187.0,
+            volume=5000,
+        ),
+        _tech_row(
+            as_of=date(2026, 4, 6),
+            rsi_14=58.0,
+            macd=1.8,
+            macd_signal=0.4,
+            macd_hist=0.4,
+            sma_20=175.0,
+            sma_50=170.0,
+            bb_upper=200.0,
+            bb_middle=180.0,
+            bb_lower=158.0,
+            close=184.0,
+            volume=4900,
+        ),
     ]
     monthly_rows = [
-        (date(2026, 4, 1), 65.0, 5.0, 1.0, 1.0, 170.0, 160.0, 220.0, 175.0, 140.0, 190.0, 20000),
-        (date(2026, 3, 1), 62.0, 4.0, 0.8, 0.8, 165.0, 155.0, 210.0, 170.0, 135.0, 180.0, 19000),
+        _tech_row(
+            as_of=date(2026, 4, 1),
+            rsi_14=65.0,
+            macd=5.0,
+            macd_signal=1.0,
+            macd_hist=1.0,
+            sma_20=170.0,
+            sma_50=160.0,
+            bb_upper=220.0,
+            bb_middle=175.0,
+            bb_lower=140.0,
+            close=190.0,
+            volume=20000,
+        ),
+        _tech_row(
+            as_of=date(2026, 3, 1),
+            rsi_14=62.0,
+            macd=4.0,
+            macd_signal=0.8,
+            macd_hist=0.8,
+            sma_20=165.0,
+            sma_50=155.0,
+            bb_upper=210.0,
+            bb_middle=170.0,
+            bb_lower=135.0,
+            close=180.0,
+            volume=19000,
+        ),
     ]
     _install_fake(
         monkeypatch,
@@ -303,20 +497,28 @@ def test_technical_trend_label_derivation(
 ) -> None:
     """AC1: TREND label comes from close vs SMA-50, SMA-20 vs SMA-50, slope."""
     rows = [
-        (date(2026, 4, 16), 55.0, 1.0, 0.5, 0.5, sma_20, sma_50, 220.0, 180.0, 140.0, close, 1000),
-        (
-            date(2026, 4, 15),
-            54.0,
-            0.9,
-            0.4,
-            0.4,
-            sma_20 - 1,
-            sma_50 - 1,
-            218.0,
-            178.0,
-            138.0,
-            prior_close,
-            900,
+        _tech_row(
+            as_of=date(2026, 4, 16),
+            sma_20=sma_20,
+            sma_50=sma_50,
+            bb_upper=220.0,
+            bb_middle=180.0,
+            bb_lower=140.0,
+            close=close,
+        ),
+        _tech_row(
+            as_of=date(2026, 4, 15),
+            rsi_14=54.0,
+            macd=0.9,
+            macd_signal=0.4,
+            macd_hist=0.4,
+            sma_20=sma_20 - 1,
+            sma_50=sma_50 - 1,
+            bb_upper=218.0,
+            bb_middle=178.0,
+            bb_lower=138.0,
+            close=prior_close,
+            volume=900,
         ),
     ]
     _install_fake(monkeypatch, {"technical_indicators_daily": _tech_result(rows)})
@@ -341,6 +543,96 @@ def test_technical_weekly_empty_renders_nm_in_place(monkeypatch: pytest.MonkeyPa
     assert "## MONTHLY" in report
     assert "no weekly indicator data" in report
     assert "no monthly indicator data" in report
+
+
+# ---------- technical QNT-353: consensus + 52w/performance/volume ----------
+
+
+def _uptrend_pair(as_of: date) -> list[tuple[Any, ...]]:
+    """Two bars that resolve to Uptrend (close > SMA-50, SMA-20 > SMA-50, +slope)."""
+    return [
+        _tech_row(as_of=as_of, sma_20=180.0, sma_50=175.0, close=198.0),
+        _tech_row(sma_20=179.0, sma_50=174.0, close=195.0),
+    ]
+
+
+def _downtrend_pair(as_of: date) -> list[tuple[Any, ...]]:
+    """Two bars that resolve to Downtrend (close < SMA-50, SMA-20 < SMA-50, -slope)."""
+    return [
+        _tech_row(as_of=as_of, sma_20=155.0, sma_50=165.0, close=150.0),
+        _tech_row(sma_20=156.0, sma_50=166.0, close=160.0),
+    ]
+
+
+def _sideways_pair(as_of: date) -> list[tuple[Any, ...]]:
+    """Two bars that resolve to Sideways (SMA-20 > SMA-50 but close < SMA-50)."""
+    return [
+        _tech_row(as_of=as_of, sma_20=160.0, sma_50=155.0, close=150.0),
+        _tech_row(sma_20=159.0, sma_50=154.0, close=149.0),
+    ]
+
+
+def test_technical_consensus_majority_rule(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC3: two timeframes agreeing (Uptrend + Uptrend vs Downtrend) win."""
+    _install_fake(
+        monkeypatch,
+        {
+            "technical_indicators_daily": _tech_result(_uptrend_pair(date(2026, 4, 16))),
+            "technical_indicators_weekly": _tech_result(_uptrend_pair(date(2026, 4, 13))),
+            "technical_indicators_monthly": _tech_result(_downtrend_pair(date(2026, 4, 1))),
+        },
+    )
+    report = build_technical_report("NVDA")
+    assert (
+        "Multi-timeframe consensus: Uptrend "
+        "(daily Uptrend, weekly Uptrend, monthly Downtrend; majority rule, ties to Sideways)"
+    ) in report
+
+
+def test_technical_consensus_three_way_tie_resolves_sideways(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC3: no label reaching two votes resolves to Sideways."""
+    _install_fake(
+        monkeypatch,
+        {
+            "technical_indicators_daily": _tech_result(_uptrend_pair(date(2026, 4, 16))),
+            "technical_indicators_weekly": _tech_result(_downtrend_pair(date(2026, 4, 13))),
+            "technical_indicators_monthly": _tech_result(_sideways_pair(date(2026, 4, 1))),
+        },
+    )
+    report = build_technical_report("NVDA")
+    assert (
+        "Multi-timeframe consensus: Sideways "
+        "(daily Uptrend, weekly Downtrend, monthly Sideways; majority rule, ties to Sideways)"
+    ) in report
+
+
+def test_technical_performance_window_na_without_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC2: a missing window anchor (0-sentinel from argMaxIf) renders N/M for
+    that window only, not a fabricated return."""
+    _install_fake(
+        monkeypatch,
+        {
+            "technical_indicators_daily": _tech_result(_uptrend_pair(date(2026, 4, 16))),
+            # adj_1y absent (0.0 sentinel) -> 1y N/M; the others compute.
+            "high_52w": _price_ctx(
+                high_52w=220.0,
+                low_52w=150.0,
+                adj_now=198.0,
+                adj_1m=188.0,
+                adj_3m=180.0,
+                adj_1y=0.0,
+                adj_ytd=190.0,
+                avg_volume_20=800.0,
+            ),
+        },
+    )
+    report = build_technical_report("NVDA")
+    assert "1y N/M (insufficient history)" in report
+    assert "1m +5.32%" in report
 
 
 # ---------- fundamental ----------

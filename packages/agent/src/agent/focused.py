@@ -13,8 +13,8 @@ QNT-208 reshapes the verdict + news fields:
   quoted verbatim from the fundamental report's own label.
 * ``focus="technical"`` carries ``verdict in {Uptrend, Sideways, Downtrend}``.
   When daily / weekly / monthly diverge the summary names each and the
-  verdict reflects the majority rule (>=2 timeframes agree wins;
-  otherwise Sideways).
+  verdict is quoted from the technical report's Multi-timeframe consensus
+  line (the template counts the timeframes; the LLM does not).
 * ``focus="news"`` (renamed from ``news_sentiment`` per the QNT-207 drop
   of sentiment surfacing) carries no verdict. Instead it populates
   ``existing_development`` (the running story), ``positive_catalysts``
@@ -143,9 +143,9 @@ class FocusedAnalysis(BaseModel):
             "Premium / Inline / Discounted, quoted verbatim from the "
             "fundamental report. For focus=technical: one of Uptrend / "
             "Sideways / Downtrend, quoted verbatim from the technical "
-            "report's per-timeframe TREND labels (majority rule across "
-            "daily/weekly/monthly). For focus=news: null -- news uses the "
-            "catalyst fields below instead."
+            "report's per-timeframe TREND labels, taking the multi-timeframe "
+            "verdict from the report's Multi-timeframe consensus line. For "
+            "focus=news: null -- news uses the catalyst fields below instead."
         ),
     )
     existing_development: str | None = Field(
