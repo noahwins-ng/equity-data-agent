@@ -197,8 +197,8 @@ instead of a fresh fetch. Retrieval quality is guarded by a deterministic ir-mea
 
 | Control | Mechanism | Default | Source |
 |---|---|---|---|
-| Per-IP request rate limit | `slowapi` moving-window | `5/min, 30/hr, 100/day` | `settings.CHAT_RATE_LIMIT` |
-| Per-IP daily token budget | In-memory dict, UTC reset | ~10K tokens / IP / day | `settings.CHAT_TOKENS_PER_IP_PER_DAY` |
+| Per-IP request rate limit | `slowapi` moving-window | `5/min, 20/day` | `settings.CHAT_RATE_LIMIT` |
+| Per-IP daily token budget | In-memory dict, UTC reset | ~280K tokens / IP / day | `settings.CHAT_TOKENS_PER_IP_PER_DAY` |
 | Global daily Groq TPD breaker | In-memory counter, UTC reset | ~50K tokens / day (~50% of model TPD) | `settings.CHAT_TOKENS_GLOBAL_PER_DAY` |
 | CORS allowlist | Explicit list + project-pinned regex | `localhost:3001` (dev); set per-env in prod | `settings.CORS_ALLOWED_ORIGINS` + `CORS_ALLOWED_ORIGIN_REGEX` |
 | Prompt-injection input filter | Pydantic field validator | Reject control chars (except `\n` / `\t`); reject single tokens > 500 chars | `api.security.validate_chat_message` |

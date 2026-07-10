@@ -561,7 +561,7 @@ def test_paid_breaker_survives_30_chat_launch_free_tier_tripped_at_15() -> None:
     ~15 (the silent quota wall this ticket removes).
 
     A substantive thesis chat is ~14K tokens. The burst is spread across IPs so
-    no single IP exceeds its UNCHANGED 30K/day fence (<=2 chats/IP), isolating
+    no single IP exceeds its per-IP token fence (<=2 chats/IP), isolating
     the GLOBAL breaker as the thing under test. Uses the live settings value so
     the test re-derives if CHAT_TOKENS_GLOBAL_PER_DAY changes again.
     """
@@ -578,7 +578,7 @@ def test_paid_breaker_survives_30_chat_launch_free_tier_tripped_at_15() -> None:
         )
         completed = 0
         for i in range(n_chats):
-            ip = f"visitor-{i // 2}"  # 2 chats/IP -> 28K < 30K per-IP fence
+            ip = f"visitor-{i // 2}"  # 2 chats/IP -> 28K < per-IP fence
             ok, reason = b.can_serve(ip)
             assert reason != "per_ip", "per-IP fence tripped; burst must isolate the global cap"
             if not ok:
