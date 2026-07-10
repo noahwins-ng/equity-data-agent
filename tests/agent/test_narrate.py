@@ -443,6 +443,100 @@ def test_dropped_card_substrate_reads_from_state_key(monkeypatch: pytest.MonkeyP
     assert captured["payload_markdown"] == ""
 
 
+_FUND_REPORT_WITH_PEERS = (
+    "# FUNDAMENTAL REPORT — NVDA\n"
+    "## SCALE\nRevenue $60.9B (source: fundamental)\n\n"
+    "## PEER CONTEXT\n"
+    "Sector median P/E (Technology, 5 peers in coverage): 24.5 -- NVDA at 42.1 (71.8% premium)\n"
+    "Sector median EV/EBITDA (Technology, 5 peers in coverage): 18.0 -- NVDA at 30.0 (66.7%)\n\n"
+    "## QUARTERLY\n"
+    "### QUARTERLY VALUATION\n"
+    "P/E 42.1 (range 18.0–45.0 over last 5y, near the high, prior period 40.9) — Premium\n"
+    "### QUARTERLY GROWTH (YoY)\n"
+    "Revenue +85.23% YoY (source: fundamental)\n"
+)
+
+
+def test_narrate_folds_peer_and_own_history_when_payload_has_valuation_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-359 AC1 (fix B): a narrate payload carrying a valuation label
+    (Thesis fundamental **Label:** Premium) folds BOTH the fundamental report's
+    ## PEER CONTEXT block (peer-delta %) AND its ### QUARTERLY VALUATION block
+    (the own-history "range ... over last 5y" line that drives the label when
+    peer coverage is thin) into narrate's input substrate -- so a spoken
+    comparison magnitude, versus peers OR its own history, is quotable-verbatim
+    instead of fabricated. Stays tight: the growth subsection is NOT dragged in."""
+    captured: dict[str, Any] = {}
+
+    def _fake_prompt(**kwargs: Any) -> str:
+        captured.update(kwargs)
+        return "PROMPT"
+
+    monkeypatch.setattr(graph_module, "build_narrate_prompt", _fake_prompt)
+    stub = _StubLLM(stream_chunks=["ok."])
+    monkeypatch.setattr(graph_module, "get_llm", lambda *a, **kw: stub)
+
+    config: RunnableConfig = {"configurable": {"thread_id": "peer-fold:NVDA"}}
+    narrate_node(
+        {
+            "ticker": "NVDA",
+            "question": "is NVDA's P/E stretched?",
+            "intent": "thesis",
+            "answer": make_thesis(),  # fundamental.label = "Premium"
+            "reports": {"fundamental": _FUND_REPORT_WITH_PEERS},
+        },
+        config,
+        _bare_deps(),
+    )
+
+    payload = captured["payload_markdown"]
+    # The peer-delta magnitude reaches the prompt, quotable verbatim.
+    assert "71.8% premium" in payload
+    assert "## PEER CONTEXT" in payload
+    # The own-history range line reaches it too (the axis the prompt invites).
+    assert "range 18.0–45.0 over last 5y" in payload
+    assert "### QUARTERLY VALUATION" in payload
+    # Tight fold: the growth subsection after the valuation block is NOT dragged in.
+    assert "### QUARTERLY GROWTH" not in payload
+    assert "+85.23% YoY" not in payload
+
+
+def test_narrate_does_not_fold_peer_section_without_valuation_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-359: the fold is gated on the payload carrying a valuation label.
+    A news-substrate turn (no Premium/Inline/Discounted label) leaves the
+    substrate untouched -- no peer section is bolted on."""
+    captured: dict[str, Any] = {}
+
+    def _fake_prompt(**kwargs: Any) -> str:
+        captured.update(kwargs)
+        return "PROMPT"
+
+    monkeypatch.setattr(graph_module, "build_narrate_prompt", _fake_prompt)
+    stub = _StubLLM(stream_chunks=["ok."])
+    monkeypatch.setattr(graph_module, "get_llm", lambda *a, **kw: stub)
+
+    config: RunnableConfig = {"configurable": {"thread_id": "no-fold:NVDA"}}
+    news_report = "## news\nNVDA strikes Micron HBM4 supply deal\n"
+    narrate_node(
+        {
+            "ticker": "NVDA",
+            "question": "any news on the Micron deal?",
+            "intent": "news",
+            "answer": None,
+            "narrative_substrate": "news",
+            "reports": {"news": news_report, "fundamental": _FUND_REPORT_WITH_PEERS},
+        },
+        config,
+        _bare_deps(),
+    )
+
+    assert captured["payload_markdown"] == news_report
+    assert "PEER CONTEXT" not in captured["payload_markdown"]
+
+
 def test_card_bearing_path_clears_narrative_substrate() -> None:
     """QNT-320 regression: synthesize writes ``narrative_substrate`` on EVERY return
     path -- a card-bearing path clears it to None. So a prior drop-card turn's

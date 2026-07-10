@@ -654,6 +654,114 @@ def _runtime_report_texts(state: AgentState) -> list[str]:
     return texts
 
 
+# QNT-359 (fix B): the valuation labels a narrate payload can carry (Thesis /
+# comparison ``**Label:**``, focused ``**Verdict:**``). A card shown one of these
+# was shown the LABEL but not the peer-median-vs-ticker number that justifies it,
+# so a spoken "X% above the sector median" gets fabricated. Anchored on the
+# rendered label/verdict line so a bare "premium" adjective in prose does not
+# trigger the fold.
+_VALUATION_LABEL_RE = re.compile(r"\*\*(?:Label|Verdict):\*\*\s*(?:Premium|Inline|Discounted)\b")
+
+_PEER_SECTION_HEADING = "## PEER CONTEXT"
+# The own-history block: the per-multiple "range X-Y over last 5y, <position>"
+# lines drive the Premium/Inline/Discounted label when peer coverage is thin
+# (peer median N/A). The fundamental aspect label is quoted from the quarterly
+# section, so its quarterly VALUATION block is the own-history line to fold.
+_QUARTERLY_VALUATION_HEADING = "### QUARTERLY VALUATION"
+
+
+def _payload_carries_valuation_label(payload_markdown: str) -> bool:
+    """True when the narrate payload renders a fundamental valuation label."""
+    return bool(_VALUATION_LABEL_RE.search(payload_markdown or ""))
+
+
+def _fundamental_report_texts(state: AgentState) -> list[str]:
+    """Every fundamental report body gathered this turn (single + comparison).
+
+    Mirrors the source split :func:`_runtime_report_texts` grades against, but
+    narrowed to the ``fundamental`` report -- the only one carrying a
+    ``## PEER CONTEXT`` block.
+    """
+    texts: list[str] = []
+    reports_by_ticker = state.get("reports_by_ticker") or {}
+    if reports_by_ticker:
+        for ticker_reports in reports_by_ticker.values():
+            if isinstance(ticker_reports, dict) and ticker_reports.get("fundamental"):
+                texts.append(str(ticker_reports["fundamental"]))
+    reports = state.get("reports") or {}
+    if isinstance(reports, dict) and reports.get("fundamental"):
+        texts.append(str(reports["fundamental"]))
+    return texts
+
+
+def _slice_section(report_text: str, heading: str, stops: tuple[str, ...]) -> str | None:
+    """Slice one section out of a report: from ``heading`` up to the first of
+    ``stops`` after it (or end of report). None when ``heading`` is absent.
+
+    ``stops`` are the heading prefixes that terminate the section -- e.g. a
+    level-2 ``## PEER CONTEXT`` stops at the next ``\\n## `` (a ``### `` subsection
+    does not close it); a level-3 ``### QUARTERLY VALUATION`` stops at the next
+    ``\\n### `` sibling OR the next ``\\n## `` parent, whichever comes first.
+    """
+    start = report_text.find(heading)
+    if start < 0:
+        return None
+    rest = report_text[start:]
+    ends = [idx for idx in (rest.find(stop, 1) for stop in stops) if idx >= 0]
+    section = rest if not ends else rest[: min(ends)]
+    return section.strip() or None
+
+
+def _peer_valuation_section(report_text: str) -> str | None:
+    """Slice the peer-delta AND own-history valuation lines from a fundamental
+    report (QNT-359).
+
+    Two blocks justify a Premium / Inline / Discounted label, and AC1 names both:
+    ``## PEER CONTEXT`` (the ``_peer_line`` sector-median-vs-ticker %) and
+    ``### QUARTERLY VALUATION`` (the per-multiple "range X-Y over last 5y,
+    <position>" own-history line -- which drives the label when peer coverage is
+    thin). Fold both so any magnitude narrate speaks -- versus peers OR versus its
+    own history -- is quotable-verbatim. Returns the blocks joined, or None when
+    the report carries neither. Stays tight: the growth / profitability / cash
+    subsections after the valuation block are not dragged in.
+    """
+    blocks = [
+        block
+        for block in (
+            _slice_section(report_text, _PEER_SECTION_HEADING, ("\n## ",)),
+            _slice_section(report_text, _QUARTERLY_VALUATION_HEADING, ("\n### ", "\n## ")),
+        )
+        if block
+    ]
+    if not blocks:
+        return None
+    return "\n\n".join(blocks)
+
+
+def _narrate_peer_substrate(state: AgentState, payload_markdown: str) -> str | None:
+    """QNT-359 (fix B): the peer/valuation section to fold into narrate's input.
+
+    When the narrate payload carries a valuation label but was shown only the
+    card, the peer-delta number that backs the label lives in the fundamental
+    report -- which narrate is already GRADED against via
+    :func:`_runtime_report_texts` but never SHOWN. Returning that section here
+    lets narrate_node fold it into the substrate so a spoken comparison magnitude
+    is quotable-verbatim from what the model saw. None when there is nothing to
+    fold (no label, or no peer section).
+    """
+    if not _payload_carries_valuation_label(payload_markdown):
+        return None
+    sections = [
+        section
+        for text in _fundamental_report_texts(state)
+        if (section := _peer_valuation_section(text))
+    ]
+    if not sections:
+        return None
+    # De-dupe identical sections (a single-ticker turn folds one) while keeping order.
+    return "\n\n".join(dict.fromkeys(sections))
+
+
 def _runtime_grounding_check(answer: str, reports: list[str]) -> tuple[HallucinationResult, float]:
     """Advisory runtime numeric grounding check for completed answer text."""
     result = check_grounding(answer, reports)
