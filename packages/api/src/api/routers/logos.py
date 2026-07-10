@@ -68,7 +68,18 @@ _FINNHUB_PROFILE2_URL = "https://finnhub.io/api/v1/stock/profile2"
 # unrelated hosts). ``fullmatch`` anchors implicitly so a partial match
 # can't slip through.
 _FINNHUB_CDN_HOST_PATTERN = re.compile(r"^static\d*\.finnhub\.io$")
-_REQUEST_TIMEOUT_SECONDS = 5.0
+_REQUEST_TIMEOUT_SECONDS = 10.0
+# Transient failures (timeout, 5xx, connection reset) are retried rather than
+# cached as a permanent None. The prewarm caches None with no TTL and only
+# re-fetches on pod restart, so a single blip on one ticker would otherwise
+# blank that logo for the pod's entire lifetime (and, because the frontend
+# bakes the /logos map at build time, freeze it into the next Vercel build).
+# Observed in prod as a moving gap: NVDA/MSFT one boot, AMD the next. Three
+# attempts with a short linear backoff turns a flaky boot into a reliable one;
+# hard failures (missing logo field, host mismatch, oversize) still return
+# None immediately without burning retries.
+_MAX_FETCH_ATTEMPTS = 3
+_RETRY_BACKOFF_SECONDS = 0.5
 # Free-tier Finnhub allows 60 RPM on /stock/profile2; 1s spacing keeps us
 # well below the limit even on cold start. The CDN host (static.finnhub.io)
 # is unmetered so we don't space those out.
@@ -104,50 +115,59 @@ def _fetch_logo_data_url(ticker: str, client: httpx.Client) -> str | None:
 
     Two-stage: first hits the rate-limited /stock/profile2 endpoint to
     discover the CDN URL, then GETs the bytes from static.finnhub.io.
-    Soft-fails (returns None) on every error path: empty key, non-2xx,
+    Transient network failures (timeout, non-2xx, connection reset) are
+    retried up to ``_MAX_FETCH_ATTEMPTS`` times; hard failures (empty key,
     JSON decode failure, missing/empty ``logo`` field, host mismatch,
-    oversized payload. The frontend renders initials when None — there
-    is no caller that depends on knowing why.
+    oversized payload) return None immediately without retrying. The
+    frontend renders initials when None — there is no caller that depends
+    on knowing why.
     """
-    try:
-        profile = client.get(
-            _FINNHUB_PROFILE2_URL,
-            params={"symbol": ticker, "token": settings.FINNHUB_API_KEY},
-        )
-        profile.raise_for_status()
-        payload = profile.json()
-    except (httpx.HTTPError, ValueError) as exc:
-        logger.warning("finnhub profile2 fetch failed for %s: %s", ticker, exc)
-        return None
-    if not isinstance(payload, dict):
-        return None
-    url = payload.get("logo")
-    if not isinstance(url, str) or not url:
-        return None
+    last_exc: Exception | None = None
+    for attempt in range(_MAX_FETCH_ATTEMPTS):
+        if attempt > 0:
+            time.sleep(_RETRY_BACKOFF_SECONDS * attempt)
+        try:
+            profile = client.get(
+                _FINNHUB_PROFILE2_URL,
+                params={"symbol": ticker, "token": settings.FINNHUB_API_KEY},
+            )
+            profile.raise_for_status()
+            payload = profile.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            last_exc = exc  # transient — retry
+            continue
+        if not isinstance(payload, dict):
+            return None
+        url = payload.get("logo")
+        if not isinstance(url, str) or not url:
+            return None
 
-    # Pin the host before issuing the second GET — Finnhub's JSON is the
-    # only thing telling us where to fetch the bytes, and a bad value
-    # would otherwise let us reach arbitrary network destinations.
-    parsed = urlparse(url)
-    hostname = parsed.hostname or ""
-    if parsed.scheme != "https" or not _FINNHUB_CDN_HOST_PATTERN.fullmatch(hostname):
-        logger.warning("finnhub logo URL host mismatch for %s: %r", ticker, parsed.hostname)
-        return None
+        # Pin the host before issuing the second GET — Finnhub's JSON is the
+        # only thing telling us where to fetch the bytes, and a bad value
+        # would otherwise let us reach arbitrary network destinations.
+        parsed = urlparse(url)
+        hostname = parsed.hostname or ""
+        if parsed.scheme != "https" or not _FINNHUB_CDN_HOST_PATTERN.fullmatch(hostname):
+            logger.warning("finnhub logo URL host mismatch for %s: %r", ticker, parsed.hostname)
+            return None
 
-    try:
-        image = client.get(url)
-        image.raise_for_status()
-    except httpx.HTTPError as exc:
-        logger.warning("finnhub logo bytes fetch failed for %s: %s", ticker, exc)
-        return None
-    body = image.content
-    if not body or len(body) > _MAX_LOGO_BYTES:
-        return None
-    content_type = image.headers.get("content-type", "image/png").split(";")[0].strip()
-    if not content_type.startswith("image/"):
-        content_type = "image/png"
-    encoded = base64.b64encode(body).decode("ascii")
-    return f"data:{content_type};base64,{encoded}"
+        try:
+            image = client.get(url)
+            image.raise_for_status()
+        except httpx.HTTPError as exc:
+            last_exc = exc  # transient — retry
+            continue
+        body = image.content
+        if not body or len(body) > _MAX_LOGO_BYTES:
+            return None
+        content_type = image.headers.get("content-type", "image/png").split(";")[0].strip()
+        if not content_type.startswith("image/"):
+            content_type = "image/png"
+        encoded = base64.b64encode(body).decode("ascii")
+        return f"data:{content_type};base64,{encoded}"
+
+    logger.warning("finnhub logo fetch exhausted retries for %s: %s", ticker, last_exc)
+    return None
 
 
 def _populate_missing(missing: list[str]) -> None:
