@@ -103,11 +103,12 @@ def _patch_intent(monkeypatch: pytest.MonkeyPatch, intent: str = "thesis") -> No
 @pytest.mark.parametrize(
     ("question", "expected"),
     [
-        ("What's interesting about AAPL this week?", ["news", "technical"]),
-        ("What is interesting about AAPL this week?", ["news", "technical"]),
-        ("What should I watch on AAPL next week?", ["news", "technical"]),
+        # News-led scans take a third lens (company) for the earnings catalyst (QNT-357).
+        ("What's interesting about AAPL this week?", ["news", "technical", "company"]),
+        ("What is interesting about AAPL this week?", ["news", "technical", "company"]),
+        ("What should I watch on AAPL next week?", ["news", "technical", "company"]),
         ("What stands out on AAPL?", ["company", "news"]),
-        ("Anything interesting about AAPL?", ["news", "technical"]),
+        ("Anything interesting about AAPL?", ["news", "technical", "company"]),
     ],
 )
 def test_deterministic_plan_matches_guardrail(question: str, expected: list[str]) -> None:
@@ -175,7 +176,7 @@ def test_explore_supervisor_emits_plan_rationale_via_event_emitter(
     assert rationale_events[0] == {"text": result["plan_rationale"]}
 
 
-def test_news_led_exploration_routes_and_gathers_two_lenses(
+def test_news_led_exploration_routes_and_gathers_three_lenses(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_intent(monkeypatch, "thesis")
@@ -192,12 +193,14 @@ def test_news_led_exploration_routes_and_gathers_two_lenses(
     # exploration card, regardless of the classifier's original label.
     assert result["intent"] == "exploration"
     assert isinstance(result["answer"], ExplorationAnswer)
-    assert result["plan"] == ["news", "technical"]
-    assert result["supervisor_iterations"] == 2
-    assert set(result["reports"]) == {"news", "technical"}
+    # QNT-357 follow-up: news-led scans take a third lens (company) so the dated
+    # earnings catalyst rides along with the news + technical momentum read.
+    assert result["plan"] == ["news", "technical", "company"]
+    assert result["supervisor_iterations"] == 3
+    assert set(result["reports"]) == {"news", "technical", "company"}
     assert tools["news"].call_count == 1
     assert tools["technical"].call_count == 1
-    assert tools["company"].call_count == 0
+    assert tools["company"].call_count == 1
     assert tools["fundamental"].call_count == 0
     # AC5: the supervisor made no LLM call -- the only schema bound this turn is
     # the ExplorationAnswer card from synthesize, never an exploration-decision.
@@ -219,11 +222,11 @@ def test_broad_exploration_still_routes_when_classifier_labels_news(
     # A "news"-labeled broad scan still resolves to the exploration card, not
     # the single-lens focused-news card.
     assert result["intent"] == "exploration"
-    assert result["plan"] == ["news", "technical"]
-    assert result["supervisor_iterations"] == 2
+    assert result["plan"] == ["news", "technical", "company"]
+    assert result["supervisor_iterations"] == 3
     assert tools["news"].call_count == 1
     assert tools["technical"].call_count == 1
-    assert tools["company"].call_count == 0
+    assert tools["company"].call_count == 1
     assert tools["fundamental"].call_count == 0
 
 
@@ -261,10 +264,11 @@ def test_news_led_watch_prompt_gets_complementary_lens(
         {"ticker": "AAPL", "question": "What should I watch on AAPL next week?"}
     )
 
-    assert result["plan"] == ["news", "technical"]
+    # QNT-357 follow-up: the "watch" scan now also pulls company for the earnings date.
+    assert result["plan"] == ["news", "technical", "company"]
     assert tools["news"].call_count == 1
     assert tools["technical"].call_count == 1
-    assert tools["company"].call_count == 0
+    assert tools["company"].call_count == 1
     assert tools["fundamental"].call_count == 0
 
 
