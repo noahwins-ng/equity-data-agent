@@ -202,7 +202,8 @@ Standard data-engineering patterns under Dagster-native names:
 
 **Grounded RAG provenance** — a targeted-event answer streaming with its retrieved-source citations in the chat panel.
 
-![RAG provenance](docs/screenshots/rag-provenance.png)
+<img src="docs/screenshots/rag-provenance.png" alt="RAG provenance" width="420">
+
 
 **Langfuse trace** — request-level trace with LangGraph spans, model metadata, token usage, and eval scores.
 
