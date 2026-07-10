@@ -142,17 +142,20 @@ class Settings(BaseSettings):
     CORS_ALLOWED_ORIGIN_REGEX: str = ""
 
     # Per-IP request rate limits applied to POST /api/v1/agent/chat. SlowAPI
-    # accepts the semicolon-delimited "5/minute;30/hour;100/day" syntax;
-    # exceeding any tier returns 429 with Retry-After. Sized for one
-    # recruiter session (the portfolio audience the panel exists to serve).
-    CHAT_RATE_LIMIT: str = "5/minute;30/hour;100/day"
+    # accepts the semicolon-delimited "5/minute;20/day" syntax; exceeding any
+    # tier returns 429 with Retry-After. The 20/day tier is the advertised
+    # per-visitor cap (recruiter portfolio audience); 5/minute is a burst
+    # guard so those 20 can't be fired in one scripted spray.
+    CHAT_RATE_LIMIT: str = "5/minute;20/day"
 
-    # Per-IP daily Groq token budget. Soft cap orthogonal to request count —
-    # a chatty user can stay under 100 requests/day yet exhaust a model TPD
-    # by triggering many tool runs. Sized for ~7-10 thesis runs/visitor
-    # post-QNT-175 (4 tools instead of 3, ~3.5-4K tokens/run including the
-    # company report). UTC-midnight reset matches Groq's TPD window.
-    CHAT_TOKENS_PER_IP_PER_DAY: int = 30_000
+    # Per-IP daily token budget. Soft cap orthogonal to request count — a
+    # chatty user can stay under the request cap yet run up cost by triggering
+    # many tool runs. Sized so the 20/day request cap is the one that actually
+    # binds: a substantive thesis chat is ~14K tokens (see
+    # CHAT_TOKENS_GLOBAL_PER_DAY), so 20 × 14K = 280K keeps the token fence
+    # from cutting a visitor short of the advertised 20 chats. UTC-midnight
+    # reset. ~$0.04/visitor/day worst case at DeepSeek pricing.
+    CHAT_TOKENS_PER_IP_PER_DAY: int = 280_000
 
     # Global daily token budget — the sum across all IPs. QNT-258 / ADR-025:
     # re-derived for the paid launch primary (DeepSeek V4 Flash via OpenRouter).
@@ -167,7 +170,7 @@ class Settings(BaseSettings):
     # ceiling of ~$2.7/day — comfortably above a good launch evening + daily
     # ingest + dev/eval sweeps, yet still bounding a stuck loop or scraper to a
     # few dollars/day. The tight per-user fences are UNCHANGED and do the real
-    # anti-abuse work: per-IP token budget (30K/day) + rate limit (100/day).
+    # anti-abuse work: per-IP token budget (280K/day) + rate limit (20/day).
     # Still FAIL CLOSED — once exceeded, every request gets the friendly
     # demo-limit redirect until UTC midnight (see api/security.py).
     CHAT_TOKENS_GLOBAL_PER_DAY: int = 20_000_000

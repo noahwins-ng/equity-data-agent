@@ -3,13 +3,14 @@
 Three orthogonal controls layered on ``POST /api/v1/agent/chat``:
 
 1. **Per-IP request rate limit** (``slowapi``) — protects against
-   request-count flooding. Defaults: ``5/minute, 30/hour, 100/day``. Hitting
+   request-count flooding. Defaults: ``5/minute, 20/day``. Hitting
    any tier returns HTTP 429 with ``Retry-After``; the chat panel surfaces
    the friendly limit message.
 2. **Per-IP daily token budget** — soft cap orthogonal to request
-   count. A chatty user can stay under 100 req/day but still burn a large
-   token spend by triggering many tool runs. Default ~10K tokens/IP/day. Once
-   exceeded, ``can_serve_request()`` returns ``False`` and the SSE handler
+   count. A chatty user can stay under the request cap but still burn a large
+   token spend by triggering many tool runs. Default ~280K tokens/IP/day —
+   sized so the 20/day request cap binds first. Once exceeded,
+   ``can_serve_request()`` returns ``False`` and the SSE handler
    short-circuits to a deterministic conversational redirect.
 3. **Global daily token circuit breaker** — QNT-258 / ADR-025: with the
    paid launch primary (DeepSeek via OpenRouter) there is no free-tier TPD

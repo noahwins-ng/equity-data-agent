@@ -694,7 +694,7 @@ export function ChatPanel() {
             were decorative; the trust line below is the canonical
             advertisement of what's behind the demo. */}
         <span className="text-[11px] normal-case tracking-normal text-zinc-500">
-          demo: ~30 queries/hour per visitor · powered by Groq free tier
+          demo: ~20 queries/day per visitor
         </span>
       </header>
 
