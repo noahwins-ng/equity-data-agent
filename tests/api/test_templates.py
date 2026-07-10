@@ -135,6 +135,10 @@ def _price_ctx(**overrides: Any) -> _FakeResult:
 _EMPTY_PRICE_CTX = _price_ctx()
 _EMPTY_PEER_RESULT = _FakeResult(("pe_ratio", "ev_ebitda", "price_to_sales"), [])
 _EMPTY_TECH_RESULT = _tech_result([])
+# QNT-357 follow-up: the fundamental report now fetches the next earnings date;
+# default to a far-future date so terse tests render a line and never trip the
+# no-try/except fundamental query on an unmatched fake.
+_EARNINGS_CAL_RESULT = _FakeResult(("next_earnings_date",), [(date(2099, 8, 15),)])
 
 
 def _install_fake(monkeypatch: pytest.MonkeyPatch, canned: dict[str, _FakeResult]) -> None:
@@ -150,6 +154,8 @@ def _install_fake(monkeypatch: pytest.MonkeyPatch, canned: dict[str, _FakeResult
         canned = {"argMax": _EMPTY_PEER_RESULT, **canned}
     if "equity_raw.fundamentals" not in canned:
         canned = {**canned, "equity_raw.fundamentals": _MARKET_CAP_RESULT}
+    if "earnings_calendar" not in canned:
+        canned = {**canned, "earnings_calendar": _EARNINGS_CAL_RESULT}
     if "technical_indicators_weekly" not in canned:
         canned = {**canned, "technical_indicators_weekly": _EMPTY_TECH_RESULT}
     if "technical_indicators_monthly" not in canned:
@@ -887,6 +893,37 @@ def test_fundamental_header_freshness(monkeypatch: pytest.MonkeyPatch) -> None:
     report = build_fundamental_report("NVDA")
     assert "quarterly" in report
     assert "days old" in report
+
+
+def test_fundamental_report_renders_next_earnings_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QNT-357 follow-up: the fundamental header carries the next-earnings date verbatim.
+
+    A bare quick_fact "when does X report earnings" strips the company report and
+    routes to the fundamental lens on the "earnings" keyword, so the date must live
+    here too to answer that literal ask.
+    """
+    _install_fake(
+        monkeypatch,
+        {
+            "fundamental_summary": _FakeResult(_FUND_COLS, [_fund_row()]),
+            "earnings_calendar": _FakeResult(("next_earnings_date",), [(date(2099, 8, 15),)]),
+        },
+    )
+    report = build_fundamental_report("NVDA")
+    assert "Next earnings: 2099-08-15" in report
+
+
+def test_fundamental_report_next_earnings_na_when_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No scheduled (or stale-filtered) date degrades to N/A, matching company.py."""
+    _install_fake(
+        monkeypatch,
+        {
+            "fundamental_summary": _FakeResult(_FUND_COLS, [_fund_row()]),
+            "earnings_calendar": _FakeResult(("next_earnings_date",), []),
+        },
+    )
+    report = build_fundamental_report("NVDA")
+    assert "Next earnings: N/A" in report
 
 
 def test_fundamental_static_data_disclaimer_present(
