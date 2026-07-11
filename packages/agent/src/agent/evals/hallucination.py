@@ -75,6 +75,11 @@ Numbers we deliberately ignore:
       date is not caught. (Real AMD trace ``d59d146f``, 2026-07-11: the
       report's ``2026-07-09`` became ``surged 5.8% on July 9`` and the bare
       ``9`` counted as unsupported.)
+    * Bare calendar years ("since 2023", "fiscal '26") — see
+      ``_strip_year_idiom``. Years usually ground by accident via the
+      reports' ISO dates; the strip covers the ones that don't. Guarded so
+      ``$2026`` / ``2023.5`` / ``2025%`` stay claims; same fabricated-year
+      blind spot as the other label strips.
 
 False-positive risk:
     Single-digit integers like ``5`` or ``7`` that the model uses as a
@@ -156,6 +161,20 @@ _DATE_IDIOM_RE = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+# Bare calendar years ("since 2023", "fiscal 2026") and apostrophe shorthand
+# ("fiscal '26"). A year is a label, not a numeric claim (QNT-361 follow-up
+# 5) — years usually ground BY ACCIDENT via the reports' ISO dates, but a
+# year with no matching ISO date in the gathered set (a past year, next
+# fiscal year) false-flags. Guards: no leading $, no decimal/percent/unit
+# continuation, so "$2026", "2023.5", and "2025%" all stay claims; the
+# century is pinned to 19xx/20xx so ordinary four-digit quantities ("1,900"
+# is comma-formed; "4500 units" starts 45) rarely collide. Same symmetric
+# blind spot as dates: a FABRICATED year is not caught.
+_YEAR_IDIOM_RE = re.compile(
+    r"(?<![\w.$])(?:19|20)\d{2}(?![\d.%]|[kmbt]|bn|tn|mn)|'\d{2}\b",
+    re.IGNORECASE,
+)
+
 # Magnitude unit glued to a number ($2.5T, $14B, 20k). The (?<=\d) lookbehind
 # ties it to the digits so a bare "K"/"M" is never stripped. Kept in sync with
 # the unit alternation inside _NUMBER_RE.
@@ -222,6 +241,13 @@ def _strip_date_idiom(text: str) -> str:
     return _DATE_IDIOM_RE.sub(" ", text)
 
 
+def _strip_year_idiom(text: str) -> str:
+    """Remove bare calendar years ("since 2023", "fiscal '26") before
+    extraction. Symmetric strip; see the ``_YEAR_IDIOM_RE`` comment for the
+    guards and the fabricated-year blind spot."""
+    return _YEAR_IDIOM_RE.sub(" ", text)
+
+
 def _glue_spelled_scale(text: str) -> str:
     """Fold a spelled-out scale word onto the number before it (QNT-297).
 
@@ -238,7 +264,9 @@ def _prepare(text: str) -> str:
     """Shared pre-extraction pipeline: strip scaffold + window idiom, then
     fold spelled-out scale words. Used by both ``extract_numbers`` and
     ``_extract_scaled`` so the two see the same token stream."""
-    return _glue_spelled_scale(_strip_date_idiom(_strip_period_idiom(_strip_scaffold(text))))
+    return _glue_spelled_scale(
+        _strip_year_idiom(_strip_date_idiom(_strip_period_idiom(_strip_scaffold(text))))
+    )
 
 
 def _canonicalise(token: str) -> str:

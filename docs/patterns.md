@@ -239,6 +239,8 @@ def get_technical_report(ticker: str) -> dict:
 **Conventions** (all in `packages/api/src/api/formatters.py` + templates, per ADR-012):
 - **Percentages render at one decimal** - `format_signed_pct` / `format_pct` default `precision=1`; inline f-string percentage sites use `:.1f`/`:+.1f`. Finance convention quotes growth rates at 1dp.
 - **Peer-delta percentages render at integer precision** (`(72% premium)`, not `(72.4% premium)`) - every observed narrator rounding of a peer delta spoke exactly `round(x)`, and a tenth of a percent on a peer premium is spurious precision (medians move daily). Growth/margin percentages stay 1dp.
+- **bps changes print their pts conversion alongside** (`+222 bps (+2.2 pts) YoY`) - "margin expanded 2.2 points" is a unit conversion the narrator must be able to quote, not compute.
+- **The volume multiple renders at 1dp** (`1.2x the 20-day average`) - "1.3x average volume" is the spoken form. P/E multiples stay 2dp (real convention); a narrator's "nearly 38x" is tripwire territory by design.
 - **Prices, ratios, and EPS stay at two decimals** (`format_ratio`, `format_currency` defaults).
 - **Absolute dollar magnitudes render scale-suffixed at one decimal** (`format_currency_compact`: `$129.2B`, `$3.0T`) - a raw `$129,174,000,000` invites the narrator to speak `$129.2B`, which is rounding. Share prices are not magnitudes; they stay exact at 2dp.
 - **Never format a percentage inline at 2dp in a template** - if you need a percent string, use the formatter helpers or `:.1f`.

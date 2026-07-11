@@ -357,7 +357,10 @@ def _volume_line(volume: float | None, ctx: dict[str, Any] | None) -> str:
     if not avg:
         return f"{shares:,} shares (20-day average unavailable)"
     ratio = volume / avg
-    return f"{shares:,} shares - {ratio:.2f}x the 20-day average"
+    # 1dp multiple (QNT-361 follow-up 5): "1.3x average volume" is the spoken
+    # form — a 2dp "1.25x" invites the same narrator rounding the peer-delta
+    # lines exhibited. Same exact-value-equality contract as everywhere else.
+    return f"{shares:,} shares - {ratio:.1f}x the 20-day average"
 
 
 def _fetch_rows(

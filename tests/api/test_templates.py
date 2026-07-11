@@ -274,7 +274,9 @@ def test_technical_bullish_overbought_rendering(monkeypatch: pytest.MonkeyPatch)
         in report
     )
     assert "Performance (daily): 1m +5.3%; 3m +10.0%; YTD +4.2%; 1y +20.0%" in report
-    assert "Volume (daily): 1,000 shares - 1.25x the 20-day average" in report
+    # 1dp multiple (QNT-361 follow-up 5): "1.3x average volume" is the
+    # spoken form; 1000/800 = 1.25 → 1.2 under round-half-even.
+    assert "Volume (daily): 1,000 shares - 1.2x the 20-day average" in report
     # QNT-353 AC3 — multi-timeframe consensus computed in the template header.
     assert "Multi-timeframe consensus: Sideways (daily Uptrend, weekly N/M, monthly N/M" in report
     # QNT-299: machine-parseable as-of footer, uses the DAILY section's date.
@@ -1061,8 +1063,10 @@ def test_fundamental_profitability_carries_bps_yoy_suffix(
     _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, rows)})
     report = build_fundamental_report("NVDA")
     assert "Net margin (quarterly): 25.0%" in report
-    assert "+120 bps YoY" in report
-    assert "-40 bps YoY" in report
+    # pts conversion printed alongside (QNT-361 follow-up 5) so a narrator
+    # saying "expanded 1.2 points" quotes rather than converts units.
+    assert "+120 bps (+1.2 pts) YoY" in report
+    assert "-40 bps (-0.4 pts) YoY" in report
 
 
 def test_fundamental_ttm_section_renders_ebitda_margin(
@@ -1079,7 +1083,9 @@ def test_fundamental_ttm_section_renders_ebitda_margin(
     # The asset never emits bps-YoY on TTM rows, so the TTM PROFITABILITY
     # section must carry no bps-YoY suffix (invariant lock).
     ttm_block = report.split("## TTM")[1]
-    assert "bps YoY" not in ttm_block
+    # "bps" (not the full "bps YoY") — the suffix now reads "bps (+1.2 pts)
+    # YoY", so the tighter substring keeps the invariant honest.
+    assert "bps" not in ttm_block
 
 
 def test_fundamental_renders_premium_inline_discounted_label(

@@ -48,6 +48,20 @@ test("sentence-final token annotates with the dagger before the period", () => {
   assert.equal(annotateUnsupportedNumbers("grew by 45%.", ["45"]), "grew by 45%†.");
 });
 
+test("split-chunk fragments must be joined before annotating", () => {
+  // QNT-361 follow-up 5: SSE prose chunks split on token boundaries, so a
+  // number can straddle two chunks. Annotating a fragment daggers the
+  // trailing half mid-number; annotating the join is safe — chat-panel
+  // joins proseChunks before calling this.
+  const chunks = ["trading at a 45", ".4% discount"];
+  assert.equal(
+    annotateUnsupportedNumbers(chunks.join(""), ["45"]),
+    "trading at a 45.4% discount", // 45 never matches inside 45.4
+  );
+  // The corruption the join prevents (fragment ends at a chunk boundary):
+  assert.equal(annotateUnsupportedNumbers(chunks[0], ["45"]), "trading at a 45†");
+});
+
 test("deep-annotates nested card fields (AMD incident shape)", () => {
   // Real AMD turn (trace d59d146f): the "$600" miss lived in the news
   // card's summary — a structured field, not the narrative — and rendered
