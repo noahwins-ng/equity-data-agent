@@ -452,7 +452,13 @@ def _peer_context_lines(
             return f"Sector median {label} ({sector}, {n_peers} peers in coverage): N/A"
         pct = (target - med) / med * 100
         direction = "premium" if pct >= 0 else "discount"
-        pct_str = f"{abs(pct):.1f}%"
+        # Integer precision (QNT-361 follow-up 4): every observed narrator
+        # rounding of a peer delta spoke exactly round(x) — "45.4% discount"
+        # became "45%", "72.4%/83.2% premium" became "72%/83%" — each one a
+        # grounding miss. A tenth of a percent on a peer premium is spurious
+        # precision (medians move daily), so the report prints the form the
+        # narrator was already speaking. Growth/margin percentages stay 1dp.
+        pct_str = f"{abs(pct):.0f}%"
         return (
             f"Sector median {label} ({sector}, {n_peers} peers in coverage): "
             f"{format_ratio(med)} -- {ticker} at {format_ratio(target)} ({pct_str} {direction})"
