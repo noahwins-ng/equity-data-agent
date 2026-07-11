@@ -11,23 +11,23 @@ The argument is: $ARGUMENTS
 ### Step 0: Orient
 
 1. If an issue identifier was provided, fetch the issue from Linear for context (title, description, AC)
-2. `git branch --show-current` — confirm we're on a feature branch
-3. If on `main`, stop: "Nothing to review — you're on main."
+2. `git branch --show-current` - confirm we're on a feature branch
+3. If on `main`, stop: "Nothing to review - you're on main."
 
 ### Step 1: Gather the Diff
 
-1. `git diff main...HEAD` — the full diff of everything on this branch
-2. `git diff --stat main...HEAD` — summary of files changed
-3. `git log --oneline main...HEAD` — commits on this branch
-4. If there are uncommitted changes (`git status`), warn: "Uncommitted changes exist — review covers committed state only."
+1. `git diff main...HEAD` - the full diff of everything on this branch
+2. `git diff --stat main...HEAD` - summary of files changed
+3. `git log --oneline main...HEAD` - commits on this branch
+4. If there are uncommitted changes (`git status`), warn: "Uncommitted changes exist - review covers committed state only."
 
 ### Step 2: Review (Adversarial)
 
-**Step 2.0: Spawn `code-reviewer-ediff` subagent first** (experiment introduced 2026-04-21 — see `.claude/agents/README.md`).
+**Step 2.0: Spawn `code-reviewer-ediff` subagent first** (experiment introduced 2026-04-21 - see `.claude/agents/README.md`).
 
-Invoke via the Agent tool with `subagent_type: "code-reviewer-ediff"`, passing the issue identifier + the PR number (if one exists) + the full AC list extracted from Linear. The agent reads only the final diff — no author context, no conversation history — so it's genuinely fresh eyes. Its report lands before you do your own pass.
+Invoke via the Agent tool with `subagent_type: "code-reviewer-ediff"`, passing the issue identifier + the PR number (if one exists) + the full AC list extracted from Linear. The agent reads only the final diff - no author context, no conversation history - so it's genuinely fresh eyes. Its report lands before you do your own pass.
 
-Incorporate the agent's findings as the starting point for your own review. Do NOT skip your own pass just because the agent ran — you may catch things it missed (and vice versa). If the agent returns `Verdict: FIX FIRST`, those are yours to triage before proceeding.
+Incorporate the agent's findings as the starting point for your own review. Do NOT skip your own pass just because the agent ran - you may catch things it missed (and vice versa). If the agent returns `Verdict: FIX FIRST`, those are yours to triage before proceeding.
 
 **Step 2.1: Your own review.** Read the full diff and review it as if you did NOT write this code. You are a skeptical reviewer seeing it for the first time. Check each category:
 
@@ -38,7 +38,7 @@ Incorporate the agent's findings as the starting point for your own review. Do N
 - Incorrect exception handling (too broad `except`, swallowed errors)
 
 #### Security
-- SQL injection (especially in ClickHouse queries — check for f-strings or `.format()` with user input)
+- SQL injection (especially in ClickHouse queries - check for f-strings or `.format()` with user input)
 - Hardcoded secrets, hosts, or credentials (should use `shared.Settings`)
 - Missing input validation on API endpoints (ticker validation, date ranges)
 - Path traversal or command injection in any shell calls
@@ -51,7 +51,7 @@ Incorporate the agent's findings as the starting point for your own review. Do N
 
 #### Edge Cases
 - What happens with empty data? (no rows returned from ClickHouse, yfinance returns nothing)
-- What happens on retry? (idempotency — ReplacingMergeTree handles dupes, but does the code assume single-run?)
+- What happens on retry? (idempotency - ReplacingMergeTree handles dupes, but does the code assume single-run?)
 - What happens with network failures? (timeouts, connection refused)
 - API rate limits (yfinance 429s, LLM API limits)
 
@@ -59,7 +59,7 @@ Incorporate the agent's findings as the starting point for your own review. Do N
 - Re-read the AC list from Linear (or from the sanity-check output in this session)
 - For each AC containing an execution-trigger phrase (see `sanity-check.md` Step 2 keyword list), was a verification command actually run with output pasted?
 - **Template AC from `docs/AC-templates.md`**: if the diff touches infra paths (`docker-compose.yml`, `.github/workflows/`, `Dockerfile`, `Makefile`, root config files), the infra-PR template AC (CD green, no prod drift, post-deploy smoke) apply implicitly. Verify each has evidence even if the Linear issue description omitted them.
-- If any execution AC was marked ✓ without command + output evidence, this is a **BLOCKING** review issue — do not ship
+- If any execution AC was marked ✓ without command + output evidence, this is a **BLOCKING** review issue - do not ship
 
 #### Code Quality (only flag significant issues, not style)
 - Dead code or unreachable branches
@@ -70,7 +70,7 @@ Incorporate the agent's findings as the starting point for your own review. Do N
 ### Step 3: Report
 
 ```
-Review: QNT-XX — Title (or "current branch")
+Review: QNT-XX - Title (or "current branch")
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Files reviewed: N files, +X -Y lines
@@ -78,11 +78,11 @@ Files reviewed: N files, +X -Y lines
 Issues found:
 
   🔴 BLOCKING (must fix before ship):
-    - [file.py:42] SQL query uses f-string with ticker input — potential injection
-    - [file.py:87] Broad except catches SystemExit — use specific exceptions
+    - [file.py:42] SQL query uses f-string with ticker input - potential injection
+    - [file.py:87] Broad except catches SystemExit - use specific exceptions
 
   🟡 ADVISORY (consider fixing):
-    - [file.py:15] No timeout on HTTP request — could hang indefinitely
+    - [file.py:15] No timeout on HTTP request - could hang indefinitely
     - [file.py:63] Empty list case returns None but caller expects list
 
   ✅ CLEAN (no issues):
@@ -94,7 +94,7 @@ Verdict: SHIP / FIX FIRST
 ```
 
 **SHIP** = no blocking issues found.
-**FIX FIRST** = blocking issues exist — list them with file:line and suggested fix.
+**FIX FIRST** = blocking issues exist - list them with file:line and suggested fix.
 
 ### Step 4: If FIX FIRST
 
@@ -108,5 +108,5 @@ After fixes, re-read the changed lines to confirm the fix doesn't introduce new 
 ### Step 5: If SHIP
 
 ```
-Review passed — ready for /ship QNT-XX
+Review passed - ready for /ship QNT-XX
 ```

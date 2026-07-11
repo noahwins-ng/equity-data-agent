@@ -8,12 +8,12 @@ The issue identifier is: $ARGUMENTS
 
 ### Step 1: Diagnose
 
-1. **Check git state** (primary signal — always reliable):
-   - `git branch --show-current` — confirm we're on the right branch
-   - `git log --oneline main...HEAD` — see commits on branch
-   - `git status` — any uncommitted work from the failed run?
-   - `gh pr list --head <branch> --state open` — is there an open PR?
-   - `gh pr list --head <branch> --state merged` — was the PR already merged?
+1. **Check git state** (primary signal - always reliable):
+   - `git branch --show-current` - confirm we're on the right branch
+   - `git log --oneline main...HEAD` - see commits on branch
+   - `git status` - any uncommitted work from the failed run?
+   - `gh pr list --head <branch> --state open` - is there an open PR?
+   - `gh pr list --head <branch> --state merged` - was the PR already merged?
 
 2. **Determine failure point from git state** (use this hierarchy, not Linear status):
    - **No commits on branch** → `/pick` completed but `/implement` never started
@@ -24,23 +24,23 @@ The issue identifier is: $ARGUMENTS
    - **Open PR exists** → `/ship` failed during CI or merge step
    - **Merged PR exists** → `/ship` failed during post-deploy verification
 
-3. **Cross-check with Linear** (secondary — may have drifted):
+3. **Cross-check with Linear** (secondary - may have drifted):
    - Fetch the Linear issue status to confirm, but do NOT override the git-based diagnosis if they disagree
    - If Linear status contradicts git state, note the discrepancy in the report
 
 4. **Report the diagnosis**:
    ```
-   Diagnosing: QNT-XX — Title
+   Diagnosing: QNT-XX - Title
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
    Branch:     noahwinsdev/qnt-XX-description
-   Linear:     In Progress (matches git state | DRIFTED — git says <X>)
+   Linear:     In Progress (matches git state | DRIFTED - git says <X>)
    WIP commits: 3
    Uncommitted: 2 modified files
    Open PR:    none
 
    Last failure likely at: /implement (Step 2)
-   Reason: <inferred from git state — e.g., "lint errors in uncommitted files", "tests failing", "incomplete AC">
+   Reason: <inferred from git state - e.g., "lint errors in uncommitted files", "tests failing", "incomplete AC">
    ```
 
 ### Step 2: Fix
@@ -48,10 +48,10 @@ The issue identifier is: $ARGUMENTS
 Based on the failure point:
 
 **If failed during `/implement`**:
-1. Check uncommitted files — stage and commit a WIP if there's salvageable work
-2. Run `uv run ruff check .` and `uv run ruff format .` — fix any lint/format issues
-3. Run `uv run pyright` — fix any type errors
-4. Run `uv run pytest packages/<package>/tests/ -x -q` — fix any test failures
+1. Check uncommitted files - stage and commit a WIP if there's salvageable work
+2. Run `uv run ruff check .` and `uv run ruff format .` - fix any lint/format issues
+3. Run `uv run pyright` - fix any type errors
+4. Run `uv run pytest packages/<package>/tests/ -x -q` - fix any test failures
 5. Re-read the acceptance criteria from Linear and check which ACs are still unfinished
 6. Implement any remaining ACs
 7. Create a WIP commit for the fixes
@@ -64,12 +64,12 @@ Based on the failure point:
 **If failed during `/ship`**:
 1. Check if a PR already exists: look for open PRs on this branch
 2. If PR exists but CI failed: read the CI error, fix, push
-3. If no PR: the fix is done — resume will handle the rest
-4. If merge conflict: report to user — this needs manual resolution
+3. If no PR: the fix is done - resume will handle the rest
+4. If merge conflict: report to user - this needs manual resolution
 
 ### Step 3: Resume Pipeline
 
-After fixing, resume by invoking the remaining sub-commands via the Skill tool in sequence. Do NOT re-implement their logic — invoke the actual commands:
+After fixing, resume by invoking the remaining sub-commands via the Skill tool in sequence. Do NOT re-implement their logic - invoke the actual commands:
 
 - If fixed during `/implement` → invoke `/sanity-check`, then `/review`, then `/ship`
 - If fixed during `/sanity-check` → invoke `/sanity-check` (re-run it fresh), then `/review`, then `/ship`
@@ -80,7 +80,7 @@ After fixing, resume by invoking the remaining sub-commands via the Skill tool i
 
 Post a comment on the Linear issue documenting the failure and recovery:
 ```
-**Fix applied** — resumed pipeline from /<step>
+**Fix applied** - resumed pipeline from /<step>
 
 **Problem:** <what failed and why>
 **Fix:** <what was changed>
@@ -90,7 +90,7 @@ Post a comment on the Linear issue documenting the failure and recovery:
 ### Step 4: Report
 
 ```
-Fixed: QNT-XX — Title
+Fixed: QNT-XX - Title
 ━━━━━━━━━━━━━━━━━━━━━
 
 Problem:  <what failed>

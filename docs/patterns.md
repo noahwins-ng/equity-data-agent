@@ -1,6 +1,6 @@
 # Codebase Patterns
 
-Established recipes for common tasks. Follow these patterns when implementing — don't reinvent structure.
+Established recipes for common tasks. Follow these patterns when implementing - don't reinvent structure.
 
 ---
 
@@ -64,7 +64,7 @@ if result.value_rejects:
 ```
 
 **Conventions**:
-- `strict=False` (tolerate extra/reordered columns — they don't break us) and `coerce=False` (so dtype drift is *detected*, not silently coerced).
+- `strict=False` (tolerate extra/reordered columns - they don't break us) and `coerce=False` (so dtype drift is *detected*, not silently coerced).
 - Pin dtypes only where drift is meaningful and the payload is stable; make benign-NaN columns `nullable=True` so clean inputs aren't newly quarantined.
 - A new source (e.g. EDGAR 8-K) reuses this: add a `*_CONTRACT`, wire one `validate_contract` call.
 
@@ -100,7 +100,7 @@ class MyResource(ConfigurableResource):
 ```
 
 **Conventions**:
-- Config fields default to empty/zero — fall back to `shared.settings` at runtime
+- Config fields default to empty/zero - fall back to `shared.settings` at runtime
 - This lets tests override via Dagster config without touching env vars
 - Include retry logic for any external I/O (see `_MAX_RETRIES` pattern in `clickhouse.py`)
 - Use `logging.getLogger(__name__)` for structured logging
@@ -137,7 +137,7 @@ from dagster_pipelines.resources.clickhouse import ClickHouseResource
 
 logger = logging.getLogger(__name__)
 
-# Partition by ticker — all per-ticker assets use this
+# Partition by ticker - all per-ticker assets use this
 my_partitions = StaticPartitionsDefinition(TICKERS)
 
 class MyConfig(Config):
@@ -179,7 +179,7 @@ def my_asset(
 
 **Concurrency pre-flight** (required when adding a scheduled / sensor-triggered partitioned job):
 
-Every partitioned asset fans out to N subprocess workers per trigger. The `QueuedRunCoordinator` cap in `dagster.yaml` (set by QNT-113) limits how many can run concurrently — raising the cap without raising the daemon's `mem_limit` re-opens the Apr 20 2026 OOM-cascade failure mode.
+Every partitioned asset fans out to N subprocess workers per trigger. The `QueuedRunCoordinator` cap in `dagster.yaml` (set by QNT-113) limits how many can run concurrently - raising the cap without raising the daemon's `mem_limit` re-opens the Apr 20 2026 OOM-cascade failure mode.
 
 Before shipping a new scheduled/sensor asset, compute:
 
@@ -189,9 +189,9 @@ safe_concurrent_runs = (mem_limit_on_dagster_daemon − 660 MB) / 360 MB
 
 Where `660 MB ≈ 260 MB daemon baseline + 400 MB sensor-tick headroom` and `360 MB` is the observed per-run-worker peak RSS during `__ASSET_JOB` materialization (revised from 150 MB after Apr 21 2026 OOM; see QNT-115).
 
-At the current `mem_limit: 3g` (QNT-115) this gives `(3072 − 660) / 360 ≈ 6` theoretical concurrent ceiling. Practical cap stays at `max_concurrent_runs: 3` (QNT-113) — the ceiling is headroom, not a target.
+At the current `mem_limit: 3g` (QNT-115) this gives `(3072 − 660) / 360 ≈ 6` theoretical concurrent ceiling. Practical cap stays at `max_concurrent_runs: 3` (QNT-113) - the ceiling is headroom, not a target.
 
-- If `max_concurrent_runs` in `dagster.yaml` is already less than `safe_concurrent_runs`, no change needed — your new asset will queue behind the existing jobs.
+- If `max_concurrent_runs` in `dagster.yaml` is already less than `safe_concurrent_runs`, no change needed - your new asset will queue behind the existing jobs.
 - If the total fan-out across ALL scheduled/sensor jobs × their partition counts, triggered within a single cron firing window, would exceed `max_concurrent_runs`, either (a) raise `mem_limit` on `dagster-daemon` in `docker-compose.yml` AND scale `max_concurrent_runs` proportionally in the same PR, or (b) stagger the schedules so fan-out doesn't overlap.
 - Serialized throughput is the safe default. A backfill taking ~10× longer is correct; an OOM cascade that kills the daemon is not.
 
@@ -213,20 +213,20 @@ app = FastAPI(title="Equity Data Agent API")
 
 @app.get("/api/v1/reports/technical/{ticker}")
 def get_technical_report(ticker: str) -> dict:
-    """Report endpoint — returns text consumed by the agent."""
+    """Report endpoint - returns text consumed by the agent."""
     # Validate ticker against TICKERS list
     # Query ClickHouse using settings.clickhouse_url
-    # Return pre-computed data — NO arithmetic in endpoint code
+    # Return pre-computed data - NO arithmetic in endpoint code
 ```
 
 **Conventions**:
 - All endpoints under `/api/v1/`
 - Report endpoints return text strings (consumed by agent)
 - Data endpoints return JSON arrays (consumed by frontend)
-- Validate `{ticker}` against `shared.tickers.TICKERS` — return 404 for unknown
+- Validate `{ticker}` against `shared.tickers.TICKERS` - return 404 for unknown
 - Always use `SELECT ... FROM table FINAL` for ClickHouse queries (ReplacingMergeTree consistency)
 - No authentication (read-only public market data)
-- Use `shared.settings` for all config — never hardcode connection details
+- Use `shared.settings` for all config - never hardcode connection details
 
 **When routers are added**: Create `packages/api/src/api/routers/<domain>.py`, use `APIRouter(prefix="/api/v1/<domain>")`, and include in `main.py` via `app.include_router(router)`.
 
@@ -251,7 +251,7 @@ ORDER BY (ticker, date);
 ```
 
 **Conventions**:
-- Sequential numbering: `000`, `001`, `002`, ... — check last file and increment
+- Sequential numbering: `000`, `001`, `002`, ... - check last file and increment
 - `equity_raw.*` for ingested data, `equity_derived.*` for computed data
 - Always `ReplacingMergeTree` with a version column (`fetched_at` or `computed_at`)
 - Always `PARTITION BY ticker` and `ORDER BY (ticker, <temporal_key>)`
@@ -264,9 +264,9 @@ ORDER BY (ticker, date);
 
 **Location**: `packages/dagster-pipelines/src/dagster_pipelines/retry.py` (QNT-110)
 
-Two layers protect Dagster runs from transient failures. Apply both to auto-triggered jobs; apply neither to manual / UI-launched jobs (real errors should fail loud — operator is watching).
+Two layers protect Dagster runs from transient failures. Apply both to auto-triggered jobs; apply neither to manual / UI-launched jobs (real errors should fail loud - operator is watching).
 
-**Layer 1 — Op-level (`DEPLOY_WINDOW_RETRY`)**: handles flaky ops *inside* a running run. yfinance timeout, transient ClickHouse error, etc. Retries the failing step in place without re-launching the whole run.
+**Layer 1 - Op-level (`DEPLOY_WINDOW_RETRY`)**: handles flaky ops *inside* a running run. yfinance timeout, transient ClickHouse error, etc. Retries the failing step in place without re-launching the whole run.
 
 ```python
 from dagster_pipelines.retry import DEPLOY_WINDOW_RETRY
@@ -278,7 +278,7 @@ some_job = define_asset_job(
 )
 ```
 
-**Layer 2 — Run-level (`DEPLOY_WINDOW_RUN_RETRY_TAGS`)**: handles whole-run failures including dequeue/launch errors. The Apr 19 incident was in this bucket — daemon got gRPC UNAVAILABLE while dequeuing a run because the code-server container was mid-restart from a deploy, so no op ever ran. Op-level retry doesn't help; the instance re-launches the whole run instead.
+**Layer 2 - Run-level (`DEPLOY_WINDOW_RUN_RETRY_TAGS`)**: handles whole-run failures including dequeue/launch errors. The Apr 19 incident was in this bucket - daemon got gRPC UNAVAILABLE while dequeuing a run because the code-server container was mid-restart from a deploy, so no op ever ran. Op-level retry doesn't help; the instance re-launches the whole run instead.
 
 ```python
 from dagster_pipelines.retry import DEPLOY_WINDOW_RUN_RETRY_TAGS
@@ -290,17 +290,17 @@ some_job = define_asset_job(
 )
 ```
 
-Run-level retry is **activated globally** by `run_retries.enabled: true` in `dagster.yaml`, with `retry_on_asset_or_op_failure: false` so *only* launch-level failures retry. User errors inside ops still fail loud — a real bug in an asset should not silently retry (that's what layer 1 is for, scoped to transient ops).
+Run-level retry is **activated globally** by `run_retries.enabled: true` in `dagster.yaml`, with `retry_on_asset_or_op_failure: false` so *only* launch-level failures retry. User errors inside ops still fail loud - a real bug in an asset should not silently retry (that's what layer 1 is for, scoped to transient ops).
 
 **Which layer for which job**:
 
 | Job type | Op retry (in-run) | Run retry (re-launch) |
 |---|---|---|
 | Sensor-triggered (`*_downstream_job`) | ✓ | ✓ |
-| Schedule-triggered (`*_daily_job`, `*_weekly_job`) | Skip — fresh materialization, re-launch is cleaner | ✓ |
+| Schedule-triggered (`*_daily_job`, `*_weekly_job`) | Skip - fresh materialization, re-launch is cleaner | ✓ |
 | Manual / UI-launched | Skip | Skip |
 
-**News jobs (QNT-53 / QNT-54)**: apply both layers from day one — same lesson as `feedback_sensor_batch_from_day_one`. Don't retrofit later; inherit the protection at build-time.
+**News jobs (QNT-53 / QNT-54)**: apply both layers from day one - same lesson as `feedback_sensor_batch_from_day_one`. Don't retrofit later; inherit the protection at build-time.
 
 ---
 
@@ -308,10 +308,10 @@ Run-level retry is **activated globally** by `run_retries.enabled: true` in `dag
 
 **Location**: the request boundary (`api.routers.agent_chat`, `agent.__main__`) and any graph node in `packages/agent/src/agent/`.
 
-ADR-019 replaced the Phase-5 per-node `@observe` + `traced_invoke` wrapper with the Langfuse-LangGraph cookbook pattern: open **one** parent trace at the request boundary, attach a single `CallbackHandler` at graph entry, and let LangGraph propagate the runnable `config` so every node's `llm.invoke(...)` is auto-traced. This halved per-chat events to stay under the 50k/mo free tier — the tool wrappers are **not** traced (they are HTTP calls to FastAPI, not LLM calls).
+ADR-019 replaced the Phase-5 per-node `@observe` + `traced_invoke` wrapper with the Langfuse-LangGraph cookbook pattern: open **one** parent trace at the request boundary, attach a single `CallbackHandler` at graph entry, and let LangGraph propagate the runnable `config` so every node's `llm.invoke(...)` is auto-traced. This halved per-chat events to stay under the 50k/mo free tier - the tool wrappers are **not** traced (they are HTTP calls to FastAPI, not LLM calls).
 
 ```python
-# Request boundary — parent trace + one handler attached at graph entry.
+# Request boundary - parent trace + one handler attached at graph entry.
 from agent.tracing import make_callback_handler, observe, propagate_attributes
 
 @observe(name="agent-chat")
@@ -323,7 +323,7 @@ def _runner(...):
         config = {"callbacks": [handler]} if handler else {}
         graph.invoke(state, config=config)
 
-# Graph node — accept config, forward it to the LLM call.
+# Graph node - accept config, forward it to the LLM call.
 def synthesize(state: AgentState, config: RunnableConfig) -> dict:
     llm = get_llm()
     response = llm.invoke(build_prompt(state), config=_prompt_cfg(config, "system-prompt"))
@@ -332,23 +332,23 @@ def synthesize(state: AgentState, config: RunnableConfig) -> dict:
 
 **Two non-negotiables**:
 1. Every `llm.invoke(...)` passes `config=` so callbacks propagate. `tests/agent/test_tracing.py::test_llm_invoke_calls_pass_config_kwarg` fails CI if a call omits it. (This replaced the old "route through `traced_invoke`" invariant.)
-2. The parent trace lives at the request boundary, not per-node. Don't re-add `@observe` to nodes or tools — it double-roots the trace and re-inflates event volume (the exact thing ADR-019 cut).
+2. The parent trace lives at the request boundary, not per-node. Don't re-add `@observe` to nodes or tools - it double-roots the trace and re-inflates event volume (the exact thing ADR-019 cut).
 
 **Prompt linking (QNT-199)**: `_prompt_cfg(config, "<prompt-name>")` in `graph.py` attaches `langfuse_prompt` metadata so each generation links to its registered prompt in the Langfuse UI. `scripts/push_prompts.py` registers the five named prompts on every deploy; when keys are unset it falls back to the QNT-187 content-hash (`prompt_version`) metadata.
 
-**Config**: `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_BASE_URL` in `.env`. Unset keys → `make_callback_handler()` returns `None`, callers branch on the empty-config form, nothing blows up in tests or offline dev. Region matters: the US and EU projects live on different hosts (`us.cloud.langfuse.com` vs `cloud.langfuse.com`) — a trace sent to the wrong region is silently dropped with no auth error.
+**Config**: `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_BASE_URL` in `.env`. Unset keys → `make_callback_handler()` returns `None`, callers branch on the empty-config form, nothing blows up in tests or offline dev. Region matters: the US and EU projects live on different hosts (`us.cloud.langfuse.com` vs `cloud.langfuse.com`) - a trace sent to the wrong region is silently dropped with no auth error.
 
-**Short-lived processes** (CLI, scripts): call `tracing.flush()` before exit — otherwise the last span never reaches the server. `agent.__main__` already does this in a `finally` block; copy the pattern for any new entry point.
+**Short-lived processes** (CLI, scripts): call `tracing.flush()` before exit - otherwise the last span never reaches the server. `agent.__main__` already does this in a `finally` block; copy the pattern for any new entry point.
 
 ---
 
 ## Adding a Ticker
 
-**Location**: `packages/shared/src/shared/tickers.py` — but it is not a one-liner.
+**Location**: `packages/shared/src/shared/tickers.py` - but it is not a one-liner.
 
-Adding or removing a ticker touches **four registry structures** in `tickers.py` — `TICKERS`, `TICKER_METADATA`, `NEWS_RELEVANCE`, `TICKER_NAME_ALIASES` — plus several backfill surfaces and an eval-golden sweep. Dagster partitions, API endpoints, and agent tools derive from `TICKERS` automatically, but the metadata / relevance / alias structures and the goldens do not — a missing entry fails *silently* (no news, unparseable in chat, or a broken eval row).
+Adding or removing a ticker touches **four registry structures** in `tickers.py` - `TICKERS`, `TICKER_METADATA`, `NEWS_RELEVANCE`, `TICKER_NAME_ALIASES` - plus several backfill surfaces and an eval-golden sweep. Dagster partitions, API endpoints, and agent tools derive from `TICKERS` automatically, but the metadata / relevance / alias structures and the goldens do not - a missing entry fails *silently* (no news, unparseable in chat, or a broken eval row).
 
-**Follow `docs/guides/ticker-lifecycle.md`** for the full checklist. Never hardcode ticker lists in business logic — derive from the registry or the `/api/v1/tickers` endpoint.
+**Follow `docs/guides/ticker-lifecycle.md`** for the full checklist. Never hardcode ticker lists in business logic - derive from the registry or the `/api/v1/tickers` endpoint.
 
 ---
 
@@ -362,7 +362,7 @@ agent               ← shared
 api                 ← shared + agent
 ```
 
-**Within a package** — import from `shared`:
+**Within a package** - import from `shared`:
 ```python
 from shared.config import settings        # Config singleton
 from shared.config import Settings        # Type (for testing)

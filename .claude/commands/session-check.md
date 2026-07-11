@@ -13,32 +13,32 @@ Restore context for the current work-in-progress. Run this at the start of a new
    - Current status (In Progress, In Review, etc.)
    - Which milestone it belongs to
    - Identify which system area the issue touches (Dagster, API, agent, shared, frontend, infra) from the title/description
-   - Run `git log --oneline main...HEAD` and check if any commits touch the relevant package path (e.g., `packages/dagster-pipelines/` for Dagster issues). If no commits exist for that area on this branch yet, suggest: "No prior commits in this area — read `docs/architecture/system-overview.md` to orient before coding."
+   - Run `git log --oneline main...HEAD` and check if any commits touch the relevant package path (e.g., `packages/dagster-pipelines/` for Dagster issues). If no commits exist for that area on this branch yet, suggest: "No prior commits in this area - read `docs/architecture/system-overview.md` to orient before coding."
 
 3. **Show recent work** to restore context:
-   - `git log --oneline main...HEAD` — commits on this branch only
-   - `git diff --stat main...HEAD` — files changed vs main
-   - `git status` — any uncommitted work
+   - `git log --oneline main...HEAD` - commits on this branch only
+   - `git diff --stat main...HEAD` - files changed vs main
+   - `git status` - any uncommitted work
 
-4. **Assess AC status** — for each acceptance criterion:
+4. **Assess AC status** - for each acceptance criterion:
    - Get the list of files changed on this branch: `git diff --name-only main...HEAD`
    - Read the files that map to AC items (prioritise primary implementation files over tests and config; cap at 5 files to stay fast)
    - If no files changed yet, note "no implementation started" for all AC
    - Mark ✓ if clearly present, ○ if partial or uncertain, ✗ if not found
-   - Keep this fast and directional — deep verification is `/sanity-check`'s job
+   - Keep this fast and directional - deep verification is `/sanity-check`'s job
 
 5. **If on main** (no active issue):
    - Check for any open PRs via `gh pr list --author @me`
    - Report any open PRs
-   - Do NOT suggest the next issue — that's `/cycle-start`'s job
+   - Do NOT suggest the next issue - that's `/cycle-start`'s job
    - Prompt: "No active issue. Run `/cycle-start` to review the cycle or `/pick QNT-XX` to start an issue."
 
 6. **Report** formatted as:
    ```
-   Resuming: QNT-XX — Title
+   Resuming: QNT-XX - Title
    ━━━━━━━━━━━━━━━━━━━━━━━━━
    Status:    In Progress
-   Milestone: Phase X — Name
+   Milestone: Phase X - Name
    Branch:    noahwinsdev/qnt-XX-description
 
    Recent commits:
@@ -52,7 +52,7 @@ Restore context for the current work-in-progress. Run this at the start of a new
    Uncommitted: 2 modified, 1 untracked
 
    Acceptance Criteria:
-     ✓ Criterion 1 (done — committed in abc1234)
+     ✓ Criterion 1 (done - committed in abc1234)
      ○ Criterion 2 (in progress)
      ○ Criterion 3 (not started)
    ```

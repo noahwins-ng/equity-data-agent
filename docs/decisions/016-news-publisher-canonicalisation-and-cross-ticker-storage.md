@@ -14,7 +14,7 @@ went live:
    `finnhub.io/api/news?id=...` redirects. The URL host is opaque
    (`finnhub.io`), and the `publisher_name` field tells us *which Finnhub
    feed* the article came from, not who actually wrote it. "Yahoo" routinely
-   covers republished Reuters / Bloomberg / Fool / Barron's pieces — the
+   covers republished Reuters / Bloomberg / Fool / Barron's pieces - the
    label is the only signal we had, and it can be wrong. QNT-73 partially
    patched this by preferring `domain(url)` over `publisher_name` for
    non-`finnhub.io` URLs, which fixed the ~22% direct-outlet bucket but
@@ -49,7 +49,7 @@ The 7-day-window cross-tab from 2026-05-01 (QNT-148 investigation):
 | Same-ticker repeat factor (max rows per `(ticker, id)`) | 3 |
 
 The card shipping with no canonical publisher field, no resolved-host
-column, and no dedup contract was a Phase 6 short-cut by design — get the
+column, and no dedup contract was a Phase 6 short-cut by design - get the
 shape on screen, then come back. This ADR is the come-back.
 
 ## Decision
@@ -64,7 +64,7 @@ populates it on every insert via `resolve_publisher_host(url)`:
 
 ```
 resolve_publisher_host(url):
-    if host(url) != "finnhub.io": return strip_www(host(url))   # direct outlet — short-circuit
+    if host(url) != "finnhub.io": return strip_www(host(url))   # direct outlet - short-circuit
     HEAD url, follow up to 5 redirects, 5s deadline
     if HEAD 405 / 403 / 501: retry with streamed GET (no body read)
     if non-2xx OR final host == finnhub.io OR exception: return ""
@@ -91,20 +91,20 @@ rather than crashing the asset or persisting a misleading host. The
 fallback chain in the API absorbs unresolved rows: a finnhub.io row whose
 HEAD timed out renders the trimmed `publisher_name` (e.g. "Yahoo")
 instead of "—". Rows with neither resolved nor inferable publisher render
-"—". This preserves AC #6 — no frontend regression for unresolvable
-articles — and keeps the ingest run-time bounded.
+"—". This preserves AC #6 - no frontend regression for unresolvable
+articles - and keeps the ingest run-time bounded.
 
 **Empirical resolution rate (post-deploy 2026-05-01).** Cloudflare-fronted
 Finnhub (`server: cloudflare`, `cf-cache-status: DYNAMIC`) returns
 `HTTP 302 → Location: /` for the majority of redirect requests, even
 with realistic browser User-Agent + Referer + 1.5s per-process rate
 limit. The behavior is sticky: URLs that resolve successfully during one
-asset run return `/` when probed 10–20 minutes later from the same IP.
+asset run return `/` when probed 10-20 minutes later from the same IP.
 The signal looks like per-source bot mitigation (or a sliding-window
 throttle the redirect server doesn't document) rather than per-URL
-expiry — recent and older articles fail at the same rate, and a
+expiry - recent and older articles fail at the same rate, and a
 staggered one-ticker re-run gets ~44% while a parallel 10-ticker burst
-gets 1–6% per ticker.
+gets 1-6% per ticker.
 
 What this means for AC #4: across the rolling 7-day window, **~22% of
 rows are direct outlets (resolved_host populated by short-circuit) +
@@ -121,7 +121,7 @@ Finnhub endpoint is ~55%**, so the AC is revised accordingly. Pushing
 higher would require either (a) parsing article body for byline
 (explicit out-of-scope per the ticket), (b) a paid Finnhub endpoint
 that returns the original outlet URL alongside the article (unverified
-pricing — separate ticket if revisited), or (c) a long-running
+pricing - separate ticket if revisited), or (c) a long-running
 cookie/session strategy that survives Cloudflare's per-source budget
 (speculative, fragile).
 
@@ -149,7 +149,7 @@ The `/api/v1/news/{ticker}` endpoint groups by `id` and picks the
 `argMax(field, published_at)` for every payload field, with `max(published_at)`
 as the row timestamp. This collapses the same-ticker-multiple-rows case
 (timestamp drift) to one row per article without losing any cross-ticker
-signal — each ticker's query still sees its own copy of a cross-mentioned
+signal - each ticker's query still sees its own copy of a cross-mentioned
 article.
 
 Cross-ticker dedup is **deliberately not** done. A reader on the AAPL page
@@ -159,7 +159,7 @@ from MSFT's feed. The cross-ticker view is the responsibility of a future
 "Related across portfolio" surface (see §4).
 
 **Why id, not (host + headline)**: the `id` column is `blake2b(url)`,
-which is exactly the dedup signal we want — same URL is the same article
+which is exactly the dedup signal we want - same URL is the same article
 modulo aggregator paywalls. Headline-based dedup would false-negative on
 "5 reasons NVDA could rally" vs "Five reasons NVDA could rally" (same
 article, identical URL) and false-positive on legitimately distinct
@@ -192,19 +192,19 @@ news card, decide whether peer-news is a card-level addition (e.g.
 ## Cross-store identity
 
 Following the heuristic from
-`feedback_pre_design_cross_store_identity.md` — write upstream PK →
+`feedback_pre_design_cross_store_identity.md` - write upstream PK →
 downstream PK and the one-sentence invariant before bridging two stores.
 
 | Boundary | Upstream PK | Downstream PK | Invariant |
 |---|---|---|---|
 | Finnhub `/company-news?symbol=X` → `news_raw` | Finnhub article (`url`) | `(ticker, published_at, id)` where `id = blake2b(url)` | One row per (ticker, url) pair; cross-mentioned URL → N rows. Inherited from ADR-015. |
-| Finnhub redirect host → `news_raw.resolved_host` | `url` (`finnhub.io/api/news?id=...`) | `(ticker, published_at, id).resolved_host` | At-most-one resolution per row — soft-fails to `''` on any error; idempotent on re-fetch (same URL → same `id` → ReplacingMergeTree absorbs the re-write). |
+| Finnhub redirect host → `news_raw.resolved_host` | `url` (`finnhub.io/api/news?id=...`) | `(ticker, published_at, id).resolved_host` | At-most-one resolution per row - soft-fails to `''` on any error; idempotent on re-fetch (same URL → same `id` → ReplacingMergeTree absorbs the re-write). |
 | `news_raw` → API `/api/v1/news/{ticker}` | `(ticker, published_at, id)` | `(ticker, id)` after `argMax` dedup | Same article URL collapses to one card row per ticker; cross-ticker rows remain independent. |
 | `news_raw` → Qdrant `equity_news` | `(ticker, id)` | `point_id = blake2b(f"{ticker}:{id}")` | Unchanged from QNT-120 / ADR-015. |
 
 ## Per-ticker attribution semantics
 
-For AC #7 — how does an article end up under a given ticker?
+For AC #7 - how does an article end up under a given ticker?
 
 Finnhub's `/company-news?symbol=X` returns articles whose `related` array
 includes `X`. The matching is **string-equality on the symbol**, not
@@ -214,15 +214,15 @@ piece is *useful* to an AMZN reader is not Finnhub's call to make.
 
 Implications we accept:
 * AMZN's feed will occasionally surface articles that are 90% META and
-  drop AMZN's name once. Acceptable — the alternative (relevance scoring)
+  drop AMZN's name once. Acceptable - the alternative (relevance scoring)
   is opaque and can hide articles a reader wants.
 * The mega-cap fanout (one earnings-preview piece across all six tickers)
-  is by design — readers who watch the whole portfolio see the article in
+  is by design - readers who watch the whole portfolio see the article in
   every ticker they hold; the cross-ticker dedup contract above leaves it
   to the "Related across portfolio" surface (deferred §4) to collapse.
 
 If Finnhub ever changes the matching to relevance scoring (or adds a
-threshold parameter), revisit this ADR — the per-ticker fanout numbers in
+threshold parameter), revisit this ADR - the per-ticker fanout numbers in
 the table above will shift, and the dedup contract may need to grow a
 relevance filter alongside the URL-hash check.
 
@@ -240,7 +240,7 @@ outlet. Wire-service byline parsing is a separate, deeper problem (HTML
 shape varies per outlet, syndication banners are inconsistent) and would
 be a Phase 7 polish if we ever care.
 
-**Dedup by `(host, headline)`** instead of `id`. Rejected — see §3 above.
+**Dedup by `(host, headline)`** instead of `id`. Rejected - see §3 above.
 URL-hash dedup is strictly stronger and the `id` column already exists
 for this purpose.
 
@@ -258,7 +258,7 @@ re-write (ReplacingMergeTree dedups on the same key with the new
 `fetched_at`). After ~7 daily ticks the steady-state window is fully
 populated; no separate one-shot backfill is needed. Articles older than
 7 days remain at `resolved_host = ''` and fall back to the API's
-`multiIf` chain — acceptable since the news card is a 7-day surface.
+`multiIf` chain - acceptable since the news card is a 7-day surface.
 
 ## Consequences
 
@@ -269,7 +269,7 @@ populated; no separate one-shot backfill is needed. Articles older than
   stripping) live in one SQL expression instead of N component-level
   helpers.
 * Adding a debug surface ("show me the raw publisher signals") is cheap
-  — `publisher_name`, `url`, and `resolved_host` are all still in the
+  - `publisher_name`, `url`, and `resolved_host` are all still in the
   payload.
 * Per-article correctness: ~78% of weekly rows go from "Yahoo" / "Benzinga"
   generic labels to the actual outlet (cnbc.com, seekingalpha.com,
@@ -287,8 +287,8 @@ populated; no separate one-shot backfill is needed. Articles older than
 * Two new soft-failure modes the ops runbook will eventually need to
   describe: outlet flapping (HEAD timeouts spike) and Finnhub redirect
   rewriting (the resolved host changes for the same article between
-  ticks). Both are already absorbed by the soft-fail contract — no
-  asset retries, no run-level alerts — but a future operator looking
+  ticks). Both are already absorbed by the soft-fail contract - no
+  asset retries, no run-level alerts - but a future operator looking
   at "why did `resolved_host` drift" should know where to look.
 * `equity_raw.news_raw` schema grows by one column (3 LowCardinality
   bytes per row). At the current ~30k rolling 7-day rows, the storage
@@ -296,21 +296,21 @@ populated; no separate one-shot backfill is needed. Articles older than
 
 ## References
 
-* QNT-148 — implements this ADR.
-* QNT-73 — Phase 6 ticker detail page; demand-driver for the canonical
+* QNT-148 - implements this ADR.
+* QNT-73 - Phase 6 ticker detail page; demand-driver for the canonical
   publisher field.
-* QNT-120 — Qdrant point-id namespacing; the precedent for "one row per
+* QNT-120 - Qdrant point-id namespacing; the precedent for "one row per
   (ticker, id), even when the underlying URL is shared."
-* QNT-141 — Yahoo-RSS → Finnhub cutover, the source of the redirect-label
+* QNT-141 - Yahoo-RSS → Finnhub cutover, the source of the redirect-label
   problem this ADR resolves.
-* ADR-009 — Embedding via Qdrant Cloud Inference; the rolling 7-day
+* ADR-009 - Embedding via Qdrant Cloud Inference; the rolling 7-day
   window framing.
-* ADR-014 — Next.js rendering mode per page; the "empty list ≡ service
+* ADR-014 - Next.js rendering mode per page; the "empty list ≡ service
   down" anti-pattern this card honours.
-* ADR-015 — Finnhub `/company-news` source pick; the cross-store
+* ADR-015 - Finnhub `/company-news` source pick; the cross-store
   identity table this ADR extends.
-* `feedback_pre_design_cross_store_identity.md` — the heuristic used in
+* `feedback_pre_design_cross_store_identity.md` - the heuristic used in
   the §"Cross-store identity" table above.
-* `feedback_milestone_demand_not_code.md` — explains why this ADR sits
+* `feedback_milestone_demand_not_code.md` - explains why this ADR sits
   in Phase 6 (the demanding phase) not Phase 4 (the phase whose ingest
   code it touches).

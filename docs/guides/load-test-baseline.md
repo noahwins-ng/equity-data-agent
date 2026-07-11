@@ -1,6 +1,6 @@
 # Load-Test Baseline
 
-p50 / p95 / p99 latency for the five public read endpoints under modest concurrency. Establishes "is the API fast enough at the demo dataset" — not a soak test, not a breaker validation. See QNT-65 for scope rationale.
+p50 / p95 / p99 latency for the five public read endpoints under modest concurrency. Establishes "is the API fast enough at the demo dataset" - not a soak test, not a breaker validation. See QNT-65 for scope rationale.
 
 ## What this is and what it is not
 
@@ -15,21 +15,21 @@ The breaker code is identical at any cap value, and re-tripping unit-tested gate
 
 ## Tool
 
-`scripts/load_test_baseline.py` — Python `asyncio` + `httpx.AsyncClient` driver. Chosen over `hey` / `k6` because:
+`scripts/load_test_baseline.py` - Python `asyncio` + `httpx.AsyncClient` driver. Chosen over `hey` / `k6` because:
 
 - `httpx` is already a project dependency (transitive via FastAPI), so the script runs inside the prod `api` container with zero install.
-- The matrix is 5 endpoints × 10 tickers, not a single URL — `hey` would need a shell wrapper to aggregate per-endpoint.
+- The matrix is 5 endpoints × 10 tickers, not a single URL - `hey` would need a shell wrapper to aggregate per-endpoint.
 - Lives next to the rest of the repo's one-off scripts and replays cleanly via `uv run python …`.
 
 ## Run methodology
 
 - **N = 500 requests**: 5 endpoints × 10 tickers × 10 reps each.
 - **Concurrency = 20** (`asyncio.Semaphore`).
-- **Warm-up pass discarded** before the measured run — 50 requests (one per `(endpoint, ticker)` pair) prime the ClickHouse query-plan cache, Qdrant client, and module-level state so the first measured request isn't a cold-start outlier. Not a full pre-warm of all 500 measured requests.
-- **Probed inside the prod `api` container** (`docker exec`) against `http://localhost:8000` — eliminates the SSH tunnel and Caddy hops, leaving the in-container loopback round-trip + uvicorn + FastAPI handler + ClickHouse query.
+- **Warm-up pass discarded** before the measured run - 50 requests (one per `(endpoint, ticker)` pair) prime the ClickHouse query-plan cache, Qdrant client, and module-level state so the first measured request isn't a cold-start outlier. Not a full pre-warm of all 500 measured requests.
+- **Probed inside the prod `api` container** (`docker exec`) against `http://localhost:8000` - eliminates the SSH tunnel and Caddy hops, leaving the in-container loopback round-trip + uvicorn + FastAPI handler + ClickHouse query.
 - **>5 % errors per endpoint = non-zero exit** so a future re-run fails loud if an endpoint regresses.
-- **Latency is computed over `status == 200` only.** Non-200 responses are counted in the `err` column but excluded from p50/p95/p99 — a fast 5xx would otherwise look like a fast endpoint. The `err` column is the canary; latency is conditional on success.
-- **The script is staged in `/tmp` on Hetzner and `/tmp` inside the api container, never copied into the repo on prod.** This is a one-off transient — see `feedback_prod_hotfix_scp.md`: SCP'd files in `/opt/equity-data-agent/` would block CD's `git pull`. `/tmp` is safe.
+- **Latency is computed over `status == 200` only.** Non-200 responses are counted in the `err` column but excluded from p50/p95/p99 - a fast 5xx would otherwise look like a fast endpoint. The `err` column is the canary; latency is conditional on success.
+- **The script is staged in `/tmp` on Hetzner and `/tmp` inside the api container, never copied into the repo on prod.** This is a one-off transient - see `feedback_prod_hotfix_scp.md`: SCP'd files in `/opt/equity-data-agent/` would block CD's `git pull`. `/tmp` is safe.
 
 ## Run record
 
@@ -65,12 +65,12 @@ ssh hetzner "docker cp /tmp/load_test_baseline.py \
 ### Reading the numbers
 
 - **All 500 requests succeeded** (zero errors, zero non-200s).
-- **p50 sits at 390–600 ms** across endpoints — within the ballpark for a single-row ClickHouse FINAL query plus serialization on a CX41.
-- **`/quote` is the slowest** at p50 (~600 ms): it stitches OHLCV + 30-bar avg volume + TTM P/E + raw market cap in one round-trip (intentional per `data.py:542` — saves the frontend three sequential calls on every navigation).
-- **p95/p99 spread is wide** (700–1200 ms), driven by ClickHouse merge contention under 20-way concurrent FINAL reads. This is consistent with the `system.text_log` / `metric_log` merge creep noted in the ops runbook — the equity tables aren't the hot path here, but they share the merge scheduler.
-- **End-to-end frontend latency will exceed these numbers** by the Cloudflare → Hetzner tunnel hop (typically +50–150 ms RTT depending on PoP). The p95 ceiling here is the API floor; user-perceived latency is API + tunnel + Vercel cache miss.
+- **p50 sits at 390-600 ms** across endpoints - within the ballpark for a single-row ClickHouse FINAL query plus serialization on a CX41.
+- **`/quote` is the slowest** at p50 (~600 ms): it stitches OHLCV + 30-bar avg volume + TTM P/E + raw market cap in one round-trip (intentional per `data.py:542` - saves the frontend three sequential calls on every navigation).
+- **p95/p99 spread is wide** (700-1200 ms), driven by ClickHouse merge contention under 20-way concurrent FINAL reads. This is consistent with the `system.text_log` / `metric_log` merge creep noted in the ops runbook - the equity tables aren't the hot path here, but they share the merge scheduler.
+- **End-to-end frontend latency will exceed these numbers** by the Cloudflare → Hetzner tunnel hop (typically +50-150 ms RTT depending on PoP). The p95 ceiling here is the API floor; user-perceived latency is API + tunnel + Vercel cache miss.
 
-There is no hard SLO yet. The original QNT-65 target was "p95 < 500 ms across endpoints" — only `ohlcv` and `indicators` hit that bar at p95, and none hit it at p99. That is acceptable for the current demo (Vercel ISR + Dagster deploy hook means most page loads serve a build-time-pinned response, not a fresh API call), but worth noting if a future feature ever depends on per-request p95 < 500 ms.
+There is no hard SLO yet. The original QNT-65 target was "p95 < 500 ms across endpoints" - only `ohlcv` and `indicators` hit that bar at p95, and none hit it at p99. That is acceptable for the current demo (Vercel ISR + Dagster deploy hook means most page loads serve a build-time-pinned response, not a fresh API call), but worth noting if a future feature ever depends on per-request p95 < 500 ms.
 
 ## Replay
 
@@ -87,4 +87,4 @@ ssh hetzner "docker cp /tmp/load_test_baseline.py \
     http://localhost:8000 --reps 10 --concurrency 20"
 ```
 
-JSON summary lands on stdout, Markdown table on stderr — pipe stderr to a fresh "Run record" entry above when re-running.
+JSON summary lands on stdout, Markdown table on stderr - pipe stderr to a fresh "Run record" entry above when re-running.

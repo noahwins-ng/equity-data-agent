@@ -1,4 +1,4 @@
-# Retrospective: Phase 0 — Foundation
+# Retrospective: Phase 0 - Foundation
 
 **Timeline:** Apr 12 → Apr 15, 2026 (1 cycle)
 **Shipped:** 7 issues, 17 PRs merged
@@ -21,9 +21,9 @@
 
 ## What Went Well
 
-- Monorepo + shared package (QNT-34, QNT-35) were clean — no rework
+- Monorepo + shared package (QNT-34, QNT-35) were clean - no rework
 - GitHub Actions CI/CD structure was solid from the start
-- DDL schema design held up — no changes needed after first pass
+- DDL schema design held up - no changes needed after first pass
 
 ---
 
@@ -37,7 +37,7 @@
 4. `DAGSTER_HOME` not set → dagster-daemon crash
 5. Hetzner firewall blocking GitHub Actions SSH (personal IP only)
 
-**ClickHouse HTTP rejects multi-statement DDL** — required splitting `000_create_databases.sql` into two files.
+**ClickHouse HTTP rejects multi-statement DDL** - required splitting `000_create_databases.sql` into two files.
 
 **No domain available** → Caddy deferred to Phase 6; API exposed directly on `:8000`.
 
@@ -49,14 +49,14 @@
 |---|---|
 | Docker + uv | Always use `uv sync --frozen --no-dev --all-packages` in Dockerfile |
 | Docker + uv | Use full venv paths in compose commands (`/app/.venv/bin/...`), not `uv run` |
-| ClickHouse | One SQL statement per migration file — HTTP interface rejects multi-statement |
+| ClickHouse | One SQL statement per migration file - HTTP interface rejects multi-statement |
 | Hetzner | Firewall port 22 must allow `0.0.0.0/0` for GitHub Actions CD |
 | Dagster | `DAGSTER_HOME=/dagster_home` env var + `mkdir -p /dagster_home` in Dockerfile required |
 | LiteLLM | Image is `litellm/litellm` on Docker Hub, not `ghcr.io/berriai/litellm` |
 
 ---
 
-## Next: Phase 1 — Data Ingestion
+## Next: Phase 1 - Data Ingestion
 
 | Issue | Title | Priority |
 |---|---|---|
@@ -66,6 +66,6 @@
 | QNT-82 | `make seed` (30d × 3 tickers for local dev) | Low |
 
 **Risk flags:**
-- `dagster_pipelines/__init__.py` is empty — `definitions.py` + ClickHouse resource need to be set up before any asset can materialise
+- `dagster_pipelines/__init__.py` is empty - `definitions.py` + ClickHouse resource need to be set up before any asset can materialise
 - yfinance rate limits are unpredictable; exponential backoff is essential
 - 2-year backfill × 10 tickers will be the first real load test on Hetzner ClickHouse

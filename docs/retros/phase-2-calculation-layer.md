@@ -1,4 +1,4 @@
-# Retrospective — Phase 2: Calculation Layer
+# Retrospective - Phase 2: Calculation Layer
 
 **Timeline:** 2026-04-15 11:44 UTC → 2026-04-16 16:46 UTC (~29 hours elapsed, single cycle)
 **Shipped:** 12 issues, 12 PRs merged (6 planned + 6 reactive); 1 cancelled (QNT-82 `make seed`)
@@ -16,7 +16,7 @@
 | QNT-68 | 17 Dagster asset checks across 6 assets | #40 |
 | QNT-47 | Validation tests: snapshot + canonical Wilder/Appel cross-reference for 2 tickers, exact-match fundamentals | #49 |
 
-### Reactive follow-ups (not in the original plan — opened during/after the outage)
+### Reactive follow-ups (not in the original plan - opened during/after the outage)
 
 | Issue | Deliverable | PR |
 |---|---|---|
@@ -31,7 +31,7 @@ Plus two non-QNT infra fixes (PR #41 prod Dagster persistence + UI tunnel, PR #4
 
 ## Velocity
 
-6 planned ships in the first ~12 hours (QNT-70 → QNT-68), then the Apr 16 outage fractured the rest of the phase into 6 reactive ships over the next ~18 hours. Average shipping cadence was ~2.5 hours per issue, including sanity-check, review, PR, CI, deploy, and post-deploy verification — which is fast because most items were single-file or single-module changes.
+6 planned ships in the first ~12 hours (QNT-70 → QNT-68), then the Apr 16 outage fractured the rest of the phase into 6 reactive ships over the next ~18 hours. Average shipping cadence was ~2.5 hours per issue, including sanity-check, review, PR, CI, deploy, and post-deploy verification - which is fast because most items were single-file or single-module changes.
 
 ## What went well
 
@@ -49,18 +49,18 @@ Plus two non-QNT infra fixes (PR #41 prod Dagster persistence + UI tunnel, PR #4
 
 ## Key lessons (saved to memory)
 
-- **`feedback_asset_checks_catch_real_bugs`** — Set real domain bounds on asset checks (P/E 10k, margins ±100%, RSI 0-100). "Not null" checks don't catch formula bugs; real-bound checks do.
-- **`feedback_deploy_green_isnt_code_deployed`** — CD green + `/health` green ≠ new code running. Always assert SHA + runtime-load identity. `set -euo pipefail` on every bash heredoc in CD.
-- **`feedback_runtime_state_must_be_declarative`** — Any stateful runtime config (Dagster default_status, cron enabled, feature flags, log levels) must be declared in code. "It works because someone toggled it two weeks ago" is an invisible dependency.
-- **`feedback_linear_links_resets_state`** — `save_issue(links=...)` on Linear can silently revert status (In Review → In Progress). Re-assert state after attaching or at /ship Step 7.
-- **`feedback_sensor_batch_from_day_one`** (new) — Dagster sensors should batch all pending events per tick from day one. Single-event-per-tick is too slow for catch-up and forced a mid-phase rewrite.
-- **`feedback_sample_ac_broadly`** (new) — AC spot-checks must vary across all row-type dimensions. Checking only annual rows missed the quarterly P/E bug; two follow-up PRs (QNT-87, QNT-91) were needed to fix what one broad sample would have caught up front.
+- **`feedback_asset_checks_catch_real_bugs`** - Set real domain bounds on asset checks (P/E 10k, margins ±100%, RSI 0-100). "Not null" checks don't catch formula bugs; real-bound checks do.
+- **`feedback_deploy_green_isnt_code_deployed`** - CD green + `/health` green ≠ new code running. Always assert SHA + runtime-load identity. `set -euo pipefail` on every bash heredoc in CD.
+- **`feedback_runtime_state_must_be_declarative`** - Any stateful runtime config (Dagster default_status, cron enabled, feature flags, log levels) must be declared in code. "It works because someone toggled it two weeks ago" is an invisible dependency.
+- **`feedback_linear_links_resets_state`** - `save_issue(links=...)` on Linear can silently revert status (In Review → In Progress). Re-assert state after attaching or at /ship Step 7.
+- **`feedback_sensor_batch_from_day_one`** (new) - Dagster sensors should batch all pending events per tick from day one. Single-event-per-tick is too slow for catch-up and forced a mid-phase rewrite.
+- **`feedback_sample_ac_broadly`** (new) - AC spot-checks must vary across all row-type dimensions. Checking only annual rows missed the quarterly P/E bug; two follow-up PRs (QNT-87, QNT-91) were needed to fix what one broad sample would have caught up front.
 
 ## System-overview updates
 
 Added the CD hard-gate step to the Infrastructure section (SHA match + asset-graph load). Added a note to `equity_derived.fundamental_summary` documenting the TTM-quarterly-P/E + N/M-threshold behaviour. Added a "Data quality" line summarising the 17 asset checks registered.
 
-## Phase review — applying lessons to upcoming phases
+## Phase review - applying lessons to upcoming phases
 
 Phase 2 taught four concrete things. Each was cross-referenced against the upcoming phase specs, producing four actioned scope changes rather than just flags.
 
@@ -71,24 +71,24 @@ Phase 2 taught four concrete things. Each was cross-referenced against the upcom
 | 4 | modify | QNT-53 | News schedule declares `default_status=RUNNING`; downstream sensor batches all pending events per tick from day one | QNT-46 + QNT-92 |
 | 4 | add    | QNT-93 | Dagster asset checks for `news_raw` and `news_embeddings` (real domain bounds, not just "not null") | QNT-68 |
 
-All four updated in Linear with audit-trail comments. Plan (`docs/project-plan.md`) and spec (`docs/project-requirement.md`) updated inline. No ADR warranted — these refine existing requirements rather than changing architecture.
+All four updated in Linear with audit-trail comments. Plan (`docs/project-plan.md`) and spec (`docs/project-requirement.md`) updated inline. No ADR warranted - these refine existing requirements rather than changing architecture.
 
-Phases 5, 6, 7 reviewed — no changes warranted. The "interpret, don't calculate" agent boundary is validated by Phase 2 (all math lives in Dagster). Frontend null handling is already implicit in the Phase 6 spec. Phase 7 observability is covered by the CD hardening that already shipped.
+Phases 5, 6, 7 reviewed - no changes warranted. The "interpret, don't calculate" agent boundary is validated by Phase 2 (all math lives in Dagster). Frontend null handling is already implicit in the Phase 6 spec. Phase 7 observability is covered by the CD hardening that already shipped.
 
-## Up next — Phase 3: API Layer
+## Up next - Phase 3: API Layer
 
 FastAPI endpoints that turn the computed data into reports for the agent and JSON arrays for the frontend.
 
-Suggested pull for the first Phase-3 cycle (capped at ~6 issues — Phase 2's observed core-feature velocity, excluding the outage surge):
+Suggested pull for the first Phase-3 cycle (capped at ~6 issues - Phase 2's observed core-feature velocity, excluding the outage surge):
 
 | Priority | Issue | Notes |
 |---|---|---|
-| High | QNT-69 | Design report templates (now includes null/N/M conventions) — unblocks all `/reports/*` |
-| High | QNT-48 | `/reports/technical/{ticker}` — template for the other report endpoints |
-| High | QNT-76 | `/ohlcv/{ticker}?timeframe=` — feeds the frontend candlestick chart |
-| High | QNT-77 | `/indicators/{ticker}?timeframe=` — pairs with QNT-76 for chart overlays |
+| High | QNT-69 | Design report templates (now includes null/N/M conventions) - unblocks all `/reports/*` |
+| High | QNT-48 | `/reports/technical/{ticker}` - template for the other report endpoints |
+| High | QNT-76 | `/ohlcv/{ticker}?timeframe=` - feeds the frontend candlestick chart |
+| High | QNT-77 | `/indicators/{ticker}?timeframe=` - pairs with QNT-76 for chart overlays |
 | High | QNT-51 | `/health` enhanced (services + deploy identity) |
-| Medium | QNT-78 | `/tickers` — cheap utility, good first-endpoint test |
+| Medium | QNT-78 | `/tickers` - cheap utility, good first-endpoint test |
 
 ## Timeline reference
 

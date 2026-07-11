@@ -5,7 +5,7 @@
 
 ## Context
 
-The agent and frontend need price data at three timeframes — daily, weekly, and monthly — to support multi-timeframe technical analysis (e.g., daily RSI for short-term momentum, weekly RSI for medium-term trend health, monthly for regime context).
+The agent and frontend need price data at three timeframes - daily, weekly, and monthly - to support multi-timeframe technical analysis (e.g., daily RSI for short-term momentum, weekly RSI for medium-term trend health, monthly for regime context).
 
 The question was whether to ingest weekly and monthly bars directly from yfinance, or derive them by aggregating the daily bars already in ClickHouse.
 
@@ -34,12 +34,12 @@ Technical indicators (RSI, MACD, SMA, EMA, Bollinger Bands) are then computed on
 
 **ClickHouse Materialized Views**
 - Could auto-aggregate weekly/monthly at insert time with zero Dagster code
-- Rejected: materialized views are invisible to Dagster's lineage graph. The whole point of Software-Defined Assets is that the full pipeline — Raw → Aggregated → Indicators → Reports — is visible and replayable. Hiding aggregations inside the database breaks that.
+- Rejected: materialized views are invisible to Dagster's lineage graph. The whole point of Software-Defined Assets is that the full pipeline - Raw → Aggregated → Indicators → Reports - is visible and replayable. Hiding aggregations inside the database breaks that.
 
 ## Consequences
 
 **Easier:**
-- Rebuild any timeframe by re-running one Dagster asset — no external API call needed
+- Rebuild any timeframe by re-running one Dagster asset - no external API call needed
 - No risk of daily/weekly/monthly data drifting out of sync (single source)
 - Full lineage visible in Dagster UI
 - Sensor can trigger indicator recomputation for all timeframes when daily raw data refreshes

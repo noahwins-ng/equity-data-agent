@@ -5,8 +5,8 @@ End-to-end deploy of the Next.js frontend on Vercel, talking to the Hetzner Fast
 ## Topology
 
 ```
-Browser → https://<vercel-project>.vercel.app   (Vercel CDN — frontend)
-Browser → https://api.<your-domain>             (Cloudflare edge — named tunnel)
+Browser → https://<vercel-project>.vercel.app   (Vercel CDN - frontend)
+Browser → https://api.<your-domain>             (Cloudflare edge - named tunnel)
                                 │
                                 ▼ (cloudflared, outbound from Hetzner)
                           api:8000 (FastAPI, loopback-bound)
@@ -25,7 +25,7 @@ Browser → https://api.<your-domain>             (Cloudflare edge — named tun
 In the Cloudflare dashboard:
 
 1. Zero Trust → Networks → Tunnels → **Create a tunnel** → type `Cloudflared` → name `equity-data-agent` → Save.
-2. On the install page, **copy the connector token** (the long `eyJ...` string). Skip the install command — the token is wired in via Docker, not by running cloudflared on the host.
+2. On the install page, **copy the connector token** (the long `eyJ...` string). Skip the install command - the token is wired in via Docker, not by running cloudflared on the host.
 3. Public Hostname tab → **Add a public hostname**:
    - Subdomain: `api`
    - Domain: pick `<your-domain>` from the dropdown
@@ -54,7 +54,7 @@ Save. SOPS re-encrypts in place. Commit `.env.sops` along with any compose chang
 
 CD picks up the encrypted file on merge to `main`, decrypts it in the GitHub Actions runner (per QNT-102), scp's plaintext to `/opt/equity-data-agent/.env`, and runs `docker compose --profile prod up -d --build --remove-orphans`. cloudflared starts with the token, registers with Cloudflare, and the public hostname comes online.
 
-Verify from your laptop (no SSH tunnel needed — the API is now public via Cloudflare):
+Verify from your laptop (no SSH tunnel needed - the API is now public via Cloudflare):
 
 ```bash
 curl -sf https://api.<your-domain>/api/v1/health | jq .status
@@ -69,7 +69,7 @@ In the UptimeRobot dashboard → your monitor → **Edit** → set the URL to:
 https://api.<your-domain>/api/v1/health
 ```
 
-Save. The probe should go green within one check interval. The URL is permanent — no more rotation maintenance.
+Save. The probe should go green within one check interval. The URL is permanent - no more rotation maintenance.
 
 ### 5. Update prod CORS allowlist
 
@@ -86,7 +86,7 @@ CORS_ALLOWED_ORIGINS=https://<your-vercel-project>.vercel.app,http://localhost:3
 CORS_ALLOWED_ORIGIN_REGEX=^https://<your-vercel-project>(-[a-z0-9-]+)?\.vercel\.app$
 ```
 
-The regex matches Vercel preview deploys for *this* project only — leaked previews from unrelated projects can't drive traffic. Replace `<your-vercel-project>` with the actual project slug.
+The regex matches Vercel preview deploys for *this* project only - leaked previews from unrelated projects can't drive traffic. Replace `<your-vercel-project>` with the actual project slug.
 
 Commit, push, and let CD pick it up.
 
@@ -116,7 +116,7 @@ In the Vercel dashboard → your project → **Settings → Environment Variable
 |---|---|---|
 | `NEXT_PUBLIC_API_URL` | `https://api.<your-domain>` | Production, Preview |
 
-The `NEXT_PUBLIC_` prefix exposes it to the browser bundle — this is intentional, the browser needs to know the API URL to fetch from. No other env vars are needed; everything else is server-side and stays on Hetzner.
+The `NEXT_PUBLIC_` prefix exposes it to the browser bundle - this is intentional, the browser needs to know the API URL to fetch from. No other env vars are needed; everything else is server-side and stays on Hetzner.
 
 ### 8. Configure repo root
 
@@ -142,8 +142,8 @@ cd frontend && npx vercel --prod
 
 - Open `https://<your-vercel-project>.vercel.app` in a browser.
 - Watchlist should load (server-side fetch from Hetzner via the tunnel).
-- Click a ticker — chart, fundamentals, news should populate.
-- Open the chat panel, send a message — SSE should stream tool calls + thesis.
+- Click a ticker - chart, fundamentals, news should populate.
+- Open the chat panel, send a message - SSE should stream tool calls + thesis.
 - Open browser devtools → Network tab → confirm:
   - All API calls go to `https://api.<your-domain>/api/v1/...`
   - No CORS errors in console.
@@ -155,7 +155,7 @@ The named tunnel registers using the connector token, which is stable. Host rebo
 
 1. Hetzner reboots → docker daemon comes back → cloudflared container starts with the same token → reconnects to the same tunnel UUID → public hostname stays bound.
 2. No Vercel env var refresh required.
-3. Optional chaos test post-deploy: `ssh hetzner sudo reboot`, wait 2 min, re-curl `https://api.<your-domain>/api/v1/health` and a Vercel `/ticker/<symbol>` page — both should return 200 without intervention.
+3. Optional chaos test post-deploy: `ssh hetzner sudo reboot`, wait 2 min, re-curl `https://api.<your-domain>/api/v1/health` and a Vercel `/ticker/<symbol>` page - both should return 200 without intervention.
 
 ## Troubleshooting
 
@@ -167,7 +167,7 @@ The named tunnel registers using the connector token, which is stable. Host rebo
 
 **CORS error in browser console**
 - The Vercel domain isn't in `CORS_ALLOWED_ORIGINS`. See step 5.
-- Check the request URL — if it's `api.<your-domain>` (server-side fetch on Vercel doesn't have an origin) the issue is elsewhere; if it's a browser fetch, the origin should be `https://<your-vercel-project>.vercel.app`.
+- Check the request URL - if it's `api.<your-domain>` (server-side fetch on Vercel doesn't have an origin) the issue is elsewhere; if it's a browser fetch, the origin should be `https://<your-vercel-project>.vercel.app`.
 
 **Preview deploy works but production doesn't**
 - `CORS_ALLOWED_ORIGIN_REGEX` covers `<project>-<branch>.vercel.app` for previews; the production domain `<project>.vercel.app` must be in `CORS_ALLOWED_ORIGINS` separately. Verify both.
@@ -177,5 +177,5 @@ The named tunnel registers using the connector token, which is stable. Host rebo
 - The agent's QNT-150 cleanup ensures graceful shutdown; symptoms here would be a reconnect loop in the browser.
 
 **Vercel build fails on first deploy**
-- Root directory not set to `frontend` — see step 8.
-- Missing `NEXT_PUBLIC_API_URL` — Vercel build doesn't strictly require it (server fetches gracefully fail with `IS_PRERENDER` per `lib/api.ts`), but pages will be empty if not set.
+- Root directory not set to `frontend` - see step 8.
+- Missing `NEXT_PUBLIC_API_URL` - Vercel build doesn't strictly require it (server fetches gracefully fail with `IS_PRERENDER` per `lib/api.ts`), but pages will be empty if not set.

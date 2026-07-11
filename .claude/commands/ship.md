@@ -12,7 +12,7 @@ Fetch the current Linear status of the issue first.
 **If the issue is already In Review** (meaning `/sanity-check` was run and passed recently):
 - Skip the full sanity check
 - Re-verify acceptance criteria from Linear only (a quick read of relevant files)
-- Confirm: "Issue already In Review — skipping code quality checks, re-verifying AC only."
+- Confirm: "Issue already In Review - skipping code quality checks, re-verifying AC only."
 
 **Otherwise**, invoke `/sanity-check` with the issue identifier via the Skill tool. Do NOT re-implement its logic here.
 - Wait for it to complete
@@ -20,7 +20,7 @@ Fetch the current Linear status of the issue first.
 - If verdict is READY TO SHIP: proceed to Step 2
 
 ### Step 2: Verify Project Plan Entry (hard gate)
-Every shipped ticket must have an entry in `docs/project-plan.md` before PR. The plan is the narrative of the project — Linear is the tracker; without a plan entry, the work is invisible to anyone reading the repo cold.
+Every shipped ticket must have an entry in `docs/project-plan.md` before PR. The plan is the narrative of the project - Linear is the tracker; without a plan entry, the work is invisible to anyone reading the repo cold.
 
 Grep the plan for the issue identifier:
 ```bash
@@ -28,8 +28,8 @@ grep -n "QNT-XX" docs/project-plan.md
 ```
 
 **If no matching line is found**: STOP. Ship is blocked.
-- Report: `QNT-XX has no entry in docs/project-plan.md — ship blocked`
-- Prompt the user: "Draft a plan entry (title + one-line `**Triggered by:**` or context sub-bullet) and confirm wording before I proceed. Or explain why this ticket doesn't need one (rare — only applies to pure housekeeping that leaves no product trace)."
+- Report: `QNT-XX has no entry in docs/project-plan.md - ship blocked`
+- Prompt the user: "Draft a plan entry (title + one-line `**Triggered by:**` or context sub-bullet) and confirm wording before I proceed. Or explain why this ticket doesn't need one (rare - only applies to pure housekeeping that leaves no product trace)."
 - Once confirmed, add the entry under the appropriate milestone section, then continue below.
 
 **Once an entry exists, tick it**:
@@ -51,7 +51,7 @@ grep -n "QNT-XX" docs/project-plan.md
   git fetch origin main
   git log HEAD..origin/main --oneline
   ```
-  If main has new commits: rebase first with `git rebase origin/main`. If conflicts arise, report them and stop — do not auto-resolve.
+  If main has new commits: rebase first with `git rebase origin/main`. If conflicts arise, report them and stop - do not auto-resolve.
 - Push the branch: `git push -u origin HEAD`
 
 ### Step 4: Create PR
@@ -84,14 +84,14 @@ grep -n "QNT-XX" docs/project-plan.md
 - Switch back to main: `git checkout main && git pull`
 
 ### Step 7: Post-Deploy Verification
-After merge, CD runs automatically. **Wait for deployment to propagate before verifying** — the old containers need time to be replaced.
+After merge, CD runs automatically. **Wait for deployment to propagate before verifying** - the old containers need time to be replaced.
 
-1. Check CD status first: `ssh hetzner 'docker compose -f /opt/equity-data-agent/docker-compose.yml ps --format json'` to see container uptimes. If containers were created more than 5 minutes ago, CD may not have triggered yet — wait and re-check.
+1. Check CD status first: `ssh hetzner 'docker compose -f /opt/equity-data-agent/docker-compose.yml ps --format json'` to see container uptimes. If containers were created more than 5 minutes ago, CD may not have triggered yet - wait and re-check.
 2. If CI/CD is still running, wait ~90 seconds and re-check. Do not run `make check-prod` against a stale deployment.
 
-**Hard gates — verify deployed code before trusting any AC result:**
+**Hard gates - verify deployed code before trusting any AC result:**
 
-CD already runs these assertions (QNT-88 + QNT-89), but `/ship` must re-verify them at ship time in case CD was skipped, manually overridden, or raced with a drift. If either gate fails, STOP — do not run `make check-prod` or per-AC verification. AC checks on the wrong code are meaningless.
+CD already runs these assertions (QNT-88 + QNT-89), but `/ship` must re-verify them at ship time in case CD was skipped, manually overridden, or raced with a drift. If either gate fails, STOP - do not run `make check-prod` or per-AC verification. AC checks on the wrong code are meaningless.
 
 a) **Prod SHA matches the merge commit**:
 ```bash
@@ -136,12 +136,12 @@ This SSHs to Hetzner, checks `docker compose ps`, and hits `/health`. If it fail
 | API endpoint responds in prod | `curl http://<prod-host>:8000/<endpoint>` |
 | Prod service healthy | `make check-prod` (health endpoint) |
 
-If all prod execution AC pass: move Linear → **Done** (manual API call — do not rely on GitHub auto-close).
+If all prod execution AC pass: move Linear → **Done** (manual API call - do not rely on GitHub auto-close).
 If any prod execution AC fail: keep Linear → **In Review**, report what failed and how to fix it.
 
 ### Step 7b: Post Shipped Comment on Linear Issue
 
-Post a comment on the Linear issue. Same contract as the sanity-check comment: **auditable at a glance** (per-AC, literal evidence) AND **carries what you learned** (findings). This is the permanent ship record — paste receipts, don't paraphrase them.
+Post a comment on the Linear issue. Same contract as the sanity-check comment: **auditable at a glance** (per-AC, literal evidence) AND **carries what you learned** (findings). This is the permanent ship record - paste receipts, don't paraphrase them.
 
 ```
 ## Shipped
@@ -154,14 +154,14 @@ Deploy run: <actions run url>
 <Only include if the work deviated from the ticket. One bullet each for:
  a corrected assumption (with the evidence that corrected it), a latent bug found,
  a decision made and why, or a scope shortcut taken.
- If nothing deviated, write: "None — implementation matched the ticket as written.">
+ If nothing deviated, write: "None - implementation matched the ticket as written.">
 
 ## Acceptance Criteria
-- [x] AC1 — <text>. [code AC — pinned by <test::name>]
-- [x] AC2 — <text>. [dev execution AC]
+- [x] AC1 - <text>. [code AC - pinned by <test::name>]
+- [x] AC2 - <text>. [dev execution AC]
   Command: <exact command>
   Output:  <literal output>
-- [x] AC3 — <text>. [prod execution AC — verified post-deploy]
+- [x] AC3 - <text>. [prod execution AC - verified post-deploy]
   Command: <exact command, e.g. make check-prod / ssh hetzner ...>
   Output:  <literal output proving the prod claim>
 
@@ -177,7 +177,7 @@ Deploy run: <actions run url>
 
 Rules for the comment:
 - **Every execution AC (dev AND prod) gets a literal `Command:` + `Output:` receipt.** Prod AC that were ⏳ PENDING at sanity-check are now resolved here with their post-deploy evidence. Code AC names the test/file that pins it.
-- **Carry the Findings forward** — if the sanity-check comment flagged a corrected assumption or decision, restate it here so the ship record stands alone. If nothing deviated, say so explicitly.
+- **Carry the Findings forward** - if the sanity-check comment flagged a corrected assumption or decision, restate it here so the ship record stands alone. If nothing deviated, say so explicitly.
 - This creates a permanent audit trail. Every shipped issue must have a comment whose claims a reader can re-verify without rerunning the work.
 
 ### Step 8: Report
@@ -190,6 +190,6 @@ PR:     <url> (merged)
 Status: Done
 Branch: deleted
 
-Milestone: Phase X — Y% complete
-Next up:   QNT-YY — <next issue title>  (highest-priority open issue in active cycle)
+Milestone: Phase X - Y% complete
+Next up:   QNT-YY - <next issue title>  (highest-priority open issue in active cycle)
 ```

@@ -1,4 +1,4 @@
-# Agent answer quality — senior-analyst voice v6
+# Agent answer quality - senior-analyst voice v6
 
 **Date:** 2026-07-03
 **Ticket:** QNT-303
@@ -6,15 +6,15 @@
 45-day window (2026-05-27 → 2026-07-03) were pulled read-only from the Langfuse
 `/api/public/observations` API (ADR-019: GETs only, zero new spans), grouped by
 `traceId`, and bucketed by intent (parsed from the `classify` node output). The
-`narrate` node output — the streamed analyst-voice bubble (ADR-020, QNT-285
-BLUF) — is the primary surface graded here; the structured `synthesize` output
+`narrate` node output - the streamed analyst-voice bubble (ADR-020, QNT-285
+BLUF) - is the primary surface graded here; the structured `synthesize` output
 is read alongside for grounding. This is the v6 successor to the 2026-05-18 v1
 round (`agent-analyst-quality-2026-05-18.md`); it audits the intents that
 shipped *after* v1 and had never had a voice pass: exploration, lean-comparison
 narration, followup narrative-only, clarify lead-ins, and the QNT-276
 retrieved-evidence narrative-only paths.
 
-## What this doc is — and isn't
+## What this doc is - and isn't
 
 The **forensic snapshot** behind the QNT-303 rule decisions. It captures the
 verbatim prod outputs, the per-signature scores, and the reproduction so a
@@ -34,21 +34,21 @@ not edit this one.
 | news | 13 | 9/13 | **4 retrieved-evidence narrations bury the read mid-paragraph** |
 | comparison | 1 | 1/1 | Narrate already emits a relative lean |
 | technical (focused) | 1 | 1/1 | Terse label BLUF ("**Sideways**") |
-| quick_fact | — (no narrate) | — | Structured only; value+regime present |
+| quick_fact | - (no narrate) | - | Structured only; value+regime present |
 
-(Full corpus also spans older pv=6–15 samples back to 2026-05-27; the recency
+(Full corpus also spans older pv=6-15 samples back to 2026-05-27; the recency
 cut isolates current-prod voice from pre-BLUF history.)
 
 ## Candidate-signature scorecard (D-1..D-6)
 
 | Signature | Verdict | Evidence | Action |
 |---|---|---|---|
-| **D-1 Falsifier** | **MISSING** | **0 / 63** recent narrations name what would change the view | **SHIPPED** — narrate rule 8, scoped to thesis/comparison |
-| D-2 Tension-naming | Largely present | Thesis/followup/comparison name the conflict ("rich valuation … complicate the picture") | Not shipped — samples don't support a new hard rule |
-| D-3 Comparison bottom line | Covered by narrate | Comparison narrate already leads with a relative call ("**More cautious on NVDA relative to AAPL**") | **Deferred** — product decision; narrate covers it, structured-card change not approved |
-| D-4 Quick-fact "so what" | Largely present | quick_fact answers carry value + regime word ("RSI-14 … is 41.2, which is neutral") | Not shipped here — prior-session grounding overlaps QNT-296 |
-| D-5 Conviction / coverage | Unaudited (no degraded turns) | No news-unavailable / degraded-coverage narration in the 45-day window | **Deferred** — pairs with QNT-299; no graded-poor sample to justify wiring |
-| **D-6 Filler ban** | Clean now, no guard | **0** filler hits in recent narrations, but no permanent tripwire existed | **SHIPPED** — deterministic eval-path gate (no-regret) |
+| **D-1 Falsifier** | **MISSING** | **0 / 63** recent narrations name what would change the view | **SHIPPED** - narrate rule 8, scoped to thesis/comparison |
+| D-2 Tension-naming | Largely present | Thesis/followup/comparison name the conflict ("rich valuation … complicate the picture") | Not shipped - samples don't support a new hard rule |
+| D-3 Comparison bottom line | Covered by narrate | Comparison narrate already leads with a relative call ("**More cautious on NVDA relative to AAPL**") | **Deferred** - product decision; narrate covers it, structured-card change not approved |
+| D-4 Quick-fact "so what" | Largely present | quick_fact answers carry value + regime word ("RSI-14 … is 41.2, which is neutral") | Not shipped here - prior-session grounding overlaps QNT-296 |
+| D-5 Conviction / coverage | Unaudited (no degraded turns) | No news-unavailable / degraded-coverage narration in the 45-day window | **Deferred** - pairs with QNT-299; no graded-poor sample to justify wiring |
+| **D-6 Filler ban** | Clean now, no guard | **0** filler hits in recent narrations, but no permanent tripwire existed | **SHIPPED** - deterministic eval-path gate (no-regret) |
 
 ## Headline findings
 
@@ -60,7 +60,7 @@ cut isolates current-prod voice from pre-BLUF history.)
    This is the strongest missing senior-analyst signature and the primary
    shipped rule. It is ADR-003-safe: the rule anchors on a regime LABEL the
    payload already prints (Uptrend/Premium/an RSI band) and forbids inventing a
-   number. **Scope:** gated to **thesis and comparison** only — the two shapes
+   number. **Scope:** gated to **thesis and comparison** only - the two shapes
    that reliably fetch the technical + fundamental reports that print those
    labels. News is narrative-only and a followup can elaborate a news thread, so
    neither carries a printed threshold; an initial draft that included news made
@@ -69,7 +69,7 @@ cut isolates current-prod voice from pre-BLUF history.)
    by narrowing the scope + steering the anchor to labels not raw levels).
 
 2. **Tension-naming is already a strength (D-2).** The BLUF narrate reliably
-   names the conflict and which side is weighted — e.g. AAPL: *"the uptrend …
+   names the conflict and which side is weighted - e.g. AAPL: *"the uptrend …
    is tempered by its premium valuation, with a P/E of 35.27 … introduce
    caution."* No new rule warranted; the D-1 rule reinforces this by asking
    which side would have to break.
@@ -86,8 +86,8 @@ cut isolates current-prod voice from pre-BLUF history.)
 
 4. **Quick-fact carries the "so what" already (D-4).** Metric lookups pair the
    value with its regime word: *"The RSI-14 for NVDA is 41.2, which is neutral
-   (source: technical)."* The remaining half of the candidate — prior-session
-   direction — is a runtime-grounding change that overlaps **QNT-296**
+   (source: technical)."* The remaining half of the candidate - prior-session
+   direction - is a runtime-grounding change that overlaps **QNT-296**
    (quick_fact runtime numeric grounding); deferred there to avoid two tickets
    editing the same shape.
 
@@ -100,7 +100,7 @@ cut isolates current-prod voice from pre-BLUF history.)
    degradation note when a degraded sample surfaces.
 
 6. **Filler is clean but unguarded (D-6).** Zero banned-filler hits in the
-   recent corpus — the ADR-020 voice block's "no padding" instruction is
+   recent corpus - the ADR-020 voice block's "no padding" instruction is
    holding. But there was no *deterministic* guard, so a future prompt
    regression could reintroduce "it's important to note" / a leading "Overall,"
    with only the LLM judge (which misses soft filler) between it and prod. A
@@ -109,7 +109,7 @@ cut isolates current-prod voice from pre-BLUF history.)
 
 ## Per-intent verbatim samples
 
-### thesis — AAPL (pv=15, 2026-07-02) — BLUF clean, no falsifier
+### thesis - AAPL (pv=15, 2026-07-02) - BLUF clean, no falsifier
 
 > **Constructive, but priced for it.**
 >
@@ -123,12 +123,12 @@ cut isolates current-prod voice from pre-BLUF history.)
 > rollout and Services momentum.
 
 - BLUF: 3. Bold call, one blank line, synthesis prose.
-- Tension (D-2): present — "rich valuation … complicate the picture."
+- Tension (D-2): present - "rich valuation … complicate the picture."
 - Falsifier (D-1): **absent.** The Watch line is a calendar catalyst, not a
   printed level whose breach flips "constructive." A falsifier here would read
   "…turns cautious if it loses the SMA-50 the report prints."
 
-### news — NVDA retrieved-evidence (2026-06-25) — BLUF **missed**
+### news - NVDA retrieved-evidence (2026-06-25) - BLUF **missed**
 
 > Nvidia's recent partnership with SLB, a collaboration that's been in place
 > for roughly two decades, has taken center stage … The picture looks
@@ -138,10 +138,10 @@ cut isolates current-prod voice from pre-BLUF history.)
   leading as a bold call. 4 of 13 recent news narrations show this pattern,
   all on the retrieved-evidence "any recent news" path (QNT-276). The bold-call
   contract already exists in `NARRATE_SYSTEM_PROMPT`; this is a compliance-rate
-  gap, not a missing rule — documented, not separately re-ruled, to avoid
+  gap, not a missing rule - documented, not separately re-ruled, to avoid
   prompt bloat that risks regressing the 9/13 that comply.
 
-### news — NVDA retrieved-evidence (2026-07-02) — BLUF clean, ids anchored
+### news - NVDA retrieved-evidence (2026-07-02) - BLUF clean, ids anchored
 
 > **Constructive, driven by new partnerships and platform announcements.**
 >
@@ -153,7 +153,7 @@ cut isolates current-prod voice from pre-BLUF history.)
 - BLUF: 3. Retrieved-evidence ids (R1/R3/R2) carried into citations correctly
   (QNT-301 contract holding on the narrate surface).
 
-### comparison — NVDA vs AAPL (2026-07) — relative lean already present (D-3)
+### comparison - NVDA vs AAPL (2026-07) - relative lean already present (D-3)
 
 > **More cautious on NVDA relative to AAPL.**
 >
@@ -164,7 +164,7 @@ cut isolates current-prod voice from pre-BLUF history.)
 
 - The relative preference D-3 asked for is already here in the narrate wrapper.
 
-### followup — META cloud (2026-07-02) — BLUF + tension clean
+### followup - META cloud (2026-07-02) - BLUF + tension clean
 
 > **Meta's cloud business plans are a double-edged sword.**
 >
@@ -175,14 +175,14 @@ cut isolates current-prod voice from pre-BLUF history.)
 
 - Tension (D-2): present and well-weighted. Falsifier (D-1): absent.
 
-### quick_fact — NVDA / MSFT (2026-07) — value + regime present (D-4)
+### quick_fact - NVDA / MSFT (2026-07) - value + regime present (D-4)
 
 > The RSI-14 for NVDA is 41.2, which is neutral (source: technical).
 
 > The latest management guidance from MSFT earnings is revenue growth of
 > 18.30% YoY (source: fundamental) …
 
-- The value never lands bare — a regime word or YoY frame accompanies it.
+- The value never lands bare - a regime word or YoY frame accompanies it.
 
 ## Rules shipped (each traces to a finding above)
 
@@ -196,15 +196,15 @@ the single `NARRATE_FALSIFIER_RULE` edit bumps it exactly once.
 
 ## Deferred (with reason)
 
-- **D-2** — already a strength; no new rule.
-- **D-3** — narrate already leads with the relative lean; structured-card change
+- **D-2** - already a strength; no new rule.
+- **D-3** - narrate already leads with the relative lean; structured-card change
   needs explicit product approval. **Approved 2026-07-03 and shipped as a
   QNT-303 follow-up** (see the follow-up section below).
-- **D-4** — value+regime already present; prior-session grounding belongs to
+- **D-4** - value+regime already present; prior-session grounding belongs to
   **QNT-296** (same shape).
-- **D-5** — no degraded-coverage sample in-window to grade against; pairs with
+- **D-5** - no degraded-coverage sample in-window to grade against; pairs with
   **QNT-299** when one surfaces.
-- **News BLUF compliance (4/13)** — the bold-call rule already exists; a
+- **News BLUF compliance (4/13)** - the bold-call rule already exists; a
   compliance-rate gap on the retrieved-evidence path, documented not re-ruled.
 
 ## Reproduction
@@ -219,7 +219,7 @@ uv run python -m agent.evals.langfuse_baseline --days 45   # per-node token/late
 
 Snapshot captured 2026-07-03; window 2026-05-27 → 2026-07-03.
 
-## Appendix — before/after (D-1) + clean-window verification (AC4)
+## Appendix - before/after (D-1) + clean-window verification (AC4)
 
 Generated live against the real narrate model (`groq/llama-3.3-70b` via the
 local LiteLLM proxy, temperature 0) with the falsifier rule OFF vs ON.
@@ -227,21 +227,21 @@ local LiteLLM proxy, temperature 0) with the falsifier rule OFF vs ON.
 **thesis (AAPL)**
 
 - BEFORE: *"**Neutral** … The technical setup is generally upbeat but shows a
-  slightly bearish MACD … Watch: App Store regulatory developments."* — no
+  slightly bearish MACD … Watch: App Store regulatory developments."* - no
   falsifier.
 - AFTER: *"**Neutral, for now.** … the stock maintaining its uptrend and
   closing above the SMA-50 … **The read holds while the trend label stays
-  Uptrend.**"* — label-anchored falsifier, no invented number.
+  Uptrend.**"* - label-anchored falsifier, no invented number.
 
 **comparison (NVDA vs AAPL)**
 
 - BEFORE: *"…The tension between these two setups complicates the comparison …
-  Watch: NVDA's ability to break above its SMA-50."* — no falsifier.
+  Watch: NVDA's ability to break above its SMA-50."* - no falsifier.
 - AFTER: *"…**The read holds while NVDA's growth remains strong; it flips if
-  NVDA's RSI drops into oversold territory.**"* — anchored on the printed RSI
+  NVDA's RSI drops into oversold territory.**"* - anchored on the printed RSI
   band.
 
-**Paired clean-window run** — the same 5 fixtures (thesis/followup/news + a
+**Paired clean-window run** - the same 5 fixtures (thesis/followup/news + a
 technical control) replayed on `main` (baseline) and on this branch (candidate),
 same session, agent temp 0, judge = OpenRouter per ADR-023. The QNT-215
 "no-regression" contract is a paired delta, so both runs are shown:
@@ -255,12 +255,12 @@ same session, agent temp 0, judge = OpenRouter per ADR-023. The QNT-215
 | exploration_quality | 0.620 | 0.670 | +0.050 |
 | composite | 0.806 | 0.840 | +0.034 |
 
-**Every axis is flat or up** — no guardrail regresses (the QNT-215 gate's
+**Every axis is flat or up** - no guardrail regresses (the QNT-215 gate's
 `non_hallucination`/`helpfulness`/`voice_match` are all >= baseline), and the
 filler gate produced no false positives. An earlier D-1 draft scoped to news had
 driven `msft-news-what-matters` to `non_hallucination=0.0` by fabricating a
 "200-day moving average"; that was caught pre-merge and fixed by narrowing the
-falsifier to thesis/comparison — the paired run above is post-fix. (Judge
+falsifier to thesis/comparison - the paired run above is post-fix. (Judge
 single-run scatter on `analyst_likeness` remains; the paired design cancels the
 shared fixture-difficulty term, so the deltas are the trustworthy quantity.)
 
@@ -274,15 +274,15 @@ labels, no new number. Pinned by `test_comparison_prompt_closes_with_relative_pr
 
 **Watch-vs-falsifier competition (confirmed, deferred as a design decision).**
 A controlled A/B (n=10 each, temp 0.3, live `groq/llama-3.3-70b`) confirmed the
-D-1 falsifier crowds out the QNT-285 "Watch:" close on thesis — Watch went from
+D-1 falsifier crowds out the QNT-285 "Watch:" close on thesis - Watch went from
 ~7/10 to ~4/10 while the falsifier took the closing slot. Both are optional
 *closes* and the falsifier ("the read holds while Uptrend holds; flips if RSI
 rolls over") is semantically a terminal sentence, so it wins the slot. Prompt
 ordering (Watch-last) and explicit "keep Watch as the final line" wording did
 NOT reliably restore it on this model (Watch stayed ≤1/10). This is a
-genuine product trade-off — the falsifier is arguably a *stronger* close than a
-generic "Watch: the earnings print" — not a mechanical bug, so it is left for a
+genuine product trade-off - the falsifier is arguably a *stronger* close than a
+generic "Watch: the earnings print" - not a mechanical bug, so it is left for a
 product decision rather than shipped with a non-working fix. Options on the
 table: (a) accept the substitution; (b) merge the two into one combined close
-("read holds while Uptrend holds — watch the print for confirmation"); (c) make
+("read holds while Uptrend holds - watch the print for confirmation"); (c) make
 the falsifier body-only and rarer.

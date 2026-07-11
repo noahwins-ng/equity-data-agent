@@ -7,7 +7,7 @@ How the commands chain together week to week. For command reference (one-liners)
 ## Weekly Rhythm
 
 ```
-Monday                    Tuesday–Thursday           Friday
+Monday                    Tuesday-Thursday           Friday
 ──────────────────────    ──────────────────────    ──────────────────
 /cycle-start              /session-check            /cycle-end
   ↓                         ↓ (auto via hook)         (auto-runs /sync-docs,
@@ -28,11 +28,11 @@ Monday                    Tuesday–Thursday           Friday
   → pick
   → implement (with WIP commits + AC checkpoints + targeted tests)
   → sanity-check (with auto-fix on failure)
-  → review (adversarial code review — logic, security, edge cases)
+  → review (adversarial code review - logic, security, edge cases)
   → ship (squash WIPs, PR, CI, merge)
 ```
 
-`/go` is the true end-to-end orchestrator. It handles errors by diagnosing and fixing them — not by stopping at the first failure. It only asks you after 2 failed attempts at the same step.
+`/go` is the true end-to-end orchestrator. It handles errors by diagnosing and fixing them - not by stopping at the first failure. It only asks you after 2 failed attempts at the same step.
 
 **Step by step (when you want control at each stage):**
 ```
@@ -51,11 +51,11 @@ Monday                    Tuesday–Thursday           Friday
 /sanity-check QNT-XX
   → lint + format + types + tests
   → AC check using the three-class taxonomy (QNT-90):
-      • [code AC]          — verified by reading the code; mark PASS/FAIL
-      • [dev execution AC] — must run the command + paste output as evidence (keywords like
+      • [code AC]          - verified by reading the code; mark PASS/FAIL
+      • [dev execution AC] - must run the command + paste output as evidence (keywords like
                              "populated", "returns", "visible", "schedule enabled" trigger this)
-      • [prod execution AC] — only verifiable post-deploy; mark ⏳ PENDING
-      • ⏳ PENDING         — verifier belongs to a later phase (e.g., frontend selector on
+      • [prod execution AC] - only verifiable post-deploy; mark ⏳ PENDING
+      • ⏳ PENDING         - verifier belongs to a later phase (e.g., frontend selector on
                              an API ticket); consumer ticket inherits the AC (Phase 3 lesson)
   → Linear → In Review on pass
 
@@ -70,13 +70,13 @@ Monday                    Tuesday–Thursday           Friday
   → ticks project-plan.md
   → creates PR, waits for CI, squash merges
   → post-deploy hard gates (must both pass before trusting any AC result):
-      (a) prod `git rev-parse HEAD` equals merge-commit SHA (QNT-88 — catches silent
+      (a) prod `git rev-parse HEAD` equals merge-commit SHA (QNT-88 - catches silent
           stale-deploy drift, Apr-16 outage pattern)
       (b) Dagster definitions module loads with the expected asset/check/schedule counts
-          (QNT-89 — catches "container up but Python didn't actually load" drift)
+          (QNT-89 - catches "container up but Python didn't actually load" drift)
   → make check-prod (services + /health)
   → verifies each ⏳ PENDING prod-execution AC with the appropriate command
-  → Linear → Done via explicit API call (NOT relying on GitHub "Closes QNT-XX" — save_issue
+  → Linear → Done via explicit API call (NOT relying on GitHub "Closes QNT-XX" - save_issue
     with links can silently revert state; a manual state write is load-bearing)
   → posts shipped comment on Linear with evidence (audit trail)
   → branch deleted
@@ -88,7 +88,7 @@ If `/sanity-check` finds failures, fix them and re-run. Or use `/fix QNT-XX` to 
 
 ## Command Invocation Architecture
 
-Commands are either **leaf** (self-contained) or **composite** (invoke other commands via the Skill tool). Composite commands never re-implement sub-command logic inline — they invoke the actual command so its full instructions load fresh.
+Commands are either **leaf** (self-contained) or **composite** (invoke other commands via the Skill tool). Composite commands never re-implement sub-command logic inline - they invoke the actual command so its full instructions load fresh.
 
 ### Leaf Commands (depth 0)
 
@@ -100,7 +100,7 @@ These never invoke another command:
 
 | Command | Invokes | Max Depth | Notes |
 |---------|---------|-----------|-------|
-| `/ship` | `/sanity-check` | 1 | Conditional — skipped if issue already In Review |
+| `/ship` | `/sanity-check` | 1 | Conditional - skipped if issue already In Review |
 | `/fix` | `/sanity-check`, `/review`, `/ship` | 2 | Subset depends on which step failed; `/ship` may invoke `/sanity-check` |
 | `/retro` | `/sync-docs`, `/change-scope` | 1 | `/sync-docs` always (cleanup); `/change-scope` conditionally, one invocation per approved forward-looking scope change |
 | `/cycle-end` | `/sync-docs` | 1 | Always, in cleanup step |
@@ -142,7 +142,7 @@ These never invoke another command:
 
 ## Hooks (Automatic Behaviors)
 
-Hooks run automatically — you don't invoke them. They're configured in `.claude/settings.json`.
+Hooks run automatically - you don't invoke them. They're configured in `.claude/settings.json`.
 
 | Hook | Event | What it does |
 |------|-------|--------------|
@@ -171,7 +171,7 @@ Hook scripts live in `.claude/hooks/`. The configuration is in `.claude/settings
   → surfaces issues missing from plan
 ```
 
-Note: `/change-scope` updates `project-plan.md` text directly for all three change types — no manual follow-up needed. Run `/sync-docs` only to reconcile unrelated Done/Cancelled statuses.
+Note: `/change-scope` updates `project-plan.md` text directly for all three change types - no manual follow-up needed. Run `/sync-docs` only to reconcile unrelated Done/Cancelled statuses.
 
 ---
 
@@ -193,7 +193,7 @@ Note: `/change-scope` updates `project-plan.md` text directly for all three chan
   → retro written to docs/retros/phase-X-name.md
   → Linear project status update posted (onTrack / atRisk)
   → manual follow-up (not yet automated): promote reusable code recipes to
-    docs/patterns.md — see "Codebase Patterns → Where patterns come from" below
+    docs/patterns.md - see "Codebase Patterns → Where patterns come from" below
 ```
 
 ---
@@ -202,13 +202,13 @@ Note: `/change-scope` updates `project-plan.md` text directly for all three chan
 
 | Situation | Command |
 |-----------|---------|
-| `/go` pipeline failed mid-way | `/fix QNT-XX` — diagnoses, fixes, resumes |
-| Don't know where I am | `/status` — instant branch/commit/uncommitted check |
-| Resuming after a break (full context) | `/session-check` (or just start — SessionStart hook gives basics) |
+| `/go` pipeline failed mid-way | `/fix QNT-XX` - diagnoses, fixes, resumes |
+| Don't know where I am | `/status` - instant branch/commit/uncommitted check |
+| Resuming after a break (full context) | `/session-check` (or just start - SessionStart hook gives basics) |
 | Linear status out of sync with git/PR | `/sync-linear QNT-XX` |
 | project-plan.md has unchecked Done items | `/sync-docs` |
 | Unsure what to work on next | `/cycle-start` |
-| Prod health failures detected at session start | `make monitor-log` — check details, then `make check-prod` or `make rollback` |
+| Prod health failures detected at session start | `make monitor-log` - check details, then `make check-prod` or `make rollback` |
 
 ---
 
@@ -260,19 +260,19 @@ Run periodically (e.g., monthly) or after any incident. Complements the reactive
 
 ## Codebase Patterns
 
-Before implementing, check `docs/patterns.md` — it catalogs established recipes for common tasks (Dagster asset, FastAPI endpoint, agent tool, new ticker, ClickHouse migration, export patterns, etc.).
+Before implementing, check `docs/patterns.md` - it catalogs established recipes for common tasks (Dagster asset, FastAPI endpoint, agent tool, new ticker, ClickHouse migration, export patterns, etc.).
 
 Follow the existing pattern. Don't reinvent structure.
 
 ### Where patterns come from
 
-`patterns.md` is maintained manually. Retros are the natural discovery moment — a ticket that invented a reusable recipe in a specific package should have that recipe lifted into `patterns.md` so the next session finds it.
+`patterns.md` is maintained manually. Retros are the natural discovery moment - a ticket that invented a reusable recipe in a specific package should have that recipe lifted into `patterns.md` so the next session finds it.
 
 **Memory vs patterns (they're different)**:
 
 | | Memory (`feedback_*.md`) | `patterns.md` |
 |---|---|---|
-| **Scope** | Workflow rule — "when/why to apply" | Code recipe — literal paste-ready implementation |
+| **Scope** | Workflow rule - "when/why to apply" | Code recipe - literal paste-ready implementation |
 | **Discovery** | Auto-loaded every session | Manually read during `/implement` Step 1 |
 | **Example** | "When testing external services, mock at the client boundary" | The 15-line `_FakeClient` class + the `monkeypatch.setattr(...)` wiring |
 
@@ -280,4 +280,4 @@ If a retro identifies a reusable code recipe but the recipe never makes it into 
 
 **Pending extractions** (recipes surfaced but not yet in `patterns.md`):
 
-- Fake external-service client fixture (Phase 3 `_FakeClient` in `packages/api/tests/test_data.py`) — applies to ClickHouse today, Qdrant in Phase 4 (QNT-54/55 scope explicitly requires it)
+- Fake external-service client fixture (Phase 3 `_FakeClient` in `packages/api/tests/test_data.py`) - applies to ClickHouse today, Qdrant in Phase 4 (QNT-54/55 scope explicitly requires it)

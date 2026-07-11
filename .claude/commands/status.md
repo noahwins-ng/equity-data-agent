@@ -1,16 +1,16 @@
 # Status
 
-Lightweight context check — quick glance at where you are without fetching from Linear or doing deep analysis. No arguments needed.
+Lightweight context check - quick glance at where you are without fetching from Linear or doing deep analysis. No arguments needed.
 
 ## Instructions
 
-Run these commands and report the results. No Linear API calls, no file reading beyond git — this should be instant.
+Run these commands and report the results. No Linear API calls, no file reading beyond git - this should be instant.
 
 1. **Branch**: `git branch --show-current`
 2. **Issue**: extract QNT-XX from branch name (e.g., `noahwinsdev/qnt-41-dagster-asset` → QNT-41)
-3. **Uncommitted work**: `git status --short` — count modified, staged, and untracked
+3. **Uncommitted work**: `git status --short` - count modified, staged, and untracked
 4. **Commits on branch**: `git log --oneline main...HEAD` (count + last 3)
-5. **Diff size**: `git diff --stat main...HEAD` — total files changed, insertions, deletions
+5. **Diff size**: `git diff --stat main...HEAD` - total files changed, insertions, deletions
 
 ### Report
 

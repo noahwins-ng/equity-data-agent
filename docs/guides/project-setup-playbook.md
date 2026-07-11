@@ -19,12 +19,12 @@ A reusable checklist for bootstrapping new projects with Claude Code, Linear, an
 
 ### 1.2 Set up Linear
 - [ ] Create a **project** under the appropriate team
-- [ ] Create **milestones** for each phase (not issues — milestones)
+- [ ] Create **milestones** for each phase (not issues - milestones)
 - [ ] Create **issues** for each deliverable within a phase
   - Each issue has: scope, deliverables, acceptance criteria
 - [ ] Enable **1-week cycles** on the team (Settings → Team → Cycles)
 - [ ] Pull first milestone's issues into Cycle 1 and set their status to **Todo** (Backlog issues don't appear on the cycle board)
-- [ ] Create one **cross-cutting milestone** alongside the phase milestones: `Ops & Reliability` (or equivalent). Reactive incident follow-ups and production-hardening tickets land here — they don't fit cleanly into any one phase, and forcing them into Phase 0 obscures that they were learned the hard way, not planned. Issues like "CD verifies prod git SHA matches merged commit" or "add restart policy to prod services" belong here.
+- [ ] Create one **cross-cutting milestone** alongside the phase milestones: `Ops & Reliability` (or equivalent). Reactive incident follow-ups and production-hardening tickets land here - they don't fit cleanly into any one phase, and forcing them into Phase 0 obscures that they were learned the hard way, not planned. Issues like "CD verifies prod git SHA matches merged commit" or "add restart policy to prod services" belong here.
 
 ---
 
@@ -41,7 +41,7 @@ gh repo create project-name --public --description "..." --source . --push=false
 
 | File | Purpose |
 |---|---|
-| `CLAUDE.md` | AI conventions — auto-loaded every Claude Code session |
+| `CLAUDE.md` | AI conventions - auto-loaded every Claude Code session |
 | `Makefile` | Dev commands (setup, dev, test, lint, tunnel, issue, pr) |
 | `.env.example` | All env vars documented with dev defaults |
 | `.gitignore` | Language + framework + IDE + env patterns |
@@ -49,15 +49,15 @@ gh repo create project-name --public --description "..." --source . --push=false
 
 ### 2.3 CLAUDE.md template
 Include these sections:
-1. **Core philosophy** — the non-negotiable rules for this project
-2. **Architecture** — how components relate
-3. **Stack** — what technologies and why
-4. **Repo structure** — where code lives
-5. **Code style** — linter, formatter, type checker
-6. **Git workflow** — branching, commit format, PR conventions
-7. **Working docs** — pointer to `docs/` folder
-8. **Observability** — what tools monitor what
-9. **Common commands** — Makefile commands + slash commands
+1. **Core philosophy** - the non-negotiable rules for this project
+2. **Architecture** - how components relate
+3. **Stack** - what technologies and why
+4. **Repo structure** - where code lives
+5. **Code style** - linter, formatter, type checker
+6. **Git workflow** - branching, commit format, PR conventions
+7. **Working docs** - pointer to `docs/` folder
+8. **Observability** - what tools monitor what
+9. **Common commands** - Makefile commands + slash commands
 
 ### 2.4 Makefile commands to include
 
@@ -87,20 +87,20 @@ make pr TEAM=XX TITLE="..." # Push + create PR
 
 ### 2.5 Docker Compose invariants (if using Docker for prod)
 
-These are not optional polish — they are day-one invariants. Skipping them costs real production outages.
+These are not optional polish - they are day-one invariants. Skipping them costs real production outages.
 
 - **Every prod-profile service must declare `restart: unless-stopped`**. Docker's default restart policy is `no`, which means after a host reboot, nothing comes back up. The equity-data-agent project learned this on 2026-04-18 when a kernel-update reboot took the API dark for 48 minutes until manual `docker compose up -d` (see QNT-95). Chose `unless-stopped` over `always` because it still respects a manual `docker compose down` during deploys.
-- **Named volumes for all stateful services.** ClickHouse, Postgres, Dagster run-history, Caddy certs — anything with state that must survive a container rebuild needs a named volume mounted into the service. Bind mounts from `./data/*` are brittle; named volumes are `docker volume inspect`-able.
+- **Named volumes for all stateful services.** ClickHouse, Postgres, Dagster run-history, Caddy certs - anything with state that must survive a container rebuild needs a named volume mounted into the service. Bind mounts from `./data/*` are brittle; named volumes are `docker volume inspect`-able.
 - **Every service used by the app must be listed in a profile.** `profiles: [dev]` / `profiles: [prod]` gates what `docker compose up` brings up. Without profiles, all services start every time, which hurts local dev speed and obscures what prod actually runs.
 
 ### 2.6 Git hook (commit-msg)
 Enforce two commit patterns:
 
 ```
-# Code changes — must reference a Linear issue
+# Code changes - must reference a Linear issue
 TEAM-XX: type(scope): description
 
-# Meta/process work — no issue needed (docs, commands, workflow tweaks)
+# Meta/process work - no issue needed (docs, commands, workflow tweaks)
 docs: description
 chore: description
 ```
@@ -116,7 +116,7 @@ git config core.hooksPath .githooks
 
 ## Phase 3: Slash Commands
 
-> **Starting point**: copy `.claude/commands/` from `equity-data-agent` — the full 12-command framework is already written and battle-tested. Then do two project-wide replacements:
+> **Starting point**: copy `.claude/commands/` from `equity-data-agent` - the full 12-command framework is already written and battle-tested. Then do two project-wide replacements:
 > 1. Linear team ID (e.g. `6da338db-71b2-4d14-9519-8a19231e1ccd`) → your new team's ID (find it via `list_teams` in Linear MCP)
 > 2. Issue prefix `QNT-` → your project's prefix (e.g. `SVC-`, `PLT-`)
 >
@@ -135,7 +135,7 @@ Create `.claude/commands/` with workflow commands:
 #### Issue Lifecycle
 | Command | When | What |
 |---|---|---|
-| `/go TEAM-XX` | Work on an issue end-to-end | pick → implement → sanity-check → review → ship — fully automated, stops only on failure |
+| `/go TEAM-XX` | Work on an issue end-to-end | pick → implement → sanity-check → review → ship - fully automated, stops only on failure |
 | `/pick TEAM-XX` | Starting an issue manually | Checkout branch (uses `gitBranchName` from Linear for full name) → Linear In Progress → display AC |
 | `/implement TEAM-XX` | After pick (manual flow) | Explore codebase → write code → lint + format + types self-check |
 | `/sanity-check TEAM-XX` | Before shipping (manual flow) | Lint + format + types + tests + AC verification → Linear In Review |
@@ -144,7 +144,7 @@ Create `.claude/commands/` with workflow commands:
 #### Docs & Scope
 | Command | When | What |
 |---|---|---|
-| `/change-scope add\|drop\|modify` | Requirement changes | Update spec + system-overview + project-plan.md + Linear + ADR if warranted — all in one command |
+| `/change-scope add\|drop\|modify` | Requirement changes | Update spec + system-overview + project-plan.md + Linear + ADR if warranted - all in one command |
 | `/sync-docs` | Post-change or post-cycle | Tick Done items in project-plan.md, remove Cancelled, surface gaps |
 | `/sync-linear TEAM-XX` | Recovery only | Detect state from git/PR, correct Linear status |
 
@@ -153,12 +153,12 @@ Create `.claude/commands/` with workflow commands:
 - Commands that take arguments use `$ARGUMENTS` placeholder
 - Commands reference the specific Linear team ID and conventions from the project
 - `/ship` skips code quality re-checks if the issue is already In Review (avoids redundant work after `/sanity-check`)
-- `/change-scope` handles `project-plan.md` updates directly for add/drop/modify — no manual follow-up on the plan
-- AC assessment in `/session-check` reads source files, not git log keywords — keyword matching produces false positives
-- `/pick` and `/go` must use the `gitBranchName` field from Linear for the full branch name — never create short branches without the description suffix
-- When assigning issues to a cycle, always move status Backlog → Todo — Backlog issues don't appear on the Linear cycle board
-- Maintain a `docs/guides/dev-workflow.md` as a cadence cheat sheet (not a command reference — that's CLAUDE.md)
-- `/cycle-start`, `/cycle-end`, and `/retro` post Linear project status updates — keeps the project feed as a lightweight audit trail without manual updates
+- `/change-scope` handles `project-plan.md` updates directly for add/drop/modify - no manual follow-up on the plan
+- AC assessment in `/session-check` reads source files, not git log keywords - keyword matching produces false positives
+- `/pick` and `/go` must use the `gitBranchName` field from Linear for the full branch name - never create short branches without the description suffix
+- When assigning issues to a cycle, always move status Backlog → Todo - Backlog issues don't appear on the Linear cycle board
+- Maintain a `docs/guides/dev-workflow.md` as a cadence cheat sheet (not a command reference - that's CLAUDE.md)
+- `/cycle-start`, `/cycle-end`, and `/retro` post Linear project status updates - keeps the project feed as a lightweight audit trail without manual updates
 - `/sanity-check` and `/change-scope` post comments on individual Linear issues for traceability
 
 ### Acceptance criteria taxonomy (learned the hard way in QNT-41, QNT-42, QNT-90)
@@ -168,16 +168,16 @@ Every AC falls into one of three classes, and `/sanity-check` must enforce the d
 | Class | Verifiable by | Evidence required | Blocks ship? |
 |---|---|---|---|
 | **code AC** | Reading the implementation | None beyond pass/fail from the reviewer ("implemented in `foo.py:42`") | Yes if missing |
-| **dev execution AC** | Running a command locally / on prod host | Command + output pasted inline — not "looks good", actual bytes | Yes if no evidence |
-| **prod execution AC** | Only verifiable in the deployed environment | `⏳ PENDING` marker carried into `/ship`'s post-deploy step | No — defers to `/ship` |
+| **dev execution AC** | Running a command locally / on prod host | Command + output pasted inline - not "looks good", actual bytes | Yes if no evidence |
+| **prod execution AC** | Only verifiable in the deployed environment | `⏳ PENDING` marker carried into `/ship`'s post-deploy step | No - defers to `/ship` |
 
-**Keyword trigger.** If an AC contains "populated", "returns", "visible in", "deployed", "loaded", "CD passes", "sensor running", "schedule enabled", etc., it is *never* a code AC — those phrases are factual claims about runtime behavior that code inspection cannot prove. `/sanity-check` must hard-fail when a keyword-triggered AC lacks command+output evidence.
+**Keyword trigger.** If an AC contains "populated", "returns", "visible in", "deployed", "loaded", "CD passes", "sensor running", "schedule enabled", etc., it is *never* a code AC - those phrases are factual claims about runtime behavior that code inspection cannot prove. `/sanity-check` must hard-fail when a keyword-triggered AC lacks command+output evidence.
 
 This taxonomy was codified in QNT-90 after three Phase 1 issues (QNT-41/42/43) were marked Done based on code inspection alone, then found broken when verified against prod. Ship `/sanity-check` with this logic baked in from day one.
 
 ### Implicit AC via diff-path triggers (`docs/AC-templates.md`)
 
-Some AC apply to every PR in a class — not because the issue author remembered to add them, but because the class of change *demands* them. Keep these in `docs/AC-templates.md`, triggered by `git diff --name-only main...HEAD` matching a path glob:
+Some AC apply to every PR in a class - not because the issue author remembered to add them, but because the class of change *demands* them. Keep these in `docs/AC-templates.md`, triggered by `git diff --name-only main...HEAD` matching a path glob:
 
 ```markdown
 ## Infra / CI / Deploy PRs
@@ -204,13 +204,13 @@ docs/
 ├── INDEX.md                    # Navigation and purpose
 ├── project-requirement.md      # Full requirements, architecture, stack
 ├── project-plan.md             # Phase-by-phase delivery checklists (synced via /ship + /sync-docs)
-├── patterns.md                 # Established code recipes — read before implementing
+├── patterns.md                 # Established code recipes - read before implementing
 ├── AC-templates.md             # Implicit AC per diff-path trigger (see §3 above)
 ├── architecture/
 │   └── system-overview.md      # How the system works, data flow, component responsibilities
 ├── decisions/
 │   ├── TEMPLATE.md             # ADR template
-│   └── 001-first-decision.md   # Why X over Y — include rejected alternatives
+│   └── 001-first-decision.md   # Why X over Y - include rejected alternatives
 ├── guides/
 │   ├── dev-workflow.md         # Weekly cadence: how commands chain together
 │   ├── local-dev-setup.md      # Getting started from clone
@@ -221,7 +221,7 @@ docs/
     └── *.http                  # REST Client test files
 ```
 
-`project-plan.md` is the living delivery checklist — checkboxes per phase, referenced by QNT-XX. It's distinct from `project-requirement.md` (the spec). `/ship` ticks it automatically; `/sync-docs` reconciles it with Linear.
+`project-plan.md` is the living delivery checklist - checkboxes per phase, referenced by QNT-XX. It's distinct from `project-requirement.md` (the spec). `/ship` ticks it automatically; `/sync-docs` reconciles it with Linear.
 
 ### ADR template
 ```markdown
@@ -263,7 +263,7 @@ What becomes easier or harder?
 - [ ] CI workflow (on PR): lint + type check + tests
 - [ ] CD workflow (on push to main): deploy to production
 
-**Non-negotiable CD hard gates** — the deploy is not "successful" until these pass. A 200 from `/health` on its own is not proof that the code you merged is the code that's running. Both gates were added after the 2026-04-16 outage, when CD reported green while prod was 17 commits behind main (a SCP'd hotfix had blocked `git pull`):
+**Non-negotiable CD hard gates** - the deploy is not "successful" until these pass. A 200 from `/health` on its own is not proof that the code you merged is the code that's running. Both gates were added after the 2026-04-16 outage, when CD reported green while prod was 17 commits behind main (a SCP'd hotfix had blocked `git pull`):
 
 - [ ] **Prod SHA matches the merged commit**
   ```bash
@@ -278,9 +278,9 @@ What becomes easier or harder?
 These three gates run *in CD itself* via GitHub Actions, and `/ship` re-verifies them at ship time in case CD was skipped or the branch raced with a drift.
 
 ### Observability (pick based on project)
-- [ ] **Langfuse** — if using LLM agents (trace thoughts, tools, latency)
-- [ ] **Sentry** — API error tracking (free tier: 5k errors/month)
-- [ ] **Built-in UIs** — ClickHouse Play, Dagster UI, etc.
+- [ ] **Langfuse** - if using LLM agents (trace thoughts, tools, latency)
+- [ ] **Sentry** - API error tracking (free tier: 5k errors/month)
+- [ ] **Built-in UIs** - ClickHouse Play, Dagster UI, etc.
 
 ### Host-level reliability (VPS / bare-metal prod)
 
@@ -290,10 +290,10 @@ Three cheap signals that would have prevented both of this project's prod outage
 - [ ] **Session-start hook in `.claude/hooks/session-start.sh`** that SSHs to prod with a 3-second timeout, tails the monitor's log, and injects any recent failures + pending reboots into the Claude Code session context. Makes prod health impossible to miss during dev work.
 - [ ] **Mail alerts from `unattended-upgrades`** (Linux hosts) via an SMTP smarthost. Set `Unattended-Upgrade::Mail` and `MailReport "on-change"`. Verify end-to-end delivery before claiming this works.
 
-**Smarthost choice for mail alerts** — we evaluated three, Resend was the winner:
-- **Direct SMTP to recipient MX (port 25)** — rejected. Most cloud providers (incl. Hetzner) block outbound 25 by default, and consumer mail providers spam-filter VPS senders without SPF/DKIM.
-- **Gmail SMTP relay (`smtp.gmail.com:587` + App Password)** — rejected. Requires 2FA + App Password on the Google account, which may not be available in the target environment.
-- **Resend SMTP relay (`smtp.resend.com:587` + API key)** — chosen. Free tier (3k/month, 100/day), API-key auth, port 587 with STARTTLS so port-25 blocks are irrelevant. Full recipe in `docs/guides/<cloud>-bootstrap.md` §10 of the equity-data-agent repo.
+**Smarthost choice for mail alerts** - we evaluated three, Resend was the winner:
+- **Direct SMTP to recipient MX (port 25)** - rejected. Most cloud providers (incl. Hetzner) block outbound 25 by default, and consumer mail providers spam-filter VPS senders without SPF/DKIM.
+- **Gmail SMTP relay (`smtp.gmail.com:587` + App Password)** - rejected. Requires 2FA + App Password on the Google account, which may not be available in the target environment.
+- **Resend SMTP relay (`smtp.resend.com:587` + API key)** - chosen. Free tier (3k/month, 100/day), API-key auth, port 587 with STARTTLS so port-25 blocks are irrelevant. Full recipe in `docs/guides/<cloud>-bootstrap.md` §10 of the equity-data-agent repo.
 - **Postfix gotcha**: `apt install bsd-mailx` with default debconf preseed sets `default_transport = error`, which silently bounces everything. Always run `postconf -e 'default_transport = smtp' 'relay_transport = smtp'` before testing delivery.
 
 ---
@@ -322,13 +322,13 @@ Save to `.claude/projects/<project>/memory/`:
 
 Short manifesto of rules this project paid to learn. Bake them into new projects before the first prod deploy, not after.
 
-1. **Aggregate "green" hides invariants.** CI ✓ + CD ✓ + `/health` 200 does not prove your prod is in a state you can survive a failure from. Each signal proves a narrow claim (syntax, connectivity, responsiveness) — none proves durability. *Apr 16 outage: CD green while prod ran 17-commit-stale code. Apr 18 outage: /health 200 before the reboot, then 48 min dark because nothing restarted.*
+1. **Aggregate "green" hides invariants.** CI ✓ + CD ✓ + `/health` 200 does not prove your prod is in a state you can survive a failure from. Each signal proves a narrow claim (syntax, connectivity, responsiveness) - none proves durability. *Apr 16 outage: CD green while prod ran 17-commit-stale code. Apr 18 outage: /health 200 before the reboot, then 48 min dark because nothing restarted.*
 
-2. **Chaos-test what you claim survivable.** If an AC says "survives host reboot", the acceptance criterion is `ssh prod 'sudo systemctl restart docker' && sleep 30 && assert_all_containers_up` — not "check returned 200". Run the actual failure injection during `/ship` post-deploy in a low-traffic window.
+2. **Chaos-test what you claim survivable.** If an AC says "survives host reboot", the acceptance criterion is `ssh prod 'sudo systemctl restart docker' && sleep 30 && assert_all_containers_up` - not "check returned 200". Run the actual failure injection during `/ship` post-deploy in a low-traffic window.
 
-3. **Runtime state must be declarative.** Schedules, sensors, feature flags, restart policies — set them in code (config files / `default_status=RUNNING` / `restart: unless-stopped`). Never rely on "I toggled it in the UI that one time." A fresh deploy should reproduce the exact runtime state the docs describe. *QNT-92 lesson: sensors that were STARTED in the Dagster UI reverted to STOPPED on the next deploy, silently breaking the auto-recompute chain.*
+3. **Runtime state must be declarative.** Schedules, sensors, feature flags, restart policies - set them in code (config files / `default_status=RUNNING` / `restart: unless-stopped`). Never rely on "I toggled it in the UI that one time." A fresh deploy should reproduce the exact runtime state the docs describe. *QNT-92 lesson: sensors that were STARTED in the Dagster UI reverted to STOPPED on the next deploy, silently breaking the auto-recompute chain.*
 
-4. **Restart policy is not optional polish — it's a day-one invariant.** `restart: unless-stopped` on every prod service in `docker-compose.yml` from the first deploy. Docker's default is `no`.
+4. **Restart policy is not optional polish - it's a day-one invariant.** `restart: unless-stopped` on every prod service in `docker-compose.yml` from the first deploy. Docker's default is `no`.
 
 5. **Pending-reboot visibility before your first outage, not after.** Wire the `/var/run/reboot-required` check into the cron health-monitor + session-start hook before kernel updates become your problem. Mail alerts via Resend take ~10 minutes; the alternative is being surprised at 4 AM UTC.
 
@@ -345,7 +345,7 @@ Short manifesto of rules this project paid to learn. Bake them into new projects
 Applies if the project has batch ingestion → computed derivatives → query/API (e.g., Dagster + ClickHouse). Skip if not relevant.
 
 - **Asset checks with real domain bounds, not "not null".** RSI must be between 0 and 100, volume must be > 0, P/E must be null when |EPS| < $0.10 (near-zero earnings). QNT-68 added 17 such checks to the equity-data-agent project; two of them caught actual formula bugs in fundamental ratios that code review had missed.
-- **Sensor batching from day one.** If you write event-driven reactive assets (asset A materializes → sensor fires → asset B materializes), the sensor must batch *all* pending source events per tick. Single-event-per-tick processing can't catch up after a brief outage — it accumulates a backlog that grows until something hand-intervenes. *QNT-46 was rewritten once for exactly this reason.*
+- **Sensor batching from day one.** If you write event-driven reactive assets (asset A materializes → sensor fires → asset B materializes), the sensor must batch *all* pending source events per tick. Single-event-per-tick processing can't catch up after a brief outage - it accumulates a backlog that grows until something hand-intervenes. *QNT-46 was rewritten once for exactly this reason.*
 - **Sample AC broadly, across every dimension.** When spot-checking derived data, sample across every row type and timeframe (annual + quarterly; daily + weekly + monthly). QNT-45 shipped with only annual rows spot-checked; quarterly P/E was broken for 4 days until retro caught it.
 - **`ReplacingMergeTree` everywhere + stable sort key = idempotent ingestion for free.** No manual dedup logic. Re-running the same partition overwrites cleanly.
 
@@ -356,7 +356,7 @@ Applies if the project has batch ingestion → computed derivatives → query/AP
 ### Repo + workflow
 ```
 [ ] Project brief written (docs/project-requirement.md)
-[ ] Project plan written (docs/project-plan.md — phase checklists with ISSUE-XX references)
+[ ] Project plan written (docs/project-plan.md - phase checklists with ISSUE-XX references)
 [ ] Linear: project + phase milestones + cross-cutting "Ops & Reliability" milestone + cycles
 [ ] Git repo initialized + GitHub remote
 [ ] CLAUDE.md with project conventions
@@ -380,7 +380,7 @@ Applies if the project has batch ingestion → computed derivatives → query/AP
 [ ] Named volumes for all stateful services; services gated by prod/dev profiles
 [ ] CD hard gate 1: prod git SHA == merged commit SHA
 [ ] CD hard gate 2: runtime loaded expected code (asset graph / route set)
-[ ] CD hard gate 3: post-deploy smoke — one cheap real operation succeeds on prod
+[ ] CD hard gate 3: post-deploy smoke - one cheap real operation succeeds on prod
 [ ] scripts/health-monitor.sh cron installed on prod (15-min tick, logs failures + pending reboots)
 [ ] .claude/hooks/session-start.sh tails the monitor log so prod failures surface in dev
 [ ] Unattended-upgrades mail alerts via Resend SMTP (or equivalent smarthost); delivery verified end-to-end
