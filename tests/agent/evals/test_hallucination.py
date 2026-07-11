@@ -41,14 +41,24 @@ class TestExtractNumbers:
         assert extract_numbers("$1,234") == extract_numbers("1234")
         assert extract_numbers("25%") == extract_numbers("25")
 
-    def test_decimal_precision_is_preserved(self) -> None:
-        # 12.30 vs 12.3 — preserving the trailing zero is the design choice
-        # that catches the "model rounded a number" form of arithmetic.
-        # If this test fails, hallucination detection has been weakened
-        # against a real ADR-003 violation class.
-        assert "12.30" in extract_numbers("price 12.30")
-        assert "12.3" in extract_numbers("price 12.3")
-        assert extract_numbers("12.30") != extract_numbers("12.3")
+    def test_trailing_fractional_zeros_are_formatting(self) -> None:
+        # QNT-361: 16.60 and 16.6 are the same value — a trailing fractional
+        # zero is formatting, not arithmetic, so both canonicalise to 16.6.
+        # (Pre-361 this was the inverse: the trailing zero was preserved and a
+        # report "+16.60%" false-flagged a narrator's spoken "16.6".)
+        assert extract_numbers("price 16.60") == extract_numbers("price 16.6")
+        assert extract_numbers("12.30") == extract_numbers("12.3")
+        assert extract_numbers("grew 5.00%") == extract_numbers("grew 5")
+        # Integer zeros are value, not formatting — never stripped.
+        assert "100" in extract_numbers("total of 100")
+        assert "20" in extract_numbers("about 20")
+
+    def test_genuine_rounding_stays_distinct(self) -> None:
+        # Exact value equality, NOT rounding tolerance: 19.36 vs 19.4 are
+        # different values. If this test fails, hallucination detection has
+        # been weakened against a real ADR-003 violation class.
+        assert extract_numbers("19.36") != extract_numbers("19.4")
+        assert extract_numbers("12.345") != extract_numbers("12.3")
 
     def test_markdown_scaffolding_is_ignored(self) -> None:
         # "## 1." is a heading number, not a claim about NVDA's RSI.
@@ -271,6 +281,26 @@ class TestCheck:
         result = check(thesis, reports)
         assert not result.ok
         assert "12.3" in result.unsupported
+
+    def test_incident_trailing_zero_quote_is_supported(self) -> None:
+        # Real QNT-361 incident (trace d9bbf008, 2026-07-11 AAPL thesis): the
+        # report wrote "+16.60% YoY", the narrator spoke "16.6%" — same value,
+        # was redacted as [unsupported number]. Must pass now.
+        thesis = "Revenue grew 16.6% YoY (source: fundamental)."
+        reports = ["Revenue (quarterly): +16.60% YoY"]
+        result = check(thesis, reports)
+        assert result.ok
+        assert result.unsupported == ()
+
+    def test_incident_rounded_quote_still_flagged(self) -> None:
+        # The other half of the incident: report "+19.36% YoY", narrator spoke
+        # "19.4%" — genuine rounding, stays flagged (out-of-scope by design:
+        # tolerance here would weaken the no-arithmetic contract).
+        thesis = "Net income grew 19.4% YoY (source: fundamental)."
+        reports = ["Net income (quarterly): +19.36% YoY"]
+        result = check(thesis, reports)
+        assert not result.ok
+        assert "19.4" in result.unsupported
 
     def test_no_numbers_in_thesis_passes_trivially(self) -> None:
         thesis = "Constructive overall (source: technical)."

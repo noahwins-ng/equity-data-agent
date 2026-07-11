@@ -254,8 +254,8 @@ def test_technical_bullish_overbought_rendering(monkeypatch: pytest.MonkeyPatch)
     assert "above signal" in report
     # Price action shows close vs SMA-50
     assert "close above SMA-50" in report
-    # Period change (was "+1.54% daily" in v1; now "+1.54% vs prior period")
-    assert "+1.54% vs prior period" in report
+    # Period change (was "+1.54% daily" in v1; 1dp since QNT-361)
+    assert "+1.5% vs prior period" in report
     # TREND replaces SIGNAL footer
     assert "### DAILY TREND" in report
     assert "Uptrend" in report
@@ -263,17 +263,17 @@ def test_technical_bullish_overbought_rendering(monkeypatch: pytest.MonkeyPatch)
     # QNT-353 AC1 — widened indicator lines with canonical thresholds in-body.
     # Terser daily forms (comparison token budget): %B folds onto the Bollinger
     # line, ADX/ATR/SMA-200/MACD-cross compact.
-    assert "SMA-200 (daily): close above SMA-200 (170.00) +16.47%; 50/200 golden cross" in report
+    assert "SMA-200 (daily): close above SMA-200 (170.00) +16.5%; 50/200 golden cross" in report
     assert "ADX-14 (daily): 31.0 — trending (≥ 25 trending, < 20 weak)" in report
     assert "ATR-14 (daily): 4.50 (2.3% of close)" in report
     assert "; %B 0.83 (0 = lower band, 1 = upper band)" in report
     assert "MACD bullish cross (daily): yes — crossed above signal on the latest bar" in report
     # QNT-353 AC2 — 52-week range + PERFORMANCE + volume, all pre-computed.
     assert (
-        "52-week (daily): 52-week range 150.00 - 220.00; close -10.00% from the 52-week high"
+        "52-week (daily): 52-week range 150.00 - 220.00; close -10.0% from the 52-week high"
         in report
     )
-    assert "Performance (daily): 1m +5.32%; 3m +10.00%; YTD +4.21%; 1y +20.00%" in report
+    assert "Performance (daily): 1m +5.3%; 3m +10.0%; YTD +4.2%; 1y +20.0%" in report
     assert "Volume (daily): 1,000 shares - 1.25x the 20-day average" in report
     # QNT-353 AC3 — multi-timeframe consensus computed in the template header.
     assert "Multi-timeframe consensus: Sideways (daily Uptrend, weekly N/M, monthly N/M" in report
@@ -638,7 +638,7 @@ def test_technical_performance_window_na_without_history(
     )
     report = build_technical_report("NVDA")
     assert "1y N/M (insufficient history)" in report
-    assert "1m +5.32%" in report
+    assert "1m +5.3%" in report
 
 
 # ---------- fundamental ----------
@@ -728,8 +728,8 @@ def test_fundamental_prior_period_trend_label(monkeypatch: pytest.MonkeyPatch) -
     )
     report = build_fundamental_report("NVDA")
     # +25% vs +18% prior → accelerating
-    assert "Revenue (quarterly): +25.00% YoY" in report
-    assert "prior period +18.00%, accelerating" in report
+    assert "Revenue (quarterly): +25.0% YoY" in report
+    assert "prior period +18.0%, accelerating" in report
 
 
 def test_fundamental_unknown_ticker_404() -> None:
@@ -1524,7 +1524,7 @@ def test_company_context_now_renders_with_data(monkeypatch: pytest.MonkeyPatch) 
     # P/E cited verbatim
     assert "Latest P/E: 25.00" in report
     # Revenue YoY cited verbatim
-    assert "Latest revenue YoY: +12.00%" in report
+    assert "Latest revenue YoY: +12.0%" in report
     # Trend label derived from daily data
     assert "Daily trend:" in report
     # QNT-357: next earnings date rendered verbatim (ADR-012)
@@ -1577,7 +1577,7 @@ def test_company_report_compact_keeps_numbers_drops_lists(
     # Numeric grounding block preserved verbatim (hallucination-scorer safe).
     assert "## CONTEXT NOW" in compact
     assert "Latest P/E: 25.00" in compact
-    assert "Latest revenue YoY: +12.00%" in compact
+    assert "Latest revenue YoY: +12.0%" in compact
     # Qualitative grounding kept.
     assert "## BUSINESS" in compact
     assert "## KEY RISKS" in compact

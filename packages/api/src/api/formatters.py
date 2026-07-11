@@ -50,10 +50,16 @@ def format_pct(
 def format_signed_pct(
     value: float | None,
     *,
-    precision: int = 2,
+    precision: int = 1,
     na_reason: str = "data unavailable",
 ) -> str:
-    """Format a signed percentage with explicit ``+``/``-`` sign."""
+    """Format a signed percentage with explicit ``+``/``-`` sign.
+
+    Percentages render at one decimal (QNT-361): growth rates are quoted at
+    one decimal by finance convention, and the narrator repeats report values
+    verbatim — a 2dp report value invited "spoken" 1dp rounding that the
+    grounding check correctly flagged as drift.
+    """
     if _is_missing(value):
         return f"N/M ({na_reason})"
     assert value is not None

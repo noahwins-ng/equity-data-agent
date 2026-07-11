@@ -7,12 +7,15 @@ enforcement of ADR-003.
 
 Verbatim vs. value-equivalent:
     The AC says "verbatim". We canonicalise away pure formatting differences
-    (leading ``$``, trailing ``%``, comma thousand-separators, and a glued
-    magnitude unit — ``$2.5T``/``$14B``/``20k``) so a thesis that writes
-    ``$1,234`` is accepted when the report wrote ``1234`` — that is
-    formatting, not arithmetic. Decimal precision is preserved: a thesis
-    that writes ``12.30`` against a report that wrote ``12.3`` IS flagged,
-    because changing precision is rounding and rounding is arithmetic.
+    (leading ``$``, trailing ``%``, comma thousand-separators, trailing
+    fractional zeros, and a glued magnitude unit — ``$2.5T``/``$14B``/``20k``)
+    so a thesis that writes ``$1,234`` is accepted when the report wrote
+    ``1234`` — that is formatting, not arithmetic. Trailing fractional zeros
+    are formatting too (QNT-361): ``16.60`` and ``16.6`` are the same value,
+    so both canonicalise to ``16.6``. This is exact value equality, NOT
+    rounding tolerance — a thesis that writes ``19.4`` against a report that
+    wrote ``19.36`` IS still flagged, because changing the value is rounding
+    and rounding is arithmetic.
 
     Magnitude units (QNT-255 follow-up): news reports quote market caps and
     deal sizes with a glued scale suffix (``Breaches $2.5T``, ``$14B AI
@@ -202,10 +205,11 @@ def _canonicalise(token: str) -> str:
     """Normalise a numeric token to its value form.
 
     Strips leading ``$``, trailing ``%``, a glued magnitude unit
-    (``$2.5T`` → ``2.5``, ``$14B`` → ``14``, ``20k`` → ``20``), and comma
-    thousand-separators — none of those are arithmetic. Decimal precision
-    (trailing zeros) is preserved on purpose: rounding is arithmetic, so
-    ``12.30`` ≠ ``12.3``.
+    (``$2.5T`` → ``2.5``, ``$14B`` → ``14``, ``20k`` → ``20``), comma
+    thousand-separators, and trailing fractional zeros (``16.60`` → ``16.6``,
+    ``12.30`` → ``12.3``, ``5.00`` → ``5``) — none of those are arithmetic
+    (QNT-361). Genuine rounding still flags: ``19.36`` and ``19.4`` are
+    different values and stay distinct.
     """
     cleaned = token.lstrip("+")
     if cleaned.startswith("$"):
@@ -224,7 +228,15 @@ def _canonicalise(token: str) -> str:
     # checked for conflicts in ``check`` (QNT-297), so "$5M" is NOT accepted
     # against a report "$5B".
     cleaned = _MAGNITUDE_UNIT_RE.sub("", cleaned)
-    return cleaned.replace(",", "")
+    cleaned = cleaned.replace(",", "")
+    # Trailing fractional zeros are formatting, not value (QNT-361): report
+    # "16.60" and thesis "16.6" are the same number. Guarded on the decimal
+    # point so integer zeros ("20", "100") are never touched. Applies to ANY
+    # decimal token, not just percentages — still exact value equality, and
+    # price/ratio surfaces render at 2dp so it rarely fires off-percentage.
+    if "." in cleaned:
+        cleaned = cleaned.rstrip("0").rstrip(".")
+    return cleaned
 
 
 def _split_scale(token: str) -> tuple[str, str | None]:

@@ -1047,7 +1047,7 @@ the underlying metric values that drove the label.
 
 **Characterise prior-session deltas.** Reports often print a current value \
 alongside its prior-session delta -- e.g. "RSI 64.7 (prior session 76.7, \
-down 12.1)" or "Revenue +12.00% YoY (prior period +8.00%, accelerating)". \
+down 12.1)" or "Revenue +12.0% YoY (prior period +8.0%, accelerating)". \
 When the delta is large, characterise the direction not just the current \
 bucket. "Cooling from overbought" / "rolling over from neutral" / "growth \
 accelerating from a low base" are the analyst phrasings; "indicating \
