@@ -232,6 +232,18 @@ def get_technical_report(ticker: str) -> dict:
 
 ---
 
+## Report Display Precision (QNT-361)
+
+**The report layer owns rounding; the narrator quotes verbatim.** Per the core no-arithmetic rule, the LLM never re-rounds a number - so a report value printed at the "wrong" precision invites spoken rounding that the grounding check correctly flags as drift (trace d9bbf008: "+16.60%" spoken as "16.6%" got redacted).
+
+**Conventions** (all in `packages/api/src/api/formatters.py` + templates, per ADR-012):
+- **Percentages render at one decimal** - `format_signed_pct` / `format_pct` default `precision=1`; inline f-string percentage sites use `:.1f`/`:+.1f`. Finance convention quotes growth rates at 1dp.
+- **Prices, ratios, and EPS stay at two decimals** (`format_ratio`, `format_currency` defaults).
+- **Never format a percentage inline at 2dp in a template** - if you need a percent string, use the formatter helpers or `:.1f`.
+- The grounding check (`agent/evals/hallucination.py`) treats trailing fractional zeros as formatting (`16.60` == `16.6`) but genuine rounding as drift (`19.36` != `19.4`) - exact value equality, not tolerance. If a narrator rounding shows up as a grounding miss, fix the report precision, don't loosen the checker.
+
+---
+
 ## Adding a ClickHouse Migration
 
 **Location**: `migrations/<NNN>_<description>.sql`

@@ -453,7 +453,7 @@ _FUND_REPORT_WITH_PEERS = (
     "### QUARTERLY VALUATION\n"
     "P/E 42.1 (range 18.0–45.0 over last 5y, near the high, prior period 40.9) — Premium\n"
     "### QUARTERLY GROWTH (YoY)\n"
-    "Revenue +85.23% YoY (source: fundamental)\n"
+    "Revenue +85.2% YoY (source: fundamental)\n"
 )
 
 
@@ -499,7 +499,7 @@ def test_narrate_folds_peer_and_own_history_when_payload_has_valuation_label(
     assert "### QUARTERLY VALUATION" in payload
     # Tight fold: the growth subsection after the valuation block is NOT dragged in.
     assert "### QUARTERLY GROWTH" not in payload
-    assert "+85.23% YoY" not in payload
+    assert "+85.2% YoY" not in payload
 
 
 def test_narrate_does_not_fold_peer_section_without_valuation_label(

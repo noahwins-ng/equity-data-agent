@@ -131,7 +131,7 @@ def _price_action_label(close: float, sma_20: float | None, sma_50: float | None
         diff_pct = (close - sma_50) / sma_50 * 100
         direction = "above" if close >= sma_50 else "below"
         parts.append(
-            f"close {direction} SMA-50 ({format_ratio(sma_50, precision=2)}) by {diff_pct:+.2f}%"
+            f"close {direction} SMA-50 ({format_ratio(sma_50, precision=2)}) by {diff_pct:+.1f}%"
         )
     else:
         parts.append("SMA-50: N/M (insufficient history)")
@@ -139,7 +139,7 @@ def _price_action_label(close: float, sma_20: float | None, sma_50: float | None
         diff_pct = (close - sma_20) / sma_20 * 100
         direction = "above" if close >= sma_20 else "below"
         parts.append(
-            f"close {direction} SMA-20 ({format_ratio(sma_20, precision=2)}) by {diff_pct:+.2f}%"
+            f"close {direction} SMA-20 ({format_ratio(sma_20, precision=2)}) by {diff_pct:+.1f}%"
         )
     return "; ".join(parts)
 
@@ -188,7 +188,7 @@ def _sma_200_label(close: float, sma_50: float | None, sma_200: float | None) ->
         return "N/M (insufficient history; needs 200 bars)"
     diff_pct = (close - sma_200) / sma_200 * 100
     direction = "above" if close >= sma_200 else "below"
-    line = f"close {direction} SMA-200 ({format_ratio(sma_200, precision=2)}) {diff_pct:+.2f}%"
+    line = f"close {direction} SMA-200 ({format_ratio(sma_200, precision=2)}) {diff_pct:+.1f}%"
     if sma_50 is not None:
         line += f"; 50/200 {'golden cross' if sma_50 >= sma_200 else 'death cross'}"
     return line
@@ -332,7 +332,7 @@ def _range_52w_line(close: float, ctx: dict[str, Any] | None) -> str:
     from_high = (close - high) / high * 100
     return (
         f"52-week range {format_ratio(low, precision=2)} - {format_ratio(high, precision=2)}; "
-        f"close {from_high:+.2f}% from the 52-week high"
+        f"close {from_high:+.1f}% from the 52-week high"
     )
 
 

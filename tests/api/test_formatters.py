@@ -49,14 +49,15 @@ class TestFormatPct:
 
 class TestFormatSignedPct:
     def test_positive_value_gets_explicit_plus(self) -> None:
-        assert format_signed_pct(5.25) == "+5.25%"
+        # One decimal by default (QNT-361): percentages are quoted at 1dp.
+        assert format_signed_pct(5.27) == "+5.3%"
 
     def test_negative_value_keeps_its_minus(self) -> None:
-        assert format_signed_pct(-3.5) == "-3.50%"
+        assert format_signed_pct(-3.5) == "-3.5%"
 
     def test_zero_uses_plus_sign(self) -> None:
         # Zero is non-negative, so the positive branch applies — harmless.
-        assert format_signed_pct(0.0) == "+0.00%"
+        assert format_signed_pct(0.0) == "+0.0%"
 
     def test_none_gets_na_reason(self) -> None:
         assert format_signed_pct(None) == "N/M (data unavailable)"
