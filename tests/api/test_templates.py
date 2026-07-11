@@ -1005,10 +1005,13 @@ def test_fundamental_scale_block_renders_absolute_figures(
     _install_fake(monkeypatch, {"fundamental_summary": _FakeResult(_FUND_COLS, rows)})
     report = build_fundamental_report("NVDA")
     assert "## SCALE" in report
-    assert "Revenue (TTM): $130,500,000,000" in report
-    assert "Net income (TTM): $72,880,000,000" in report
-    assert "Free cash flow (TTM): $60,850,000,000" in report
-    assert "Market cap: $3,000,000,000,000" in report
+    # Scale-suffixed at 1dp (QNT-361 follow-up): the report prints the
+    # speakable form so the narrator quotes it verbatim instead of rounding
+    # a raw $130,500,000,000 into an ungrounded "$130.5B".
+    assert "Revenue (TTM): $130.5B" in report
+    assert "Net income (TTM): $72.9B" in report
+    assert "Free cash flow (TTM): $60.9B" in report
+    assert "Market cap: $3.0T" in report
 
 
 def test_fundamental_scale_block_nm_without_ttm_or_market_cap(

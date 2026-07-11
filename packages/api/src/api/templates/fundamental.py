@@ -33,7 +33,7 @@ from shared.tickers import TICKER_METADATA, TICKERS
 from api.clickhouse import get_client
 from api.formatters import (
     format_as_of_footer,
-    format_currency,
+    format_currency_compact,
     format_pct,
     format_ratio,
     format_signed_pct,
@@ -368,6 +368,11 @@ def _scale_lines(ttm_latest: dict[str, Any] | None, market_cap: float | None) ->
     market cap is the raw snapshot (QNT-354, report-v1 C-4). Rendered once at the top
     so "what is NVDA's revenue / market cap" — natural quick_fact asks — answer with a
     cited value instead of "not available in the supplied reports".
+
+    Scale-suffixed at one decimal (QNT-361 follow-up): the raw form
+    ($129,174,000,000) invited the narrator to speak "$129.2B" — genuine
+    rounding the grounding check correctly flags. The report prints the
+    speakable form instead.
     """
 
     def _val(key: str) -> float | None:
@@ -375,10 +380,10 @@ def _scale_lines(ttm_latest: dict[str, Any] | None, market_cap: float | None) ->
 
     return [
         "## SCALE",
-        f"Revenue (TTM): {format_currency(_val('revenue_ttm'), precision=0)}",
-        f"Net income (TTM): {format_currency(_val('net_income_ttm'), precision=0)}",
-        f"Free cash flow (TTM): {format_currency(_val('fcf_ttm'), precision=0)}",
-        f"Market cap: {format_currency(market_cap, precision=0)}",
+        f"Revenue (TTM): {format_currency_compact(_val('revenue_ttm'))}",
+        f"Net income (TTM): {format_currency_compact(_val('net_income_ttm'))}",
+        f"Free cash flow (TTM): {format_currency_compact(_val('fcf_ttm'))}",
+        f"Market cap: {format_currency_compact(market_cap)}",
     ]
 
 

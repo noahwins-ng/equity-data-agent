@@ -292,6 +292,17 @@ class TestCheck:
         assert result.ok
         assert result.unsupported == ()
 
+    def test_scale_block_compact_dollars_ground_spoken_form(self) -> None:
+        # QNT-361 follow-up: SCALE prints "$129.2B" (was $129,174,000,000,
+        # which the narrator rounded to an ungrounded "$129.2B"). The spoken
+        # expansion "$129.2 billion" folds to the same (mantissa, scale) pair
+        # via the QNT-297 machinery, so the loop closes.
+        thesis = "Free cash flow of $129.2 billion TTM supports buybacks (source: fundamental)."
+        reports = ["## SCALE\nFree cash flow (TTM): $129.2B"]
+        result = check(thesis, reports)
+        assert result.ok
+        assert result.unsupported == ()
+
     def test_incident_rounded_quote_still_flagged(self) -> None:
         # The other half of the incident: report "+19.36% YoY", narrator spoke
         # "19.4%" — genuine rounding, stays flagged (out-of-scope by design:
