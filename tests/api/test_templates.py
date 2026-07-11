@@ -874,6 +874,10 @@ def test_fundamental_peer_context_rendered_for_nvda(
     assert "Sector median P/E" in report
     # median of [28, 30, 25, 27] = (27+28)/2 = 27.50
     assert "27.50" in report
+    # Peer delta renders at integer precision (QNT-361 follow-up 4): every
+    # observed narrator rounding of a peer delta spoke round(x), so the
+    # report prints that form. P/E 25.0 vs median 27.50 → 9% discount.
+    assert "(9% discount)" in report
 
 
 def test_fundamental_peer_context_na_for_amzn(

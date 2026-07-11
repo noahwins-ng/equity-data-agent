@@ -447,8 +447,9 @@ _FUND_REPORT_WITH_PEERS = (
     "# FUNDAMENTAL REPORT — NVDA\n"
     "## SCALE\nRevenue $60.9B (source: fundamental)\n\n"
     "## PEER CONTEXT\n"
-    "Sector median P/E (Technology, 5 peers in coverage): 24.5 -- NVDA at 42.1 (71.8% premium)\n"
-    "Sector median EV/EBITDA (Technology, 5 peers in coverage): 18.0 -- NVDA at 30.0 (66.7%)\n\n"
+    "Sector median P/E (Technology, 5 peers in coverage): 24.5 -- NVDA at 42.1 (72% premium)\n"
+    "Sector median EV/EBITDA (Technology, 5 peers in coverage): 18.0 -- NVDA at 30.0 "
+    "(67% premium)\n\n"
     "## QUARTERLY\n"
     "### QUARTERLY VALUATION\n"
     "P/E 42.1 (range 18.0–45.0 over last 5y, near the high, prior period 40.9) — Premium\n"
@@ -492,7 +493,7 @@ def test_narrate_folds_peer_and_own_history_when_payload_has_valuation_label(
 
     payload = captured["payload_markdown"]
     # The peer-delta magnitude reaches the prompt, quotable verbatim.
-    assert "71.8% premium" in payload
+    assert "72% premium" in payload
     assert "## PEER CONTEXT" in payload
     # The own-history range line reaches it too (the axis the prompt invites).
     assert "range 18.0–45.0 over last 5y" in payload
