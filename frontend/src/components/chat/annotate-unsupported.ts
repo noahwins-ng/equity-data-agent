@@ -29,11 +29,42 @@ export function annotateUnsupportedNumbers(
   let annotated = text;
   for (const raw of unsupported.filter(Boolean).sort((a, b) => b.length - a.length)) {
     const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // Right boundary mirrors the checker's _NUMBER_RE: a sentence-final "."
+    // is allowed ("above $600." annotates), but a decimal continuation is
+    // not ("45" never matches inside "45.4").
     const pattern = new RegExp(
-      `(^|[^\\d.])(${escaped}(?:%|bn|tn|mn|[KMBTkmbt])?)(?=$|[^\\d.])`,
+      `(^|[^\\d.])(${escaped}(?:%|bn|tn|mn|[KMBTkmbt])?)(?=$|\\.(?!\\d)|[^\\d.])`,
       "g",
     );
     annotated = annotated.replace(pattern, "$1$2†");
   }
   return annotated;
+}
+
+/** Recursively annotate every string field of a structured answer card.
+ *
+ * QNT-361 follow-up 3: the grounding check scores the WHOLE answer, but
+ * annotation only reached the narrative/prose — a miss living in a card
+ * field (real AMD turn: "$600" in the news card summary) got no dagger
+ * while the banner claimed "Numbers marked †". Card payloads are pure
+ * prose strings (no URLs — those live on RetrievedSource/NewsRow, which
+ * are never passed here), so a deep string-map is safe.
+ */
+export function annotateUnsupportedDeep<T>(value: T, unsupported: readonly string[]): T {
+  if (unsupported.length === 0 || value === null || value === undefined) return value;
+  if (typeof value === "string") {
+    return annotateUnsupportedNumbers(value, unsupported) as unknown as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((v) => annotateUnsupportedDeep(v, unsupported)) as unknown as T;
+  }
+  if (typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [
+        k,
+        annotateUnsupportedDeep(v, unsupported),
+      ]),
+    ) as T;
+  }
+  return value;
 }

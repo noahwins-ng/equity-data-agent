@@ -52,7 +52,10 @@ import {
 } from "@/lib/api";
 import { parseSseStream } from "@/lib/sse";
 import { announceableAnswer, bindToolResult, hasAnswerSurface } from "./chat-run";
-import { annotateUnsupportedNumbers } from "./chat/annotate-unsupported";
+import {
+  annotateUnsupportedDeep,
+  annotateUnsupportedNumbers,
+} from "./chat/annotate-unsupported";
 import { RunBlock } from "./chat/run-block";
 import { SuggestionButton } from "./chat/suggestion-button";
 import type { ChatRun } from "./chat/types";
@@ -608,6 +611,17 @@ export function ChatPanel() {
               proseChunks: r.proseChunks.map((chunk) =>
                 annotateUnsupportedNumbers(chunk, unsupported),
               ),
+              // QNT-361 follow-up 3: the grounding check scores the whole
+              // answer, so the structured card fields get daggers too — a
+              // miss in a card summary/key point used to render unmarked
+              // while the banner claimed "Numbers marked †".
+              thesis: annotateUnsupportedDeep(r.thesis, unsupported),
+              quickFact: annotateUnsupportedDeep(r.quickFact, unsupported),
+              comparison: annotateUnsupportedDeep(r.comparison, unsupported),
+              comparisonLean: annotateUnsupportedDeep(r.comparisonLean, unsupported),
+              conversational: annotateUnsupportedDeep(r.conversational, unsupported),
+              focused: annotateUnsupportedDeep(r.focused, unsupported),
+              exploration: annotateUnsupportedDeep(r.exploration, unsupported),
               // A run is "errored" only when it hit a terminal error AND
               // produced no answer surface at all (QNT-226: retrieved sources
               // count as a surface — see hasAnswerSurface).
