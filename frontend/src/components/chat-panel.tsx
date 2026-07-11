@@ -608,9 +608,15 @@ export function ChatPanel() {
               ...r,
               stats: ev,
               narrative: annotateUnsupportedNumbers(r.narrative, unsupported),
-              proseChunks: r.proseChunks.map((chunk) =>
-                annotateUnsupportedNumbers(chunk, unsupported),
-              ),
+              // Annotate the JOINED prose once (QNT-361 follow-up 5): SSE
+              // chunks split on token boundaries, so per-chunk annotation
+              // could miss a number straddling the split — or worse, dagger
+              // a trailing fragment mid-number ("...a 45" + ".4%" →
+              // "45†.4%"). RunBlock renders the join, so one chunk is
+              // equivalent.
+              proseChunks: r.proseChunks.length
+                ? [annotateUnsupportedNumbers(r.proseChunks.join(""), unsupported)]
+                : r.proseChunks,
               // QNT-361 follow-up 3: the grounding check scores the whole
               // answer, so the structured card fields get daggers too — a
               // miss in a card summary/key point used to render unmarked

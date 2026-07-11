@@ -260,7 +260,12 @@ def _margin_line(
         direction = "expanding" if value > prior else "contracting" if value < prior else "steady"
         line += f" (prior period {format_pct(prior)}, {direction})"
     if bps_yoy is not None and math.isfinite(bps_yoy):
-        line += f"; {'+' if bps_yoy >= 0 else ''}{bps_yoy:.0f} bps YoY"
+        # The pts conversion is printed alongside (QNT-361 follow-up 5): a
+        # narrator saying "margin expanded 2.2 points" is a unit conversion
+        # of 222 bps — arithmetic the report must pre-compute so the spoken
+        # form is quotable (ADR-003).
+        sign = "+" if bps_yoy >= 0 else ""
+        line += f"; {sign}{bps_yoy:.0f} bps ({sign}{bps_yoy / 100:.1f} pts) YoY"
     return line
 
 

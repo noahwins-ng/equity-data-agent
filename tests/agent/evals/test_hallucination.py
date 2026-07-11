@@ -171,6 +171,38 @@ class TestDateIdiom:
         assert "5.2" in extract_numbers("returns of May 5.2% were reported")
 
 
+class TestYearIdiom:
+    """Bare calendar years ("since 2023", "fiscal '26") are labels, not
+    claims (QNT-361 follow-up 5). Years usually ground by accident via the
+    reports' ISO dates; this covers the ones that don't (past years, next
+    fiscal year). Same symmetric-strip blind spot as the date idiom."""
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("the strongest quarter since 2023", set()),
+            ("fiscal 2027 guidance is pending", set()),
+            ("margins recover in fiscal '26", set()),
+            # Guards: money, decimals, percents, and glued units stay claims.
+            ("priced at $2026", {"2026"}),
+            ("a value of 2023.5", {"2023.5"}),
+            ("grew 2025%", {"2025"}),
+            ("raised $2026B", {"2026"}),
+        ],
+    )
+    def test_year_labels_are_dropped(self, text: str, expected: set[str]) -> None:
+        assert set(extract_numbers(text)) == expected
+
+    def test_fiscal_year_claim_against_dateless_reports_passes(self) -> None:
+        # The motivating shape: a year mention with no matching ISO date in
+        # the gathered reports must not read as a fabricated number.
+        thesis = "Guidance implies a recovery in fiscal 2027 (source: fundamental)."
+        reports = ["Revenue (quarterly): +16.6% YoY (prior period +15.7%, steady)"]
+        result = check(thesis, reports)
+        assert result.ok
+        assert result.unsupported == ()
+
+
 class TestMagnitudeUnit:
     """Numbers glued to a magnitude unit ($2.5T, $14B, 20k) are value-equivalent
     to their expanded form.
