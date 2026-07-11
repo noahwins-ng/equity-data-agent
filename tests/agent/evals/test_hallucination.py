@@ -119,6 +119,58 @@ class TestPeriodIdiom:
         assert result.unsupported == ()
 
 
+class TestDateIdiom:
+    """Month-name dates ("July 9") are labels, not numeric claims.
+
+    Regression for the QNT-361 follow-up-3 finding (real AMD trace d59d146f,
+    2026-07-11): the news report timestamps stories in ISO form (2026-07-09),
+    the model paraphrased to "surged 5.8% on July 9", and the bare "9" was
+    counted as an unsupported number — dropping grounding to 0.78 alongside
+    one genuine catch ("$600" derived from $635/$640 targets).
+    """
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("surged on July 9", set()),
+            ("reported Jan 15th results", set()),
+            ("guidance issued September 15, 2026", set()),
+            ("the 9 July session", set()),
+            ("earnings on 24 Sept 2026", set()),
+            # A percentage adjacent to a date keeps its claim.
+            ("surged 5.8% on July 9", {"5.8"}),
+            # A number after the modal "may" (no date shape) still counts.
+            ("margins may 5x from here", set()),  # 5x is unit-glued, not a claim
+            ("rose 12% in May", {"12"}),
+        ],
+    )
+    def test_date_labels_are_dropped(self, text: str, expected: set[str]) -> None:
+        assert set(extract_numbers(text)) == expected
+
+    def test_real_amd_july_9_finding_passes(self) -> None:
+        # The incident shape: ISO date in the report, English date in the
+        # answer, the surge percentage grounded by the report body.
+        thesis = "The stock surged 5.8% on July 9 after a supply chain report (source: news)."
+        reports = ["- 2026-07-09 [Yahoo] Why Is AMD Stock Rocketing Higher: shares rose 5.8%"]
+        result = check(thesis, reports)
+        assert result.ok
+        assert result.unsupported == ()
+
+    def test_derived_price_floor_still_flagged(self) -> None:
+        # The genuine catch from the same AMD turn must keep flagging: the
+        # reports name $635 / $640 targets; "above $600" is narrator-derived.
+        thesis = "Analyst upgrades pushed price targets above $600 (source: news)."
+        reports = ["Stifel raises AMD target to $635", "Goldman Sachs sets $640"]
+        result = check(thesis, reports)
+        assert not result.ok
+        assert "600" in result.unsupported
+
+    def test_decimal_after_month_is_not_a_date(self) -> None:
+        # "May 5.2%" — the day cap's lookahead rejects a decimal/percent
+        # continuation, so the number stays a claim.
+        assert "5.2" in extract_numbers("returns of May 5.2% were reported")
+
+
 class TestMagnitudeUnit:
     """Numbers glued to a magnitude unit ($2.5T, $14B, 20k) are value-equivalent
     to their expanded form.

@@ -69,6 +69,12 @@ Numbers we deliberately ignore:
       higher level. (Real TSLA trace ``b7c2187``, 2026-06-09: the report's
       ``near 5y low`` became ``near the 5-year low`` in the answer; the bare
       ``5`` was counted as unsupported and dropped grounding 1.0 → 0.91.)
+    * Month-name dates the model paraphrases from the report's ISO form —
+      ``July 9`` (report writes ``2026-07-09``) — see ``_strip_date_idiom``.
+      Same symmetric-strip blind spot as the window labels: a *fabricated*
+      date is not caught. (Real AMD trace ``d59d146f``, 2026-07-11: the
+      report's ``2026-07-09`` became ``surged 5.8% on July 9`` and the bare
+      ``9`` counted as unsupported.)
 
 False-positive risk:
     Single-digit integers like ``5`` or ``7`` that the model uses as a
@@ -124,6 +130,30 @@ _SCAFFOLD_RE = re.compile(r"(?m)^(\s*#+\s*\d+[.)]|\s*\d+[.)])(?=\s)")
 _PERIOD_IDIOM_RE = re.compile(
     r"(?<![\w.])\d+(?:\.\d+)?[-\s](?:year|yr|day|week|wk|month|mo|quarter|qtr)s?\b",
     re.IGNORECASE,
+)
+
+# Month-name date idioms ("July 9", "Jan 15th", "September 15, 2026", "9
+# July"). The day (and year) are part of an English date label, not numeric
+# claims (QNT-361 follow-up 3): reports print dates in ISO form (2026-07-09),
+# the model paraphrases to English, and the bare day leaked through as an
+# unsupported number (real AMD trace d59d146f, 2026-07-11: "surged 5.8% on
+# July 9" flagged "9", dropping grounding 1.0 → 0.78 alongside one real
+# catch). Stripped symmetrically like the period idiom, with the same
+# accepted blind spot: a FABRICATED date is not caught. The month list is
+# closed so a modal "may" needs an adjacent bare number to false-fire —
+# ungrammatical in practice. The day is capped at two digits and must not
+# open a decimal or percentage, so "May 5.2%" still counts its number.
+_MONTHS = (
+    r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?"
+    r"|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+)
+_DATE_IDIOM_RE = re.compile(
+    rf"""
+    \b{_MONTHS}\.?\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,?\s+\d{{4}})?(?![\d.%])   # July 9 / Jan 15th, 2026
+    |
+    (?<![\w.])\d{{1,2}}(?:st|nd|rd|th)?\s+{_MONTHS}\b(?:,?\s+\d{{4}})?      # 9 July / 15 Sept 2026
+    """,
+    re.IGNORECASE | re.VERBOSE,
 )
 
 # Magnitude unit glued to a number ($2.5T, $14B, 20k). The (?<=\d) lookbehind
@@ -182,6 +212,16 @@ def _strip_period_idiom(text: str) -> str:
     return _PERIOD_IDIOM_RE.sub(" ", text)
 
 
+def _strip_date_idiom(text: str) -> str:
+    """Remove month-name dates ("July 9", "15 Sept 2026") before extraction.
+
+    Replaces with a space so the surrounding text never merges into a new
+    token. Symmetric strip, same blind spot as the period idiom: a
+    fabricated date is not caught — see the ``_DATE_IDIOM_RE`` comment.
+    """
+    return _DATE_IDIOM_RE.sub(" ", text)
+
+
 def _glue_spelled_scale(text: str) -> str:
     """Fold a spelled-out scale word onto the number before it (QNT-297).
 
@@ -198,7 +238,7 @@ def _prepare(text: str) -> str:
     """Shared pre-extraction pipeline: strip scaffold + window idiom, then
     fold spelled-out scale words. Used by both ``extract_numbers`` and
     ``_extract_scaled`` so the two see the same token stream."""
-    return _glue_spelled_scale(_strip_period_idiom(_strip_scaffold(text)))
+    return _glue_spelled_scale(_strip_date_idiom(_strip_period_idiom(_strip_scaffold(text))))
 
 
 def _canonicalise(token: str) -> str:
