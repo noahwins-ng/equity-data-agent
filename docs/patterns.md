@@ -239,6 +239,7 @@ def get_technical_report(ticker: str) -> dict:
 **Conventions** (all in `packages/api/src/api/formatters.py` + templates, per ADR-012):
 - **Percentages render at one decimal** - `format_signed_pct` / `format_pct` default `precision=1`; inline f-string percentage sites use `:.1f`/`:+.1f`. Finance convention quotes growth rates at 1dp.
 - **Prices, ratios, and EPS stay at two decimals** (`format_ratio`, `format_currency` defaults).
+- **Absolute dollar magnitudes render scale-suffixed at one decimal** (`format_currency_compact`: `$129.2B`, `$3.0T`) - a raw `$129,174,000,000` invites the narrator to speak `$129.2B`, which is rounding. Share prices are not magnitudes; they stay exact at 2dp.
 - **Never format a percentage inline at 2dp in a template** - if you need a percent string, use the formatter helpers or `:.1f`.
 - The grounding check (`agent/evals/hallucination.py`) treats trailing fractional zeros as formatting (`16.60` == `16.6`) but genuine rounding as drift (`19.36` != `19.4`) - exact value equality, not tolerance. If a narrator rounding shows up as a grounding miss, fix the report precision, don't loosen the checker.
 

@@ -11,6 +11,7 @@ import math
 
 from api.formatters import (
     format_currency,
+    format_currency_compact,
     format_pct,
     format_ratio,
     format_signed_pct,
@@ -61,6 +62,28 @@ class TestFormatSignedPct:
 
     def test_none_gets_na_reason(self) -> None:
         assert format_signed_pct(None) == "N/M (data unavailable)"
+
+
+class TestFormatCurrencyCompact:
+    def test_billions_render_scale_suffixed_at_one_decimal(self) -> None:
+        # The QNT-361 follow-up incident value: report printed
+        # $129,174,000,000, narrator spoke $129.2B and got flagged. The
+        # report now prints the speakable form.
+        assert format_currency_compact(129_174_000_000.0) == "$129.2B"
+
+    def test_trillions_and_millions(self) -> None:
+        assert format_currency_compact(3_000_000_000_000.0) == "$3.0T"
+        assert format_currency_compact(451_442_000_000.0) == "$451.4B"
+        assert format_currency_compact(14_500_000.0) == "$14.5M"
+
+    def test_negative_sign_leads_the_currency_symbol(self) -> None:
+        assert format_currency_compact(-1_500_000_000.0) == "-$1.5B"
+
+    def test_under_a_million_falls_back_to_exact(self) -> None:
+        assert format_currency_compact(500_000.0) == "$500,000"
+
+    def test_none_gets_na_reason(self) -> None:
+        assert format_currency_compact(None) == "N/M (data unavailable)"
 
 
 class TestFormatCurrency:

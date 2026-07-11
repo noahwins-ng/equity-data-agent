@@ -87,6 +87,32 @@ def format_currency(
     return f"{sign}${abs(value):,.{precision}f}"
 
 
+def format_currency_compact(
+    value: float | None,
+    *,
+    na_reason: str = "data unavailable",
+) -> str:
+    """Scale-suffixed USD amount at one decimal ($129.2B, -$1.5B, $4.7T).
+
+    QNT-361 follow-up: the SCALE block printed raw dollars
+    ($129,174,000,000) which the narrator inevitably speaks as "$129.2B" —
+    genuine rounding the grounding check correctly flags. The report layer
+    owns rounding, so the report prints the speakable form. One decimal
+    mirrors the percentage convention; the grounding checker's trailing-zero
+    canonicalisation makes a printed "$129.0B" and a spoken "$129B" compare
+    equal. Values under $1M fall back to the exact comma-separated figure.
+    """
+    if _is_missing(value):
+        return f"N/M ({na_reason})"
+    assert value is not None
+    sign = "-" if value < 0 else ""
+    magnitude = abs(value)
+    for threshold, suffix in ((1e12, "T"), (1e9, "B"), (1e6, "M")):
+        if magnitude >= threshold:
+            return f"{sign}${magnitude / threshold:.1f}{suffix}"
+    return f"{sign}${magnitude:,.0f}"
+
+
 def pe_na_reason(eps: float | None) -> str:
     """Explain why a P/E ratio is N/M given the EPS context.
 
@@ -118,6 +144,7 @@ def format_as_of_footer(value: date | None) -> str:
 __all__ = [
     "format_as_of_footer",
     "format_currency",
+    "format_currency_compact",
     "format_pct",
     "format_ratio",
     "format_signed_pct",
