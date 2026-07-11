@@ -149,9 +149,9 @@ _MONTHS = (
 )
 _DATE_IDIOM_RE = re.compile(
     rf"""
-    \b{_MONTHS}\.?\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,?\s+\d{{4}})?(?![\d.%])   # July 9 / Jan 15th, 2026
+    \b{_MONTHS}\.?\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,?\s+\d{{4}})?(?![\d.%])  # July 9 / Jan 15th
     |
-    (?<![\w.])\d{{1,2}}(?:st|nd|rd|th)?\s+{_MONTHS}\b(?:,?\s+\d{{4}})?      # 9 July / 15 Sept 2026
+    (?<![\w.])\d{{1,2}}(?:st|nd|rd|th)?\s+{_MONTHS}\b(?:,?\s+\d{{4}})?  # 9 July / 15 Sept 2026
     """,
     re.IGNORECASE | re.VERBOSE,
 )
