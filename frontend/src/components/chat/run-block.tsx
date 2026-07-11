@@ -246,7 +246,7 @@ export const RunBlock = memo(function RunBlock({
           role="alert"
           className="rounded border border-amber-700/40 bg-amber-950/30 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-amber-200"
         >
-          Some numbers in this answer were not found in the supplied reports.
+          Numbers marked † were not found in the supplied reports.
           Groundedness: {groundingPct}%. Verify before relying on them.
         </div>
       )}

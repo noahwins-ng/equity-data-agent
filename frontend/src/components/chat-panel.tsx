@@ -52,6 +52,7 @@ import {
 } from "@/lib/api";
 import { parseSseStream } from "@/lib/sse";
 import { announceableAnswer, bindToolResult, hasAnswerSurface } from "./chat-run";
+import { annotateUnsupportedNumbers } from "./chat/annotate-unsupported";
 import { RunBlock } from "./chat/run-block";
 import { SuggestionButton } from "./chat/suggestion-button";
 import type { ChatRun } from "./chat/types";
@@ -69,15 +70,8 @@ function activeTickerFromPath(path: string | null): string | null {
   return m ? m[1].toUpperCase() : null;
 }
 
-function redactUnsupportedNumbers(text: string, unsupported: readonly string[] = []): string {
-  let cleaned = text;
-  for (const raw of unsupported.filter(Boolean).sort((a, b) => b.length - a.length)) {
-    const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const pattern = new RegExp(`(^|[^\\d.])(${escaped})(?=$|[^\\d.])`, "g");
-    cleaned = cleaned.replace(pattern, "$1[unsupported number]");
-  }
-  return cleaned;
-}
+// QNT-361 follow-up: grounding misses are annotated ("45%†"), no longer
+// redacted to "[unsupported number]" — see annotate-unsupported.ts.
 
 // ─── Composer — input + send ───────────────────────────────────────────────
 //
@@ -610,9 +604,9 @@ export function ChatPanel() {
             updateRun(id, (r) => ({
               ...r,
               stats: ev,
-              narrative: redactUnsupportedNumbers(r.narrative, unsupported),
+              narrative: annotateUnsupportedNumbers(r.narrative, unsupported),
               proseChunks: r.proseChunks.map((chunk) =>
-                redactUnsupportedNumbers(chunk, unsupported),
+                annotateUnsupportedNumbers(chunk, unsupported),
               ),
               // A run is "errored" only when it hit a terminal error AND
               // produced no answer surface at all (QNT-226: retrieved sources
