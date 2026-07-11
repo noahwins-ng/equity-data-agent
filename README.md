@@ -1,10 +1,10 @@
 # Equity Data Agent
 
 > Production-deployed AI/data engineering project for US equities. The agent
-> writes an investment thesis but is **not allowed to invent or calculate numbers** -
+> writes an investment thesis but is **not allowed to invent or calculate numbers**:
 > Dagster computes them, FastAPI prints them into report strings, and LangGraph
 > reasons over those reports. An eval checks every number in the answer against the
-> retrieved reports - strip that grounding from the same model and it invents
+> retrieved reports. Strip that grounding from the same model and it invents
 > **86.9%** of its figures; with it, **0.0%**.
 
 [![Live demo](https://img.shields.io/badge/live%20demo-equity--data--agent--ynr2.vercel.app-success?style=for-the-badge)](https://equity-data-agent-ynr2.vercel.app)
@@ -13,7 +13,7 @@
 
 ## Highlights
 
-A 30-second scan across both disciplines. The lead is AI engineering - the grounded, eval-guarded agent - resting on a data platform built to make that grounding guarantee possible. Every cell is backed by a section below.
+A 30-second scan across both disciplines. The lead is AI engineering (the grounded, eval-guarded agent), resting on a data platform built to make that grounding guarantee possible. Every cell is backed by a section below.
 
 | Data engineering | AI engineering |
 |---|---|
@@ -24,13 +24,13 @@ A 30-second scan across both disciplines. The lead is AI engineering - the groun
 
 ## Try It
 
-Live app: **[equity-data-agent-ynr2.vercel.app](https://equity-data-agent-ynr2.vercel.app)** - try `Give me a balanced thesis on NVDA`, `Compare MSFT and GOOGL`, or `What's the news sentiment on TSLA?`
+Live app: **[equity-data-agent-ynr2.vercel.app](https://equity-data-agent-ynr2.vercel.app)**. Try `Give me a balanced thesis on NVDA`, `Compare MSFT and GOOGL`, or `What's the news sentiment on TSLA?`
 
-The universe is 10 semis/tech-concentrated US equities (NVDA, AAPL, MSFT, GOOGL, AMZN, META, TSLA, MU, AMD, INTC) - a scope choice that keeps every ticker in sectors the agent can reason about with shared context (AI/data-center demand, the semi cycle). Data ingests daily after market close.
+The universe is 10 semis/tech-concentrated US equities (NVDA, AAPL, MSFT, GOOGL, AMZN, META, TSLA, MU, AMD, INTC), a scope choice that keeps every ticker in sectors the agent can reason about with shared context (AI/data-center demand, the semi cycle). Data ingests daily after market close.
 
 ## Why This Exists
 
-LLMs synthesize well but are unreliable at arithmetic - a fabricated RSI or an invented P/E poisons an otherwise plausible thesis. This project treats that as an architecture problem:
+LLMs synthesize well but are unreliable at arithmetic: a fabricated RSI or an invented P/E poisons an otherwise plausible thesis. This project treats that as an architecture problem:
 
 | Role | Layer | Responsibility |
 |---|---|---|
@@ -121,11 +121,11 @@ graph LR
     SEARCH --> UI
 ```
 
-The agentic boundary is the load-bearing constraint: the agent only calls HTTP tools that return report text - no database client, no raw tables, no calculator. Fuller description in [`docs/architecture/system-overview.md`](docs/architecture/system-overview.md).
+The agentic boundary is the load-bearing constraint: the agent only calls HTTP tools that return report text. No database client, no raw tables, no calculator. Fuller description in [`docs/architecture/system-overview.md`](docs/architecture/system-overview.md).
 
 ## AI Engineering
 
-The agent is a controllable graph, not a single prompt - routing, retrieval, and evaluation are each first-class.
+The agent is a controllable graph, not a single prompt: routing, retrieval, and evaluation are each first-class.
 
 ```mermaid
 flowchart TD
@@ -152,10 +152,10 @@ The guarantee is deliberately narrow:
 
 > The agent must not introduce numeric claims absent from the reports it retrieved.
 
-Two concerns, kept separate: **provenance** (numbers are copied from reports, not computed by the LLM) and **correctness** (evals + an LLM judge check the cited numbers actually answer the question). Enforcement is layered - architecture ([ADR-003](docs/decisions/003-intelligence-vs-math.md)) keeps arithmetic out of the agent, the prompt requires every number to cite its report, and a CI eval suite guards it:
+Two concerns, kept separate: **provenance** (numbers are copied from reports, not computed by the LLM) and **correctness** (evals + an LLM judge check the cited numbers actually answer the question). Enforcement is layered. Architecture ([ADR-003](docs/decisions/003-intelligence-vs-math.md)) keeps arithmetic out of the agent, the prompt requires every number to cite its report, and a CI eval suite guards it:
 
-- numeric grounding ([`hallucination.py`](packages/agent/src/agent/evals/hallucination.py)) - every numeric literal traced to a report;
-- golden-set regression ([`golden_set.py`](packages/agent/src/agent/evals/golden_set.py)) - 44 questions across all 10 tickers;
+- numeric grounding ([`hallucination.py`](packages/agent/src/agent/evals/hallucination.py)): every numeric literal traced to a report;
+- golden-set regression ([`golden_set.py`](packages/agent/src/agent/evals/golden_set.py)): 44 questions across all 10 tickers;
 - tool-call ([`tool_calls.py`](packages/agent/src/agent/evals/tool_calls.py)) and dialogue ([`dialogue_eval.py`](packages/agent/src/agent/evals/dialogue_eval.py), a 5-axis LLM judge);
 - retrieval IR metrics ([`retrieval_eval.py`](packages/agent/src/agent/evals/retrieval_eval.py): recall@k / MRR / nDCG);
 - LLM-judged RAGAS + G-Eval ([`deepeval_eval.py`](packages/agent/src/agent/evals/deepeval_eval.py), off the hot path) and RAG routing ([`news_search_eval.py`](packages/agent/src/agent/evals/news_search_eval.py)).

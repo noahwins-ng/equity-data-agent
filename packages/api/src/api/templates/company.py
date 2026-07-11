@@ -156,7 +156,7 @@ def _context_now_lines(ticker: str) -> list[str]:
         if rev is None or not math.isfinite(rev):
             lines.append("Latest revenue YoY: N/A (no quarterly revenue reported)")
         else:
-            lines.append(f"Latest revenue YoY: {rev:+.2f}%")
+            lines.append(f"Latest revenue YoY: {rev:+.1f}%")
 
     if trend is None:
         lines.append("Daily trend: N/A (no recent indicator rows)")
