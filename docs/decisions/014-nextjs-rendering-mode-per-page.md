@@ -32,7 +32,7 @@ Status indicators (provenance strip, watchlist next-ingest label) were detached 
 
 ## Context
 
-Phase 6 (TERMINAL/NINE — `docs/design-frontend-plan.md`) is the first frontend ticket. Before the first page component is written, we need to choose a rendering mode and cache strategy for every data-fetching surface. This ADR is the frontend counterpart of ADR-010 (Dagster production topology) and ADR-011 (LLM routing): the "pre-decide before the first commit" guardrail Phase 4/5 retros recommended after watching `simplest thing that works` framework defaults silently miss production constraints (`feedback_vendor_prod_docs.md`).
+Phase 6 (TERMINAL/NINE - `docs/design-frontend-plan.md`) is the first frontend ticket. Before the first page component is written, we need to choose a rendering mode and cache strategy for every data-fetching surface. This ADR is the frontend counterpart of ADR-010 (Dagster production topology) and ADR-011 (LLM routing): the "pre-decide before the first commit" guardrail Phase 4/5 retros recommended after watching `simplest thing that works` framework defaults silently miss production constraints (`feedback_vendor_prod_docs.md`).
 
 Three retro lessons feed directly into this ADR:
 
@@ -68,14 +68,14 @@ The app shell (per design v2) has four data surfaces. For each, name (1) renderi
 
 | Field | Value |
 |---|---|
-| Surface | Persistent server component inside the root layout — visible on every route. |
+| Surface | Persistent server component inside the root layout - visible on every route. |
 | Rendering | Server Component with cached `fetch` (Next.js Data Cache, 24 h TTL -- see Cache row). Note: this is the Data Cache, not "ISR" in the route-segment sense -- ISR is a property of `page.tsx` / `route.ts`, not a layout-level fetch. |
 | Data fetch | Server `fetch(NEXT_PUBLIC_API_URL + "/api/v1/dashboard/summary", { next: { revalidate: 86_400 } })` |
 | Cache | `revalidate: 86_400` (the `DEFAULT_REVALIDATE_SECONDS` in `lib/api.ts`). Underlying data is daily-cadence (Dagster ingest at `02:00 ET`), so 24 h is the semantic ceiling -- any shorter TTL regenerates more often than the data actually changes, and any longer TTL would risk serving content from before the most recent ingest. The original 60 s value burned 78 % of the Vercel free-tier ISR Writes budget in 30 days; an interim 1 h fix cut it ~60x but still allowed ~24 wasted regenerations/day, so QNT-166 ratcheted it the rest of the way to 86 400 s. Explicit, because Next.js 15 dropped default `fetch` caching. |
 | Failure mode | `fetch` rejects -> RSC throws -> nearest `error.tsx` boundary renders fallback ("watchlist unavailable"). Never block route render on a watchlist failure. |
 | Identity | upstream: `/dashboard/summary` rows keyed by `ticker` -> downstream: React `<li>` keyed by `ticker`. The full ticker set (10 portfolio + SPY benchmark) comes from `/api/v1/tickers` -- never hardcoded. Pre-condition: SPY must be added to `packages/shared/src/shared/tickers.py` (tracked under QNT-134, "Add SPY to `shared.tickers` for benchmark overlay"); until that lands, `/api/v1/tickers` returns 10 and the SPY benchmark row is absent rather than synthesised. |
 
-### 2. `/` (Dashboard landing — middle pane empty state)
+### 2. `/` (Dashboard landing - middle pane empty state)
 
 | Field | Value |
 |---|---|
@@ -86,7 +86,7 @@ The app shell (per design v2) has four data surfaces. For each, name (1) renderi
 | Failure mode | n/a (no data). |
 | Identity | n/a. |
 
-### 3. `/ticker/[symbol]` (Ticker detail page — middle pane)
+### 3. `/ticker/[symbol]` (Ticker detail page - middle pane)
 
 | Field | Value |
 |---|---|

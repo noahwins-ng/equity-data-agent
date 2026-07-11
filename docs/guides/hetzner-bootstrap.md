@@ -1,4 +1,4 @@
-# Hetzner CX41 — Production Bootstrap Guide
+# Hetzner CX41 - Production Bootstrap Guide
 
 One-time setup for a fresh server. After this, every push to `main` auto-deploys via GitHub Actions.
 
@@ -52,11 +52,11 @@ cd /opt/equity-data-agent
 
 As of QNT-102, prod secrets are **SOPS-encrypted in git** (`.env.sops`) and decrypted
 in the GitHub Actions runner on every deploy. The VPS never holds the age private key
-and has no manually-placed `.env` — the file at `/opt/equity-data-agent/.env` is
+and has no manually-placed `.env` - the file at `/opt/equity-data-agent/.env` is
 overwritten by CD on each push to `main`.
 
 For a **first-time setup** (new project or new prod environment), do the SOPS
-bootstrap from your dev machine before the first CD run — see §11 below. On the
+bootstrap from your dev machine before the first CD run - see §11 below. On the
 VPS itself there is nothing to do: skip to §5.
 
 Values you'll encrypt into `.env.sops`:
@@ -64,17 +64,17 @@ Values you'll encrypt into `.env.sops`:
 | Variable | Value |
 |---|---|
 | `ENV` | `prod` |
-| `CLICKHOUSE_HOST` | `clickhouse` (Docker service name — not localhost) |
+| `CLICKHOUSE_HOST` | `clickhouse` (Docker service name - not localhost) |
 | `CLICKHOUSE_PORT` | `8123` |
-| `LITELLM_BASE_URL` | `http://litellm:4000` (Docker service name — not localhost) |
+| `LITELLM_BASE_URL` | `http://litellm:4000` (Docker service name - not localhost) |
 | `QDRANT_URL` | Your Qdrant Cloud cluster URL |
 | `QDRANT_API_KEY` | From Qdrant Cloud dashboard |
-| `GROQ_API_KEY` | From [console.groq.com](https://console.groq.com) — default LLM provider, see ADR-011 |
+| `GROQ_API_KEY` | From [console.groq.com](https://console.groq.com) - default LLM provider, see ADR-011 |
 | `CEREBRAS_API_KEY` | Optional emergency gpt-oss-120b capacity fallback, see ADR-011 |
-| `GEMINI_API_KEY` | Optional — Gemini 2.5 Flash quality override (free tier, see ADR-011 + QNT-123) |
+| `GEMINI_API_KEY` | Optional - Gemini 2.5 Flash quality override (free tier, see ADR-011 + QNT-123) |
 | `LANGFUSE_PUBLIC_KEY` | From Langfuse dashboard |
 | `LANGFUSE_SECRET_KEY` | From Langfuse dashboard |
-| `LANGFUSE_BASE_URL` | `https://cloud.langfuse.com` (EU) or `https://us.cloud.langfuse.com` (US) — must match the region where the project was created |
+| `LANGFUSE_BASE_URL` | `https://cloud.langfuse.com` (EU) or `https://us.cloud.langfuse.com` (US) - must match the region where the project was created |
 | `SENTRY_DSN` | From Sentry project settings |
 | `NEXT_PUBLIC_API_URL` | `https://your-domain.com` |
 
@@ -82,7 +82,7 @@ Values you'll encrypt into `.env.sops`:
 
 ## 5. Public ingress (Cloudflare named tunnel)
 
-Public HTTPS ingress is via a Cloudflare named tunnel (ADR-018, named-tunnel migration QNT-177). The `cloudflared` service connects outbound to Cloudflare and exposes the FastAPI at `api.<your-domain>`. The `api` service binds port 8000 to loopback only — no public port, no DNS A-record, no Let's Encrypt.
+Public HTTPS ingress is via a Cloudflare named tunnel (ADR-018, named-tunnel migration QNT-177). The `cloudflared` service connects outbound to Cloudflare and exposes the FastAPI at `api.<your-domain>`. The `api` service binds port 8000 to loopback only - no public port, no DNS A-record, no Let's Encrypt.
 
 Setup is one-time: create the tunnel in Cloudflare Zero Trust, configure the public hostname, paste the connector token into `.env.sops`. Full runbook in `docs/guides/vercel-deploy.md`.
 
@@ -97,7 +97,7 @@ In GitHub: repo **Settings → Secrets and variables → Actions → New reposit
 | `HETZNER_HOST` | Server public IP |
 | `HETZNER_USER` | `root` |
 | `HETZNER_SSH_KEY` | Contents of your private key (including `-----BEGIN` / `-----END` lines) |
-| `SOPS_AGE_KEY` | Full contents of `~/.config/sops/age/keys.txt` (both the `# created: …` / `# public key: …` comments and the `AGE-SECRET-KEY-…` line — see §11). Set via: `gh secret set SOPS_AGE_KEY < ~/.config/sops/age/keys.txt`. |
+| `SOPS_AGE_KEY` | Full contents of `~/.config/sops/age/keys.txt` (both the `# created: …` / `# public key: …` comments and the `AGE-SECRET-KEY-…` line - see §11). Set via: `gh secret set SOPS_AGE_KEY < ~/.config/sops/age/keys.txt`. |
 
 To get your SSH private key:
 ```bash
@@ -139,7 +139,7 @@ make migrate
 # All services running
 docker compose ps
 
-# API health check (no domain — direct IP)
+# API health check (no domain - direct IP)
 curl http://<your-ip>:8000/health
 ```
 
@@ -156,7 +156,7 @@ Expected: all services `Up`, health check returns `200 OK`.
 
 ## 10. Unattended-Upgrades Mail Alerts (Resend SMTP Relay)
 
-`unattended-upgrades` silently schedules a host reboot when a kernel/libc update requires one. On 2026-04-18 this went unnoticed for ~21 hours — see the QNT-95 / QNT-96 incident — so we require mail delivery on every upgrade run. Pending reboots are also surfaced independently by `scripts/health-monitor.sh` (§10.6 below), so the two channels are belt-and-suspenders.
+`unattended-upgrades` silently schedules a host reboot when a kernel/libc update requires one. On 2026-04-18 this went unnoticed for ~21 hours - see the QNT-95 / QNT-96 incident - so we require mail delivery on every upgrade run. Pending reboots are also surfaced independently by `scripts/health-monitor.sh` (§10.6 below), so the two channels are belt-and-suspenders.
 
 ### 10.1 Why Resend (and not direct SMTP or Gmail)
 
@@ -165,7 +165,7 @@ Three options were considered during QNT-96:
 | Option | Rejected / Chosen | Reason |
 |---|---|---|
 | **Direct SMTP to the recipient MX** (postfix → gmail.com on port 25) | Rejected | Hetzner blocks outbound port 25 by default (anti-spam policy; requires a support ticket to unblock). Even with the block lifted, Gmail aggressively spam-filters unauthenticated VPS senders without SPF/DKIM. |
-| **Gmail SMTP relay** (`smtp.gmail.com:587` with a Google App Password) | Rejected | Requires 2FA enabled on the Google account and an App Password generated from account settings — not available in our environment. |
+| **Gmail SMTP relay** (`smtp.gmail.com:587` with a Google App Password) | Rejected | Requires 2FA enabled on the Google account and an App Password generated from account settings - not available in our environment. |
 | **Resend SMTP relay** (`smtp.resend.com:587` with an API key) | **Chosen** | Free tier (3k/month, 100/day), simple API-key auth, port 587 with STARTTLS so Hetzner's port-25 block is irrelevant, good deliverability without DNS setup. |
 
 ### 10.2 Install the mail transport
@@ -209,12 +209,12 @@ sudo postconf -e \
   'default_transport = smtp' \
   'relay_transport = smtp'
 
-# 2. Sender rewrite — Resend's free tier requires a verified-domain sender.
+# 2. Sender rewrite - Resend's free tier requires a verified-domain sender.
 # `onboarding@resend.dev` is their pre-verified default; use it until you
 # verify your own domain (DNS TXT records via the Resend dashboard).
 echo '/.+/    onboarding@resend.dev' | sudo tee /etc/postfix/sender_canonical > /dev/null
 
-# 3. SASL credentials — root-only, 0600. SMTP username is literally "resend".
+# 3. SASL credentials - root-only, 0600. SMTP username is literally "resend".
 sudo mkdir -p /etc/postfix/sasl
 sudo sh -c 'cat > /etc/postfix/sasl/sasl_passwd <<EOF
 [smtp.resend.com]:587 resend:<YOUR_RESEND_API_KEY>
@@ -226,7 +226,7 @@ sudo chmod 600 /etc/postfix/sasl/sasl_passwd.db
 sudo systemctl restart postfix
 ```
 
-**Free-tier caveat**: without domain verification, Resend only accepts mail **to** the email associated with your Resend account. For us that's `noahwins.dev@gmail.com`, which matches our `Unattended-Upgrade::Mail` target below — so it works. Domain verification lifts both the sender-rewrite requirement and the single-recipient restriction, and is worth doing once a project domain is available.
+**Free-tier caveat**: without domain verification, Resend only accepts mail **to** the email associated with your Resend account. For us that's `noahwins.dev@gmail.com`, which matches our `Unattended-Upgrade::Mail` target below - so it works. Domain verification lifts both the sender-rewrite requirement and the single-recipient restriction, and is worth doing once a project domain is available.
 
 ### 10.4 Enable unattended-upgrades mail
 
@@ -237,7 +237,7 @@ Unattended-Upgrade::Mail "noahwins.dev@gmail.com";
 Unattended-Upgrade::MailReport "on-change";
 ```
 
-`on-change` emits a mail only when packages were actually upgraded or an error occurred — not on every no-op run.
+`on-change` emits a mail only when packages were actually upgraded or an error occurred - not on every no-op run.
 
 ### 10.5 Verify delivery end-to-end
 
@@ -250,9 +250,9 @@ echo "test from $(hostname) at $(date -u +%FT%TZ)" | mail -s "hetzner mail test"
 sudo tail -5 /var/log/mail.log
 ```
 
-Then check the Gmail inbox — including Promotions and Spam the first time, since `onboarding@resend.dev` is a new sender to that inbox and Gmail may not route to Primary initially.
+Then check the Gmail inbox - including Promotions and Spam the first time, since `onboarding@resend.dev` is a new sender to that inbox and Gmail may not route to Primary initially.
 
-**Mail that never leaves the box is worse than no alerting** — always run this check after any smarthost config change. `relay=none, status=bounced` with zero delay means postfix rejected the routing locally (usually the `default_transport = error` gotcha from §10.2). A real SMTP failure will show non-zero `delays=...` and a reason string.
+**Mail that never leaves the box is worse than no alerting** - always run this check after any smarthost config change. `relay=none, status=bounced` with zero delay means postfix rejected the routing locally (usually the `default_transport = error` gotcha from §10.2). A real SMTP failure will show non-zero `delays=...` and a reason string.
 
 ### 10.6 Pending-reboot surfacing (independent channel)
 
@@ -271,7 +271,7 @@ Prod secrets live in `.env.sops` (committed, encrypted) and are decrypted by the
 GitHub Actions runner on every deploy. The runner then `scp`s the plaintext
 `.env` to `/opt/equity-data-agent/.env` on the VPS (mode 0600, owned by the
 deploy user). The age private key lives only in a password manager and in the
-`SOPS_AGE_KEY` GitHub secret — never on the VPS.
+`SOPS_AGE_KEY` GitHub secret - never on the VPS.
 
 ### 11.1 One-time project bootstrap (on your dev machine)
 
@@ -289,12 +289,12 @@ chmod 600 ~/.config/sops/age/keys.txt
 # 2a. macOS gotcha: sops's default key-file path on macOS is
 #     ~/Library/Application Support/sops/age/keys.txt (not ~/.config/sops/age/keys.txt).
 #     We keep the Linux path for portability and point sops at it via env var.
-#     Skip this block on Linux — the default location is already correct there.
+#     Skip this block on Linux - the default location is already correct there.
 if [ "$(uname)" = "Darwin" ]; then
   export SOPS_AGE_KEY_FILE="$HOME/.config/sops/age/keys.txt"
   if ! grep -q 'SOPS_AGE_KEY_FILE' ~/.zshrc 2>/dev/null; then
     echo 'export SOPS_AGE_KEY_FILE="$HOME/.config/sops/age/keys.txt"' >> ~/.zshrc
-    echo "Added SOPS_AGE_KEY_FILE to ~/.zshrc — reload the shell or use 'source ~/.zshrc'"
+    echo "Added SOPS_AGE_KEY_FILE to ~/.zshrc - reload the shell or use 'source ~/.zshrc'"
   fi
 fi
 
@@ -327,7 +327,7 @@ make sops-decrypt | diff - .env && echo "round-trip OK"
 #      - 1Password Secure Note.
 #      - Printed paper in a fireproof box (most disaster-resistant).
 #    Always paste the ENTIRE contents of ~/.config/sops/age/keys.txt
-#    (including the `# created: …` / `# public key: …` comments — SOPS needs
+#    (including the `# created: …` / `# public key: …` comments - SOPS needs
 #    the whole file to reconstruct identity).
 
 # 8. Add the SOPS_AGE_KEY GitHub secret. Value = full keys.txt contents:
@@ -352,7 +352,7 @@ git push
 
 **Container-recreation gotcha**: Docker Compose only recreates a container when
 the *service definition* changes (image SHA, command, env_file path, ports,
-volumes). Editing the *contents* of `.env` does NOT count — the running
+volumes). Editing the *contents* of `.env` does NOT count - the running
 container keeps the env vars it was launched with. So a value-only rotation
 push needs a force-recreate to take effect:
 
@@ -371,7 +371,7 @@ Verify the new value is active inside the container:
 ssh hetzner "docker exec equity-data-agent-<service>-1 printenv <KEY>"
 ```
 
-If the rotation is part of a code change push, no manual recreate is needed —
+If the rotation is part of a code change push, no manual recreate is needed -
 the code change rebuilds the image, which docker compose treats as a service
 change and recreates the container automatically.
 
@@ -402,9 +402,9 @@ gh secret set SOPS_AGE_KEY < ~/.config/sops/age/keys.txt
 
 # 6. Update the escrow entry (Apple Notes / Bitwarden / 1Password / etc.)
 #    to the new keys.txt contents. Don't delete the old entry until step 7
-#    succeeds — the old key is still needed if the new CD run fails.
+#    succeeds - the old key is still needed if the new CD run fails.
 
-# 7. Commit and push — next CD run will use the new key
+# 7. Commit and push - next CD run will use the new key
 git add .sops.yaml .env.sops
 git commit -m "QNT-XX: chore(secrets): rotate SOPS age key"
 git push
@@ -421,7 +421,7 @@ at the upstream (Anthropic dashboard, Qdrant dashboard, etc.) first, then run
 
 If the private key is gone and was not escrowed:
 
-1. Rotate every secret value at its upstream provider — you've lost the
+1. Rotate every secret value at its upstream provider - you've lost the
    ability to decrypt `.env.sops`, so treat all stored values as destroyed.
 2. Generate a new age keypair (§11.1 steps 2-3).
 3. Build a fresh `.env` with the new upstream values.
@@ -429,7 +429,7 @@ If the private key is gone and was not escrowed:
 5. Update the GitHub secret and password manager (§11.1 steps 7-8).
 6. Commit and push.
 
-The encrypted history in git is now orphaned — no key can decrypt it. That's
+The encrypted history in git is now orphaned - no key can decrypt it. That's
 fine; the point is that no one else can decrypt it either.
 
 ---

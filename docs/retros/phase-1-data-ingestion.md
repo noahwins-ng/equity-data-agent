@@ -1,4 +1,4 @@
-Retrospective: Phase 1 — Data Ingestion
+Retrospective: Phase 1 - Data Ingestion
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Timeline: April 13 → April 15 (1 cycle)
@@ -12,10 +12,10 @@ Issues:
   QNT-82  Implement make seed                       Cancelled (not needed)
 
 What went well:
-  - Fast execution — all 4 issues shipped in a single day
+  - Fast execution - all 4 issues shipped in a single day
   - patterns.md recipes kept asset implementations consistent across ohlcv_raw and fundamentals
   - ReplacingMergeTree + StaticPartitionsDefinition = clean idempotent ingestion, no dedup logic needed
-  - yfinance API integration was straightforward — retry policy + rate limiting handled edge cases
+  - yfinance API integration was straightforward - retry policy + rate limiting handled edge cases
   - QNT-82 correctly identified as unnecessary and cancelled rather than built
 
 What was harder than expected:
@@ -29,7 +29,7 @@ Lessons saved to memory:
   - AC verification: keyword trigger list updated with "toggle", UI-visible ACs need dev server running
   - /go rework: must invoke sub-commands, never inline their logic
 
-Next up: Phase 2 — Calculation Layer (6 issues)
+Next up: Phase 2 - Calculation Layer (6 issues)
   QNT-70  ohlcv_weekly + ohlcv_monthly aggregation      Medium
   QNT-44  technical_indicators (daily/weekly/monthly)    High
   QNT-45  fundamental_summary (15 ratios)                (in plan)

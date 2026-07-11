@@ -1,7 +1,7 @@
 # ADR-009: News Embeddings via Qdrant Cloud Inference
 
 **Date**: 2026-04-22
-**Status**: Accepted (revised same-day from an earlier inline-compute variant — see §"Revision history")
+**Status**: Accepted (revised same-day from an earlier inline-compute variant - see §"Revision history")
 
 ## Context
 
@@ -40,7 +40,7 @@ Free-tier budget: 5M tokens/month/model (Apr-22 Qdrant pricing). Projected load 
 - Rejected on architectural grounds.
 
 **Run a self-hosted embedding model on-host without Dagster gating.**
-- Pushes the daemon cgroup to ~3.24 GB peak at 3-way fan-out — re-opens the Apr 20/21 OOM failure mode.
+- Pushes the daemon cgroup to ~3.24 GB peak at 3-way fan-out - re-opens the Apr 20/21 OOM failure mode.
 - Rejected because "bump the mem_limit again" is the wrong pattern.
 
 ## Consequences
@@ -50,44 +50,44 @@ Free-tier budget: 5M tokens/month/model (Apr-22 Qdrant pricing). Projected load 
 - No Docker image weight bloat (~80 MB stays out). Faster CD builds.
 - Tests stay local: a fake `QdrantClient` that records `(text, model)` tuples is simpler than a fake model + fake client (Phase 3 retro lesson, applied).
 - Zero coupling to sentence-transformers or PyTorch in the `dagster-pipelines` dependency graph.
-- Runtime: no model-load cold start; first embed on a fresh run-worker completes in one HTTP round-trip (~hundreds of ms) instead of ~10–20 s of model load.
+- Runtime: no model-load cold start; first embed on a fresh run-worker completes in one HTTP round-trip (~hundreds of ms) instead of ~10-20 s of model load.
 
 **Harder:**
-- New runtime dependency on Qdrant Cloud Inference uptime. If Qdrant Cloud Inference is down, embedding stops — the op-retry on `news_embeddings` absorbs a brief outage but a sustained one stalls the pipeline. Same class of risk we already take on ClickHouse via Dagster.
-- Egress: headline text (~2–5 KB/headline × 30 headlines/tick × 6 ticks/day × 10 tickers ≈ 0.9 MB/day) leaves our network to Qdrant. Small by any metric but worth noting for future capacity planning.
+- New runtime dependency on Qdrant Cloud Inference uptime. If Qdrant Cloud Inference is down, embedding stops - the op-retry on `news_embeddings` absorbs a brief outage but a sustained one stalls the pipeline. Same class of risk we already take on ClickHouse via Dagster.
+- Egress: headline text (~2-5 KB/headline × 30 headlines/tick × 6 ticks/day × 10 tickers ≈ 0.9 MB/day) leaves our network to Qdrant. Small by any metric but worth noting for future capacity planning.
 - Token budget: 810K / 5M tokens/month at current volume is ~16%. Triples if we extend to `headline + body`; if we ever pay, it's $0.02/M tokens (check at commit time) so not a blocker. Track if the monthly usage creeps above 50%.
 - Model choice is now governed by Qdrant's catalog. If the upstream sentence-transformers model diverges from what Qdrant hosts, we lose a degree of freedom. Mitigation: check the "Cost: Free" list on Qdrant's inference page before adding a second model (reranker, etc.).
-- Input text is sent to Qdrant's inference service. Qdrant docs say "the input used for inference is not stored" unless explicitly included in the payload — acceptable for public RSS headlines, re-evaluate if we ever embed anything private.
+- Input text is sent to Qdrant's inference service. Qdrant docs say "the input used for inference is not stored" unless explicitly included in the payload - acceptable for public RSS headlines, re-evaluate if we ever embed anything private.
 
 ## Revisit Triggers
 
 Revisit this ADR if any of the following happens:
 
 - Qdrant Cloud Inference retires `all-MiniLM-L6-v2` or moves it off the free tier, or our monthly token usage crosses 50% of the free allowance.
-- A second ML model is added that Qdrant does not host (reranker, cross-encoder, fine-tuned embedder) — the shared-infrastructure argument weakens.
-- Egress volume grows >100× (e.g. embedding full article bodies at sub-minute cadence) — a self-hosted model may become cheaper than the egress + latency cost.
+- A second ML model is added that Qdrant does not host (reranker, cross-encoder, fine-tuned embedder) - the shared-infrastructure argument weakens.
+- Egress volume grows >100× (e.g. embedding full article bodies at sub-minute cadence) - a self-hosted model may become cheaper than the egress + latency cost.
 - A compliance/data-residency requirement appears that forbids sending headline text to a US-region third-party inference service.
-- Qdrant Cloud Inference latency becomes a problem — each asset run adds one network hop per headline; at very high volume this caps throughput.
+- Qdrant Cloud Inference latency becomes a problem - each asset run adds one network hop per headline; at very high volume this caps throughput.
 
 ## Revision history
 
-### Apr-22 2026 — superseded inline-compute decision
+### Apr-22 2026 - superseded inline-compute decision
 
-The original draft of this ADR landed the opposite decision: **run embedding inline in the run-worker, gate with `tag_concurrency_limits: dagster/embedding: 1`, bake weights into the `dagster` image**. That draft existed because, at draft time, Qdrant Cloud Inference was not yet known to the repo. Once confirmed on the Qdrant platform page (Apr-22, same day), the inline-compute constraints — the tag rule, the Dockerfile bake, the `sentence-transformers` dep, the `EmbeddingResource` — were all solving a problem that Qdrant was already solving for free.
+The original draft of this ADR landed the opposite decision: **run embedding inline in the run-worker, gate with `tag_concurrency_limits: dagster/embedding: 1`, bake weights into the `dagster` image**. That draft existed because, at draft time, Qdrant Cloud Inference was not yet known to the repo. Once confirmed on the Qdrant platform page (Apr-22, same day), the inline-compute constraints - the tag rule, the Dockerfile bake, the `sentence-transformers` dep, the `EmbeddingResource` - were all solving a problem that Qdrant was already solving for free.
 
 For future-me / future-reader: the inline-compute sizing math was
 
 ```
 peak_memory = 660 MB daemon baseline + N_workers × (360 MB base + 500 MB model resident)
             = 660 + 1 × 860 = ~1.52 GB at N=1 (serialized via tag rule)
-            = 660 + 3 × 860 = ~3.24 GB at N=3 (OOM — why the tag rule was needed)
+            = 660 + 3 × 860 = ~3.24 GB at N=3 (OOM - why the tag rule was needed)
 ```
 
 Those numbers are only relevant if we ever pivot back to self-hosted embedding, e.g. under a revisit-trigger. They are preserved here so the revisit is a known-cost decision rather than a rediscovery.
 
 Lesson captured (memory: `feedback_calibration_window`): the cost of checking the vendor's feature surface *before* writing the inline-compute design would have been one search query, and would have saved roughly 200 LOC of code + an ADR draft. This ADR stands as an example of a same-day pivot caught while the context was still fresh.
 
-### Apr-28 2026 — verified free-tier numbers + Workaround A escape hatch
+### Apr-28 2026 - verified free-tier numbers + Workaround A escape hatch
 
 Post-QNT-141 (Finnhub migration) + alongside QNT-142 (delta-only embedding fix). Verified the Qdrant Cloud free-tier numbers and pre-sized the local-embedding escape hatch so a future maintainer can swap under pressure without re-researching.
 
@@ -100,7 +100,7 @@ Post-QNT-141 (Finnhub migration) + alongside QNT-142 (delta-only embedding fix).
 
 **Where we sit (post-QNT-141 + QNT-142):** ~810K tokens/month projected (16% of free-tier budget), matching the original calibration. Pre-QNT-142, the QNT-141 Finnhub backfill briefly threatened ~93× that load (28 211 rows × 6 ticks/day × `fetched_at` full-refresh window). QNT-142's `published_at` window + delta-only upsert restores the original sizing so the free tier stays comfortable.
 
-#### Workaround A — switch to local CPU embedding (escape hatch)
+#### Workaround A - switch to local CPU embedding (escape hatch)
 
 This ADR keeps cloud inference. Workaround A is the documented path *if* a trigger fires; we do not deploy it pre-emptively.
 
@@ -113,7 +113,7 @@ This ADR keeps cloud inference. Workaround A is the documented path *if* a trigg
 **Files to change** (verified 2026-04-28; line numbers approximate):
 
 - `packages/dagster-pipelines/src/dagster_pipelines/resources/qdrant.py` (~line 72): set `cloud_inference=False`, add an optional encoder field on the resource so dependent assets can pull the same model instance.
-- `packages/dagster-pipelines/src/dagster_pipelines/assets/news_embeddings.py` (~line 135): replace `vector=Document(text=..., model=EMBED_MODEL)` with `vector=encoder.encode(text).tolist()`. `PointStruct` accepts both shapes — no protocol or wire-format change.
+- `packages/dagster-pipelines/src/dagster_pipelines/assets/news_embeddings.py` (~line 135): replace `vector=Document(text=..., model=EMBED_MODEL)` with `vector=encoder.encode(text).tolist()`. `PointStruct` accepts both shapes - no protocol or wire-format change.
 - `packages/dagster-pipelines/pyproject.toml`: add `sentence-transformers>=3.0` (~500 MB on disk including model weights) + `torch-cpu>=2.0` (~150 MB for the CPU-only build).
 - `packages/api/src/api/routers/search.py` (~line 77): same encoder swap for query-time consistency. The agent's semantic search must use the same model that produced the indexed vectors.
 
@@ -127,15 +127,15 @@ This ADR keeps cloud inference. Workaround A is the documented path *if* a trigg
 **Effect:**
 
 - Zero token-budget concern. Qdrant becomes a pure vector DB; we own embedding compute.
-- This ADR's "thin run worker" property is lost — that's the explicit trade-off accepted only if the inference budget becomes the binding constraint.
+- This ADR's "thin run worker" property is lost - that's the explicit trade-off accepted only if the inference budget becomes the binding constraint.
 - The asset's behavioural contract (idempotent upsert keyed on `point_id(ticker, url_id)`) is unchanged; existing QNT-93 asset checks continue to pass.
 - The Apr-22 same-day-pivot lesson stands: this is the same code, in the same place, that the original draft of this ADR proposed before the Qdrant Cloud Inference page was found. We keep the simpler path until a real trigger fires; if it does, the swap is bounded and well-understood.
 
 ## References
 
-- QNT-54 — Dagster asset: news embeddings → Qdrant (this ADR's driver)
-- QNT-113 — max_concurrent_runs: 3 (origin of the QueuedRunCoordinator pattern)
-- QNT-114 — tag_concurrency_limits proved out on `dagster/backfill`
-- QNT-115 — daemon mem_limit 2g → 3g and the 360 MB per-worker peak observation
-- ADR-003 — Intelligence vs Math (three-role architecture, used to reject the api-piggyback option)
+- QNT-54 - Dagster asset: news embeddings → Qdrant (this ADR's driver)
+- QNT-113 - max_concurrent_runs: 3 (origin of the QueuedRunCoordinator pattern)
+- QNT-114 - tag_concurrency_limits proved out on `dagster/backfill`
+- QNT-115 - daemon mem_limit 2g → 3g and the 360 MB per-worker peak observation
+- ADR-003 - Intelligence vs Math (three-role architecture, used to reject the api-piggyback option)
 - Qdrant Cloud Inference docs: https://qdrant.tech/documentation/cloud/inference/

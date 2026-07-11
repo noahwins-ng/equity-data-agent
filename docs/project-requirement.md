@@ -1,7 +1,7 @@
 # Equity Data Agent - Project Requirements
 
 Status: current production requirements. This document is the canonical
-product and architecture spec — delivery history lives in
+product and architecture spec - delivery history lives in
 [`docs/project-plan.md`](project-plan.md), tradeoff history lives in
 [`docs/decisions/`](decisions/), and post-phase lessons live in
 [`docs/retros/`](retros/).
@@ -644,8 +644,8 @@ Data endpoint requirements:
 
 ### 8.4 Search Endpoints
 
-- `GET /api/v1/search/news` — over the `equity_news` collection.
-- `GET /api/v1/search/earnings` — over the `equity_earnings` 8-K corpus (QNT-263).
+- `GET /api/v1/search/news` - over the `equity_news` collection.
+- `GET /api/v1/search/earnings` - over the `equity_earnings` 8-K corpus (QNT-263).
 
 Requirements:
 
@@ -781,7 +781,7 @@ and golden-set evaluation.
 ## 10. Public Chat Abuse Controls
 
 `POST /api/v1/agent/chat` is public by design. There is no login or API key for
-the portfolio demo — see
+the portfolio demo - see
 [ADR-017](decisions/017-public-chat-truly-public-no-auth.md) for the threat
 model and why auth was rejected.
 
@@ -928,21 +928,21 @@ Port policy:
 ### 12.5 Deployment Gates
 
 Production deploys must include the following gates. Each was paid for by a
-specific incident — see Phase 2 and Phase 3 retros for the originating
+specific incident - see Phase 2 and Phase 3 retros for the originating
 failures:
 
 - SOPS decrypt for secrets.
 - Git SHA identity check (catches "deploy succeeded but prod runs old code"
-  — Phase 2 retro / QNT-88, QNT-89).
+  - Phase 2 retro / QNT-88, QNT-89).
 - Docker Compose build/up.
 - Idempotent ClickHouse migrations.
 - API health loop.
 - Dagster definitions-load gate (catches "code-server up but graph broken"
-  — Phase 3 retro).
+  - Phase 3 retro).
 - Config bind-mount restart handling (catches stale config from named-volume
-  shadowing — QNT-110 / QNT-112).
+  shadowing - QNT-110 / QNT-112).
 - Observability smoke checks for infra/observability changes (catches
-  "shipped infra, every signal green, nothing actually working" — QNT-103
+  "shipped infra, every signal green, nothing actually working" - QNT-103
   obs follow-up).
 
 ## 13. LLM Routing And Evaluation
@@ -959,7 +959,7 @@ Current production pattern:
   that aborts a throttled call and reroutes within the same client call.
 - Groq fallbacks (recursive): Llama-4-Scout-17B, then `gpt-oss-120b` as
   last-resort same-provider capacity. (The Cerebras hop added in QNT-215 was
-  removed in QNT-227 — it could not serve synthesize within the client timeout.)
+  removed in QNT-227 - it could not serve synthesize within the client timeout.)
 - Small tier: Groq `gpt-oss-20b` drives the `classify` / `plan` nodes (QNT-220),
   falling back to the 70B default on TPD exhaustion.
 - Optional override: Gemini 2.5 Flash.
@@ -991,7 +991,7 @@ Additional eval layers:
     the shape-references). Floors re-derived against a measured baseline, then
     enforcement flipped on against a **>=50-record** baseline (the design-doc
     floor). The DeepEval judge runs on a paid OpenRouter model (DeepSeek V4 Flash)
-    so the judged baseline isn't bound by free-tier daily token ceilings — a full
+    so the judged baseline isn't bound by free-tier daily token ceilings - a full
     >=50 run costs ~$0.18 and stays off the hot path (ADR-023). The dialogue /
     golden judge stays on the free model.
 

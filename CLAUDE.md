@@ -55,7 +55,7 @@ For multi-step tasks, state a brief plan:
 ```
 
 
-# Equity Data Agent — Project Conventions
+# Equity Data Agent - Project Conventions
 
 ## Core Philosophy: Intelligence vs. Math
 
@@ -93,10 +93,10 @@ Data Sources → Dagster → ClickHouse/Qdrant → FastAPI → LangGraph Agent
 ## Repo Structure
 
 Monorepo with 4 packages under `packages/`:
-- `shared` — Pydantic schemas, config, ticker registry (the glue)
-- `dagster-pipelines` — assets, sensors, schedules
-- `api` — FastAPI endpoints
-- `agent` — LangGraph agent
+- `shared` - Pydantic schemas, config, ticker registry (the glue)
+- `dagster-pipelines` - assets, sensors, schedules
+- `api` - FastAPI endpoints
+- `agent` - LangGraph agent
 
 ## Code Style
 
@@ -114,20 +114,20 @@ Monorepo with 4 packages under `packages/`:
 ### Issue Structure
 Every Linear issue body follows this skeleton (QNT-293 / QNT-318 are the model). Match it exactly when creating or rewriting a ticket:
 ```
-## Context          — why this exists; the incident/precedent that motivates it
-## Scope            — what to build
-## Out of scope     — (optional) what it deliberately doesn't do, and who owns that
+## Context          - why this exists; the incident/precedent that motivates it
+## Scope            - what to build
+## Out of scope     - (optional) what it deliberately doesn't do, and who owns that
 ## Acceptance Criteria
 - [ ] AC1 (code) -- <verifiable statement>
 - [ ] AC2 (dev execution) -- <needs a real command + output receipt>
 - [ ] AC3 (docs) -- <statement>
-## References        — related QNT tickets, ADRs, file paths
+## References        - related QNT tickets, ADRs, file paths
 ```
 AC rules:
 - Heading is `## Acceptance Criteria` (not `## AC`).
-- Each AC is a **numbered checkbox** — `- [ ] AC1`, `AC2`, … — so it can be referenced as "AC4" in commits, PRs, and `docs/project-plan.md`.
+- Each AC is a **numbered checkbox** - `- [ ] AC1`, `AC2`, … - so it can be referenced as "AC4" in commits, PRs, and `docs/project-plan.md`.
 - Each AC carries a **class tag**: `(code)` / `(dev execution)` / `(prod execution)` / `(docs)` (slash combos like `(code/docs)` allowed). The tag drives `/sanity-check`: `dev`/`prod execution` ACs need a literal command+output receipt; `code`/`docs` are verified by reading the implementation.
-- Always set `project: "Equity Data Agent"` on create; keep bodies plain ASCII (Linear WAF). Updating a description can silently reset `milestone` — re-assert it.
+- Always set `project: "Equity Data Agent"` on create; keep bodies plain ASCII (Linear WAF). Updating a description can silently reset `milestone` - re-assert it.
 
 ### Commit Format
 ```
@@ -155,31 +155,31 @@ Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`
 
 ## Ticker Scope
 
-10 US equities — defined in `packages/shared/src/shared/tickers.py`. Adding or removing a ticker touches four registry structures plus several backfill surfaces and an eval-golden sweep — follow `docs/guides/ticker-lifecycle.md`. Never hardcode ticker lists in business logic.
+10 US equities - defined in `packages/shared/src/shared/tickers.py`. Adding or removing a ticker touches four registry structures plus several backfill surfaces and an eval-golden sweep - follow `docs/guides/ticker-lifecycle.md`. Never hardcode ticker lists in business logic.
 
 ## Working Docs
 
 The `docs/` folder is the shared brain for this project. Read relevant sections when starting work on a new area.
 
-- `docs/architecture/` — how the system works (read first)
-- `docs/patterns.md` — established code recipes (read before implementing)
-- `docs/decisions/` — ADRs: why we chose X over Y (read when questioning a design choice)
-- `docs/guides/` — how to do common tasks
-- `docs/api/*.http` — API test files (open with VS Code REST Client)
+- `docs/architecture/` - how the system works (read first)
+- `docs/patterns.md` - established code recipes (read before implementing)
+- `docs/decisions/` - ADRs: why we chose X over Y (read when questioning a design choice)
+- `docs/guides/` - how to do common tasks
+- `docs/api/*.http` - API test files (open with VS Code REST Client)
 
 When making a significant architectural decision, create a new ADR using `docs/decisions/TEMPLATE.md`.
 
 ## Observability
 
-- **Langfuse**: Agent tracing — LLM calls, tool calls, latency
+- **Langfuse**: Agent tracing - LLM calls, tool calls, latency
 - **Sentry**: FastAPI error tracking in production
-- **Health Monitor**: Cron on Hetzner (every 15 min) — checks API `/health` + Docker services, logs failures. `make monitor-log` to check. Session-start hook auto-warns on failures.
-- **Alerting**: Two independent channels (QNT-101) — external uptime probe on `/api/v1/health` (UptimeRobot or equivalent, native Discord on free tier) + `docker-events-notify.service` on Hetzner streaming die/kill/oom/restart to a Discord webhook (alerts ≤30 s). Setup: `docs/guides/uptime-monitoring.md`. Self-monitored via heartbeat file + optional external heartbeat URL (Healthchecks.io free tier). Install: `make events-notify-install`. Test: `make events-notify-test`.
-- **Logs UI**: Dozzle (QNT-103) tails every compose container at `http://localhost:8082` via SSH tunnel — replaces the `ssh hetzner "docker compose logs <svc>"` workflow.
-- **Metrics & Trends**: Prometheus (15d retention) + Grafana dashboards (QNT-103) — host CPU/mem/disk via node_exporter, per-container metrics via cAdvisor. Reach Grafana at `http://localhost:3030` via SSH tunnel (admin/admin on first boot only — UI forces a password change on first login and the new password persists in the `grafana_data` volume). Alert rules (memory >80% per container, host mem >90%, restart loop, disk >80%) route to the same Discord webhook as QNT-101. Status: `make obs-status`. Synthetic alert test: `make obs-alert-test`.
-- **Ops Runbook**: `docs/guides/ops-runbook.md` — failure-mode catalog with symptoms, diagnosis, response, and prevention. Grep this first when prod breaks; every Ops & Reliability ticket extends it.
-- **ClickHouse Play**: `http://localhost:8123/play` — SQL editor for data exploration (via SSH tunnel)
-- **Dagster UI**: `http://localhost:3000` — asset lineage, run history, sensor status
+- **Health Monitor**: Cron on Hetzner (every 15 min) - checks API `/health` + Docker services, logs failures. `make monitor-log` to check. Session-start hook auto-warns on failures.
+- **Alerting**: Two independent channels (QNT-101) - external uptime probe on `/api/v1/health` (UptimeRobot or equivalent, native Discord on free tier) + `docker-events-notify.service` on Hetzner streaming die/kill/oom/restart to a Discord webhook (alerts ≤30 s). Setup: `docs/guides/uptime-monitoring.md`. Self-monitored via heartbeat file + optional external heartbeat URL (Healthchecks.io free tier). Install: `make events-notify-install`. Test: `make events-notify-test`.
+- **Logs UI**: Dozzle (QNT-103) tails every compose container at `http://localhost:8082` via SSH tunnel - replaces the `ssh hetzner "docker compose logs <svc>"` workflow.
+- **Metrics & Trends**: Prometheus (15d retention) + Grafana dashboards (QNT-103) - host CPU/mem/disk via node_exporter, per-container metrics via cAdvisor. Reach Grafana at `http://localhost:3030` via SSH tunnel (admin/admin on first boot only - UI forces a password change on first login and the new password persists in the `grafana_data` volume). Alert rules (memory >80% per container, host mem >90%, restart loop, disk >80%) route to the same Discord webhook as QNT-101. Status: `make obs-status`. Synthetic alert test: `make obs-alert-test`.
+- **Ops Runbook**: `docs/guides/ops-runbook.md` - failure-mode catalog with symptoms, diagnosis, response, and prevention. Grep this first when prod breaks; every Ops & Reliability ticket extends it.
+- **ClickHouse Play**: `http://localhost:8123/play` - SQL editor for data exploration (via SSH tunnel)
+- **Dagster UI**: `http://localhost:3000` - asset lineage, run history, sensor status
 
 ## Common Commands
 
@@ -212,8 +212,8 @@ make pr QNT=34 TITLE="description"  # Push + create PR
 
 ### MCP servers (configured in `.mcp.json`)
 
-- `clickhouse` — query the warehouse directly (read-only). Requires `make tunnel` running and `CLICKHOUSE_USER`/`CLICKHOUSE_PASSWORD` set in `.env`.
-- `github` — read PRs/issues/Actions runs without prompts; write actions (create PR, comment, merge) prompt for approval. Requires `GITHUB_PERSONAL_ACCESS_TOKEN` in `.env` (run `gh auth token` to fetch).
+- `clickhouse` - query the warehouse directly (read-only). Requires `make tunnel` running and `CLICKHOUSE_USER`/`CLICKHOUSE_PASSWORD` set in `.env`.
+- `github` - read PRs/issues/Actions runs without prompts; write actions (create PR, comment, merge) prompt for approval. Requires `GITHUB_PERSONAL_ACCESS_TOKEN` in `.env` (run `gh auth token` to fetch).
 
 ### Workflow Commands (Claude Code slash commands)
 
@@ -249,7 +249,7 @@ make pr QNT=34 TITLE="description"  # Push + create PR
 /server-audit             # Audit Hetzner prod: durability / host / security / drift. Proposes Linear tickets for gaps, files on approval.
 ```
 
-### Hooks (Automatic — no manual invocation)
+### Hooks (Automatic - no manual invocation)
 
 Configured in `.claude/settings.json`, scripts in `.claude/hooks/`:
 

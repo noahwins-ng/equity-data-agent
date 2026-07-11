@@ -17,29 +17,29 @@ Use **batch ingestion exclusively** for all data pipelines.
 - Fundamentals: weekly Dagster schedule, fetch all available quarters
 - News: periodic Dagster schedule (every few hours), fetch recent articles
 
-`ReplacingMergeTree` in ClickHouse handles deduplication — overlapping fetches are safe and idempotent.
+`ReplacingMergeTree` in ClickHouse handles deduplication - overlapping fetches are safe and idempotent.
 
 ## Alternatives Considered
 
 **Streaming (Kafka + consumers)**
 - Would require Kafka or Redis Streams, a persistent consumer process, and offset management
-- yfinance has no real-time feed — daily bars are only available after market close
+- yfinance has no real-time feed - daily bars are only available after market close
 - Adds ~2-4GB memory overhead on a 16GB VPS that already allocates 10GB to ClickHouse + Ollama
 - Streaming makes sense for sub-minute data; this project uses daily bars for investment thesis generation
 
 **WebSocket feeds from a broker API (e.g., Alpaca, Polygon)**
 - Would enable real-time price updates
 - Requires a paid subscription for reliable real-time data
-- The agent generates investment theses, not intraday trading signals — real-time data provides no meaningful value here
+- The agent generates investment theses, not intraday trading signals - real-time data provides no meaningful value here
 
 ## Consequences
 
 **Easier:**
-- Simple Dagster schedules — no always-on consumer infrastructure
+- Simple Dagster schedules - no always-on consumer infrastructure
 - Full pipeline runs in ~15-20 seconds for 10 tickers
 - Fits comfortably within Hetzner memory budget
 - Dagster handles retries, backfill, and lineage natively for batch workloads
 
 **Harder:**
 - Data is stale until the next scheduled run (acceptable for daily analysis)
-- If added in the future, real-time features would require a separate streaming layer — but this is additive, not a rewrite
+- If added in the future, real-time features would require a separate streaming layer - but this is additive, not a rewrite

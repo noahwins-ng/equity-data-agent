@@ -4,13 +4,13 @@ Evaluation framework for the LangGraph agent. Lives in-tree under `packages/agen
 
 **Design intent**: this harness is the single most important piece of AI-Engineering signal in the repo. It operationalises the ADR-003 contract ("the LLM never calculates") and provides a measurable quality signal for the prompt across versions. Reusable enough to extract as a standalone repo later.
 
-## Shared spine — `spine.py` (QNT-293)
+## Shared spine - `spine.py` (QNT-293)
 
 The eight suites below grew their own runners, history formats, thresholds, and env-gating. `spine.py` is the shared home for the pieces that must stay identical so they can't drift again (the prompt-version hash already drifted once between `graph.py` and `golden_set.py` before QNT-230 unified it):
 
-- **History envelope + writer** — `ENVELOPE_FIELDS` (`run_id` / `git_sha` / `prompt_version` / `suite`) + `append_suite_history(suite, fields, rows, run_id=…)`, which writes one **`{suite}_history.csv` per suite**: the shared envelope columns followed by that suite's own metric columns. Per-suite metrics stay suite-defined; only the envelope is shared. Each suite owns its file, so there's no sparsity (no row blanks another suite's columns) and no shared column order to keep in lockstep — the QNT-264/QNT-277 header-misalignment bug class can't recur. (This replaced a single wide `history.csv` keyed by an `eval_type` column; a `metrics`-as-JSON blob was considered and dropped — a plain per-suite CSV stays spreadsheet- and `git log -p`-readable, and cross-suite `run_id` queries are rare for eval history.)
-- **Run identity** — `git_sha()` and `prompt_version()`, stamped on every row by the writer so a run reproduces from its file alone.
-- **Gating primitives** — `threshold_from_env(name)` (one warn-on-garbage env parser) and `SuiteResult(summary, failed, run_id, warning)` (the summary + pass/fail contract the CLI dispatches on).
+- **History envelope + writer** - `ENVELOPE_FIELDS` (`run_id` / `git_sha` / `prompt_version` / `suite`) + `append_suite_history(suite, fields, rows, run_id=…)`, which writes one **`{suite}_history.csv` per suite**: the shared envelope columns followed by that suite's own metric columns. Per-suite metrics stay suite-defined; only the envelope is shared. Each suite owns its file, so there's no sparsity (no row blanks another suite's columns) and no shared column order to keep in lockstep - the QNT-264/QNT-277 header-misalignment bug class can't recur. (This replaced a single wide `history.csv` keyed by an `eval_type` column; a `metrics`-as-JSON blob was considered and dropped - a plain per-suite CSV stays spreadsheet- and `git log -p`-readable, and cross-suite `run_id` queries are rare for eval history.)
+- **Run identity** - `git_sha()` and `prompt_version()`, stamped on every row by the writer so a run reproduces from its file alone.
+- **Gating primitives** - `threshold_from_env(name)` (one warn-on-garbage env parser) and `SuiteResult(summary, failed, run_id, warning)` (the summary + pass/fail contract the CLI dispatches on).
 
 **One CLI:** `python -m agent.evals` runs the golden set exactly as before (default, unchanged); `python -m agent.evals --suite {golden,retrieval}` dispatches a named suite through the spine, printing its `summary` and mapping `failed` to the exit code.
 
@@ -18,34 +18,34 @@ The eight suites below grew their own runners, history formats, thresholds, and 
 
 All five history-writing suites (golden, retrieval, dialogue, deepeval, rag_impact) write their own `{suite}_history.csv`; the committed test `test_committed_suite_files_match_their_code_schema` pins each file's header to its `*_FIELDS`.
 
-## Four eval types — all required, not optional
+## Four eval types - all required, not optional
 
-### (a) Numeric-claim hallucination detector — `hallucination.py`
+### (a) Numeric-claim hallucination detector - `hallucination.py`
 
 For every thesis the agent produces, regex every numeric claim out of the text and assert each number appears in the tool-output report strings the agent received.
 
-- "Verbatim" with a tight canonicalisation: leading `$`, trailing `%`, and comma thousand-separators are stripped (formatting, not arithmetic). Decimal precision is preserved, so a thesis writing `12.30` against a report saying `12.3` IS flagged — rounding is arithmetic.
+- "Verbatim" with a tight canonicalisation: leading `$`, trailing `%`, and comma thousand-separators are stripped (formatting, not arithmetic). Decimal precision is preserved, so a thesis writing `12.30` against a report saying `12.3` IS flagged - rounding is arithmetic.
 - Any mismatch = test failure.
-- Direct operational enforcement of ADR-003. If the LLM adds a number that wasn't in a report, it hallucinated — by definition.
+- Direct operational enforcement of ADR-003. If the LLM adds a number that wasn't in a report, it hallucinated - by definition.
 
-### (b) Golden-set regression — `golden_set.py` + `goldens/questions.yaml`
+### (b) Golden-set regression - `golden_set.py` + `goldens/questions.yaml`
 
-16 curated `(ticker, question, reference_thesis, expected_tools)` records. Coverage invariant: at least one question per ticker in `shared.tickers.TICKERS` — enforced by `tests/agent/evals/test_questions_yaml.py`.
+16 curated `(ticker, question, reference_thesis, expected_tools)` records. Coverage invariant: at least one question per ticker in `shared.tickers.TICKERS` - enforced by `tests/agent/evals/test_questions_yaml.py`.
 
 Per run, for each record:
 1. Invoke `build_graph(...).invoke(...)` in-process with recording-wrapped tools (so the tool-call eval can see what was actually called).
 2. Score the generated thesis against the reference thesis via:
-   - **LLM-as-judge** per-axis scores (0–10 each) using the agent's own LLM via the LiteLLM proxy at `temperature=0.0`. Four axes: `faithfulness`, `structure`, `correctness`, `analyst_logic`. A `composite` column holds the rounded average of all four.
+   - **LLM-as-judge** per-axis scores (0-10 each) using the agent's own LLM via the LiteLLM proxy at `temperature=0.0`. Four axes: `faithfulness`, `structure`, `correctness`, `analyst_logic`. A `composite` column holds the rounded average of all four.
    - **Cosine similarity** over normalised term-frequency vectors. The original spec called for `all-MiniLM-L6-v2` embeddings; we ship the lighter zero-dep equivalent (same operation in a different vector space) to keep the harness portable. Swap `similarity.cosine` for an embedding-backed implementation behind the same signature when MiniLM is on the path.
 3. Append one row per record to `golden_history.csv` (envelope + `GOLDEN_FIELDS`):
    `run_id, git_sha, prompt_version, suite, eval_type, ticker, question_id, question, faithfulness, structure, correctness, analyst_logic, composite, cosine, tool_call_ok, hallucination_ok, verdict_label_consistent, elapsed_ms`.
 4. `golden_history.csv` is committed so prompt-version quality is visible in `git log -p packages/agent/src/agent/evals/golden_history.csv`.
 
-### (c) Tool-call correctness — `tool_calls.py`
+### (c) Tool-call correctness - `tool_calls.py`
 
-For each record, assert every tool in `expected_tools` was actually called. Over-fetching is allowed (the planner is told to over-fetch when in doubt) — only under-fetching fails.
+For each record, assert every tool in `expected_tools` was actually called. Over-fetching is allowed (the planner is told to over-fetch when in doubt) - only under-fetching fails.
 
-### (d) Dialogue-quality judge — `dialogue_eval.py` + `goldens/dialogue.yaml`
+### (d) Dialogue-quality judge - `dialogue_eval.py` + `goldens/dialogue.yaml`
 
 12+ hand-written multi-turn fixtures replay the agent through the same
 in-process graph path as the structured goldens. The judge is deliberately a
@@ -60,7 +60,7 @@ Dialogue rows append to `dialogue_history.csv` with `eval_type=dialogue`,
 preserving a reviewable quality ledger. Each
 run also appends one `eval_type=dialogue_summary` row carrying the per-axis mean
 (axis columns) plus its standard error (`*_se` columns) and the fixture count
-(`dialogue_n`) — see "Making the dialogue eval trustworthy" below.
+(`dialogue_n`) - see "Making the dialogue eval trustworthy" below.
 
 > **Superseded baseline (temp=0.2 era).** The QNT-214 baseline below was
 > captured with the agent-under-test at `temperature=0.2`. QNT-218 pins the
@@ -91,7 +91,7 @@ sweeps (which would drain the Groq budget).
 
 - **Determinism.** The agent-under-test is pinned to `temperature=0` for the
   duration of each fixture (`set_temperature_override`, reset in a `finally`).
-  The judge is already temp=0. This removes *sampling* variance only — Groq's
+  The judge is already temp=0. This removes *sampling* variance only - Groq's
   MoE serving is still non-deterministic, which is exactly why the per-axis
   error bars below still matter. (It is therefore wrong to call a temp=0 run
   "deterministic".)
@@ -105,16 +105,16 @@ sweeps (which would drain the Groq budget).
   `SE_delta = sd(delta_i) / sqrt(n)`. A **lift** axis (`analyst_likeness`,
   `exploration_quality`) passes when `mean_delta > k * SE_delta` (`k=2`); every
   other axis is a **guardrail** (`non_hallucination`, `helpfulness`,
-  `voice_match` — QNT-215's "no regression elsewhere") that passes when it does
+  `voice_match` - QNT-215's "no regression elsewhere") that passes when it does
   not significantly regress (`mean_delta >= -k * SE_delta`). The two tuples
   partition `DIALOGUE_AXES` so no axis goes silently unchecked. Pairing cancels
   the shared fixture-difficulty term an independent two-sample SE would
   double-count, so it is both tighter and conceptually correct. Note the gated
-  lift lives on the *noisy* axes QNT-215's topology is trying to move —
+  lift lives on the *noisy* axes QNT-215's topology is trying to move -
   `non_hallucination` is a must-not-regress guardrail, never the gate metric.
 - **Replication policy.** A full sweep replicated `n=2-3` times is reserved for
   the single final QNT-215 go/no-go decision, run **once on a verified clean
-  rate-limit window** — never as routine iteration cadence. Directional
+  rate-limit window** - never as routine iteration cadence. Directional
   iteration uses a single run on the targeted fixture(s). Routine multi-sweep
   averaging was explicitly rejected: it spends the scarce Groq budget on every
   iteration to average out a variance source temp-pinning removes for free.
@@ -124,14 +124,14 @@ sweeps (which would drain the Groq budget).
   whose median fixture latency clears `CONTAMINATION_LATENCY_MS` (≈throttling)
   or that dropped any judge call, so a contaminated aggregate is never trusted.
 
-### (e) RAG news-search eval — `news_search_eval.py` + `goldens/news_search.yaml`
+### (e) RAG news-search eval - `news_search_eval.py` + `goldens/news_search.yaml`
 
 Coverage for the QNT-222/225/226 semantic-news-search arc (RAG over the Qdrant
 `equity_news` collection), which shipped with eval coverage only for the
 *plumbing* (mocked-LLM unit tests for flag propagation, hit folding, provenance
 parsing). This axis measures the two things those tests can't: whether the
 search *fires* on the right asks, and whether retrieval returns *relevant*
-headlines. The stakes are higher than a normal coverage gap — on the
+headlines. The stakes are higher than a normal coverage gap - on the
 targeted-news path the focused news card is dropped (QNT-226 narrative-only
 shape), so a wrong firing decision or a retrieval miss degrades the entire
 answer with no regression tripwire.
@@ -144,12 +144,12 @@ and an off-domain ask) that must NOT fire the search.
 
 **Flag layer (hard gate on one direction).** `classify_intent_with_source(question)`
 is run live; its `needs_news_search` must equal the fixture's
-`expected_news_search`. The **only gated direction is a false positive** — a
+`expected_news_search`. The **only gated direction is a false positive** - a
 generic ask wrongly firing RAG drops the focused card (QNT-226), so it's the
 dangerous failure. Positive misses are reported as known-misses, not gated.
 
 > **The flag is deterministic.** `classify_intent_with_source` returns
-> `_is_targeted_news(question)` regardless of the heuristic/LLM path — QNT-229
+> `_is_targeted_news(question)` regardless of the heuristic/LLM path - QNT-229
 > moved the firing boundary into code; the LLM's
 > `IntentDecision.needs_news_search` field is guidance/back-compat only. So
 > "flag accuracy" is a **keyword-routing contract**, not a model-judgment
@@ -166,7 +166,7 @@ case-insensitive substring of the hit's headline or body.
 
 > **Rolling-window assertion strategy (the ticket's main design question).** The
 > 7-day news window rolls, so a frozen-headline assertion would go stale daily.
-> We assert **structural relevance** — a term match against the live corpus —
+> We assert **structural relevance** - a term match against the live corpus -
 > never a specific headline string. Retrieval is **reported, not gated**: a miss
 > can mean a genuine recall gap OR simply that no such story is in this week's
 > corpus (e.g. a litigation fixture returning only partnership headlines because
@@ -179,7 +179,7 @@ classifier calls, Qdrant quota for search). `contamination_warning()` flags a
 run whose per-fixture flag latency clears one full `LLM_REQUEST_TIMEOUT` ceiling
 (the Groq-throttle signature); when it fires, re-run before trusting the numbers.
 
-Standalone, like the dialogue eval — needs the tunnel + live Qdrant + LiteLLM,
+Standalone, like the dialogue eval - needs the tunnel + live Qdrant + LiteLLM,
 so it is **not** collected by pytest and does not run in the default unit sweep.
 Exit codes: `0` = no false positives; `1` = a negative wrongly fired (or zero
 fixtures); `2` = could not run a measurement (dev stack unreachable, or an
@@ -197,36 +197,36 @@ QNT-231 baseline (sha `0e46407`, 2026-06-14, clean window):
 | Retrieval hit-rate | 8/13 (62%) |
 
 Retrieval misses at baseline (nvda-litigation, nvda-settlement, tsla-recall,
-unh-investigation, v-merger) are rolling-window artefacts, not code bugs — the
+unh-investigation, v-merger) are rolling-window artefacts, not code bugs - the
 corpus that week carried no matching legal/recall/merger story for those tickers
 (tsla-recall returned 1 hit, unh-investigation 3; NVDA was dominated by the SK
 partnership story). They are the input to a future recall-improvement ticket.
 
-### (f) RAG retrieval eval — `retrieval_eval.py` + `goldens/retrieval.yaml` (QNT-261)
+### (f) RAG retrieval eval - `retrieval_eval.py` + `goldens/retrieval.yaml` (QNT-261)
 
 The news-search eval (e) scores *structural* relevance (does a hit contain an
 expected term) and reports a rolling hit-rate; it cannot separate a retrieval
 miss from a synthesis miss, and has no notion of *ranking* quality. This is the
 industry-standard **stage-1 retrieval eval**: a labeled relevance set scored with
 classic IR metrics (recall@k / MRR / nDCG via `ir_measures`), DETERMINISTIC and
-LLM-free, kept **separate** from the generation judge. Build-before-upgrade — the
+LLM-free, kept **separate** from the generation judge. Build-before-upgrade - the
 QNT-262 hybrid/rerank lift is measured against this baseline, not assumed.
 
 Three files joined by query id (standard IR layout, `goldens/`):
 
 | File | Role |
 |------|------|
-| `retrieval.yaml` | **topics** — 51 queries (news ×38 over all 10 tickers; earnings ×13 over NVDA+AAPL) + `anchor_terms` (the relevance criterion). Hand-authored. |
-| `retrieval_qrels.trec` | **labels** — `qid 0 docid 1` per relevant Qdrant point id, captured from the live corpus by `--label`. |
-| `retrieval_run.trec` | **frozen run** — the dense-retrieval ranking captured by `--baseline`; what the CI gate scores offline. |
+| `retrieval.yaml` | **topics** - 51 queries (news ×38 over all 10 tickers; earnings ×13 over NVDA+AAPL) + `anchor_terms` (the relevance criterion). Hand-authored. |
+| `retrieval_qrels.trec` | **labels** - `qid 0 docid 1` per relevant Qdrant point id, captured from the live corpus by `--label`. |
+| `retrieval_run.trec` | **frozen run** - the dense-retrieval ranking captured by `--baseline`; what the CI gate scores offline. |
 
-**doc_id = the Qdrant point id** (UInt64) — what a vector search returns, aligned
+**doc_id = the Qdrant point id** (UInt64) - what a vector search returns, aligned
 across both corpora and the later S3-Vectors substrate (`equity_news` =
 `blake2b(ticker:url_id)`, `equity_earnings` = `blake2b(ticker:doc_id:chunk_index)`).
 
 **Labels are independent of the ranking under test.** A doc is relevant to a query
 if its payload text contains one of the query's `anchor_terms`, scanned over the
-*full* ticker-scoped corpus — not the dense top-k. That independence is what makes
+*full* ticker-scoped corpus - not the dense top-k. That independence is what makes
 recall/MRR/nDCG meaningful: we measure whether dense retrieval surfaces the
 lexically-relevant docs against a ground truth it didn't produce. Labels + run are
 frozen TREC files so the CI gate is reproducible even as the live corpus rolls;
@@ -243,12 +243,12 @@ frozen TREC files so the CI gate is reproducible even as the live corpus rolls;
 
 The low recall@5 (<half the relevant docs in top-5) is the headline finding and
 the explicit motivation for QNT-262 (hybrid + rerank). The floors are regression
-tripwires set ~0.08–0.15 below the measured baseline; re-derive them against a
+tripwires set ~0.08-0.15 below the measured baseline; re-derive them against a
 fresh baseline whenever retrieval changes.
 
 **The per-PR CI gate.** `tests/agent/evals/test_retrieval_eval.py` (marked
 `eval`) loads the frozen qrels + run, recomputes the metrics via `ir_measures`,
-and asserts each clears its floor — plus a number-grounding faithfulness tripwire.
+and asserts each clears its floor - plus a number-grounding faithfulness tripwire.
 No LLM keys, no network: free, fast, reproducible, blocking (`ci.yml` runs
 `pytest -m eval` as its own step). The LLM-judged generation layer (DeepEval /
 RAGAS, QNT-264) lives off the hot path (nightly / dispatch), never per-PR.
@@ -263,10 +263,10 @@ The baseline appends one `eval_type="retrieval"` row to `retrieval_history.csv`
 (`recall_at_5` / `recall_at_20` / `mrr` / `ndcg_at_10` / `retrieval_n`) stamped
 with the same `git_sha` + `prompt_version` as every other eval type.
 
-### (g) Multi-corpus routing eval — `routing_eval.py` + `goldens/routing.yaml` (QNT-263)
+### (g) Multi-corpus routing eval - `routing_eval.py` + `goldens/routing.yaml` (QNT-263)
 
 Eval (f) measures retrieval quality *within* a corpus; this measures whether a
-question is routed to the *right* corpus in the first place — the senior
+question is routed to the *right* corpus in the first place - the senior
 multi-corpus signal. For each fixture, `agent.intent.route_search_corpora(question)`
 must equal the expected set of corpora (news and/or earnings, or neither). The
 router is DETERMINISTIC and LLM-free (`_is_targeted_news` + `_is_earnings_search`),
@@ -275,7 +275,7 @@ so it runs **offline** in the default pytest sweep
 
 24 fixtures across four routing classes (news-only, earnings-only, both, neither);
 coverage floors keep every class populated so the "both" signal can't silently
-collapse. The deterministic gate fails on any misroute — a miss is a bug, not a
+collapse. The deterministic gate fails on any misroute - a miss is a bug, not a
 model wobble. **2026-06-20: 24/24 (100%).**
 
 ```bash
@@ -283,16 +283,16 @@ uv run python -m agent.evals.routing_eval                 # offline scorecard + 
 uv run python -m agent.evals.routing_eval --only nvda-ceo-guidance
 ```
 
-### (g2) Plan-fold agreement eval — `plan_fold_eval.py` (QNT-327, v3 G-6 spike)
+### (g2) Plan-fold agreement eval - `plan_fold_eval.py` (QNT-327, v3 G-6 spike)
 
 QNT-327 folds the thesis plan pick into the classify call (`IntentDecision`
 gained optional `report_picks` / `plan_rationale`, `plan_node` consumes them and
 skips the dedicated `ThesisPlan` call) so a thesis turn drops from four sequential
 LLM calls to three. That is only shippable if the folded pick reproduces what the
 standalone planner would have chosen. For each golden question the LIVE classifier
-routes to `thesis`, this runs BOTH resolvers over the same report set — the folded
+routes to `thesis`, this runs BOTH resolvers over the same report set - the folded
 `report_picks` (`_tools_from_folded_picks`) and the standalone `ThesisPlan`
-planner (`_tools_from_thesis_plan`) — and reports the plan-pick AGREEMENT rate
+planner (`_tools_from_thesis_plan`) - and reports the plan-pick AGREEMENT rate
 (`AGREEMENT_FLOOR = 0.80`), plus the resolved intent per fixture so an
 intent-label drift from the fatter schema is visible. Pairs with `routing_eval`
 (intent accuracy unchanged) as the two-sided AC2 gate. Fires two live small
@@ -305,20 +305,20 @@ uv run python -m agent.evals.plan_fold_eval               # live agreement score
 uv run python -m agent.evals.plan_fold_eval --only nvda-technical
 ```
 
-### (h) LLM-judged generation eval — `deepeval_eval.py` + `test_deepeval.py` (QNT-264)
+### (h) LLM-judged generation eval - `deepeval_eval.py` + `test_deepeval.py` (QNT-264)
 
-Evals (a)–(g) are deterministic or single-axis. This is the **LLM-judged nuance
+Evals (a)-(g) are deterministic or single-axis. This is the **LLM-judged nuance
 layer** the 2026 two-stage RAG-eval blend calls for (docs/v2-overall-enhancement.md
-"RAG eval framework", Track 2.7): the **RAGAS metric set** — faithfulness, answer
-relevancy, context precision, context recall — plus one **custom G-Eval**
+"RAG eval framework", Track 2.7): the **RAGAS metric set** - faithfulness, answer
+relevancy, context precision, context recall - plus one **custom G-Eval**
 (`VerdictGroundedness`: is the investment verdict justified by the retrieved
 evidence, without overstating confidence). All run through **DeepEval**, the
 pytest-native production CI-gating framework that subsumes RAGAS (same metrics +
-G-Eval, one framework — standalone RAGAS was dropped to avoid redundant tooling).
+G-Eval, one framework - standalone RAGAS was dropped to avoid redundant tooling).
 
 **Off the per-PR hot path (the whole point).** ci.yml wires no LLM keys and our
 free-tier budget (Gemini 20 RPD, Groq TPD) makes judge-on-every-PR a bad fit, so
-the suite is marked `deepeval` — neither the unit step (`-m "not integration and
+the suite is marked `deepeval` - neither the unit step (`-m "not integration and
 not eval"`) nor the deterministic RAG gate (`-m eval`) collects it. It runs in a
 **separate workflow** (`.github/workflows/llm-eval.yml`, nightly `schedule:` +
 `workflow_dispatch`, stack/judge credentials as job-scoped secrets) and locally.
@@ -327,15 +327,15 @@ The per-PR RAG gate stays the deterministic one (eval (f), QNT-261).
 **Judge routing + budget (AC2).** The judge is the SAME pinned free model the
 dialogue judge uses (`equity-agent/bench-cerebras-gptoss120b` →
 `cerebras/gpt-oss-120b`), reached through the LiteLLM proxy via `get_judge_llm()`
-— no new provider key. A custom `LiteLLMJudge(DeepEvalBaseLLM)` wraps it;
+- no new provider key. A custom `LiteLLMJudge(DeepEvalBaseLLM)` wraps it;
 `generate` honours DeepEval's optional `schema` kwarg via LangChain
 `with_structured_output`. Gated to a **SAMPLE** (`DEEPEVAL_SAMPLE`, default 4
-records) on a clean window: each record costs **~8–12 judge calls** across the
-five metrics, so a 4-record run is **~32–48 calls** — inside the free tier. Metrics
+records) on a clean window: each record costs **~8-12 judge calls** across the
+five metrics, so a 4-record run is **~32-48 calls** - inside the free tier. Metrics
 run `async_mode=False` so the calls serialise rather than burst the rate limit.
 
 **Coexistence, not replacement (AC4).** The in-house number-grounding check (eval
-(a)) is retained and asserted additively per case — it's a stricter, deterministic,
+(a)) is retained and asserted additively per case - it's a stricter, deterministic,
 verbatim faithfulness layer for financial figures than generic LLM-judged
 faithfulness. DeepEval is the nuance layer on top.
 
@@ -344,12 +344,12 @@ faithfulness. DeepEval is the nuance layer on top.
 `deepeval_answer_relevancy` / `deepeval_context_precision` /
 `deepeval_context_recall` / `deepeval_geval` / `deepeval_n`), stamped with the same
 `git_sha` + `prompt_version` as every other eval type. The `deepeval_*` prefix keeps
-these 0–1 floats distinct from the integer golden-set `faithfulness` judge axis.
+these 0-1 floats distinct from the integer golden-set `faithfulness` judge axis.
 
 **Soft by default (the established judge philosophy).** Like the golden judge
 (`EVAL_MIN_JUDGE` off until history earns a trustworthy number), the DeepEval
 metric scores are a *recorded soft signal*. The pytest suite hard-asserts only
-the real contracts — every RAGAS axis produced a score, and the deterministic
+the real contracts - every RAGAS axis produced a score, and the deterministic
 number-grounding ran additively (AC4). DeepEval's canonical `assert_test`
 threshold gate is opt-in behind `DEEPEVAL_ENFORCE_THRESHOLDS`; enable it once a
 clean ≥50-record baseline re-derives the floors, the same way the retrieval gate
@@ -368,13 +368,13 @@ answer-relevancy ≥ 0.75, G-Eval ≥ 0.7) are the design-doc calibration target
 | context_precision | 0.88 | ≥ 0.8 |
 | context_recall | **0.29** | ≥ 0.8 |
 | VerdictGroundedness (G-Eval) | 0.93 | ≥ 0.7 |
-| number-grounding (deterministic) | 4/4 clean | — |
+| number-grounding (deterministic) | 4/4 clean | - |
 
 **The low `context_recall` is a measurement-design finding, not a retrieval bug.**
 Context recall checks whether the *reference answer's* statements are
 reconstructable from the retrieval context. The golden references are hand-written
 analyst *synthesis* (verdicts, interpretation), while the retrieval context is the
-raw pre-computed report data — so the synthesized claims aren't directly
+raw pre-computed report data - so the synthesized claims aren't directly
 attributable to a context chunk and recall reads low. This is the same shape as
 the structure axis scoring 0 on non-thesis query shapes (above): the framework
 surfacing a real signal about the eval inputs, not a code defect. The follow-up is
@@ -389,11 +389,11 @@ uv run python -m agent.evals.deepeval_eval --only NVDA --no-record
 uv run pytest -m deepeval -v                               # the pytest cases (live test skips w/o stack)
 ```
 
-### (i) RAG impact eval — `rag_impact_eval.py` + `goldens/rag_impact.yaml` (QNT-277)
+### (i) RAG impact eval - `rag_impact_eval.py` + `goldens/rag_impact.yaml` (QNT-277)
 
-Evals (e)–(h) score retrieval (recall@k / MRR / nDCG) and generation (RAGAS /
+Evals (e)-(h) score retrieval (recall@k / MRR / nDCG) and generation (RAGAS /
 G-Eval) **in isolation**. None catches the failure mode "search fired, retrieved a
-relevant hit, and the answer ignored it" — the exact gap that let the synthesis
+relevant hit, and the answer ignored it" - the exact gap that let the synthesis
 demotion (QNT-276) go unnoticed while every component eval stayed green. This is
 the **end-to-end contribution** eval: does a retrieved-only fact actually REACH
 the answer?
@@ -402,11 +402,11 @@ the answer?
 `build_graph` dependency injection: the report tools return a canned digest that
 OMITS the planted fact, and `search_news_tool` / `search_earnings_tool` return a
 fixture hit carrying a **coined** proper noun (a name the model can't memorise or
-paraphrase). The assertion is on the user-facing ANSWER TEXT — does the coined
-entity appear? — not on `retrieved_sources` shape or fold rendering. That contract
+paraphrase). The assertion is on the user-facing ANSWER TEXT - does the coined
+entity appear? - not on `retrieved_sources` shape or fold rendering. That contract
 survives the QNT-276 refactor, so the only way a fixture flips RED→GREEN is a
 genuine behavior change. Because search is stubbed, the eval touches **neither
-Qdrant NOR Cohere** — the only model calls are the agent's own classify +
+Qdrant NOR Cohere** - the only model calls are the agent's own classify +
 synthesize/narrate on the Groq free tier. Runs off the per-PR hot path
 (`workflow_dispatch` / local), like DeepEval, with zero rerank-quota cost. The
 offline fixture validation (`tests/agent/evals/test_rag_impact_yaml.py`) DOES run
@@ -423,7 +423,7 @@ the coined entity. A positive whose search never fired is reported as `misrouted
 `rag_impact_n`), same `git_sha` + `prompt_version` stamping as every other type.
 
 **First recorded baseline** (run `2441f9bf`, sha `f1d419c`, 2026-06-23, clean
-window, 8 fixtures): `rag_impact_pass_rate` **0.875** (7/8 gated) — the one FAIL is
+window, 8 fixtures): `rag_impact_pass_rate` **0.875** (7/8 gated) - the one FAIL is
 `msft-guidance-earnings`, where the retrieved earnings fact is dropped from the
 answer (the earnings→fundamental synthesis path demotes it). That stable failure
 is the evidence the gap is real; QNT-276 should flip it to 1.0.
@@ -436,19 +436,19 @@ uv run python -m agent.evals.rag_impact_eval --no-history
 
 **Trustworthiness (QNT-278).** `contamination_warning` now flags BOTH throttle
 signatures: the slow one (a call ran to its timeout ceiling) and the FAST one (a
-gated positive completed under `CONTAMINATION_FAST_LATENCY_MS` ~2.5s — Groq
+gated positive completed under `CONTAMINATION_FAST_LATENCY_MS` ~2.5s - Groq
 returned a truncated completion that silently drops the planted entity, the
 `msft-guidance-earnings` in-sweep flake). The msft fixture was reframed to
 must-quote ("which named initiative did MSFT management tie its guidance to?") so
 a short generation cannot answer without the coined entity, matching amzn's
 robustness.
 
-### (j) Live end-to-end RAG smoke — `rag_smoke_eval.py` + `goldens/rag_smoke.yaml` (QNT-278)
+### (j) Live end-to-end RAG smoke - `rag_smoke_eval.py` + `goldens/rag_smoke.yaml` (QNT-278)
 
-Evals (e)–(i) each score ONE layer: IR scores retrieval, DeepEval scores
+Evals (e)-(i) each score ONE layer: IR scores retrieval, DeepEval scores
 generation, and rag_impact (i) **stubs** search so it tests fold→prompt→answer but
 by construction cannot see retrieve→rerank. That seam is exactly where the QNT-276
-demotion AND the QNT-279 boilerplate leak lived — every component eval green, the
+demotion AND the QNT-279 boilerplate leak lived - every component eval green, the
 end-to-end contribution wrong, the first real check a human in the prod UI. This
 harness runs hand-picked queries through the **WHOLE chain against the real Qdrant
 + Cohere** (nothing stubbed) and asserts what the isolated evals cannot:
@@ -456,15 +456,15 @@ harness runs hand-picked queries through the **WHOLE chain against the real Qdra
 * **surfaced-source relevance** (the QNT-279 axis) against the per-corpus rerank
   floor it ASSERTS against (`RERANK_FLOORS`, mirroring `api/routers/search.py`).
   `relevant` fixtures (narrow asks) require the top hit to clear the floor;
-  `boilerplate_guard` fixtures (broad asks) require NO surfaced hit below it — an
+  `boilerplate_guard` fixtures (broad asks) require NO surfaced hit below it - an
   empty result is the correct broad-ask outcome.
-* **the retrieved fact reaches the answer** (the QNT-276 axis) — a distinctive
+* **the retrieved fact reaches the answer** (the QNT-276 axis) - a distinctive
   term DERIVED from the live top hit (a coined figure / proper noun, never a
   generic word the canned report carries) must appear in the answer. Deriving it
   from the live hit keeps the assertion sound against the rolling news window.
 
 On a **pre-QNT-279 build** the `boilerplate_guard` rows FAIL (sub-floor 8-K "About
-&lt;co&gt;" surfaces); the floor flips them GREEN — the demonstration that the
+&lt;co&gt;" surfaces); the floor flips them GREEN - the demonstration that the
 harness catches the seam bug (AC4). Off the per-PR hot path (run on demand, never
 collected by pytest), like `news_search_eval`; offline fixture validation
 (`tests/agent/evals/test_rag_smoke_yaml.py`) DOES run in the unit sweep.
@@ -482,10 +482,10 @@ row has no generation-latency signal and is never flagged).
 * **post-QNT-279** (floor on, `main`): **11/11** gated PASS, both earnings
   `boilerplate_guard` rows empty (the floor drops the 8-K "About &lt;co&gt;"
   best-of-weak). `googl-guidance-earnings` returned EMPTY (a recall gap in that
-  corpus slice — ungated, not a failure).
-* **pre-QNT-279** (floor reverted to 0.0): **5 FAIL** — all four
+  corpus slice - ungated, not a failure).
+* **pre-QNT-279** (floor reverted to 0.0): **5 FAIL** - all four
   `boilerplate_guard` rows surface sub-floor boilerplate as sources (news
-  0.036–0.059, earnings 0.076–0.152; all below their 0.30 / 0.50 floors) and the
+  0.036-0.059, earnings 0.076-0.152; all below their 0.30 / 0.50 floors) and the
   exit code flips to 1. That RED→GREEN swing is the proof the harness would have
   caught the QNT-279 leak before prod.
 
@@ -537,7 +537,7 @@ axis scoring 0 on non-thesis query shapes (set-wide S≈1.5, identical old and n
 universe), not a new-ticker gap.
 
 **Note the gap (do not loosen the contract).** The 2 golden hallucination misses
-are `tsla-news-sentiment` and `meta-news-sentiment` — both *retained* tickers, so
+are `tsla-news-sentiment` and `meta-news-sentiment` - both *retained* tickers, so
 not swap-induced. A targeted re-run reproduced them (and intermittently
 `tsla-news`): the news narrate path emits an unsupported number (TSLA `2.5`, META
 `14`) absent from the report strings. This is a pre-existing news-synthesis
@@ -571,14 +571,14 @@ uv run python -m agent.evals.news_search_eval --flag-only   # skip live Qdrant
 ```
 
 Exit codes:
-- `0` — every record passed the hallucination + tool-call contracts.
-- `1` — any record failed a hard contract, OR (if `EVAL_MIN_JUDGE` is set) the average judge score fell below the threshold.
+- `0` - every record passed the hallucination + tool-call contracts.
+- `1` - any record failed a hard contract, OR (if `EVAL_MIN_JUDGE` is set) the average judge score fell below the threshold.
 
-The judge score is treated as a **soft** signal by default — the gate is on hard contracts (hallucination, tool-call). Set `EVAL_MIN_JUDGE=7` once `history.csv` shows enough baseline runs to trust a number.
+The judge score is treated as a **soft** signal by default - the gate is on hard contracts (hallucination, tool-call). Set `EVAL_MIN_JUDGE=7` once `history.csv` shows enough baseline runs to trust a number.
 
 ## Judge axes (QNT-191)
 
-The LLM-as-judge scores four axes independently (each 0–10):
+The LLM-as-judge scores four axes independently (each 0-10):
 
 | Axis | What it measures |
 |---|---|
@@ -596,15 +596,15 @@ Historical rows (before QNT-191) have empty axis columns and carry the old singl
 
 ## Reading the history files
 
-Each suite has its own `{suite}_history.csv` (QNT-293 follow-up); the golden set's is `golden_history.csv`. Each golden row is one (run × record) pair. `tool_call_ok` and `hallucination_ok` are the hard contracts (1 = pass, 0 = fail). The committed baseline at QNT-67 ship-time intentionally includes failing rows — the eval surfaced 3 real prompt-quality findings on its first live sweep:
+Each suite has its own `{suite}_history.csv` (QNT-293 follow-up); the golden set's is `golden_history.csv`. Each golden row is one (run × record) pair. `tool_call_ok` and `hallucination_ok` are the hard contracts (1 = pass, 0 = fail). The committed baseline at QNT-67 ship-time intentionally includes failing rows - the eval surfaced 3 real prompt-quality findings on its first live sweep:
 
-- `amzn-fundamental` — thesis emitted `16.09`, not in any report
-- `unh-fundamental` and `unh-news` — thesis emitted `89.02` and `99.82`, not in any report (news synthesis quoting fundamental-style numbers is the suspicious one)
+- `amzn-fundamental` - thesis emitted `16.09`, not in any report
+- `unh-fundamental` and `unh-news` - thesis emitted `89.02` and `99.82`, not in any report (news synthesis quoting fundamental-style numbers is the suspicious one)
 
 Those are **the framework working as intended**, not framework noise. They're the input to follow-up prompt-tuning tickets, kept in the baseline so the next prompt edit is measurable against this floor.
 
 ## Why this lives in the repo, not a separate eval service
 
-- The harness runs the same agent code and prompts that ship to prod — keeping it in-tree makes that automatic.
+- The harness runs the same agent code and prompts that ship to prod - keeping it in-tree makes that automatic.
 - CI can run a subset of evals on every PR.
 - The committed `{suite}_history.csv` files in git give a permanent, reviewable record of how prompt changes moved the metrics.

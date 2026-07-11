@@ -2,12 +2,12 @@
 
 Formalise a requirement change: update the spec and Linear. Handles additions, drops, and modifications.
 
-Pass the change type and description as arguments (e.g., `/change-scope drop QNT-52 — switching to RSS instead of paid news API`).
+Pass the change type and description as arguments (e.g., `/change-scope drop QNT-52 - switching to RSS instead of paid news API`).
 
 The argument is: $ARGUMENTS
 
 **Scope of this command**: spec (`project-requirement.md`) + `system-overview.md` + Linear only.
-`project-plan.md` is NOT touched here — run `/sync-docs` after to reconcile the plan.
+`project-plan.md` is NOT touched here - run `/sync-docs` after to reconcile the plan.
 
 ---
 
@@ -15,19 +15,19 @@ The argument is: $ARGUMENTS
 
 ### Step 1: Identify Change Type
 Determine from the argument whether this is:
-- **add** — new requirement being introduced
-- **drop** — existing requirement being removed
-- **modify** — existing requirement changing scope or approach
+- **add** - new requirement being introduced
+- **drop** - existing requirement being removed
+- **modify** - existing requirement changing scope or approach
 
 If unclear from the argument, ask before proceeding.
 
 ### Step 2: Update `docs/project-requirement.md`
 
-**add**: Insert the new requirement into the appropriate phase/section. Define the *what* and *why* — not just the deliverable but the rationale and any constraints.
+**add**: Insert the new requirement into the appropriate phase/section. Define the *what* and *why* - not just the deliverable but the rationale and any constraints.
 
 **drop**: Remove or clearly mark the requirement as dropped. If it was part of a larger section, update surrounding context so the spec still reads coherently.
 
-**modify**: Update the affected section. Be precise — change only what changed. If the rationale shifted, update that too.
+**modify**: Update the affected section. Be precise - change only what changed. If the rationale shifted, update that too.
 
 ### Step 2b: Update `docs/architecture/system-overview.md`
 If the change affects any of the following, update the relevant section of `system-overview.md`:
@@ -40,11 +40,11 @@ If none of the above apply, skip this step.
 
 ### Step 2c: Update `docs/project-plan.md`
 
-**add**: Draft a new plan entry for the issue and insert it into the correct phase section. Format it to match surrounding entries (checkbox, QNT-XX reference, sub-bullets for deliverables if applicable). Do NOT wait for `/sync-docs` — add it now.
+**add**: Draft a new plan entry for the issue and insert it into the correct phase section. Format it to match surrounding entries (checkbox, QNT-XX reference, sub-bullets for deliverables if applicable). Do NOT wait for `/sync-docs` - add it now.
 
 **drop**: Remove the corresponding entry from the plan. If it has sub-bullets or context, remove those too so the section still reads coherently.
 
-**modify**: Find the plan entry matching this issue (by QNT-XX reference) and update its text to reflect the new scope. Update sub-bullets if the deliverables changed. `/sync-docs` only handles status (Done/Cancelled) — it will not update text.
+**modify**: Find the plan entry matching this issue (by QNT-XX reference) and update its text to reflect the new scope. Update sub-bullets if the deliverables changed. `/sync-docs` only handles status (Done/Cancelled) - it will not update text.
 
 ### Step 3: Update Linear
 
@@ -62,11 +62,11 @@ If none of the above apply, skip this step.
 Post a comment on the affected Linear issue (for all three change types) to create a permanent audit trail:
 
 ```
-**Scope change [add | drop | modify]** — YYYY-MM-DD
+**Scope change [add | drop | modify]** - YYYY-MM-DD
 
 What changed: <one-line summary>
 Reason: <from the user's argument>
-Spec: docs/project-requirement.md — <section>
+Spec: docs/project-requirement.md - <section>
 ADR: docs/decisions/00N-title.md | none
 ```
 
@@ -86,10 +86,10 @@ If no → skip.
 Scope change: [add | drop | modify]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Spec:     Updated docs/project-requirement.md — <section>
-Overview: Updated docs/architecture/system-overview.md — <section> | none
-Plan:     Updated docs/project-plan.md — <entry added | removed | text updated> | none
-Linear:   QNT-XX [created | cancelled | updated] — <title>
+Spec:     Updated docs/project-requirement.md - <section>
+Overview: Updated docs/architecture/system-overview.md - <section> | none
+Plan:     Updated docs/project-plan.md - <entry added | removed | text updated> | none
+Linear:   QNT-XX [created | cancelled | updated] - <title>
 ADR:      docs/decisions/00N-<title>.md (if applicable) | none
 
 Plan updated inline. Run /sync-docs only if you also need to reconcile

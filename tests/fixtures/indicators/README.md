@@ -20,16 +20,16 @@ that prod sees.
 
 Expected indicator snapshots are the raw output of `compute_indicators()` run on the
 committed OHLCV fixtures. They are regenerated whenever the indicator definitions
-intentionally change — see `docs/guides/regenerate-indicator-fixtures.md`.
+intentionally change - see `docs/guides/regenerate-indicator-fixtures.md`.
 
 ## External cross-reference
 
 The indicators in `compute_indicators()` follow industry-standard definitions:
 
-- **RSI-14** — Wilder (1978), exponential smoothing with α = 1/14 — matches TradingView
+- **RSI-14** - Wilder (1978), exponential smoothing with α = 1/14 - matches TradingView
   and Yahoo Finance defaults.
-- **MACD (12, 26, 9)** — Appel's classic definition; identical to TradingView default.
-- **Bollinger Bands (20, 2)** — 20-period SMA ± 2 sample std (ddof=1); matches
+- **MACD (12, 26, 9)** - Appel's classic definition; identical to TradingView default.
+- **Bollinger Bands (20, 2)** - 20-period SMA ± 2 sample std (ddof=1); matches
   TradingView default.
 
 `test_indicator_validation.py::test_<rsi|macd>_matches_canonical_reference_<ticker>`

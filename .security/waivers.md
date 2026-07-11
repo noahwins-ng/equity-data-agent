@@ -28,7 +28,7 @@ medium-confidence detector can't distinguish "f-string with a literal" from
 SQL query. The 24 hits fall into three patterns, all reviewed and confirmed
 not user-reachable as of 2026-05-04:
 
-1. **Constant table-name interpolation** — `{table}` or `{_TABLE_NAME}`
+1. **Constant table-name interpolation** - `{table}` or `{_TABLE_NAME}`
    resolves to a module-level string constant. The `ClickHouseResource`
    driver doesn't support identifier substitution, so identifier
    interpolation is unavoidable.
@@ -37,22 +37,22 @@ not user-reachable as of 2026-05-04:
    - `packages/dagster-pipelines/src/dagster_pipelines/asset_checks/news_embeddings_checks.py:112,199`
    - `packages/dagster-pipelines/src/dagster_pipelines/asset_checks/fundamental_summary_checks.py:40,66,98,145`
 
-2. **Constant-list interpolation** — values come from a tuple/list of
+2. **Constant-list interpolation** - values come from a tuple/list of
    string constants joined into an `IN (...)` clause; not user input.
-   - `packages/dagster-pipelines/src/dagster_pipelines/asset_checks/fundamentals_checks.py:45` —
+   - `packages/dagster-pipelines/src/dagster_pipelines/asset_checks/fundamentals_checks.py:45` -
      `valid_list = ",".join(f"'{pt}'" for pt in _VALID_PERIOD_TYPES)`.
 
-3. **Mixed: ticker-validated + constant interpolation** — query uses
+3. **Mixed: ticker-validated + constant interpolation** - query uses
    `%(ticker)s` parameterisation for the user-supplied ticker (validated
    against `ALL_OHLCV_TICKERS`/`TICKERS` allowlist before reaching SQL);
    the f-string only injects constants like timeframe-keyed table names
    from a hardcoded enum lookup or numeric `WINDOW_DAYS`.
-   - `packages/api/src/api/routers/data.py:238,301,412` — ticker
+   - `packages/api/src/api/routers/data.py:238,301,412` - ticker
      validated at line 234 (`if ticker not in ALL_OHLCV_TICKERS: 404`),
      `{table}`/`{date_col}` from `_TIMEFRAME_QUERY` enum lookup.
    - `packages/api/src/api/templates/fundamental.py:87` and
-     `packages/api/src/api/templates/technical.py:181` — same pattern.
-   - `packages/dagster-pipelines/src/dagster_pipelines/assets/news_embeddings.py:60` —
+     `packages/api/src/api/templates/technical.py:181` - same pattern.
+   - `packages/dagster-pipelines/src/dagster_pipelines/assets/news_embeddings.py:60` -
      `{WINDOW_DAYS}` is an `int` constant; ticker via `%(ticker)s`.
 
 The right fix would be either (a) parameterise table names via the ClickHouse
@@ -64,14 +64,14 @@ passwords, jinja2 autoescape off) without flap on the false positives.
 
 **Decision**: gate at HIGH (`bandit -lll`), document mediums here. **Before
 adding a new B608 finding to the waivable set, audit it against the three
-patterns above** — if a new f-string interpolates anything that could come
+patterns above** - if a new f-string interpolates anything that could come
 from user input without prior allowlist validation, fix the code; do not
 extend this waiver. Re-audit on schema change or when public chat (QNT-75)
 adds new query paths.
 
 **Skipped rules** (see `pyproject.toml` `[tool.bandit] skips`):
 
-- `B101` — `assert_used`. We exclude `tests/` already; the remaining hits
+- `B101` - `assert_used`. We exclude `tests/` already; the remaining hits
   are module-level invariant assertions in agent/api code that we want to
   keep.
 
@@ -79,17 +79,17 @@ adds new query paths.
 
 **Path allowlist** (see `.gitleaks.toml`):
 
-- `\.claude/skills/.*\.md` — Claude Code agent skill markdown. Contains
+- `\.claude/skills/.*\.md` - Claude Code agent skill markdown. Contains
   example curl commands with placeholder credentials (`"your-password"`,
   `"X-ClickHouse-Key: your-token"`) that match the `curl-auth-header` rule.
   These are documentation, not real secrets.
-- `\.env\.sops` — SOPS-encrypted dotenv ciphertext. The plaintext `.env`
+- `\.env\.sops` - SOPS-encrypted dotenv ciphertext. The plaintext `.env`
   is gitignored; the encrypted file is the deploy-time secret store and
   is safe to commit.
-- `frontend/\.next/.*` — Next.js build output. Generates per-build preview
+- `frontend/\.next/.*` - Next.js build output. Generates per-build preview
   encryption keys that match `generic-api-key`. Path is gitignored, so
   this only matters for `--no-git` filesystem scans.
-- `.*node_modules/.*` — vendor code; not our concern, often contains test
+- `.*node_modules/.*` - vendor code; not our concern, often contains test
   fixtures with synthetic secrets.
 
 ### npm audit
@@ -97,7 +97,7 @@ adds new query paths.
 **Severity gate set to HIGH.** `npm audit` currently reports 2 moderate
 findings: `postcss <8.5.10` (XSS via unescaped `</style>`), reachable only
 via Next.js's bundled copy. `npm audit fix --force` mechanically suggests
-`next@9.3.3` — that's npm's resolver picking the oldest version in the
+`next@9.3.3` - that's npm's resolver picking the oldest version in the
 range without the vulnerable postcss, not a serious upgrade path; the
 suggestion would regress us seven major versions of Next. We're not taking
 it. `postcss` is build-time only (compile-time CSS transformation; not

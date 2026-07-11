@@ -11,7 +11,7 @@ Single monorepo using uv workspaces with 4 packages under `packages/`.
 
 ## Alternatives Considered
 - **Separate repos**: Independent deployment and CI. But introduces cross-repo dependency management, schema drift between services, and slower iteration for a solo developer.
-- **Single flat package**: Simplest structure. But no import boundaries — easy to accidentally import Dagster dependencies in the API package or create circular dependencies.
+- **Single flat package**: Simplest structure. But no import boundaries - easy to accidentally import Dagster dependencies in the API package or create circular dependencies.
 
 ## Consequences
 - **Positive**: Single CI pipeline, shared schemas prevent drift, atomic commits across components, `uv sync` resolves everything.

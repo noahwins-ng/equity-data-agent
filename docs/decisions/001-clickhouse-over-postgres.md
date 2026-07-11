@@ -4,7 +4,7 @@
 **Status**: Accepted
 
 ## Context
-Need a database for time-series financial data (OHLCV, fundamentals, indicators). The workload is append-heavy with analytical queries — aggregations over date ranges, grouped by ticker.
+Need a database for time-series financial data (OHLCV, fundamentals, indicators). The workload is append-heavy with analytical queries - aggregations over date ranges, grouped by ticker.
 
 ## Decision
 Use ClickHouse with `ReplacingMergeTree` engine.

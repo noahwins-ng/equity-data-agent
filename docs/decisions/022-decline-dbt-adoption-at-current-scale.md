@@ -13,7 +13,7 @@ runs before any human reads the README. So the question was real: is dbt worth
 adopting here on engineering merit, on hiring-signal merit, or neither?
 
 A code-grounded comparison (2026-06-13, `docs/de-improvement-v1.md` Appendix A)
-examined the only migration candidates — the OHLCV aggregation assets
+examined the only migration candidates - the OHLCV aggregation assets
 `ohlcv_weekly` / `ohlcv_monthly` in
 `packages/dagster-pipelines/src/dagster_pipelines/assets/aggregation/ohlcv_aggregation.py`.
 
@@ -26,12 +26,12 @@ allocated to QNT-242 is reallocated to the data-quality lane (QNT-243
 reject/quarantine handling); the data-observability fallback (QNT-240) already
 shipped.
 
-**What we keep regardless** — the boundary rule the spike produced, which is the
+**What we keep regardless** - the boundary rule the spike produced, which is the
 durable, reusable part of this decision:
 
 > SQL-shaped, set-based transforms belong in declarative SQL models; Python math
 > (RSI / MACD / SMA and the other indicators) belongs in Dagster assets. If dbt
-> is ever adopted, `dagster-dbt` stitches both into one asset graph — dbt owns
+> is ever adopted, `dagster-dbt` stitches both into one asset graph - dbt owns
 > the set-based layer, Dagster owns the imperative-math layer. Adoption is gated
 > on demand (a larger SQL surface or a hiring requirement), not on taste.
 
@@ -48,17 +48,17 @@ The comparison found **no engineering jump** at this scale. Per Appendix A:
 | Compute | full series -> worker RAM -> pandas -> reinsert | ClickHouse aggregates in place | dbt better |
 | Partitioning | per-ticker `StaticPartition` (isolated retries + per-partition observability) | whole-table `table` rebuild | **lost** |
 | Testing | aggregation outputs have no dedicated asset checks today; the project's check idiom (e.g. `pe_in_band` on `fundamental_summary`) already exceeds dbt's built-ins | `schema.yml` not_null/unique | **neutral** (any add is achievable natively) |
-| Scope | — | only ~2 of N transforms qualify; indicators stay Python | thin slice |
+| Scope | - | only ~2 of N transforms qualify; indicators stay Python | thin slice |
 | Deps / deploy | none; already in image | `dagster-dbt` + `dbt-clickhouse` + manifest-compiled-at-build-time | added surface |
 
-The one genuine win — pushing the group-by down into ClickHouse SQL
+The one genuine win - pushing the group-by down into ClickHouse SQL
 (`toMonday` / `toStartOfMonth` + `argMin` / `argMax` + `sum`) instead of pulling
-the series to a pandas worker — is real but marginal at 10 tickers, and it is
+the series to a pandas worker - is real but marginal at 10 tickers, and it is
 bought at the cost of losing per-ticker partition granularity and taking on a new
 dependency + build-time manifest surface for a ~2-transform slice. The testing
 story does not improve either: the aggregation outputs carry no dedicated asset
 checks today, so dbt's stock `not_null`/`unique` would be a marginal *add* there
-— but that same coverage is achievable as native Dagster asset checks (the idiom
+- but that same coverage is achievable as native Dagster asset checks (the idiom
 the project already uses elsewhere, e.g. `pe_in_band`, exceeds dbt's built-ins),
 so it is no reason to adopt dbt. Net: a near-even trade whose only tiebreaker was
 hiring signal.
@@ -70,9 +70,9 @@ target listings require dbt). That scan was **not run**; the decision was made
 directly on the engineering verdict above plus the portfolio owner's call that a
 weekend is better spent on substance (QNT-243) than on a keyword-driven token
 project. The reasoning: even in the best case where the gate cleared, the
-defensible interview artifact is *this decision record* — "I evaluated dbt
+defensible interview artifact is *this decision record* - "I evaluated dbt
 against the existing asset graph, found it a near-even trade at this scale, and
-declined with a written boundary rule" — which is a stronger signal than a
+declined with a written boundary rule" - which is a stronger signal than a
 two-model POC that adds a dependency for show. The cheap-but-strong move was
 always the ADR, not the build.
 
@@ -86,7 +86,7 @@ always the ADR, not the build.
   decision is already determined by the engineering comparison; a POC would only
   confirm toolchain mechanics (`dagster-dbt` + `dbt-clickhouse` +
   manifest-at-build-time), not change the verdict. Toolchain feasibility is not
-  in doubt — both are flagship/vendor-maintained integrations.
+  in doubt - both are flagship/vendor-maintained integrations.
 * **Run the job-listing scan and let it decide.** Reasonable, but the owner
   chose to decline directly; the scan can be re-run later if the calculus
   changes (see below). The decision is intentionally cheap to revisit.
@@ -105,22 +105,22 @@ always the ADR, not the build.
 **Harder / watch**
 
 * The recruiter keyword-screen gap remains: a pure-ATS screen filtering on "dbt"
-  will not match this repo. Accepted — the README DE positioning (QNT-241) and
+  will not match this repo. Accepted - the README DE positioning (QNT-241) and
   this ADR are the mitigations for the human-review layer, not the ATS layer.
 * If the SQL-shaped surface grows materially (more set-based transforms than the
   current ~2) or a concrete target role lists dbt as a hard requirement, revisit
-  — the migration gotcha to pin at that point is already identified: the current
+  - the migration gotcha to pin at that point is already identified: the current
   pandas code uses local `date.today()` for the incomplete-period skip while
   ClickHouse `today()` is server-tz/UTC, so any dbt port must include a test
   asserting the SQL and pandas versions produce identical period sets.
 
 ## Acceptance-criteria status
 
-* **AC1 (decision + reasoning recorded)** — this ADR plus the decision comment on
+* **AC1 (decision + reasoning recorded)** - this ADR plus the decision comment on
   QNT-242. Decision: **skip / decline**. ✓ (the job-listing scan was deliberately
   not run; decided on the engineering verdict + owner call, documented above)
-* **AC2 (optional POC)** — **N/A**: gate 1 did not clear, so gate 2 (POC) is not
+* **AC2 (optional POC)** - **N/A**: gate 1 did not clear, so gate 2 (POC) is not
   entered. ✓
-* **AC3 (handoff)** — skip path: QNT-240 (data observability) already shipped;
+* **AC3 (handoff)** - skip path: QNT-240 (data observability) already shipped;
   no follow-up implementation ticket is created; QNT-242 is resolved with this
   reasoning. The reallocated effort goes to QNT-243. ✓

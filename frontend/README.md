@@ -23,7 +23,7 @@ npm run build
 
 ## Layout
 
-The app shell (`app/layout.tsx`) is a persistent three-pane grid: left-rail watchlist, middle route slot, right-rail chat panel. Chat is a `"use client"` panel imported into the layout — never a route — so SSE streams survive ticker navigation (ADR-014 §4 + Anti-pattern #6).
+The app shell (`app/layout.tsx`) is a persistent three-pane grid: left-rail watchlist, middle route slot, right-rail chat panel. Chat is a `"use client"` panel imported into the layout - never a route - so SSE streams survive ticker navigation (ADR-014 §4 + Anti-pattern #6).
 
 | Pane | Owner |
 |---|---|
@@ -34,4 +34,4 @@ The app shell (`app/layout.tsx`) is a persistent three-pane grid: left-rail watc
 
 ## API access
 
-`src/lib/api.ts` is the only module that should call `fetch` against the FastAPI backend. Every call must declare a cache directive (`revalidate: N` or `cache: "no-store"`) — bare `fetch(URL)` is forbidden per ADR-014 Anti-pattern #2.
+`src/lib/api.ts` is the only module that should call `fetch` against the FastAPI backend. Every call must declare a cache directive (`revalidate: N` or `cache: "no-store"`) - bare `fetch(URL)` is forbidden per ADR-014 Anti-pattern #2.
