@@ -1,10 +1,11 @@
 # Equity Data Agent
 
-> Production-deployed AI/data engineering project for US equities. The agent writes
-> an investment thesis but is **not allowed to invent or calculate numbers** —
+> Production-deployed AI/data engineering project for US equities. The agent
+> writes an investment thesis but is **not allowed to invent or calculate numbers** —
 > Dagster computes them, FastAPI prints them into report strings, and LangGraph
-> reasons over those reports. An eval checks every number in the answer against
-> the retrieved reports.
+> reasons over those reports. An eval checks every number in the answer against the
+> retrieved reports — strip that grounding from the same model and it invents
+> **86.9%** of its figures; with it, **0.0%**.
 
 [![Live demo](https://img.shields.io/badge/live%20demo-equity--data--agent--ynr2.vercel.app-success?style=for-the-badge)](https://equity-data-agent-ynr2.vercel.app)
 
@@ -163,15 +164,15 @@ Two concerns, kept separate: **provenance** (numbers are copied from reports, no
 
 | Suite | Latest | Per-PR CI gate |
 |---|---|---|
-| Golden regression (2026-07-04) — tool-call / grounding / answer-cosine | 40/41 · 40/41 · 0.43 | dev harness (directional) |
-| Retrieval (hybrid + Cohere rerank) — recall@5 / recall@20 | 0.53 / 0.76 | blocking (floors 0.45 / 0.68) |
+| Golden regression (2026-07-04) — tool-call / grounding | 40/41 · 40/41 | dev harness (directional) |
+| Retrieval (hybrid + Cohere rerank) — recall@5 / recall@20 (share of labeled relevant sources in top k) | 0.53 / 0.76 | blocking (floors 0.45 / 0.68) |
 | Retrieval — MRR / nDCG@10 | 0.94 / 0.79 | blocking (floors 0.85 / 0.70) |
 | Number grounding (frozen artifacts) | pass | blocking — red on any unsupported numeric |
 | Grounding ablation (2026-07-11) — fabricated-number rate, grounding on → off | 0.0% → 86.9% | illustrative (not gated) |
 
 **What grounding buys.** Strip report-grounding from the *same* model over the same 44-question set — no report injection, no cite-every-number rule — and it invents **299 of 344** figures (86.9%) against reports it never saw, versus the constrained agent's **0 of 619** (0.0%): only 1 of 44 unconstrained answers is fully clean, against all 44 constrained. The intelligence-vs-math split isn't decoration — it's the gap between 0 and 87% invented numbers. Reproduce: `uv run python -m agent.evals.baseline_eval` ([`baseline_eval.py`](packages/agent/src/agent/evals/baseline_eval.py)).
 
-Economics: ~`$0.002` per thesis on the paid DeepSeek primary ([ADR-026](docs/decisions/026-paid-synthesis-economics-and-free-tier-simplification-dividend.md)); the earlier "near-zero free-tier" framing is retired. Golden flags seen in earlier runs were scorer false positives on glued magnitude units (e.g. `$2.5T`) — fixed by sharpening the scorer, not loosening the contract ([#411](https://github.com/noahwins-ng/equity-data-agent/pull/411)). The suite earns its keep by disqualifying production-candidate models (Qwen3-32B fabrications and leaked `<think>` blocks; GPT-OSS-120B once the golden set grew).
+Economics: ~`$0.002` per thesis on the paid DeepSeek primary ([ADR-026](docs/decisions/026-paid-synthesis-economics-and-free-tier-simplification-dividend.md)). The suite earns its keep by disqualifying production-candidate models (Qwen3-32B fabrications and leaked `<think>` blocks; GPT-OSS-120B once the golden set grew).
 
 ### Where this breaks at scale
 
@@ -198,10 +199,6 @@ Standard data-engineering patterns under Dagster-native names:
 - **Single-node ClickHouse** — one node serves this comfortably; growth means a sharded cluster.
 
 ## Screenshots
-
-**Live terminal** — watchlist, ticker detail, charting, fundamentals, news, and chat in one persistent workspace.
-
-![Live terminal](docs/screenshots/terminal-live.png)
 
 **Grounded RAG provenance** — a targeted-event answer streaming with its retrieved-source citations in the chat panel.
 
@@ -247,7 +244,15 @@ Key tradeoffs: [ADR-003 Intelligence vs. Math](docs/decisions/003-intelligence-v
 
 Prerequisites: Python 3.12+, [`uv`](https://docs.astral.sh/uv/), Docker, Node.
 
-Minimum keys to run a thesis: an `OPENROUTER_API_KEY` (the DeepSeek primary) is the only required LLM key; RAG news search additionally needs a Qdrant Cloud URL/key and a Cohere key. The warehouse is reachable two ways — tunnel to a running ClickHouse, or start a throwaway local one (the `.env.example` default assumes the maintainer's SSH tunnel, so a fresh clone should take the local path):
+Minimum keys to run a thesis: an `OPENROUTER_API_KEY` (the DeepSeek primary) is the only required LLM key; RAG news search additionally needs a Qdrant Cloud URL/key and a Cohere key.
+
+```bash
+git clone https://github.com/noahwins-ng/equity-data-agent.git
+cd equity-data-agent
+make setup && $EDITOR .env
+```
+
+The warehouse is reachable two ways — tunnel to a running ClickHouse, or start a throwaway local one (the `.env.example` default assumes the maintainer's SSH tunnel, so a fresh clone should take the local path):
 
 ```bash
 docker run -d -p 8123:8123 clickhouse/clickhouse-server:24-alpine
@@ -255,10 +260,6 @@ make migrate && make seed   # DDL + a fast 30-day x 3-ticker seed
 ```
 
 ```bash
-git clone https://github.com/noahwins-ng/equity-data-agent.git
-cd equity-data-agent
-make setup && $EDITOR .env
-
 # terminals
 make dev-litellm
 make dev-api
