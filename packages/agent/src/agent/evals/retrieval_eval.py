@@ -123,15 +123,20 @@ RUN_DEPTH = 20
 #
 # QNT-262 follow-up: PROMOTED to the SERVED path -- prod now serves hybrid (dense
 # + BM25 RRF) + Cohere Rerank 3.5, so the gate scores that frozen run
-# (retrieval_run_hybrid.trec), not the dense-only one. Measured 2026-06-20
-# served baseline: R@5 0.53, R@20 0.76, RR 0.94, nDCG@10 0.79 (vs the dense
-# 0.48/0.72/0.85/0.70 the dense reference still records). Floors re-derived
-# against the served numbers so the gate now catches a rerank-path regression.
+# (retrieval_run_hybrid.trec), not the dense-only one.
+#
+# QNT-265 re-derivation (2026-07-12): the news corpus was fully reingested since
+# QNT-261 labeled it (every news point_id reassigned), so the frozen qrels + runs
+# were relabeled + rebaselined against the current corpus (the snapshot-export AC4
+# round-trip forced this). Fresh served baseline over the 51 refreshed queries:
+# R@5 0.527, R@20 0.767, RR 0.894, nDCG@10 0.799 (vs dense 0.305/0.591/0.633/0.524
+# the dense reference records -- the +0.22/+0.18/+0.26/+0.27 rerank lift is the
+# news="treatment" arm). Floors re-derived ~0.08 below the fresh served numbers.
 GATE_FLOORS: dict[str, float] = {
     "R@5": 0.45,
     "R@20": 0.68,
-    "RR": 0.85,
-    "nDCG@10": 0.70,
+    "RR": 0.81,
+    "nDCG@10": 0.72,
 }
 
 # ir_measures metric objects, evaluated together in one pass.

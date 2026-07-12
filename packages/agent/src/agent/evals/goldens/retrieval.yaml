@@ -47,23 +47,23 @@ queries:
     ticker: AAPL
     query: "What did Tim Cook say about rising prices?"
     anchor_terms: ["tim cook"]
-  - id: aapl-wwdc
+  - id: aapl-broadcom-deal
     corpus: news
     ticker: AAPL
-    query: "What did Apple announce at WWDC 2026?"
-    anchor_terms: ["wwdc"]
+    query: "Did Apple sign a chip deal with Broadcom?"
+    anchor_terms: ["broadcom deal", "broadcom partnership", "broadcom agreement", "custom chip"]
 
   # --- AMD ---
-  - id: amd-meta-chip
+  - id: amd-goldman
     corpus: news
     ticker: AMD
-    query: "Did AMD sign an AI chip pact with Meta?"
-    anchor_terms: ["meta ai chip", "meta chip", "meta pact"]
-  - id: amd-mext-acq
+    query: "What is Goldman Sachs' view on AMD?"
+    anchor_terms: ["goldman"]
+  - id: amd-turing
     corpus: news
     ticker: AMD
-    query: "What acquisition did AMD make recently?"
-    anchor_terms: ["mext", "acquisition"]
+    query: "Did AMD back the self-driving startup Turing?"
+    anchor_terms: ["turing"]
   - id: amd-rackspace
     corpus: news
     ticker: AMD
@@ -86,11 +86,11 @@ queries:
     ticker: AMZN
     query: "How is Amazon's relationship with Anthropic developing?"
     anchor_terms: ["anthropic"]
-  - id: amzn-missouri-ai
+  - id: amzn-bond-sale
     corpus: news
     ticker: AMZN
-    query: "What is Amazon's Missouri AI data center investment?"
-    anchor_terms: ["missouri"]
+    query: "How much is Amazon raising in its bond sale?"
+    anchor_terms: ["bond offering", "bond sale", "bond issuance", "debt offering"]
   - id: amzn-logistics
     corpus: news
     ticker: AMZN
@@ -98,26 +98,26 @@ queries:
     anchor_terms: ["logistics"]
 
   # --- GOOGL ---
-  - id: googl-waymo-recall
+  - id: googl-fusion
     corpus: news
     ticker: GOOGL
-    query: "Did Waymo recall any robotaxis?"
-    anchor_terms: ["waymo"]
+    query: "Did Google back a nuclear fusion startup?"
+    anchor_terms: ["fusion"]
   - id: googl-cloud
     corpus: news
     ticker: GOOGL
     query: "What new Google Cloud customers or deals were announced?"
     anchor_terms: ["google cloud"]
-  - id: googl-threat-intel
+  - id: googl-berkshire
     corpus: news
     ticker: GOOGL
-    query: "What did Google's threat intelligence group find?"
-    anchor_terms: ["threat intelligence"]
-  - id: googl-epstein-records
+    query: "Did Berkshire Hathaway invest in Alphabet?"
+    anchor_terms: ["berkshire"]
+  - id: googl-gemini
     corpus: news
     ticker: GOOGL
-    query: "Was Google asked to preserve records in the Epstein investigation?"
-    anchor_terms: ["epstein"]
+    query: "How is Alphabet's Gemini AI driving growth?"
+    anchor_terms: ["gemini"]
 
   # --- INTC ---
   - id: intc-foundry-deal
@@ -130,16 +130,16 @@ queries:
     ticker: INTC
     query: "What's the status of Intel's 18A process?"
     anchor_terms: ["18a"]
-  - id: intc-make-chips
+  - id: intc-foundry
     corpus: news
     ticker: INTC
-    query: "Will Intel make chips in America?"
-    anchor_terms: ["make chips", "chips in america", "manufacturing milestone"]
-  - id: intc-capital-raise
+    query: "How is Intel's foundry business doing?"
+    anchor_terms: ["foundry"]
+  - id: intc-hsbc
     corpus: news
     ticker: INTC
-    query: "Is Intel raising capital?"
-    anchor_terms: ["capital raise"]
+    query: "What is HSBC's rating on Intel?"
+    anchor_terms: ["hsbc"]
 
   # --- META ---
   - id: meta-threads
@@ -152,11 +152,11 @@ queries:
     ticker: META
     query: "What data center is Meta building for AI?"
     anchor_terms: ["data center"]
-  - id: meta-kosa
+  - id: meta-alberta-dc
     corpus: news
     ticker: META
-    query: "Is Meta backing the Kids Online Safety Act?"
-    anchor_terms: ["kids online safety", "kosa"]
+    query: "What is Meta's Alberta data center project?"
+    anchor_terms: ["alberta"]
   - id: meta-restructuring
     corpus: news
     ticker: META
@@ -191,11 +191,11 @@ queries:
     ticker: MU
     query: "What are expectations for Micron's Q3 results?"
     anchor_terms: ["q3"]
-  - id: mu-stifel
+  - id: mu-ford
     corpus: news
     ticker: MU
-    query: "What is Stifel's price target on Micron?"
-    anchor_terms: ["stifel"]
+    query: "What memory supply pact did Micron sign with Ford?"
+    anchor_terms: ["ford"]
 
   # --- NVDA ---
   - id: nvda-bond-debt
@@ -230,11 +230,11 @@ queries:
     ticker: TSLA
     query: "What are analysts saying about Tesla's Q2 deliveries?"
     anchor_terms: ["delivery"]
-  - id: tsla-musk-chip
+  - id: tsla-optimus
     corpus: news
     ticker: TSLA
-    query: "Is Elon Musk building a chip better than Nvidia's?"
-    anchor_terms: ["2-3x better", "better than nvidia"]
+    query: "What is the latest on Tesla's Optimus robot?"
+    anchor_terms: ["optimus"]
   - id: tsla-affordable
     corpus: news
     ticker: TSLA

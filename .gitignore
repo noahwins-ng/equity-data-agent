@@ -68,3 +68,7 @@ CLAUDE.md
 # Playwright MCP screenshots / traces (never commit)
 .playwright-mcp/
 *-validated.png
+
+# RAG corpus snapshot export (QNT-265) — default local --out dir. NEVER commit:
+# news rows carry vendor-sourced (Finnhub) article bodies; the durable home is S3.
+/rag-snapshot/
