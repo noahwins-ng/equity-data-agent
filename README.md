@@ -24,7 +24,19 @@ A 30-second scan across both disciplines. The lead is AI engineering (the ground
 
 ## Try It
 
-Live app: **[equity-data-agent-ynr2.vercel.app](https://equity-data-agent-ynr2.vercel.app)**. Try `Give me a balanced thesis on NVDA`, `Compare MSFT and GOOGL`, or `What's the news sentiment on TSLA?`
+Live app: **[equity-data-agent-ynr2.vercel.app](https://equity-data-agent-ynr2.vercel.app)**. What you can ask:
+
+| Scope | Example question |
+|---|---|
+| Investment thesis | `Give me a balanced thesis on NVDA` |
+| Quick fact | `What's AMD's P/E?` |
+| Comparison | `Compare MSFT and GOOGL` |
+| Technicals | `Is MU overbought?` |
+| Fundamentals | `How healthy is META's balance sheet?` |
+| News sentiment | `What's the news sentiment on TSLA?` |
+| Targeted events (litigation, buybacks, M&A, guidance) | `Anything on the INTC lawsuit?` |
+| Open-ended exploration | `What looks interesting right now?` |
+| Follow-ups | `And how does that compare to last quarter?` |
 
 The universe is 10 semis/tech-concentrated US equities (NVDA, AAPL, MSFT, GOOGL, AMZN, META, TSLA, MU, AMD, INTC), a scope choice that keeps every ticker in sectors the agent can reason about with shared context (AI/data-center demand, the semi cycle). Data ingests daily after market close.
 
