@@ -6,7 +6,7 @@ dependencies = [
     "shared",
     "agent",
     "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.34.0",
+    "uvicorn[standard]>=0.51.0",
     "clickhouse-connect>=0.8.0",
     "qdrant-client>=1.18.0",
     "sentry-sdk[fastapi]>=2.0.0",
