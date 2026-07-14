@@ -29,12 +29,6 @@ updates:
         # Group major bumps separately so a breaking dagster bump doesn't
         # block a fastapi patch in the same PR.
         update-types: ["minor", "patch"]
-    # Hold specific majors until a deliberate migration. Without this they leak
-    # into the grouped minor/patch PR and block the safe bumps behind them.
-    # Remove an entry when you're ready to do that upgrade as its own task.
-    ignore:
-      - dependency-name: "langfuse"  # 2.x -> 4.x: tracing @observe/client API migration
-        update-types: ["version-update:semver-major"]
 
   # ── Frontend (npm) ────────────────────────────────────────────
   - package-ecosystem: "npm"
