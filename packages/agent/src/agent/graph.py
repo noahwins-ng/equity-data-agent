@@ -205,6 +205,21 @@ logger = logging.getLogger(__name__)
 # intent=comparison).
 _COMPARISON_MAX_TOKENS = 3000
 
+# QNT-370: per-call output budget for the thesis synthesize call. The QNT-351
+# 1500 config cap was calibrated on the PRE-QNT-353/354 thesis distribution
+# (median ~920, p-high ~1400); those tickets grew the report content and the
+# live distribution moved up against the cap: Langfuse default-alias thesis
+# synthesize generations over 2026-07-10..07-14 span 1278-1487 output tokens
+# (n=11, cap-censored -- the true tail extends past 1500) with three
+# LengthFinishReasonError cap-outs at exactly 1500, including the 2026-07-14
+# MU prod incident (two consecutive fail-closes to the deterministic
+# fallback). 2500 is ~1.7x the censored max -- a ceiling, not a target, so a
+# normal thesis bills only its actual output. The QNT-351 deterministic
+# fallback still catches a genuine runaway past this ceiling. Re-derive if
+# report content grows again (Langfuse default-alias generations,
+# intent=thesis, promptName=system-prompt).
+_THESIS_MAX_TOKENS = 2500
+
 
 def _structured_call[T: BaseModel](
     schema: type[T],

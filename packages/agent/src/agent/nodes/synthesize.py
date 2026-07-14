@@ -380,7 +380,16 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
     # returns malformed tool-call JSON) surface as a fallback redirect
     # rather than crashing the whole run. The shared retry policy recovers
     # transient parse failures (measured at 5.5% on this branch — QNT-196).
-    thesis = graph._structured_call(graph.Thesis, prompt, config, "system-prompt")
+    # QNT-370: the thesis output distribution outgrew the thesis-calibrated
+    # QNT-351 1500 cap after QNT-353/354 enlarged the reports, so the thesis
+    # call carries its own budget -- see _THESIS_MAX_TOKENS.
+    thesis = graph._structured_call(
+        graph.Thesis,
+        prompt,
+        config,
+        "system-prompt",
+        llm=graph.get_llm(max_tokens=graph._THESIS_MAX_TOKENS),
+    )
     if thesis is None:
         return _fallback("I had trouble pulling a thesis together for that.")
     logger.info("synthesize %s: confidence=%s thesis=ok", ticker, confidence)
