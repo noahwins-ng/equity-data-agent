@@ -47,9 +47,6 @@ updates:
       frontend-deps:
         patterns: ["*"]
         update-types: ["minor", "patch"]
-    ignore:
-      - dependency-name: "typescript"  # 5.x -> 7.x: native "tsgo" rewrite; hold for Next/eslint-plugin support
-        update-types: ["version-update:semver-major"]
 
   # ── GitHub Actions ────────────────────────────────────────────
   # Keep CI action versions fresh; pinning by SHA is overkill here, but we
