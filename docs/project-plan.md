@@ -417,7 +417,6 @@ Updated automatically by `/ship` and `/sync-docs`.
 - [x] Forward calendar: next-earnings-date ingest + report line for dated catalysts - QNT-357
 - [x] Technical report: surface shipped indicators + volume + 52-week range + window returns + trend consensus - QNT-353
 - [x] News digest quality: 280-char snippet-budget parity + same-story dedup - QNT-356
-- [x] Technical report: surface shipped indicators + volume + 52-week range + window returns + trend consensus - QNT-353
 - [x] Comparison focus-from-axis: narrow the plan by named axis, render only gathered aspects, two-ticker output budget - QNT-358
 - [x] Report labels leak into agent prose + fabricated peer-delta reduces grounding - QNT-359
 - [x] Grounding false-miss on percentage precision: 1dp report percentages + trailing-zero canonicalisation - QNT-361
