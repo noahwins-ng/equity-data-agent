@@ -497,6 +497,8 @@ def get_llm(
     distribution, QNT-351); the no-axis full-matrix comparison is structurally
     ~2x a thesis and needs a larger budget, which it requests per-call here
     (LiteLLM lets a request-level ``max_tokens`` override the model default).
+    QNT-370: the thesis synthesize call carries its own budget too, after the
+    live thesis distribution outgrew the config cap (see _THESIS_MAX_TOKENS).
     ``None`` leaves the alias's configured cap untouched, so every other caller
     is unchanged.
     """

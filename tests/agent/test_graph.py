@@ -182,6 +182,21 @@ def test_full_flow_produces_thesis_and_confidence(stub_llm: _StructuredLLM) -> N
     assert result["errors"] == {}
 
 
+def test_thesis_synthesize_requests_thesis_output_budget(stub_llm: _StructuredLLM) -> None:
+    """QNT-370: the thesis synthesize call carries its own per-call output
+    budget -- the live thesis distribution outgrew the thesis-calibrated 1500
+    config cap after QNT-353/354 grew the reports (see _THESIS_MAX_TOKENS).
+    ``stub_llm`` patches ``graph.get_llm`` with a MagicMock factory, so the
+    call-site kwargs are observable on it."""
+    graph = build_graph({name: _mock_tool(name) for name in REPORT_TOOLS})
+
+    _run(graph)
+
+    get_llm_factory = graph_module.get_llm
+    assert isinstance(get_llm_factory, MagicMock)
+    get_llm_factory.assert_any_call(max_tokens=graph_module._THESIS_MAX_TOKENS)
+
+
 def test_runtime_grounding_rate_lowers_composite_confidence() -> None:
     clean, clean_rate = _runtime_grounding_check("RSI is 62.", ["RSI is 62."])
     miss, miss_rate = _runtime_grounding_check("RSI is 99.", ["RSI is 62."])
