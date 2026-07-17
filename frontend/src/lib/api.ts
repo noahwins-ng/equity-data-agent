@@ -118,8 +118,18 @@ export const IS_PRERENDER =
 // ─── Typed response shapes ──────────────────────────────────────────────────
 //
 // These mirror packages/api/src/api/routers/data.py. Field names + nullability
-// must stay aligned with the FastAPI response models — `make types` is the
-// long-term plan; for now we hand-maintain the surfaces the ticker page reads.
+// must stay aligned with the FastAPI endpoints by hand — this contract is
+// deliberately hand-maintained, not codegen'd.
+//
+// QNT-384: an earlier plan called for `make types` (OpenAPI → TS via
+// openapi-typescript). It was dropped because it can't actually cover this
+// file: the data endpoints return raw `list[dict[str, Any]]` with no
+// `response_model`, so their shapes never reach the OpenAPI schema, and the
+// dominant surface below — the SSE streaming chat events (RetrievedSource,
+// RetrievedSourcesEvent, DoneEvent, …) — is not expressible in OpenAPI at all.
+// So these types are the source of truth: when a `data.py` endpoint or an SSE
+// event shape changes, update the matching type here. Off-schema fields (e.g.
+// RetrievedSource.corpus below) are called out inline where they occur.
 
 export type Timeframe = "daily" | "weekly" | "monthly";
 export type PeriodType = "quarterly" | "annual" | "ttm";
