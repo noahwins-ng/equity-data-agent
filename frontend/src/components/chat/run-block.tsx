@@ -28,9 +28,13 @@ import type { ChatRun } from "./types";
 export const RunBlock = memo(function RunBlock({
   run,
   onSuggestion,
+  suggestionsDisabled,
 }: {
   run: ChatRun;
   onSuggestion: (q: string) => void;
+  // QNT-379: true while ANY run in the tape is streaming — auto-send chips on
+  // completed runs stay visible but inert, matching the disabled composer.
+  suggestionsDisabled: boolean;
 }) {
   const proseText = run.proseChunks.join("");
   const isStreaming = run.status === "streaming";
@@ -200,6 +204,7 @@ export const RunBlock = memo(function RunBlock({
         <ConversationalCard
           conversational={run.conversational}
           onSuggestion={onSuggestion}
+          suggestionsDisabled={suggestionsDisabled}
         />
       )}
 
@@ -234,7 +239,11 @@ export const RunBlock = memo(function RunBlock({
           <ul className="space-y-1">
             {run.stats.suggestions.map((s, i) => (
               <li key={i}>
-                <SuggestionButton text={s} onClick={() => onSuggestion(s)} />
+                <SuggestionButton
+                  text={s}
+                  onClick={() => onSuggestion(s)}
+                  disabled={suggestionsDisabled}
+                />
               </li>
             ))}
           </ul>

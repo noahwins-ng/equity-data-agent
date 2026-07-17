@@ -421,6 +421,7 @@ Updated automatically by `/ship` and `/sync-docs`.
 - [x] Report labels leak into agent prose + fabricated peer-delta reduces grounding - QNT-359
 - [x] Grounding false-miss on percentage precision: 1dp report percentages + trailing-zero canonicalisation - QNT-361
 - [x] Thesis synthesize output budget: per-call 2500 ceiling after QNT-353/354 report growth outgrew the thesis-calibrated 1500 cap - QNT-370
+- [x] Chat composer deadlock: settle aborted/EOF-without-done run status, extract the startRun event-reducer under node:test, disable auto-send chips mid-stream (2026-07-17 whole-project review, finding 1) - QNT-379
 - [x] Eval harness spine: shared runner, history envelope, and gates across the eight suites - QNT-293
 
 - [x] README factual-currency pass + repo metadata + hallucination-resistance baseline - QNT-282

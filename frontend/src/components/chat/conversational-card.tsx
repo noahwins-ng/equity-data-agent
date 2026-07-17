@@ -13,9 +13,12 @@ import { SuggestionButton } from "./suggestion-button";
 export function ConversationalCard({
   conversational,
   onSuggestion,
+  suggestionsDisabled,
 }: {
   conversational: ConversationalPayload;
   onSuggestion: (q: string) => void;
+  // QNT-379: chips auto-send, so they are inert while another run streams.
+  suggestionsDisabled: boolean;
 }) {
   return (
     <section className="rounded border border-zinc-800 bg-zinc-900/40">
@@ -38,7 +41,11 @@ export function ConversationalCard({
                       uses the same SuggestionButton but its parent prefills
                       the composer instead — different surface, different
                       contract. */}
-                  <SuggestionButton text={s} onClick={() => onSuggestion(s)} />
+                  <SuggestionButton
+                    text={s}
+                    onClick={() => onSuggestion(s)}
+                    disabled={suggestionsDisabled}
+                  />
                 </li>
               ))}
             </ul>
