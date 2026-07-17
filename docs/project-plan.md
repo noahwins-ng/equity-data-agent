@@ -422,6 +422,7 @@ Updated automatically by `/ship` and `/sync-docs`.
 - [x] Grounding false-miss on percentage precision: 1dp report percentages + trailing-zero canonicalisation - QNT-361
 - [x] Thesis synthesize output budget: per-call 2500 ceiling after QNT-353/354 report growth outgrew the thesis-calibrated 1500 cap - QNT-370
 - [x] Chat composer deadlock: settle aborted/EOF-without-done run status, extract the startRun event-reducer under node:test, disable auto-send chips mid-stream (2026-07-17 whole-project review, finding 1) - QNT-379
+- [x] Chat abuse controls keyed on spoofable XFF: key the per-IP rate limit + token budget on CF-Connecting-IP (right-most XFF fallback), drop the stale Caddy/ufw trust-model claims for cloudflared ingress (2026-07-17 whole-project review, finding 2) - QNT-380
 - [x] Eval harness spine: shared runner, history envelope, and gates across the eight suites - QNT-293
 
 - [x] README factual-currency pass + repo metadata + hallucination-resistance baseline - QNT-282

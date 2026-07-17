@@ -61,36 +61,44 @@ SentryLevel = Literal["fatal", "critical", "error", "warning", "info", "debug"]
 
 
 def client_ip(request: Request) -> str:
-    """Extract the client IP for rate-limiting.
+    """Extract the client IP for rate-limiting and per-IP token budgeting.
 
-    The Hetzner production deploy has Caddy as the only public ingress;
-    uvicorn binds to the internal Docker network only. Without explicit
-    proxy-header handling, ``request.client.host`` is Caddy's container IP
-    on every request — which collapses every visitor into a single
-    rate-limit bucket and a single token-budget bucket, defeating both
-    per-IP controls. SlowAPI's stock ``get_remote_address`` returns
-    exactly that value, so we cannot rely on it here.
+    Ingress reality (ADR-018): the only public path to the API is the
+    Cloudflare **named tunnel** — ``api.nusaverde.com`` → the Cloudflare edge
+    → the ``cloudflared`` connector → ``api:8000`` over the Docker bridge.
+    uvicorn binds to loopback; there is no public :8000 (and SSH on port 22 is
+    the only other open port — never a request path here). Every real request
+    therefore arrives having transited the Cloudflare edge.
 
-    Strategy: prefer the LEFT-MOST entry of ``X-Forwarded-For`` (the real
-    client; intermediate proxies append on the right per RFC 7239).
-    Fall back to ``X-Real-IP`` (Caddy / nginx default), then to
-    ``request.client.host`` for direct hits in dev where there's no proxy.
+    Header trust model:
 
-    Trust model: the ``X-Forwarded-For`` value is trusted because Caddy is
-    the only public ingress on this host (verified via ``ufw`` — only port
-    443 is internet-reachable; uvicorn's :8000 is bound to the Docker
-    network only). A direct attacker who could connect to uvicorn would
-    have already bypassed every other control. In dev where Caddy is
-    absent, the headers aren't present and we fall through to client.host.
+    - ``CF-Connecting-IP`` is *set by the Cloudflare edge* to the real
+      connecting IP and OVERWRITES any client-supplied value, so a caller
+      cannot spoof it through the tunnel. This is the authoritative source and
+      is preferred whenever present.
+    - ``X-Forwarded-For`` is only partly trustworthy: a caller can prepend
+      arbitrary entries, but the Cloudflare edge APPENDS the real connecting IP
+      as the RIGHT-MOST entry. So we read the right-most entry, never the
+      left-most (the left-most is attacker-controlled). Fallback for the
+      unexpected case where ``CF-Connecting-IP`` is absent.
+    - ``request.client.host`` is the direct peer. In dev there is no Cloudflare
+      in front, so no CF headers are present and we fall through to this
+      (``127.0.0.1`` / ``testclient``). In prod it is the ``cloudflared``
+      container's Docker IP and is used only if both headers are missing.
+
+    Why not the left-most XFF entry (the pre-QNT-380 behaviour): keying on the
+    left-most entry let anyone send ``X-Forwarded-For: <random>`` through the
+    tunnel and mint a fresh per-IP rate-limit / token-budget bucket on every
+    request, collapsing per-IP fairness to the global breaker alone.
     """
+    cf_ip = request.headers.get("cf-connecting-ip")
+    if cf_ip and cf_ip.strip():
+        return cf_ip.strip()
     fwd = request.headers.get("x-forwarded-for")
     if fwd:
-        leftmost = fwd.split(",", 1)[0].strip()
-        if leftmost:
-            return leftmost
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip:
-        return real_ip
+        entries = [entry.strip() for entry in fwd.split(",") if entry.strip()]
+        if entries:
+            return entries[-1]
     if request.client and request.client.host:
         return request.client.host
     return "unknown"

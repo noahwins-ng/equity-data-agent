@@ -378,37 +378,49 @@ class _FakeRequest:
             self.client = type("Client", (), {"host": client_host})()
 
 
-def test_client_ip_prefers_x_forwarded_for_leftmost() -> None:
-    """Behind Caddy/nginx, ``request.client.host`` is the proxy's IP, not
-    the real visitor. ``client_ip`` MUST honour ``X-Forwarded-For`` and
-    take the LEFT-MOST entry (the original client) so the per-IP rate
-    limit + per-IP token budget actually scope per-visitor in prod.
-    Regression guard for the pre-review bug where every visitor collapsed
-    into one bucket because we used ``get_remote_address`` directly."""
+def test_client_ip_prefers_cf_connecting_ip() -> None:
+    """Cloudflare's edge sets ``CF-Connecting-IP`` to the real connecting IP
+    and overwrites any client-supplied value, so it is authoritative and wins
+    over everything else — even a spoofed XFF present on the same request
+    (QNT-380)."""
     from api.security import client_ip
 
     req = _FakeRequest(
-        headers={"X-Forwarded-For": "203.0.113.5, 198.51.100.7, 172.18.0.2"},
-        client_host="172.18.0.2",  # Caddy's container IP
+        headers={
+            "CF-Connecting-IP": "203.0.113.5",
+            "X-Forwarded-For": "1.2.3.4, 203.0.113.5",
+        },
+        client_host="172.18.0.2",  # cloudflared's container IP
     )
     assert client_ip(req) == "203.0.113.5"  # type: ignore[arg-type]
 
 
-def test_client_ip_falls_back_to_x_real_ip() -> None:
-    """Some proxy configs use ``X-Real-IP`` instead of (or in addition to)
-    XFF. We honour XFF first, then X-Real-IP, then client.host."""
+def test_client_ip_ignores_spoofed_leftmost_xff() -> None:
+    """A caller can prepend arbitrary ``X-Forwarded-For`` entries, but the
+    Cloudflare edge appends the real connecting IP as the RIGHT-MOST entry.
+    Keying on the right-most entry means a spoofed left-most value cannot mint
+    a fresh per-IP bucket. Regression guard for QNT-380 — the pre-fix code
+    took the left-most (attacker-controlled) entry.
+
+    Two requests with different spoofed prefixes but the same real connecting
+    IP MUST resolve to the same key."""
     from api.security import client_ip
 
-    req = _FakeRequest(
-        headers={"X-Real-IP": "203.0.113.99"},
+    req_a = _FakeRequest(
+        headers={"X-Forwarded-For": "10.0.0.1, 203.0.113.5"},
         client_host="172.18.0.2",
     )
-    assert client_ip(req) == "203.0.113.99"  # type: ignore[arg-type]
+    req_b = _FakeRequest(
+        headers={"X-Forwarded-For": "10.0.0.2, 203.0.113.5"},
+        client_host="172.18.0.2",
+    )
+    assert client_ip(req_a) == "203.0.113.5"  # type: ignore[arg-type]
+    assert client_ip(req_b) == "203.0.113.5"  # type: ignore[arg-type]
 
 
 def test_client_ip_falls_back_to_client_host_in_dev() -> None:
-    """Dev (no Caddy) sees no proxy headers — fall through to client.host
-    so localhost requests still work."""
+    """Dev (no Cloudflare) sees no CF or proxy headers — fall through to
+    client.host so localhost requests still work."""
     from api.security import client_ip
 
     req = _FakeRequest(headers={}, client_host="127.0.0.1")
