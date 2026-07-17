@@ -30,33 +30,11 @@ import {
   useState,
 } from "react";
 
-import {
-  API_BASE_URL,
-  type ChatErrorEvent,
-  type ComparisonPayload,
-  type ConversationalPayload,
-  type DoneEvent,
-  type ExplorationAnswerPayload,
-  type FocusedAnalysisPayload,
-  type HealthResponse,
-  type IntentEvent,
-  type LeanComparisonPayload,
-  type NarrativeChunkEvent,
-  type PlanRationaleEvent,
-  type ProseChunkEvent,
-  type QuickFactPayload,
-  type RetrievedSourcesEvent,
-  type ThesisPayload,
-  type ToolCallEvent,
-  type ToolResultEvent,
-} from "@/lib/api";
+import { API_BASE_URL, type HealthResponse } from "@/lib/api";
 import { parseSseStream } from "@/lib/sse";
-import { announceableAnswer, bindToolResult, hasAnswerSurface } from "./chat-run";
-import {
-  annotateUnsupportedDeep,
-  annotateUnsupportedNumbers,
-} from "./chat/annotate-unsupported";
+import { announceableAnswer } from "./chat-run";
 import { RunBlock } from "./chat/run-block";
+import { initialRun, reduceRunEvent, settleRun } from "./chat/run-reducer";
 import { SuggestionButton } from "./chat/suggestion-button";
 import type { ChatRun } from "./chat/types";
 
@@ -469,61 +447,27 @@ export function ChatPanel() {
       // The endpoint requires a valid ticker. If the user is on the landing
       // route we surface a friendly error instead of crashing the panel.
       if (!ticker) {
-        const id = crypto.randomUUID();
         const errored: ChatRun = {
-          id,
-          ticker: null,
-          prompt,
-          startedAt: Date.now(),
+          ...initialRun({
+            id: crypto.randomUUID(),
+            ticker: null,
+            prompt,
+            startedAt: Date.now(),
+          }),
           status: "errored",
-          intent: null,
-          toolRows: [],
-          proseChunks: [],
-          narrative: "",
-          planRationale: null,
-          thesis: null,
-          quickFact: null,
-          comparison: null,
-          comparisonLean: null,
-          conversational: null,
-          focused: null,
-          exploration: null,
-          retrievedSources: [],
           errors: [
             {
               detail: "Pick a ticker from the watchlist before asking the analyst.",
               code: "no-ticker",
             },
           ],
-          stats: null,
         };
         setRuns((prev) => [...prev.slice(-MAX_RUNS + 1), errored]);
         return;
       }
 
       const id = crypto.randomUUID();
-      const run: ChatRun = {
-        id,
-        ticker,
-        prompt,
-        startedAt: Date.now(),
-        status: "streaming",
-        intent: null,
-        toolRows: [],
-        proseChunks: [],
-        narrative: "",
-        planRationale: null,
-        thesis: null,
-        quickFact: null,
-        comparison: null,
-        comparisonLean: null,
-        conversational: null,
-        focused: null,
-        exploration: null,
-        retrievedSources: [],
-        errors: [],
-        stats: null,
-      };
+      const run = initialRun({ id, ticker, prompt, startedAt: Date.now() });
       setRuns((prev) => [...prev.slice(-MAX_RUNS + 1), run]);
 
       // Cancel any in-flight stream — only one run streams at a time per
@@ -545,109 +489,29 @@ export function ChatPanel() {
           message: prompt,
           thread_id: threadId,
         },
-        (event, data) => {
-          if (event === "tool_call") {
-            const ev = data as ToolCallEvent;
-            updateRun(id, (r) => ({
-              ...r,
-              toolRows: [...r.toolRows, { ...ev }],
-            }));
-          } else if (event === "tool_result") {
-            const ev = data as ToolResultEvent;
-            updateRun(id, (r) => ({
-              ...r,
-              // QNT-252: bind by started_at, not first-unmatched-by-name.
-              toolRows: bindToolResult(r.toolRows, ev),
-            }));
-          } else if (event === "prose_chunk") {
-            const ev = data as ProseChunkEvent;
-            updateRun(id, (r) => ({
-              ...r,
-              proseChunks: [...r.proseChunks, ev.delta],
-            }));
-          } else if (event === "narrative_chunk") {
-            const ev = data as NarrativeChunkEvent;
-            updateRun(id, (r) => ({
-              ...r,
-              narrative: r.narrative + ev.delta,
-            }));
-          } else if (event === "plan_rationale") {
-            const ev = data as PlanRationaleEvent;
-            updateRun(id, (r) => ({ ...r, planRationale: ev.text }));
-          } else if (event === "intent") {
-            const ev = data as IntentEvent;
-            updateRun(id, (r) => ({ ...r, intent: ev.intent }));
-          } else if (event === "thesis") {
-            const ev = data as ThesisPayload;
-            updateRun(id, (r) => ({ ...r, thesis: ev }));
-          } else if (event === "quick_fact") {
-            const ev = data as QuickFactPayload;
-            updateRun(id, (r) => ({ ...r, quickFact: ev }));
-          } else if (event === "comparison") {
-            const ev = data as ComparisonPayload;
-            updateRun(id, (r) => ({ ...r, comparison: ev }));
-          } else if (event === "comparison_lean") {
-            const ev = data as LeanComparisonPayload;
-            updateRun(id, (r) => ({ ...r, comparisonLean: ev }));
-          } else if (event === "conversational") {
-            const ev = data as ConversationalPayload;
-            updateRun(id, (r) => ({ ...r, conversational: ev }));
-          } else if (event === "focused") {
-            const ev = data as FocusedAnalysisPayload;
-            updateRun(id, (r) => ({ ...r, focused: ev }));
-          } else if (event === "exploration") {
-            const ev = data as ExplorationAnswerPayload;
-            updateRun(id, (r) => ({ ...r, exploration: ev }));
-          } else if (event === "retrieved_sources") {
-            const ev = data as RetrievedSourcesEvent;
-            updateRun(id, (r) => ({ ...r, retrievedSources: ev.sources }));
-          } else if (event === "done") {
-            const ev = data as DoneEvent;
-            const unsupported = ev.grounding_unsupported ?? [];
-            updateRun(id, (r) => ({
-              ...r,
-              stats: ev,
-              narrative: annotateUnsupportedNumbers(r.narrative, unsupported),
-              // Annotate the JOINED prose once (QNT-361 follow-up 5): SSE
-              // chunks split on token boundaries, so per-chunk annotation
-              // could miss a number straddling the split — or worse, dagger
-              // a trailing fragment mid-number ("...a 45" + ".4%" →
-              // "45†.4%"). RunBlock renders the join, so one chunk is
-              // equivalent.
-              proseChunks: r.proseChunks.length
-                ? [annotateUnsupportedNumbers(r.proseChunks.join(""), unsupported)]
-                : r.proseChunks,
-              // QNT-361 follow-up 3: the grounding check scores the whole
-              // answer, so the structured card fields get daggers too — a
-              // miss in a card summary/key point used to render unmarked
-              // while the banner claimed "Numbers marked †".
-              thesis: annotateUnsupportedDeep(r.thesis, unsupported),
-              quickFact: annotateUnsupportedDeep(r.quickFact, unsupported),
-              comparison: annotateUnsupportedDeep(r.comparison, unsupported),
-              comparisonLean: annotateUnsupportedDeep(r.comparisonLean, unsupported),
-              conversational: annotateUnsupportedDeep(r.conversational, unsupported),
-              focused: annotateUnsupportedDeep(r.focused, unsupported),
-              exploration: annotateUnsupportedDeep(r.exploration, unsupported),
-              // A run is "errored" only when it hit a terminal error AND
-              // produced no answer surface at all (QNT-226: retrieved sources
-              // count as a surface — see hasAnswerSurface).
-              status: r.errors.length > 0 && !hasAnswerSurface(r) ? "errored" : "done",
-            }));
-          } else if (event === "error") {
-            const ev = data as ChatErrorEvent;
-            updateRun(id, (r) => ({ ...r, errors: [...r.errors, ev] }));
-          }
-        },
+        // QNT-379: the event-reducer lives in chat/run-reducer.ts (framework-
+        // free, node:test covered).
+        (event, data) => updateRun(id, (r) => reduceRunEvent(r, event, data)),
         controller.signal,
-      ).catch((err: unknown) => {
-        if (controller.signal.aborted) return; // user-initiated cancel
-        const detail = err instanceof Error ? err.message : "unknown stream error";
-        updateRun(id, (r) => ({
-          ...r,
-          errors: [...r.errors, { detail, code: "transport-failed" }],
-          status: "errored",
-        }));
-      });
+      )
+        .catch((err: unknown) => {
+          if (controller.signal.aborted) return; // settled by the finally below
+          const detail = err instanceof Error ? err.message : "unknown stream error";
+          updateRun(id, (r) => ({
+            ...r,
+            errors: [...r.errors, { detail, code: "transport-failed" }],
+            status: "errored",
+          }));
+        })
+        .finally(() => {
+          // QNT-379: single settlement guarantee. Before this, a run aborted
+          // mid-stream (or a clean EOF without a `done` frame) stayed
+          // "streaming" forever — isStreaming never cleared and the composer
+          // was dead until refresh. settleRun no-ops on already-terminal runs.
+          updateRun(id, (r) =>
+            settleRun(r, controller.signal.aborted ? "aborted" : "eof"),
+          );
+        });
     },
     [ticker, updateRun],
   );
@@ -717,7 +581,12 @@ export function ChatPanel() {
           <EmptyState ticker={ticker} onSuggestion={prefillComposer} />
         ) : (
           runs.map((run) => (
-            <RunBlock key={run.id} run={run} onSuggestion={startRun} />
+            <RunBlock
+              key={run.id}
+              run={run}
+              onSuggestion={startRun}
+              suggestionsDisabled={isStreaming}
+            />
           ))
         )}
       </div>
