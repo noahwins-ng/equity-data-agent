@@ -29,3 +29,9 @@ test("missing or invalid date renders the em-dash placeholder", () => {
   assert.equal(formatNewsDate(null), "—");
   assert.equal(formatNewsDate("not-a-date"), "—");
 });
+
+// QNT-384 AC3: TEMPORARY injected failing test to prove the CI gate fails the
+// pipeline on a broken frontend unit test. Reverted in the next commit.
+test("QNT-384 injected failure (temporary)", () => {
+  assert.strictEqual(1, 2);
+});
