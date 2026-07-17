@@ -1591,9 +1591,11 @@ async def agent_chat(request: Request, body: ChatRequest) -> StreamingResponse:
     Response media type is ``text/event-stream``; the body is a sequence of
     ``event: <name>\\ndata: <json>\\n\\n`` frames per the contract above.
 
-    ``X-Accel-Buffering: no`` is set so any reverse proxy (Caddy, nginx)
-    relays the body without buffering — without it the client wouldn't see a
-    single event until the full agent run finished, defeating the streaming.
+    ``X-Accel-Buffering: no`` is set so the ingress relays the body without
+    buffering — our public path is the Cloudflare edge / cloudflared named
+    tunnel (ADR-018), which honours this de-facto nginx header. Without it the
+    client wouldn't see a single event until the full agent run finished,
+    defeating the streaming.
 
     QNT-161: ``request`` (the bare FastAPI Request) is required by SlowAPI
     to extract the client IP for the rate-limit key; the parsed body lives
