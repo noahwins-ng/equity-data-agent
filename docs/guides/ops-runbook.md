@@ -969,7 +969,7 @@ volume loss.
 **Mitigations in place**:
 - The daemon image is built from the same repo Dockerfile as the rest of the stack - no third-party code runs in the daemon's main process. User code runs in `dagster-code-server` (separate service, no docker socket) and in ephemeral run workers (launched via DockerRunLauncher, no docker socket inside the run worker).
 - The daemon's `command:` is pinned to `dagster-daemon run -w /app/workspace.yaml` - not a shell. Remote code execution would require exploiting a bug in `dagster-daemon` itself or in a dep it imports at startup.
-- Host firewall (Hetzner `ufw`) restricts inbound ports to 22 + 80 + 443 + 8000 (API); the daemon is not directly reachable from the internet.
+- Inbound is filtered by the **Hetzner Cloud Firewall** (network-layer allowlist: 22 + 80 + 443 + 8000) - the host's own `ufw` is inactive, so it is not the enforcer. Dagster's daemon + UI bind to `127.0.0.1` only and are not in the allowlist, so the daemon is not reachable from the internet. (The allowlisted :8000 no longer fronts the API either - post-ADR-018 the API binds loopback and is served via the cloudflared tunnel; that entry is vestigial.)
 - `.env` is mode 0600, root:root on the host; even via the docker socket, extracting secrets requires privileged container access.
 
 **Do not**: bind-mount `/var/run/docker.sock` into `dagster-code-server` or into ephemeral run workers. Only the daemon needs it.
