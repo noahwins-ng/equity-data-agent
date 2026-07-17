@@ -141,12 +141,30 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          # QNT-384: node 24 (matches dev). The `test` script runs
+          # `node --test` over `.test.ts` files directly — that needs native
+          # TypeScript stripping + test-runner glob support, both default-on
+          # only in node >=23.6. On node 20 the Unit tests step can't even
+          # parse the TS and the gate would be broken rather than gating.
+          node-version: "24"
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend deps
         run: npm ci
+
+      # QNT-384: the 939 lines of frontend unit tests + lint + typecheck were a
+      # local-only honor-system gate — CI ran only npm audit, so a broken test or
+      # type error reached main unblocked (Vercel's `next build` caught type
+      # errors but nothing else). These three steps make the frontend gate real.
+      - name: Lint (eslint)
+        run: npm run lint
+
+      - name: Type check (tsc --noEmit)
+        run: npm run typecheck
+
+      - name: Unit tests (node:test)
+        run: npm test
 
       - name: npm audit (high+ severity gate)
         # --audit-level=high: mediums and lows are reported but exit 0; only

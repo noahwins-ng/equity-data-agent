@@ -196,7 +196,6 @@ make lint                           # ruff check + pyright
 make format                         # Auto-format code
 make migrate                        # Run ClickHouse DDL migrations (via HTTP)
 make seed                           # Quick seed: 30 days, 3 tickers (fast dev data)
-make types                          # Generate TS types from FastAPI OpenAPI schema
 make build                          # Build prod Docker images locally (run when changing Dockerfile, docker-compose.yml, or deps)
 make rollback                       # Rollback prod to previous commit and rebuild (emergency use)
 make monitor-install                # Install health monitor cron on Hetzner (every 15 min)
