@@ -50,6 +50,7 @@ def _extract_periods(
     if income_stmt.empty:
         return []
 
+    newest_period = income_stmt.columns.max()
     rows: list[dict] = []
     for period_end in income_stmt.columns:
         revenue = _safe_get(income_stmt, "Total Revenue", period_end)
@@ -83,24 +84,49 @@ def _extract_periods(
             ("total_liabilities", "Total Liabilities Net Minority Interest"),
             ("current_assets", "Current Assets"),
             ("current_liabilities", "Current Liabilities"),
-            ("total_debt", "Total Debt"),
-            ("cash_and_equivalents", "Cash And Cash Equivalents"),
         ]:
             row[field] = _safe_get_or_zero(balance_sheet, col_name, period_end)
+
+        # Debt/cash class fields keep missing as NULL (QNT-382): zero-coercing
+        # them makes a period where yfinance omits Total Debt read as debt-free
+        # (debt_to_equity 0) and understates EV/EBITDA — a plausible lie worse
+        # than NULL. Downstream ratios propagate NaN and reports render N/M.
+        row["total_debt"] = _safe_get(balance_sheet, "Total Debt", period_end)
+        row["cash_and_equivalents"] = _safe_get(
+            balance_sheet, "Cash And Cash Equivalents", period_end
+        )
 
         # Cash flow
         row["free_cash_flow"] = _safe_get_or_zero(cashflow, "Free Cash Flow", period_end)
 
-        # Info fields (point-in-time, same for all periods)
+        # Info fields (point-in-time snapshots, same value for all periods)
         row["ebitda"] = float(info.get("ebitda", 0) or 0)
-        row["shares_outstanding"] = int(info.get("sharesOutstanding", 0) or 0)
+        # Share count as of THIS period end, from the balance sheet (QNT-382).
+        # Provenance, in order:
+        #   1. balance-sheet "Ordinary Shares Number" for the period — per-period
+        #      truth, captures buybacks (AAPL) in historical EPS trends.
+        #   2. for the NEWEST period only, fall back to the info.sharesOutstanding
+        #      snapshot — "current" is a faithful stand-in for the latest period
+        #      end, and it keeps latest-row ratios alive when yfinance lags the
+        #      balance-sheet line.
+        #   3. otherwise NULL — never today's snapshot stamped across history.
+        shares = _safe_get(balance_sheet, "Ordinary Shares Number", period_end)
+        if shares is None and period_end == newest_period:
+            shares = float(info.get("sharesOutstanding", 0) or 0) or None
+        row["shares_outstanding"] = shares
         # impliedSharesOutstanding counts ALL share classes (the figure yfinance
         # uses for marketCap); sharesOutstanding is per-class and understates
         # dual-class names like GOOGL by ~half. Fall back to the per-class count
-        # when yfinance omits the implied figure.
-        row["implied_shares_outstanding"] = (
-            int(info.get("impliedSharesOutstanding", 0) or 0) or row["shares_outstanding"]
-        )
+        # when yfinance omits the implied figure. It is a point-in-time snapshot
+        # with no historical series, so it is stamped only on the newest period
+        # (its one consumer reads the latest non-NULL row for live market cap);
+        # older periods carry NULL rather than today's count (QNT-382).
+        if period_end == newest_period:
+            row["implied_shares_outstanding"] = (
+                float(info.get("impliedSharesOutstanding", 0) or 0) or row["shares_outstanding"]
+            )
+        else:
+            row["implied_shares_outstanding"] = None
         row["market_cap"] = float(info.get("marketCap", 0) or 0)
 
         rows.append(row)
@@ -214,6 +240,12 @@ def fundamentals(
 
     df = pd.DataFrame(all_rows)
 
+    # The nullable debt/cash fields (QNT-382) come out object-dtyped when a
+    # whole batch is None; the contract pins them to float, so coerce (None →
+    # NaN) before validation.
+    for col in ("total_debt", "cash_and_equivalents"):
+        df[col] = df[col].astype("float64")
+
     # Source-boundary contract (QNT-259): validate the assembled per-period frame
     # before any DB write. A schema violation (renamed/missing column, dtype
     # drift) raises and hard-fails the partition -> QNT-62 Discord sensor; a
@@ -232,9 +264,17 @@ def fundamentals(
 
     record_rejects(context, clickhouse, source_asset="fundamentals", rejects=rejects)
 
-    # Ensure correct types for ClickHouse
-    df["shares_outstanding"] = df["shares_outstanding"].astype("int64")
-    df["implied_shares_outstanding"] = df["implied_shares_outstanding"].astype("int64")
+    # Ensure correct types for ClickHouse: the share-count columns are
+    # Nullable(UInt64), so hand the driver an object column of Python ints /
+    # None. Built explicitly with dtype=object — Series.map would re-infer
+    # int/None back to float64 + NaN, leaving NULL handling to driver-internal
+    # coercion instead of our stated intent.
+    for col in ("shares_outstanding", "implied_shares_outstanding"):
+        df[col] = pd.Series(
+            [int(v) if pd.notna(v) else None for v in df[col]],
+            index=df.index,
+            dtype=object,
+        )
 
     cols = [
         "ticker",

@@ -215,11 +215,13 @@ FUNDAMENTALS_CONTRACT = pa.DataFrameSchema(
         "ebitda": pa.Column(float, nullable=True, required=True),
         "total_debt": pa.Column(float, nullable=True, required=True),
         "cash_and_equivalents": pa.Column(float, nullable=True, required=True),
-        # nullable=False: share counts coerce to int64 downstream, so a NaN is a
-        # value-tier quarantine (like volume in OHLCV), not a contract-blessed crash.
-        "shares_outstanding": pa.Column(nullable=False, required=True, checks=pa.Check.ge(0)),
+        # nullable=True (QNT-382): share counts are per-period from the balance
+        # sheet; a period yfinance has no count for legitimately carries NULL
+        # (the columns are Nullable(UInt64) and the asset inserts None, not NaN).
+        # ge(0) still quarantines a negative count on the rows that have one.
+        "shares_outstanding": pa.Column(nullable=True, required=True, checks=pa.Check.ge(0)),
         "implied_shares_outstanding": pa.Column(
-            nullable=False, required=True, checks=pa.Check.ge(0)
+            nullable=True, required=True, checks=pa.Check.ge(0)
         ),
         "market_cap": pa.Column(float, nullable=True, required=True),
     },
