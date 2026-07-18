@@ -6,8 +6,39 @@ the Dagster UI without needing to open ClickHouse Play.
 
 Severity conventions:
 - blocking=True + ERROR: integrity-breaking — row count, NULL close, future dates.
-  Prevents downstream materialization in the same job run.
-- WARN: stale or suspicious data — does not block downstream.
+  Fails the ohlcv_raw ingest run loudly (Dagster UI ERROR + run failure).
+- WARN: stale or suspicious data — surfaced but does not fail the run.
+
+What "blocking" does NOT do here (QNT-385, General-Enhancement #10): a blocking
+check "prevents downstream materialization in the same job run", but the ohlcv
+ingest jobs (ohlcv_daily_job / ohlcv_monthly_refresh_job) select ONLY ohlcv_raw
+— there is no downstream asset in the same run for the block to protect. The
+real derived pipeline (indicators / aggregations) runs in a SEPARATE
+sensor-triggered job (ohlcv_downstream_job) keyed on the ohlcv_raw
+ASSET_MATERIALIZATION event (sensors.py::_build_materialization_sensor), which
+fires regardless of check outcome. The materialization event is emitted before
+the check runs, so a bad row (NULL close, future date) still cascades into every
+derived table. These checks ALERT loudly; they do not GATE the derived pipeline.
+
+Decision — do NOT gate the sensor on check status (QNT-385):
+- The blocking checks already fail the ingest run loudly, so an operator is
+  alerted the moment bad data lands.
+- Same-key corruption (a NULL close on an existing (ticker, date)) self-heals:
+  the next good fetch supersedes that row via ReplacingMergeTree(fetched_at) and
+  re-triggers the sensor, so the derived rows recompute correctly on merge.
+- New-key corruption (a spurious future-dated row) does NOT self-heal:
+  ReplacingMergeTree only collapses duplicate keys, never deletes one, so a
+  bogus row no correct fetch reproduces — and its derived orphan — persists
+  until a manual DELETE mutation. This is the rarer case, and the loud blocking
+  failure is exactly what prompts that cleanup.
+- Either way, gating would make the sensor query each partition's latest check
+  evaluation before firing, adding cross-job coupling and a new failure mode
+  (what does the sensor do if the status query itself errors?) disproportionate
+  to an alerted, mostly-self-healing condition at 10-ticker scale.
+- If a real NULL-close / future-date cascade is ever observed in prod, the clean
+  fix is a design change (fold the derived assets into the gated job, or use an
+  asset-check-conditioned automation), which earns its own ticket — not ad-hoc
+  status-polling bolted onto the sensor here.
 """
 
 from datetime import timedelta

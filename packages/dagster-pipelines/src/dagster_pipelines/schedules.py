@@ -107,8 +107,24 @@ def ohlcv_daily_schedule(context: ScheduleEvaluationContext):
 # on the 1st, clear of ohlcv_daily (17:00 weekdays), news_raw (02:00 daily) and
 # fundamentals (Sun 22:00), so nothing else competes; the runs simply drain
 # 3-at-a-time under max_concurrent_runs: 3 (QNT-113) — slower, not unsafe (per-run
-# isolation at mem_limit: 3g, QNT-116). Fetch cost is identical to the original 2y
-# backfill: one yfinance request per ticker — see QNT-235 PR.
+# isolation from QNT-116 at mem_limit: 2g, QNT-385). Fetch cost is identical to the
+# original 2y backfill: one yfinance request per ticker — see QNT-235 PR.
+#
+# Residual limitation — the 2y refresh horizon leaves a permanent adjustment
+# splice at the aging boundary (QNT-385, General-Enhancement #13). period="2y"
+# only rewrites rows inside the trailing 2-year window; rows older than that are
+# never refetched. yfinance's split/dividend adjustment is applied to the WHOLE
+# series it returns, so after a split the pre-window history keeps its OLD
+# adjustment basis forever while the in-window rows carry the NEW one — a fixed
+# discontinuity at the window edge that ages forward one day per day and is never
+# healed (unlike the daily-incremental splice above, which the monthly refresh
+# does correct). Recent rolling indicators are unaffected (their lookback sits
+# entirely inside the refreshed window). Full-history integrators inherit the
+# discontinuity: OBV accumulates volume-signed-by-close-direction from the series
+# start (its window-dependence is already documented on the OBV asset), and EMA
+# seeds are computed off the earliest available closes. Accepted at current scale;
+# widening the horizon (or a one-off full-history refetch) is the fix if a
+# split-heavy ticker's long-horizon OBV/EMA ever needs to be exact.
 @schedule(
     job=ohlcv_monthly_refresh_job,
     cron_schedule="0 6 1 * *",  # 06:00 ET, 1st of each month
@@ -185,7 +201,7 @@ def news_raw_schedule(context: ScheduleEvaluationContext):
 # fan-out — plus the sensor-triggered earnings_embeddings runs — never overlaps
 # another job's window. Both assets are I/O-bound (EDGAR HTTP / Qdrant cloud
 # inference), low-memory like news; runs drain 3-at-a-time under
-# max_concurrent_runs: 3 (QNT-113) at mem_limit: 3g (QNT-116) — slower, not
+# max_concurrent_runs: 3 (QNT-113) at mem_limit: 2g (QNT-385) — slower, not
 # unsafe (concurrency pre-flight per docs/patterns.md).
 @schedule(
     job=earnings_releases_job,
@@ -214,7 +230,7 @@ def earnings_releases_schedule(context: ScheduleEvaluationContext):
 # fundamentals Sun 22:00, news daily 02:00, earnings_releases Sat 23:00), so its
 # 10-partition fan-out never overlaps another job's window. One yfinance request
 # per partition, I/O-bound like fundamentals; runs drain 3-at-a-time under
-# max_concurrent_runs: 3 (QNT-113) at mem_limit: 3g (QNT-116) — slower, not unsafe
+# max_concurrent_runs: 3 (QNT-113) at mem_limit: 2g (QNT-385) — slower, not unsafe
 # (concurrency pre-flight per docs/patterns.md).
 @schedule(
     job=earnings_calendar_job,
