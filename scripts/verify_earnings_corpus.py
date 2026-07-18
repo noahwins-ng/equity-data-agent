@@ -50,7 +50,12 @@ def _materialize(tickers: list[str]) -> None:
 
 
 def _report(tickers: list[str]) -> None:
-    client = get_client(host=settings.CLICKHOUSE_HOST, port=settings.CLICKHOUSE_PORT)
+    client = get_client(
+        host=settings.CLICKHOUSE_HOST,
+        port=settings.CLICKHOUSE_PORT,
+        username=settings.CLICKHOUSE_USER,
+        password=settings.CLICKHOUSE_PASSWORD,
+    )
     qdrant = QdrantResource()
 
     print("\n=== earnings_releases_raw row counts ===")

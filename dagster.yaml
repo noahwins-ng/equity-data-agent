@@ -44,6 +44,8 @@ run_launcher:
       - DAGSTER_HOME
       - CLICKHOUSE_HOST
       - CLICKHOUSE_PORT
+      - CLICKHOUSE_USER
+      - CLICKHOUSE_PASSWORD
       - QDRANT_URL
       - QDRANT_API_KEY
       - LITELLM_BASE_URL

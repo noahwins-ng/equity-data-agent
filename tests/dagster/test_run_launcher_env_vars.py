@@ -43,6 +43,11 @@ ASSET_REQUIRED_SETTINGS = frozenset(
     {
         "CLICKHOUSE_HOST",
         "CLICKHOUSE_PORT",
+        # QNT-381: read by ClickHouseResource._client — without the passthrough
+        # every launcher-spawned run would fail auth against the credentialed
+        # warehouse (same shape as QNT-141/144).
+        "CLICKHOUSE_PASSWORD",
+        "CLICKHOUSE_USER",
         "FINNHUB_API_KEY",
         "QDRANT_API_KEY",
         "QDRANT_URL",

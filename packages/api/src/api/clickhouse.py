@@ -33,6 +33,8 @@ def get_client() -> Client:
     return clickhouse_connect.get_client(
         host=settings.CLICKHOUSE_HOST,
         port=settings.CLICKHOUSE_PORT,
+        username=settings.CLICKHOUSE_USER,
+        password=settings.CLICKHOUSE_PASSWORD,
         connect_timeout=3,
         query_limit=0,
         autogenerate_session_id=False,

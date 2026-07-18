@@ -6,7 +6,6 @@ import argparse
 import os
 import sys
 import urllib.error
-import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,10 +26,20 @@ class MigrationError(RuntimeError):
 @dataclass
 class ClickHouseHTTP:
     url: str
+    # QNT-381: credentials travel as X-ClickHouse-* headers, not ?user=/
+    # ?password= query params — ClickHouse's HTTP handler logs request URIs,
+    # so a URL-borne password would land in server logs.
+    user: str = ""
+    password: str = ""
 
     def execute(self, sql: str) -> str:
         data = sql.encode("utf-8")
-        request = urllib.request.Request(self.url, data=data, method="POST")
+        headers: dict[str, str] = {}
+        if self.user:
+            headers["X-ClickHouse-User"] = self.user
+        if self.password:
+            headers["X-ClickHouse-Key"] = self.password
+        request = urllib.request.Request(self.url, data=data, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
                 return response.read().decode("utf-8")
@@ -41,21 +50,54 @@ class ClickHouseHTTP:
             raise MigrationError(str(exc.reason)) from exc
 
 
-def clickhouse_url() -> str:
+def load_env_credentials(env_path: Path = Path(".env")) -> None:
+    """Fill CLICKHOUSE_USER / CLICKHOUSE_PASSWORD from the repo .env when absent.
+
+    QNT-381: both callers of this script run without the .env loaded — CD runs
+    it with the VPS system python3, `make migrate` runs it via uv from dev.
+    Only the two credential keys are read: CLICKHOUSE_HOST must stay
+    env-or-default `localhost` (the VPS .env says `clickhouse`, which resolves
+    only inside the compose network, not on the host where this script runs).
+    Process env vars always win over the file.
+
+    Comment handling: a bare `# ...` value and a trailing ` # ...` are treated
+    as comments (matches the old .env.example password line). Consequence: a
+    password containing ` #` would be truncated — keep passwords to symbols
+    without `#`, per the "leave lines bare" rule in .env.example.
+
+    This script deliberately does NOT import shared.Settings: CD runs it with
+    the bare VPS python3 (no venv, no shared package on sys.path).
+    """
+    if not env_path.exists():
+        return
+    wanted = {"CLICKHOUSE_USER", "CLICKHOUSE_PASSWORD"}
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if key not in wanted or key in os.environ:
+            continue
+        # Tolerate the inline-comment style of older .env files
+        # (`CLICKHOUSE_PASSWORD=    # empty OK ...`).
+        value = value.strip()
+        if value.startswith("#"):
+            value = ""
+        else:
+            value = value.partition(" #")[0].rstrip()
+        os.environ[key] = value.strip("'\"")
+
+
+def clickhouse_client() -> ClickHouseHTTP:
+    load_env_credentials()
     host = os.environ.get("CLICKHOUSE_HOST", "localhost")
     port = os.environ.get("CLICKHOUSE_PORT", "8123")
-    user = os.environ.get("CLICKHOUSE_USER", "")
-    password = os.environ.get("CLICKHOUSE_PASSWORD", "")
-
-    query: dict[str, str] = {}
-    if user:
-        query["user"] = user
-    if password:
-        query["password"] = password
-
-    encoded = urllib.parse.urlencode(query)
-    suffix = f"?{encoded}" if encoded else ""
-    return f"http://{host}:{port}/{suffix}"
+    return ClickHouseHTTP(
+        url=f"http://{host}:{port}/",
+        user=os.environ.get("CLICKHOUSE_USER", ""),
+        password=os.environ.get("CLICKHOUSE_PASSWORD", ""),
+    )
 
 
 def split_sql_statements(sql: str) -> list[str]:
@@ -138,7 +180,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    client = ClickHouseHTTP(clickhouse_url())
+    client = clickhouse_client()
     try:
         applied_count, skipped_count = run_migrations(args.migrations_dir, client)
     except MigrationError as exc:

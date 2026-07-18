@@ -40,6 +40,8 @@ class ClickHouseResource(ConfigurableResource):
         return clickhouse_connect.get_client(
             host=self.host or settings.CLICKHOUSE_HOST,
             port=self.port or settings.CLICKHOUSE_PORT,
+            username=settings.CLICKHOUSE_USER,
+            password=settings.CLICKHOUSE_PASSWORD,
             compress=False,
         )
 

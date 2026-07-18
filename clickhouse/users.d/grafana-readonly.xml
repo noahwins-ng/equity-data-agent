@@ -11,8 +11,19 @@
             <password></password>
             <profile>grafana_readonly</profile>
             <quota>default</quota>
+            <!-- QNT-381: was ::/0 (whole internet). Grafana connects from the
+                 compose bridge network, whose subnets Docker allocates from the
+                 RFC1918 pools below; loopback covers in-container debugging.
+                 External sources hit the published 8123 port with their real
+                 (DNAT-preserved) public source IP and are rejected, so a
+                 Hetzner-firewall misconfig no longer exposes an anonymous
+                 read path. -->
             <networks>
-                <ip>::/0</ip>
+                <ip>127.0.0.0/8</ip>
+                <ip>::1</ip>
+                <ip>10.0.0.0/8</ip>
+                <ip>172.16.0.0/12</ip>
+                <ip>192.168.0.0/16</ip>
             </networks>
         </grafana_readonly>
     </users>

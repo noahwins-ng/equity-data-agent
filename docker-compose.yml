@@ -30,8 +30,17 @@ services:
       # unbounded and background merges dominate clickhouse-1 CPU.
       - ./clickhouse/config.d/system-log-ttl.xml:/etc/clickhouse-server/config.d/system-log-ttl.xml:ro
       - ./clickhouse/users.d/grafana-readonly.xml:/etc/clickhouse-server/users.d/grafana-readonly.xml:ro
+    environment:
+      # QNT-381: the official image entrypoint writes
+      # /etc/clickhouse-server/users.d/default-user.xml on every container
+      # start when these are set, putting a password on the default user.
+      # `:?` fails compose parse loudly when the password is missing/empty —
+      # a silent fallback would boot the warehouse passwordless again.
+      # Values interpolate from the repo-root .env (compose reads it natively).
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER:-default}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD in .env (QNT-381)}
     ports:
-      - "8123:8123"  # exposed for local dev; blocked by Hetzner firewall in prod
+      - "8123:8123"  # exposed for local dev; blocked by Hetzner firewall in prod (credentials = second layer, QNT-381)
     mem_limit: 8g
     mem_reservation: 2g
     cpus: 2.0
