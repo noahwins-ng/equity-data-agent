@@ -25,6 +25,13 @@ make tunnel
 ```
 Keep this running. ClickHouse is now accessible at `localhost:8123`.
 
+ClickHouse requires credentials since QNT-381 (the prod default user has a
+password). Set `CLICKHOUSE_USER=default` and `CLICKHOUSE_PASSWORD=<prod
+password>` in `.env` — every app client (Dagster resource, api client,
+`make migrate`, scripts) and the `clickhouse` MCP server reads them from
+there. Without them, queries through the tunnel fail with an auth error
+(HTTP 516).
+
 ### Terminal 2: Dagster
 ```bash
 make dev-dagster
@@ -44,7 +51,9 @@ make dev-frontend
 Next.js at http://localhost:3001
 
 ### Explore data
-Open http://localhost:8123/play in a browser for ClickHouse's built-in SQL editor.
+Open http://localhost:8123/play in a browser for ClickHouse's built-in SQL
+editor. Enter the same `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` credentials
+in the user/password fields at the top of the Play UI (QNT-381).
 
 ## Working with Claude Code
 

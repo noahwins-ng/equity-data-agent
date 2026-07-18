@@ -989,3 +989,17 @@ volume loss.
 - Memory-limited to 32 MiB - cannot host a substantial implant in-process.
 
 **Do not**: change the image to a `:latest` tag. The trust delta from a published image we audited (1.2.0) to a future floating tag is large enough to deserve an explicit upgrade ticket.
+
+### ClickHouse credentialed access (QNT-381)
+
+**Context**: port 8123 is published on `0.0.0.0` deliberately (the dev SSH tunnel and the Play UI depend on it) with the Hetzner Cloud Firewall as the network layer. QNT-381 added credentials as the second layer so a single firewall misconfig no longer means anonymous read-write warehouse access.
+
+**How the password is applied**: `docker-compose.yml` passes `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` (interpolated from `/opt/equity-data-agent/.env`) into the `clickhouse` service. The official image entrypoint writes `/etc/clickhouse-server/users.d/default-user.xml` with that password on **every container start** (`manage_clickhouse_user` runs unconditionally, before the empty-data-dir init check), so it applies to the existing prod volume, not just first boot. The compose interpolation uses `:?` - if `CLICKHOUSE_PASSWORD` is missing or empty, every `docker compose` command fails at parse time with `set CLICKHOUSE_PASSWORD in .env (QNT-381)` rather than silently booting a passwordless warehouse.
+
+**The second user**: `grafana_readonly` (`clickhouse/users.d/grafana-readonly.xml`) stays passwordless (the Grafana datasource is provisioned declaratively without a secret) but is network-scoped to RFC1918 + loopback instead of `::/0`. External connections to the published port arrive with their real DNAT-preserved public source IP and are rejected; the Grafana container (compose bridge network, `172.16.0.0/12` pool) and tunnelled operators (docker-proxy → gateway IP) still pass. The `readonly=2` profile is unchanged.
+
+**Diagnosis**: auth failures surface as HTTP 516 (`Authentication failed`) on the HTTP interface, `DatabaseError` (not retried - QNT-117) in Dagster/api logs. If every app client fails auth at once after a deploy, check that `.env` on the host still carries `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` and matches what the container was started with (`docker compose --profile prod up -d clickhouse` re-applies).
+
+**Operator access**: `docker exec equity-data-agent-clickhouse-1 clickhouse-client --query "..."` keeps working unchanged - the container's own environment carries `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` and `clickhouse-client` reads those env vars natively. The Play UI and external tools need the credentials entered explicitly.
+
+**Rotation**: `make sops-edit` → change `CLICKHOUSE_PASSWORD` → commit `.env.sops` → merge; CD decrypts the new `.env` and `docker compose up -d` recreates the container with the new password. Rotate after any suspected credential compromise (see that section above).

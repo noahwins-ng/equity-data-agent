@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     # ClickHouse
     CLICKHOUSE_HOST: str = "localhost"
     CLICKHOUSE_PORT: int = 8123
+    # QNT-381: credentials sent by every app client (Dagster resource, api
+    # client, scripts). Prod sets a password on the default user via the
+    # clickhouse service environment in docker-compose.yml; the empty-string
+    # defaults preserve a passwordless local ClickHouse for tests.
+    CLICKHOUSE_USER: str = "default"
+    CLICKHOUSE_PASSWORD: str = ""
 
     # Qdrant Cloud
     QDRANT_URL: str = ""
