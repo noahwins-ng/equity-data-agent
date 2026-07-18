@@ -494,13 +494,12 @@ def get_llm(
     QNT-358: ``max_tokens`` overrides the alias's configured output cap for one
     call. ``equity-agent/default`` pins ``max_tokens: 1500`` in
     ``litellm_config.yaml`` (calibrated on the single-ticker thesis
-    distribution, QNT-351); the no-axis full-matrix comparison is structurally
-    ~2x a thesis and needs a larger budget, which it requests per-call here
-    (LiteLLM lets a request-level ``max_tokens`` override the model default).
-    QNT-370: the thesis synthesize call carries its own budget too, after the
-    live thesis distribution outgrew the config cap (see _THESIS_MAX_TOKENS).
-    ``None`` leaves the alias's configured cap untouched, so every other caller
-    is unchanged.
+    distribution, QNT-351); shapes that outgrew that cap request a larger budget
+    per-call here (LiteLLM lets a request-level ``max_tokens`` override the model
+    default). QNT-383: the structured synthesize calls size this from the single
+    per-shape ``_OUTPUT_BUDGET`` table in ``graph.py`` (``_structured_call``), so
+    no call site passes a one-off constant. ``None`` leaves the alias's
+    configured cap untouched, so every other caller is unchanged.
     """
     if _MODEL_OVERRIDE is not None:
         alias = _MODEL_OVERRIDE

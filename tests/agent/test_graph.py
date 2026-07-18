@@ -183,9 +183,10 @@ def test_full_flow_produces_thesis_and_confidence(stub_llm: _StructuredLLM) -> N
 
 
 def test_thesis_synthesize_requests_thesis_output_budget(stub_llm: _StructuredLLM) -> None:
-    """QNT-370: the thesis synthesize call carries its own per-call output
-    budget -- the live thesis distribution outgrew the thesis-calibrated 1500
-    config cap after QNT-353/354 grew the reports (see _THESIS_MAX_TOKENS).
+    """QNT-370: the thesis synthesize call carries a larger output budget -- the
+    live thesis distribution outgrew the thesis-calibrated 1500 config cap after
+    QNT-353/354 grew the reports. QNT-383 moved that budget into the per-shape
+    ``_OUTPUT_BUDGET`` table ``_structured_call`` consults by schema.
     ``stub_llm`` patches ``graph.get_llm`` with a MagicMock factory, so the
     call-site kwargs are observable on it."""
     graph = build_graph({name: _mock_tool(name) for name in REPORT_TOOLS})
@@ -194,7 +195,48 @@ def test_thesis_synthesize_requests_thesis_output_budget(stub_llm: _StructuredLL
 
     get_llm_factory = graph_module.get_llm
     assert isinstance(get_llm_factory, MagicMock)
-    get_llm_factory.assert_any_call(max_tokens=graph_module._THESIS_MAX_TOKENS)
+    get_llm_factory.assert_any_call(max_tokens=graph_module._OUTPUT_BUDGET[Thesis])
+
+
+def test_every_answer_shape_has_output_budget() -> None:
+    """QNT-383 (AC2): every registered answer shape (a member of the
+    ``AnswerPayload`` union) has an entry in the per-shape ``_OUTPUT_BUDGET``
+    table -- so a new shape cannot ship unbudgeted and silently ride the config
+    default into a truncation cliff. Fails the moment a union member is added
+    without a budget entry."""
+    from typing import get_args
+
+    from agent.answer import AnswerPayload
+
+    registered = set(get_args(AnswerPayload))
+    missing = registered - set(graph_module._OUTPUT_BUDGET)
+    assert not missing, f"answer shapes missing an _OUTPUT_BUDGET entry: {missing}"
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [s for s, budget in graph_module._OUTPUT_BUDGET.items() if budget is not None],
+)
+def test_structured_call_sizes_llm_from_output_budget(
+    schema: type, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QNT-383 (AC1): ``_structured_call`` sizes the LLM's output ceiling from the
+    per-shape ``_OUTPUT_BUDGET`` table on the default ``llm=None`` path -- so no
+    call site passes a one-off ``max_tokens`` constant. Proves the mechanism for
+    every LLM-synthesized shape at once."""
+    captured: dict[str, object] = {}
+    stub = _StructuredLLM()
+
+    def factory(*_a: object, **kw: object) -> _StructuredLLM:
+        captured.update(kw)
+        return stub
+
+    monkeypatch.setattr(graph_module, "get_llm", factory)
+    # ``_coerce`` returns None on a shape mismatch (never raises), so the stub's
+    # default Thesis response is harmless: the assertion targets only the
+    # ``get_llm`` sizing, which happens before invoke.
+    graph_module._structured_call(schema, "prompt", {}, "prompt-name", linked=False)
+    assert captured.get("max_tokens") == graph_module._OUTPUT_BUDGET[schema]
 
 
 def test_runtime_grounding_rate_lowers_composite_confidence() -> None:
