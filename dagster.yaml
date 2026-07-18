@@ -95,22 +95,45 @@ run_launcher:
     # in cAdvisor (QNT-103). The lossy bit is the post-mortem `docker
     # inspect` path — acceptable trade for not flooding the host with
     # 1000+ Exited containers.
+    # QNT-385: cap each run-worker container's memory. The historically
+    # OOM-prone workload (QNT-111->115 incident chain) otherwise runs uncapped
+    # on the host, bounded only indirectly by max_concurrent_runs: 3 below. A
+    # single pathological worker with no ceiling grows until it invokes the
+    # *host* OOM killer, which picks victims arbitrarily and could kill
+    # clickhouse. A per-container mem_limit makes that runaway OOM *local and
+    # loud* (the worker dies at its own ceiling), and run_monitoring's per-worker
+    # health branch recovers it (~2 min, see below).
+    #
+    # Value: 2g, matching dagster-code-server (docker-compose.yml). A run worker
+    # runs the SAME import-repo + materialize-assets workload from the SAME
+    # image, and code-server is sized 2g for exactly it -- so it's the honest
+    # reference, not the daemon (512m post-QNT-116, no longer runs user code).
+    # 2g is ~5.7x the ~360 MB observed worker peak during __ASSET_JOB (QNT-115),
+    # so it's a runaway ceiling, not a reservation. This per-worker limit targets
+    # the single-runaway case; a simultaneous multi-worker leak is bounded
+    # separately by max_concurrent_runs: 3, giving a worst-case concurrent
+    # ceiling of 3 x 2g = 6g (see docs/guides/ops-runbook.md resource footprint).
     container_kwargs:
       auto_remove: true
+      mem_limit: "2g"
       volumes:
         - equity-data-agent_dagster_home:/dagster_home
 
-# QNT-113: cap concurrent runs to protect the daemon cgroup from fan-out OOM.
-# Apr 20 incident: a 10-partition `fundamentals_weekly_job` backfill launched
-# all 10 subprocess workers at once (DefaultRunCoordinator fires immediately);
-# each worker loads the full repo + does asset materialization (peak ~360 MB
-# RSS per worker during __ASSET_JOB, revised up from the original 150 MB
-# estimate after the Apr 21 OOM — see QNT-115), and the combined load blew
-# past the daemon's cgroup so the kernel OOM-killed multiple workers.
-# max_concurrent_runs=3 keeps peak usage at ~1.74 GB (daemon baseline ~260 MB
-# + sensor-tick headroom ~400 MB + 3 × 360 MB) under the 3 GB cgroup set in
-# docker-compose.yml (QNT-115 raised 2g → 3g for headroom).
-# If `mem_limit` on dagster-daemon is raised, this can be raised in proportion.
+# QNT-113: cap concurrent runs to bound fan-out blast radius.
+# Apr 20 2026 incident (pre-QNT-116 topology): a 10-partition
+# `fundamentals_weekly_job` backfill launched all 10 subprocess workers at once
+# (DefaultRunCoordinator fires immediately); each loaded the full repo + did
+# asset materialization (peak ~360 MB RSS during __ASSET_JOB, revised up from
+# the original 150 MB estimate after the Apr 21 OOM — see QNT-115), and the
+# combined load blew past the shared daemon cgroup so the kernel OOM-killed
+# multiple workers. max_concurrent_runs=3 was QNT-113's fix and still stands,
+# but the sizing model changed with QNT-116: workers are now per-container
+# (own cgroup, mem_limit 2g via QNT-385), NOT subprocesses in the daemon cgroup
+# (now 512m — user code moved to dagster-code-server). So the cap now bounds how
+# many 2g worker containers run at once against HOST memory, not against the
+# daemon cgroup: worst case 3 × 2g = 6g on the CX41 (typical 3 × ~360 MB).
+# Raising the cap is a host-capacity decision (free RAM >= new_max × 2g), not a
+# daemon-mem_limit one. See docs/patterns.md "Concurrency pre-flight".
 #
 # QNT-114: reserve a non-backfill slot so sensors (ohlcv, fundamentals, news)
 # can't be starved by a 3-partition backfill. With max_concurrent_runs=3 and a

@@ -458,6 +458,7 @@ ssh hetzner 'docker inspect equity-data-agent-dagster-daemon-1 --format "{{.Id}}
   - N workers × ~360 MB RSS each (peak during `__ASSET_JOB` materialization; revised from 150 MB - QNT-115)
   - With pre-QNT-116 `mem_limit: 3g` and `max_concurrent_runs: 3`, peak ≈ 1.74 GB (leaves ~1.3 GB slack for materialization spikes).
   - Post-QNT-116, each run gets its own container with its own cgroup - run-worker memory no longer accumulates under a single cgroup, so the formula becomes per-run rather than N-aggregate.
+  - [QNT-385](https://linear.app/noahwins/issue/QNT-385) sets that per-run cgroup ceiling explicitly: run-worker `container_kwargs.mem_limit: 2g` in `dagster.yaml` (matching `dagster-code-server`, which runs the same import + materialize workload). A single runaway worker now OOMs local + loud at 2g instead of growing until the host OOM killer picks a victim (potentially clickhouse). Worst-case concurrent worker ceiling = `max_concurrent_runs: 3` x 2g = 6g; a simultaneous multi-worker leak is bounded by the run coordinator, not the per-worker limit.
 - [QNT-110](https://linear.app/noahwins/issue/QNT-110) run-retry is complementary - handles transient launch failures (gRPC UNAVAILABLE, etc.).
 - [QNT-114](https://linear.app/noahwins/issue/QNT-114) `run_monitoring` auto-fails STARTED/CANCELING runs whose worker was OOM-killed before emitting `RUN_FAILURE` - see "CANCELING ghost after run-worker OOM" below. Post-QNT-116 the STARTED branch also fires (DockerRunLauncher supports per-worker health check), recovery ~2 min instead of ~30.
 

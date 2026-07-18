@@ -179,21 +179,25 @@ def my_asset(
 
 **Concurrency pre-flight** (required when adding a scheduled / sensor-triggered partitioned job):
 
-Every partitioned asset fans out to N subprocess workers per trigger. The `QueuedRunCoordinator` cap in `dagster.yaml` (set by QNT-113) limits how many can run concurrently - raising the cap without raising the daemon's `mem_limit` re-opens the Apr 20 2026 OOM-cascade failure mode.
+Every partitioned asset fans out to N run-worker containers per trigger. Two independent limits bound the blast radius (post-QNT-116 topology — workers are ephemeral Docker containers, NOT subprocesses inside the daemon cgroup):
 
-Before shipping a new scheduled/sensor asset, compute:
+- **Coordinator cap** — `QueuedRunCoordinator(max_concurrent_runs: 3)` in `dagster.yaml` (QNT-113): at most 3 worker containers run at once; the rest queue. This is the hard concurrency bound.
+- **Per-worker ceiling** — `container_kwargs.mem_limit: 2g` (QNT-385): each worker container OOMs locally at 2g. Observed peak is ~360 MB RSS during `__ASSET_JOB` (revised from 150 MB after the Apr 21 2026 OOM; QNT-115), so 2g is runaway headroom, not a target.
+
+Because workers are per-container, the old daemon-cgroup OOM cascade (Apr 20/21 2026, when subprocess workers shared the daemon's cgroup) is structurally gone — the daemon (`512m`, QNT-116) no longer hosts worker memory. The failure mode is now a single worker exceeding 2g, killed locally and recovered by `run_monitoring` (~2 min).
+
+The old `safe = (daemon_mem − 660) / 360` formula is retired with that topology. The current check for concurrency is **host memory ÷ per-worker ceiling**:
 
 ```
-safe_concurrent_runs = (mem_limit_on_dagster_daemon − 660 MB) / 360 MB
+safe_concurrent_runs ≈ free_host_RAM / worker_mem_limit(2g),  practically capped at max_concurrent_runs: 3
 ```
 
-Where `660 MB ≈ 260 MB daemon baseline + 400 MB sensor-tick headroom` and `360 MB` is the observed per-run-worker peak RSS during `__ASSET_JOB` materialization (revised from 150 MB after Apr 21 2026 OOM; see QNT-115).
+On the 16 GiB CX41 the worst-case concurrent worker demand is `3 × 2g = 6g` of ceiling (typical `3 × ~360 MB ≈ 1.1g`); the long-running compose services reserve far less than their summed ceilings in steady state, so 3 concurrent workers fit comfortably.
 
-At the current `mem_limit: 3g` (QNT-115) this gives `(3072 − 660) / 360 ≈ 6` theoretical concurrent ceiling. Practical cap stays at `max_concurrent_runs: 3` (QNT-113) - the ceiling is headroom, not a target.
-
-- If `max_concurrent_runs` in `dagster.yaml` is already less than `safe_concurrent_runs`, no change needed - your new asset will queue behind the existing jobs.
-- If the total fan-out across ALL scheduled/sensor jobs × their partition counts, triggered within a single cron firing window, would exceed `max_concurrent_runs`, either (a) raise `mem_limit` on `dagster-daemon` in `docker-compose.yml` AND scale `max_concurrent_runs` proportionally in the same PR, or (b) stagger the schedules so fan-out doesn't overlap.
-- Serialized throughput is the safe default. A backfill taking ~10× longer is correct; an OOM cascade that kills the daemon is not.
+Before shipping a new scheduled/sensor asset:
+- If the total fan-out across ALL scheduled/sensor jobs × their partition counts, triggered within a single cron firing window, would exceed `max_concurrent_runs`, **stagger the schedules** so fan-out doesn't overlap (the existing schedules are deconflicted this way — see `schedules.py`). Extra runs merely queue, so overlap is a throughput/latency concern, not a safety one.
+- Only raise `max_concurrent_runs` if `free_host_RAM ≥ new_max × 2g` — scaling the cap is a host-capacity decision now, not a daemon-`mem_limit` one.
+- Serialized throughput is the safe default. A backfill taking ~10× longer is correct; letting fan-out outrun host memory is not.
 
 Reference: `docs/guides/ops-runbook.md` §"Dagster backfill OOM-kill" for the incident history + diagnosis commands.
 
@@ -273,6 +277,8 @@ ORDER BY (ticker, date);
 - Always `PARTITION BY ticker` and `ORDER BY (ticker, <temporal_key>)`
 - `LowCardinality(String)` for ticker column
 - Run via `make migrate` locally; CD applies all `migrations/*.sql` automatically on every deploy (QNT-146)
+
+**Rollback-safety invariant — migrations MUST be forward-compatible + idempotent** (QNT-385): CD runs `migrations/*.sql` *before* the obs-smoke gate, and `make rollback` restores **code, not schema** (`git checkout HEAD~1 && docker compose --profile prod up -d --build`). So after a rollback the previous code runs against the *new* schema. The invariant that keeps this safe: **no migration removes/renames a column or narrows a type that old code depends on, and re-applying any migration is a no-op.** Every migration to date satisfies it — additive/widening schema changes (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN`, `MODIFY COLUMN` widening/nullable), harmless metadata changes (`COMMENT COLUMN`, `REMOVE DEFAULT` on a column the asset always supplies explicitly — see `035`), and idempotent data backfills (`ALTER TABLE ... UPDATE ... WHERE <cutover>` — re-running re-NULLs already-NULL rows, see `039`) all leave old code able to read the schema. A migration that **drops or renames a column, narrows a type, or otherwise makes the new schema unreadable by old code breaks the rollback contract**: the rolled-back old code would hit a schema it can't read. If you ever need such a destructive change, split it across two deploys (add-new → backfill → cutover code → drop-old in a later deploy) so no single rollback lands old code on an incompatible schema.
 
 ---
 
