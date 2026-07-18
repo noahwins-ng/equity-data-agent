@@ -16,14 +16,22 @@ QNT-144 direction (Settings has a key env_vars does not list):
     is empty inside the spawned container if env_vars omits it. QNT-141
     added FINNHUB_API_KEY to Settings + .env + SOPS but skipped env_vars;
     60 queued news_raw runs were silently dropped over ~24h before detection.
-    The asset-required keys are maintained as an explicit list (rather than
-    grepped at test time) because not every Settings field is read inside
-    a launcher-spawned container — agent + api run elsewhere.
+
+QNT-381 follow-up: the required-keys list used to be hand-maintained, which
+shares the human-memory failure mode that caused QNT-59/125, QNT-141/144,
+and the QNT-381 near-miss (ClickHouse creds wired into Settings + resource
+but not env_vars — caught in review, would have auth-failed every prod
+run-worker). It is now DERIVED at test time by grepping `settings.X`
+references under packages/dagster-pipelines/src/. A new reference must be
+classified — into env_vars, DAEMON_CONTEXT_SETTINGS, or
+DEFAULTS_ONLY_SETTINGS — or this suite fails with instructions. The failure
+mode flips from silently-dropped prod runs to a red CI check.
 
 DAGSTER_HOME is on an explicit allowlist — it's Dagster infra, not an app
 Setting.
 """
 
+import re
 from pathlib import Path
 
 import yaml
@@ -31,34 +39,45 @@ from shared.config import Settings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DAGSTER_YAML = REPO_ROOT / "dagster.yaml"
+PIPELINES_SRC = REPO_ROOT / "packages" / "dagster-pipelines" / "src"
 
 INFRA_ALLOWLIST = frozenset({"DAGSTER_HOME"})
 
-# Settings fields that asset code in packages/dagster-pipelines/ reads directly
-# (`settings.X`) and therefore MUST appear in env_vars for the spawned per-run
-# container to see them. Maintain this list when adding a new
-# `from shared.config import settings` reference inside dagster-pipelines.
-# Keep this in sync with grep "settings\." packages/dagster-pipelines/src/.
-ASSET_REQUIRED_SETTINGS = frozenset(
+_SETTINGS_REF = re.compile(r"\bsettings\.([A-Z][A-Z0-9_]*)\b")
+
+# Fields referenced only from sensor/schedule evaluation code, which runs in
+# dagster-code-server / dagster-daemon (both have `env_file: .env`) — never
+# inside a DockerRunLauncher-spawned run container. They must NOT be forced
+# into env_vars: if prod .env lacks the key, the launcher drops every run at
+# dequeue (QNT-125 direction).
+DAEMON_CONTEXT_SETTINGS = frozenset(
     {
-        "CLICKHOUSE_HOST",
-        "CLICKHOUSE_PORT",
-        # QNT-381: read by ClickHouseResource._client — without the passthrough
-        # every launcher-spawned run would fail auth against the credentialed
-        # warehouse (same shape as QNT-141/144).
-        "CLICKHOUSE_PASSWORD",
-        "CLICKHOUSE_USER",
-        "FINNHUB_API_KEY",
-        "QDRANT_API_KEY",
-        "QDRANT_URL",
-        # Read by dagster_pipelines.vercel_deploy.trigger_vercel_deploy. Until
-        # 2026-05-05 this was a Settings field but missing from env_vars; the
-        # scheduled vercel_deploy_after_* runs went through DockerRunLauncher,
-        # which dropped the env var, and the op silently no-op'd ("URL not set;
-        # skipping deploy trigger") for ~5 days. The frontend served its last
-        # successful build (May 1) over that window even though OHLCV/news
-        # ingestion was healthy. Same shape as QNT-141/144 (FINNHUB_API_KEY).
-        "VERCEL_DEPLOY_HOOK_URL",
+        # dagster_run_failure_alert_sensor (@run_failure_sensor — daemon).
+        "DAGSTER_BASE_URL",
+        "DISCORD_WEBHOOK_URL",
+    }
+)
+
+# Fields read inside run-worker context but DELIBERATELY not passed through:
+# run-workers fall back to the code defaults in shared.config.Settings, and
+# prod .env carries no lines for them (verified against .env.sops at the time
+# of writing) — so listing them in env_vars would drop runs at dequeue
+# (QNT-125), and passing an empty .env value through would OVERRIDE a good
+# code default with "" (e.g. SEC_EDGAR_USER_AGENT= would blank the User-Agent
+# SEC requires). To make one of these operator-tunable in prod, move it out
+# of this set AND add it to env_vars AND add a non-empty line to .env.sops in
+# the same change.
+DEFAULTS_ONLY_SETTINGS = frozenset(
+    {
+        # earnings_embeddings asset (contextual-embedding switches).
+        "CONTEXT_MAX_DOC_CHARS",
+        "CONTEXT_MODEL",
+        "CONTEXT_THROTTLE_SECONDS",
+        "EARNINGS_CONTEXTUAL",
+        # run_online_eval @op — launched via online_eval_job → run-worker.
+        "ONLINE_EVAL_SAMPLE_RATE",
+        # edgar_feeds fetch path, called from the earnings ingest asset.
+        "SEC_EDGAR_USER_AGENT",
     }
 )
 
@@ -67,6 +86,16 @@ def _load_env_vars() -> list[str]:
     with DAGSTER_YAML.open() as f:
         config = yaml.safe_load(f)
     return config["run_launcher"]["config"]["env_vars"]
+
+
+def _referenced_settings() -> set[str]:
+    """Every Settings field referenced as `settings.X` under dagster-pipelines."""
+    refs: set[str] = set()
+    for path in sorted(PIPELINES_SRC.rglob("*.py")):
+        refs.update(_SETTINGS_REF.findall(path.read_text(encoding="utf-8")))
+    # Docstrings/comments can mention fields that aren't real (regex is
+    # source-text-level); intersect with actual Settings fields.
+    return refs & set(Settings.model_fields.keys())
 
 
 def test_env_vars_subset_of_settings_or_allowlist() -> None:
@@ -93,26 +122,50 @@ def test_env_vars_has_no_duplicates() -> None:
     )
 
 
-def test_asset_required_settings_subset_of_env_vars() -> None:
-    """Inverse direction (QNT-144): every Settings key read inside a
-    DockerRunLauncher-spawned container must appear in env_vars, or asset
-    code receives an empty value at runtime.
+def test_every_referenced_setting_is_classified() -> None:
+    """Auto-derived QNT-144 direction: every `settings.X` reference under
+    packages/dagster-pipelines/ must be in env_vars, or explicitly classified
+    as daemon-context or defaults-only. A new unclassified reference fails
+    here instead of silently yielding a default/empty value in prod
+    run-workers (QNT-141/144, QNT-381 near-miss).
     """
     env_vars = set(_load_env_vars())
-    settings_fields = set(Settings.model_fields.keys())
+    referenced = _referenced_settings()
 
-    unknown_required = ASSET_REQUIRED_SETTINGS - settings_fields
-    assert not unknown_required, (
-        f"ASSET_REQUIRED_SETTINGS lists keys that are not in Settings: "
-        f"{sorted(unknown_required)}. The list has drifted from "
-        f"shared.config.Settings — update one or the other."
+    unclassified = referenced - env_vars - DAEMON_CONTEXT_SETTINGS - DEFAULTS_ONLY_SETTINGS
+    assert not unclassified, (
+        f"settings fields referenced in packages/dagster-pipelines/ but not "
+        f"classified: {sorted(unclassified)}. Decide where each one runs:\n"
+        f"  * read inside an asset/op (run-worker) and operator-tunable → add "
+        f"to dagster.yaml env_vars AND ensure prod .env carries the key\n"
+        f"  * read only in sensor/schedule evaluation (daemon/code-server) → "
+        f"add to DAEMON_CONTEXT_SETTINGS\n"
+        f"  * run-worker code that should just use the Settings default → add "
+        f"to DEFAULTS_ONLY_SETTINGS\n"
+        f"Leaving it unclassified risks the QNT-141/144 silent-default failure."
     )
 
-    missing = ASSET_REQUIRED_SETTINGS - env_vars
-    assert not missing, (
-        f"dagster.yaml run_launcher.config.env_vars is missing keys that "
-        f"asset code in packages/dagster-pipelines/ reads from Settings: "
-        f"{sorted(missing)}. DockerRunLauncher will not forward them into "
-        f"per-run containers, so settings.<key> will be empty at runtime "
-        f"and the asset will fail (QNT-144)."
+
+def test_classification_lists_are_not_stale() -> None:
+    """The two exception lists must stay minimal: entries must still be
+    referenced in source, and must not also appear in env_vars (an entry in
+    both would mean the exception no longer applies).
+    """
+    env_vars = set(_load_env_vars())
+    referenced = _referenced_settings()
+
+    stale = (DAEMON_CONTEXT_SETTINGS | DEFAULTS_ONLY_SETTINGS) - referenced
+    assert not stale, (
+        f"classification lists contain fields no longer referenced under "
+        f"packages/dagster-pipelines/: {sorted(stale)}. Remove them."
     )
+
+    contradictions = (DAEMON_CONTEXT_SETTINGS | DEFAULTS_ONLY_SETTINGS) & env_vars
+    assert not contradictions, (
+        f"fields classified as exceptions but also present in env_vars: "
+        f"{sorted(contradictions)}. Remove them from the exception list (they "
+        f"are passed through) or from env_vars (they should not be)."
+    )
+
+    overlap = DAEMON_CONTEXT_SETTINGS & DEFAULTS_ONLY_SETTINGS
+    assert not overlap, f"fields in both exception lists: {sorted(overlap)}"
