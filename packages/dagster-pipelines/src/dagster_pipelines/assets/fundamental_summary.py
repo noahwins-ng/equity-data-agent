@@ -76,7 +76,14 @@ def compute_fundamental_ratios(
     # near zero — the ratio is arithmetically valid but not comparable.
     df.loc[df["eps"].abs() < _EPS_NM_THRESHOLD, "pe_ratio"] = np.nan
     ev = market_cap + df["total_debt"] - df["cash_and_equivalents"]
-    df["ev_ebitda"] = _safe_divide(ev, df["ebitda"].replace(0, np.nan))
+    # EV/EBITDA convention is EV over TTM EBITDA. The ingest carries each
+    # period's own EBITDA (QNT-382 follow-up), so quarterly rows roll a 4Q
+    # sum — same treatment as P/E above; a single quarter's EBITDA would
+    # inflate the ratio ~4x. Annual rows already carry a full-year figure.
+    # A NULL quarter inside the window (or fewer than 4 quarters) → NaN → N/M.
+    ebitda_for_ev = df["ebitda"].copy()
+    ebitda_for_ev.loc[q_mask] = df.loc[q_mask, "ebitda"].rolling(window=4, min_periods=4).sum()
+    df["ev_ebitda"] = _safe_divide(ev, ebitda_for_ev.replace(0, np.nan))
     df["price_to_book"] = _safe_divide(market_cap, equity)
     df["price_to_sales"] = _safe_divide(market_cap, df["revenue"].replace(0, np.nan))
 
@@ -85,13 +92,12 @@ def compute_fundamental_ratios(
     df["gross_margin_pct"] = (
         _safe_divide(df["gross_profit"], df["revenue"].replace(0, np.nan)) * 100
     )
-    # EBITDA margin: yfinance only exposes a single point-in-time TTM value
-    # at `info.ebitda` (same number stamped onto every row by the ingest), so
-    # dividing by a single quarter's revenue produces a ~4× inflated ratio.
-    # We only emit ebitda_margin_pct on TTM rows where the denominator is
-    # also TTM revenue (see _build_ttm_rows). Quarterly + annual rows leave
-    # this column NULL — semantically ambiguous values are worse than absent
-    # ones for a downstream agent reading the report.
+    # EBITDA margin: since the QNT-382 follow-up the ingest carries each
+    # period's own EBITDA, so quarterly/annual margins are now computable —
+    # but they stay NULL deliberately: emitting new report lines is a
+    # report-surface decision (grounding set, output budgets, per-intent
+    # reachability), not ingest hygiene. Only TTM rows carry the margin
+    # (see _build_ttm_rows), now as a genuine rolling-4Q numerator.
     df["ebitda_margin_pct"] = np.nan
     df["roe"] = _safe_divide(df["net_income"], equity) * 100
     df["roa"] = _safe_divide(df["net_income"], df["total_assets"].replace(0, np.nan)) * 100
@@ -193,12 +199,15 @@ def _build_ttm_rows(
     nm_ttm = cast(pd.Series, ni_ttm / rev_ttm.replace(0, np.nan) * 100)
     fcf_yield_ttm = cast(pd.Series, fcf_ttm / market_cap_q * 100)
     gross_margin_ttm = cast(pd.Series, gross_profit_ttm / rev_ttm.replace(0, np.nan) * 100)
-    # EBITDA margin only makes sense as a TTM ratio because yfinance hands
-    # us a single TTM EBITDA figure (point-in-time, same on every ingested
-    # row). TTM revenue is the matching denominator, so this is the one
-    # row_type where ebitda_margin_pct is semantically defined.
-    ebitda_q = cast(pd.Series, q["ebitda"]).replace(0, np.nan)
-    ebitda_margin_ttm = cast(pd.Series, ebitda_q / rev_ttm.replace(0, np.nan) * 100)
+    # TTM EBITDA margin: rolling-4Q EBITDA over TTM revenue. Since the QNT-382
+    # follow-up the ingest carries each quarter's own EBITDA, so the numerator
+    # is a genuine trailing sum (previously a single point-in-time TTM
+    # snapshot). A NULL quarter inside the window propagates NaN → that TTM
+    # row renders N/M rather than mixing eras.
+    ebitda_ttm = cast(
+        pd.Series, cast(pd.Series, q["ebitda"]).rolling(window=4, min_periods=4).sum()
+    )
+    ebitda_margin_ttm = cast(pd.Series, ebitda_ttm / rev_ttm.replace(0, np.nan) * 100)
 
     # Balance-sheet ratios use the matching quarter's snapshot, not a rolling
     # sum — book value, debt, and current assets are point-in-time concepts.

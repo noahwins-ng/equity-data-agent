@@ -260,6 +260,29 @@ def test_missing_debt_and_cash_propagate_nm_not_zero() -> None:
     assert not pd.isna(result["eps"].iloc[0])
 
 
+def test_quarterly_ev_ebitda_uses_rolling_4q_sum(ratios: pd.DataFrame) -> None:
+    """QNT-382 follow-up: quarterly EV/EBITDA rolls a 4Q EBITDA sum (TTM
+    convention), mirroring the P/E treatment — a single quarter's EBITDA
+    would inflate the ratio ~4x."""
+    # 2024 Q4: EV = 200M + 75M - 25M = 250M; 4Q EBITDA = 8+9+11+12 = 40M
+    assert _row(ratios, "2024-12-31", "quarterly")["ev_ebitda"] == pytest.approx(6.25)
+    # 2023 Q4: EV = 200M + 50M - 10M = 240M; 4Q EBITDA = 4+4.5+5+6.5 = 20M
+    assert _row(ratios, "2023-12-31", "quarterly")["ev_ebitda"] == pytest.approx(12.0)
+
+
+def test_quarterly_first_three_quarters_have_nan_ev_ebitda(ratios: pd.DataFrame) -> None:
+    """Insufficient trailing window → NaN, matching the P/E convention."""
+    for period in ("2023-03-31", "2023-06-30", "2023-09-30"):
+        assert bool(pd.isna(_row(ratios, period, "quarterly")["ev_ebitda"]))
+
+
+def test_ttm_2024_q4_ebitda_margin_rolls_4q(ratios: pd.DataFrame) -> None:
+    """TTM EBITDA margin = rolling-4Q EBITDA / TTM revenue: 40M / 150M."""
+    assert _row(ratios, "2024-12-31", "ttm")["ebitda_margin_pct"] == pytest.approx(
+        26.666667, abs=1e-4
+    )
+
+
 def test_null_shares_propagate_nan_eps_and_pe() -> None:
     """QNT-382: a period whose share count is NULL yields NaN EPS/P/E (N/M),
     never a value computed off another period's count."""

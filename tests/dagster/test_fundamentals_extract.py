@@ -186,3 +186,49 @@ def test_missing_debt_and_cash_land_none_not_zero() -> None:
     assert by_period["2026-03-31"]["cash_and_equivalents"] == 30.0
     # Non-debt/cash fields are unchanged by QNT-382: still zero-coerced.
     assert by_period["2025-12-31"]["total_liabilities"] == 0.0
+
+
+def test_ebitda_per_period_from_income_statement() -> None:
+    """QNT-382 follow-up: each period carries its own income-statement EBITDA,
+    never the TTM info snapshot stamped across rows."""
+    periods = ["2025-12-31", "2026-03-31"]
+    income = _frame({"Total Revenue": [100.0, 110.0], "EBITDA": [30.0, 35.0]}, periods)
+
+    rows = _extract_periods(income, pd.DataFrame(), pd.DataFrame(), _INFO, "AAPL", "quarterly")
+
+    by_period = {r["period_end"].isoformat(): r for r in rows}
+    assert by_period["2025-12-31"]["ebitda"] == 30.0
+    assert by_period["2026-03-31"]["ebitda"] == 35.0
+
+
+def test_ebitda_falls_back_to_normalized_line() -> None:
+    """Some tickers report only Normalized EBITDA."""
+    income = _frame({"Total Revenue": [100.0], "Normalized EBITDA": [28.0]}, ["2025-12-31"])
+
+    rows = _extract_periods(income, pd.DataFrame(), pd.DataFrame(), _INFO, "AAPL", "quarterly")
+
+    assert rows[0]["ebitda"] == 28.0
+
+
+def test_ebitda_missing_lands_none_never_ttm_snapshot() -> None:
+    """_INFO carries ebitda=1_000_000 (a TTM snapshot). A period without an
+    income-statement EBITDA line must land None even on the newest period —
+    a trailing-twelve-month figure on a single-quarter row is a unit lie."""
+    income = _frame({"Total Revenue": [100.0]}, ["2025-12-31"])
+
+    rows = _extract_periods(income, pd.DataFrame(), pd.DataFrame(), _INFO, "AAPL", "quarterly")
+
+    assert rows[0]["ebitda"] is None
+
+
+def test_market_cap_snapshot_only_on_newest_period() -> None:
+    """market_cap is a pure info snapshot: newest period only, NULL on history
+    (QNT-382 follow-up)."""
+    periods = ["2025-12-31", "2026-03-31"]
+    income = _frame({"Total Revenue": [100.0, 110.0]}, periods)
+
+    rows = _extract_periods(income, pd.DataFrame(), pd.DataFrame(), _INFO, "AAPL", "quarterly")
+
+    by_period = {r["period_end"].isoformat(): r for r in rows}
+    assert by_period["2025-12-31"]["market_cap"] is None
+    assert by_period["2026-03-31"]["market_cap"] == 50_000_000.0
