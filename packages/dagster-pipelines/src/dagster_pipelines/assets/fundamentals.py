@@ -99,8 +99,15 @@ def _extract_periods(
         # Cash flow
         row["free_cash_flow"] = _safe_get_or_zero(cashflow, "Free Cash Flow", period_end)
 
-        # Info fields (point-in-time snapshots, same value for all periods)
-        row["ebitda"] = float(info.get("ebitda", 0) or 0)
+        # EBITDA as of THIS period from the income statement (QNT-382 follow-up);
+        # some tickers report it only as Normalized EBITDA. No info.ebitda
+        # fallback even on the newest period: that snapshot is a TTM figure, and
+        # stamping a trailing-twelve-month value onto a single quarter's row is
+        # the same unit lie this ticket family removes. Missing stays NULL.
+        ebitda = _safe_get(income_stmt, "EBITDA", period_end)
+        if ebitda is None:
+            ebitda = _safe_get(income_stmt, "Normalized EBITDA", period_end)
+        row["ebitda"] = ebitda
         # Share count as of THIS period end, from the balance sheet (QNT-382).
         # Provenance, in order:
         #   1. balance-sheet "Ordinary Shares Number" for the period — per-period
@@ -127,7 +134,14 @@ def _extract_periods(
             )
         else:
             row["implied_shares_outstanding"] = None
-        row["market_cap"] = float(info.get("marketCap", 0) or 0)
+        # market_cap is a pure info snapshot with no per-period source and no
+        # downstream reader (data.py and the fundamental template both
+        # recompute live from close x shares) — stamp it only on the newest
+        # period like implied_shares_outstanding, NULL on history (QNT-382
+        # follow-up).
+        row["market_cap"] = (
+            (float(info.get("marketCap", 0) or 0) or None) if period_end == newest_period else None
+        )
 
         rows.append(row)
 
@@ -240,10 +254,10 @@ def fundamentals(
 
     df = pd.DataFrame(all_rows)
 
-    # The nullable debt/cash fields (QNT-382) come out object-dtyped when a
-    # whole batch is None; the contract pins them to float, so coerce (None →
-    # NaN) before validation.
-    for col in ("total_debt", "cash_and_equivalents"):
+    # The nullable float fields (QNT-382 + follow-up) come out object-dtyped
+    # when a whole batch is None; the contract pins them to float, so coerce
+    # (None → NaN) before validation.
+    for col in ("total_debt", "cash_and_equivalents", "ebitda", "market_cap"):
         df[col] = df[col].astype("float64")
 
     # Source-boundary contract (QNT-259): validate the assembled per-period frame
