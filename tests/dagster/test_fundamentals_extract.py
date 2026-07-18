@@ -119,3 +119,70 @@ def test_implied_shares_falls_back_to_per_class_when_absent() -> None:
     rows = _extract_periods(income, pd.DataFrame(), pd.DataFrame(), _INFO, "MSFT", "quarterly")
 
     assert rows[0]["implied_shares_outstanding"] == 100
+
+
+def test_shares_outstanding_per_period_from_balance_sheet() -> None:
+    """QNT-382: each period carries the balance-sheet "Ordinary Shares Number"
+    as of that period end — buybacks stay visible in the history — never the
+    current info.sharesOutstanding snapshot stamped across every row."""
+    periods = ["2025-12-31", "2026-03-31"]
+    income = _frame({"Total Revenue": [100.0, 110.0]}, periods)
+    balance = _frame({"Ordinary Shares Number": [15_500.0, 15_000.0]}, periods)
+
+    rows = _extract_periods(income, balance, pd.DataFrame(), _INFO, "AAPL", "quarterly")
+
+    by_period = {r["period_end"].isoformat(): r for r in rows}
+    assert by_period["2025-12-31"]["shares_outstanding"] == 15_500
+    assert by_period["2026-03-31"]["shares_outstanding"] == 15_000
+
+
+def test_shares_snapshot_fallback_only_on_newest_period() -> None:
+    """A period without a balance-sheet share count lands None (NULL), except
+    the newest period, where the current snapshot is a faithful stand-in."""
+    periods = ["2025-12-31", "2026-03-31"]
+    income = _frame({"Total Revenue": [100.0, 110.0]}, periods)
+
+    rows = _extract_periods(income, pd.DataFrame(), pd.DataFrame(), _INFO, "AAPL", "quarterly")
+
+    by_period = {r["period_end"].isoformat(): r for r in rows}
+    assert by_period["2025-12-31"]["shares_outstanding"] is None
+    assert by_period["2026-03-31"]["shares_outstanding"] == 100  # _INFO snapshot
+
+
+def test_implied_shares_null_on_historical_periods() -> None:
+    """implied_shares_outstanding is a point-in-time snapshot: stamped only on
+    the newest period, NULL on history (QNT-382)."""
+    periods = ["2025-12-31", "2026-03-31"]
+    income = _frame({"Total Revenue": [100.0, 110.0]}, periods)
+
+    rows = _extract_periods(income, pd.DataFrame(), pd.DataFrame(), _INFO, "AAPL", "quarterly")
+
+    by_period = {r["period_end"].isoformat(): r for r in rows}
+    assert by_period["2025-12-31"]["implied_shares_outstanding"] is None
+    assert by_period["2026-03-31"]["implied_shares_outstanding"] == 100
+
+
+def test_missing_debt_and_cash_land_none_not_zero() -> None:
+    """QNT-382: a period where yfinance omits Total Debt / Cash must carry None
+    (NULL downstream), not a fake debt-free 0.0. Present values pass through and
+    the other balance-sheet fields keep their zero-coercion."""
+    periods = ["2025-12-31", "2026-03-31"]
+    income = _frame({"Total Revenue": [100.0, 110.0]}, periods)
+    balance = _frame(
+        {
+            "Total Assets": [500.0, 520.0],
+            "Total Debt": [np.nan, 80.0],
+            "Cash And Cash Equivalents": [np.nan, 30.0],
+        },
+        periods,
+    )
+
+    rows = _extract_periods(income, balance, pd.DataFrame(), _INFO, "AAPL", "quarterly")
+
+    by_period = {r["period_end"].isoformat(): r for r in rows}
+    assert by_period["2025-12-31"]["total_debt"] is None
+    assert by_period["2025-12-31"]["cash_and_equivalents"] is None
+    assert by_period["2026-03-31"]["total_debt"] == 80.0
+    assert by_period["2026-03-31"]["cash_and_equivalents"] == 30.0
+    # Non-debt/cash fields are unchanged by QNT-382: still zero-coerced.
+    assert by_period["2025-12-31"]["total_liabilities"] == 0.0

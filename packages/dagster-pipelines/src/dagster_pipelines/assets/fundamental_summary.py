@@ -177,9 +177,14 @@ def _build_ttm_rows(
     if not bool(valid.any()):
         return pd.DataFrame()
 
-    # Per-share rollup uses the matching quarter's shares_outstanding so EPS_TTM
-    # tracks the share count at the period end (vs latest), matching the EPS
-    # convention SEC filings use for "EPS, trailing twelve months".
+    # Per-share rollup uses the matching quarter's shares_outstanding. Since
+    # QNT-382 the ingest sources that column per period from the balance sheet
+    # ("Ordinary Shares Number" as of period end), so EPS_TTM genuinely tracks
+    # buybacks the way SEC filings quote "EPS, trailing twelve months". Before
+    # QNT-382 every row carried the current snapshot and this rollup silently
+    # lost buyback effects. A quarter with a NULL share count (no balance-sheet
+    # line for the period) propagates NaN — that TTM row renders N/M rather
+    # than borrowing another period's count.
     shares_q = cast(pd.Series, q["shares_outstanding"]).replace(0, np.nan)
     eps_ttm = cast(pd.Series, ni_ttm / shares_q)
     market_cap_q = cast(pd.Series, latest_close * shares_q)

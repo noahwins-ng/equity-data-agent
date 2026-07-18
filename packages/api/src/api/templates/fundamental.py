@@ -310,7 +310,8 @@ def _fetch_market_cap(ticker: str) -> float | None:
     market cap agrees with the P/S x revenue the SCALE block now sits beside
     (the snapshot is a weekly point-in-time value that drifts from the daily
     close). The multiply lives in SQL, not Python, per ADR-003. Missing on
-    either side collapses the scalar subquery to 0, caught by the sentinel guard.
+    either side collapses the scalar subquery to NULL (shares_outstanding is
+    nullable since QNT-382) or 0, both caught by the sentinel guard.
     """
     client = get_client()
     query = """
@@ -331,9 +332,9 @@ def _fetch_market_cap(ticker: str) -> float | None:
     rows = result.result_rows
     if not rows:
         return None
-    # A missing close or shares collapses the scalar subquery product to 0;
-    # treat that (and any non-positive) as missing so SCALE renders N/M rather
-    # than a misleading "$0" (formatters.py convention).
+    # A missing close or shares collapses the scalar subquery product to NULL
+    # or 0; treat that (and any non-positive) as missing so SCALE renders N/M
+    # rather than a misleading "$0" (formatters.py convention).
     value = rows[0][0]
     return value if value and value > 0 else None
 

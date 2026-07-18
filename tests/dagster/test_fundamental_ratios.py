@@ -223,3 +223,47 @@ def test_pe_not_meaningful_below_eps_threshold() -> None:
     )
     result = compute_fundamental_ratios(df, latest_close=200.0)
     assert bool(pd.isna(result["pe_ratio"].iloc[0]))
+
+
+def _single_annual_row(**overrides: object) -> pd.DataFrame:
+    """One fully-populated annual row; overrides poke NULL semantics (QNT-382)."""
+    row: dict[str, object] = {
+        "period_end": pd.to_datetime("2024-12-31").date(),
+        "period_type": "annual",
+        "revenue": 10_000_000,
+        "gross_profit": 5_000_000,
+        "net_income": 2_000_000,
+        "total_assets": 100_000_000,
+        "total_liabilities": 50_000_000,
+        "current_assets": 40_000_000,
+        "current_liabilities": 20_000_000,
+        "free_cash_flow": 1_000_000,
+        "ebitda": 2_000_000,
+        "total_debt": 25_000_000,
+        "cash_and_equivalents": 5_000_000,
+        "shares_outstanding": 1_000_000,
+        "market_cap": 0,
+    }
+    row.update(overrides)
+    return pd.DataFrame([row])
+
+
+def test_missing_debt_and_cash_propagate_nm_not_zero() -> None:
+    """QNT-382: NULL total_debt / cash (missing balance-sheet items) must
+    surface as NaN debt_to_equity and ev_ebitda — N/M downstream — not a fake
+    debt-free 0 that understates EV."""
+    df = _single_annual_row(total_debt=float("nan"), cash_and_equivalents=float("nan"))
+    result = compute_fundamental_ratios(df, latest_close=200.0)
+    assert bool(pd.isna(result["debt_to_equity"].iloc[0]))
+    assert bool(pd.isna(result["ev_ebitda"].iloc[0]))
+    # Ratios that don't touch debt/cash stay computed.
+    assert not pd.isna(result["eps"].iloc[0])
+
+
+def test_null_shares_propagate_nan_eps_and_pe() -> None:
+    """QNT-382: a period whose share count is NULL yields NaN EPS/P/E (N/M),
+    never a value computed off another period's count."""
+    df = _single_annual_row(shares_outstanding=float("nan"))
+    result = compute_fundamental_ratios(df, latest_close=200.0)
+    assert bool(pd.isna(result["eps"].iloc[0]))
+    assert bool(pd.isna(result["pe_ratio"].iloc[0]))
