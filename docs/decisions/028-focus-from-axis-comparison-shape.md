@@ -69,8 +69,11 @@ set at render time.
   `function_calling` was rejected by measurement, reversing the ticket's assumed
   direction.
 - **Two-ticker output budget (QNT-358 D).** The comparison synthesize call runs
-  with a two-ticker output budget (`_COMPARISON_MAX_TOKENS = 3000`), passed
-  per-call via `get_llm(max_tokens=...)`. Two implementation facts, both settled
+  with a two-ticker output budget of 3000, passed per-call via
+  `get_llm(max_tokens=...)`. (Superseded by QNT-383: the per-call
+  `_COMPARISON_MAX_TOKENS` constant was folded into the single per-shape
+  `_OUTPUT_BUDGET` table in `graph.py` that `_structured_call` consults by
+  schema; the 3000 value is unchanged.) Two implementation facts, both settled
   by live measurement:
   - The override must travel as the literal `max_tokens` key in the request body
     (via `extra_body`), NOT the ChatOpenAI `max_tokens=` field: recent
@@ -130,5 +133,8 @@ set at render time.
   crash truncated the SSE tail (`ERR_INCOMPLETE_CHUNKED_ENCODING`) after a
   visually complete render -- a reminder that a nullable-shape change must sweep
   every consumer of the model, not just the renderer.
-- Re-derive `_COMPARISON_MAX_TOKENS` from live Langfuse comparison
+- Re-derive the comparison output budget from live Langfuse comparison
   generations once prod traffic accrues; 3000 is the structural interim value.
+  (QNT-383 re-measured it: comparison output med 1314 / p90 2427 / max 2925 over
+  n=14, so 3000 holds as a ~1.2x-of-max ceiling; the budget now lives in the
+  `_OUTPUT_BUDGET` table.)

@@ -220,11 +220,10 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
             errors=errors,
         )
         # QNT-358 (AC4): every comparison is a TWO-ticker shape that overruns the
-        # thesis-calibrated QNT-351 1500 cap, so the whole comparison path gets
-        # the two-ticker output budget (a ceiling: a narrowed comparison bills
-        # only its smaller actual output). Live measurement (AC5) showed even a
-        # narrowed two-aspect comparison truncates at 1500 on a verbose pair, so
-        # this is not scoped to the full matrix -- see _COMPARISON_MAX_TOKENS.
+        # thesis-calibrated QNT-351 1500 cap, so it carries the larger two-ticker
+        # output budget. QNT-383 moved that budget into the single per-shape
+        # ``_OUTPUT_BUDGET`` table that ``_structured_call`` consults by schema, so
+        # this call site no longer passes a one-off ``max_tokens`` constant.
         #
         # QNT-358 (AC3): the comparison call keeps the DEFAULT strict json_schema
         # method. Verified live against the pinned DeepSeek/OpenRouter provider:
@@ -239,7 +238,6 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
             prompt,
             config,
             "comparison-prompt",
-            llm=graph.get_llm(max_tokens=graph._COMPARISON_MAX_TOKENS),
         )
         if comparison is None:
             return _fallback("I had trouble building that comparison.")
@@ -381,14 +379,15 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
     # rather than crashing the whole run. The shared retry policy recovers
     # transient parse failures (measured at 5.5% on this branch — QNT-196).
     # QNT-370: the thesis output distribution outgrew the thesis-calibrated
-    # QNT-351 1500 cap after QNT-353/354 enlarged the reports, so the thesis
-    # call carries its own budget -- see _THESIS_MAX_TOKENS.
+    # QNT-351 1500 cap after QNT-353/354 enlarged the reports, so the thesis call
+    # carries a larger budget. QNT-383 moved that budget into the single per-shape
+    # ``_OUTPUT_BUDGET`` table that ``_structured_call`` consults by schema, so
+    # this call site no longer passes a one-off ``max_tokens`` constant.
     thesis = graph._structured_call(
         graph.Thesis,
         prompt,
         config,
         "system-prompt",
-        llm=graph.get_llm(max_tokens=graph._THESIS_MAX_TOKENS),
     )
     if thesis is None:
         return _fallback("I had trouble pulling a thesis together for that.")

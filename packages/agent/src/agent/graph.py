@@ -186,39 +186,46 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# QNT-358 (AC4): per-call output budget for the comparison synthesize call.
-# The QNT-351 ``max_tokens: 1500`` cap in litellm_config.yaml was calibrated on
-# the SINGLE-ticker thesis output distribution (median ~920, p-high ~1400). EVERY
-# comparison is a TWO-ticker shape, so it is structurally larger than a thesis
-# and fail-closes the thesis-calibrated cap. AC4 scoped this budget to the
-# no-axis full matrix, but live measurement (QNT-358 AC5) showed even a NARROWED
-# two-aspect comparison (company + one axis for both tickers) can exceed 1500 on
-# a verbose pair (NVDA vs AAPL fundamentals truncated at completion_tokens=1500
-# -> fallback), because the 2-ticker overhead alone lifts it past the thesis
-# ceiling. So the budget applies to the whole comparison path, sized for the
-# largest (full-matrix) shape at ~2x the thesis p-high. max_tokens is a ceiling,
-# not a target -- a narrowed comparison bills only its (smaller) actual output,
-# so one budget for both shapes adds no cost and removes a truncation cliff. The
-# QNT-351 deterministic fallback still catches a genuine runaway past this
-# ceiling (bounded blast radius). Re-derive from the comparison output
-# distribution once prod traffic accrues (Langfuse default-alias generations,
-# intent=comparison).
-_COMPARISON_MAX_TOKENS = 3000
-
-# QNT-370: per-call output budget for the thesis synthesize call. The QNT-351
-# 1500 config cap was calibrated on the PRE-QNT-353/354 thesis distribution
-# (median ~920, p-high ~1400); those tickets grew the report content and the
-# live distribution moved up against the cap: Langfuse default-alias thesis
-# synthesize generations over 2026-07-10..07-14 span 1278-1487 output tokens
-# (n=11, cap-censored -- the true tail extends past 1500) with three
-# LengthFinishReasonError cap-outs at exactly 1500, including the 2026-07-14
-# MU prod incident (two consecutive fail-closes to the deterministic
-# fallback). 2500 is ~1.7x the censored max -- a ceiling, not a target, so a
-# normal thesis bills only its actual output. The QNT-351 deterministic
-# fallback still catches a genuine runaway past this ceiling. Re-derive if
-# report content grows again (Langfuse default-alias generations,
-# intent=thesis, promptName=system-prompt).
-_THESIS_MAX_TOKENS = 2500
+# QNT-383: the single per-shape output budget for the structured synthesize
+# calls, consulted by ``_structured_call`` below. Replaces the scattered per-call
+# ``max_tokens`` constants (``_COMPARISON_MAX_TOKENS`` / ``_THESIS_MAX_TOKENS``)
+# that three tickets (QNT-351, QNT-358, QNT-370) each had to ratchet one at a
+# time -- the reactive-sizing-trap where an output cap rots as report content
+# grows. Now every answer shape declares its ceiling in one place, and the guard
+# test (test_every_answer_shape_has_output_budget) fails if a new union member
+# ships without an entry, so a shape cannot silently ride the config default into
+# a truncation cliff.
+#
+# ``max_tokens`` is a CEILING, not a target: a call bills only its actual output,
+# and the QNT-351 deterministic fallback still catches a genuine runaway past the
+# ceiling (bounded blast radius). Values are ~1.7-2x each shape's live output
+# p-high -- reasoning is disabled (litellm_config.yaml), so this is pure
+# completion -- measured on Langfuse default-alias generations over
+# 2026-07-02..07-18, AFTER QNT-353/354 grew the reports:
+#   thesis         med 1304 / p90 1549 / max 1791 (n=72) -> 2500  (QNT-370)
+#   comparison     med 1314 / p90 2427 / max 2925 (n=14) -> 3000  (QNT-358, 2-ticker)
+#   focused        med  489 / p90  615 / max  709 (n=43) -> 1500
+#   exploration    med  450 / p90  465 / max  536 (n= 6) -> 1500
+#   quick_fact     max   96                               -> 1500
+#   conversational max  204                               -> 1500
+# QNT-383 correction: the review-finding premise that focused/exploration sat at
+# the 1500 truncation cliff did NOT hold -- both top out well under 1500 with 2x
+# headroom, because the cards are structurally bounded (<=5 bullets + <=4 verbatim
+# values) and quote rather than expand as reports grow. They keep the 1500
+# default, now stated explicitly so this table is the single source of truth.
+# LeanComparisonAnswer is built deterministically (ADR-003, no LLM call), so it
+# carries no budget (None); it is a key only so the guard test covers every
+# registered shape. Re-derive from the live distribution if a shape starts
+# pressing its ceiling (Langfuse default-alias generations by intent).
+_OUTPUT_BUDGET: dict[type, int | None] = {
+    Thesis: 2500,
+    QuickFactAnswer: 1500,
+    ComparisonAnswer: 3000,
+    LeanComparisonAnswer: None,
+    ConversationalAnswer: 1500,
+    FocusedAnalysis: 1500,
+    ExplorationAnswer: 1500,
+}
 
 
 def _structured_call[T: BaseModel](
@@ -258,7 +265,11 @@ def _structured_call[T: BaseModel](
     mode at the source. ``None`` keeps LangChain's default (json_schema), so the
     validated ``Thesis``/synthesize path is unchanged.
     """
-    base = llm if llm is not None else get_llm()
+    # QNT-383: size the output ceiling from the per-shape ``_OUTPUT_BUDGET`` table
+    # (the default ``llm=None`` path). A caller that passes its own ``llm`` -- the
+    # small-alias planner -- owns its budget; its schema is not an answer shape and
+    # carries no table entry, so the table never touches it.
+    base = llm if llm is not None else get_llm(max_tokens=_OUTPUT_BUDGET.get(schema))
     structured = (
         base.with_structured_output(schema, method=method)
         if method is not None
