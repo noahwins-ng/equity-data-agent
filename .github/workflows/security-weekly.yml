@@ -24,10 +24,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Mirrors the `image:` lines in docker-compose.yml. The `dagster`
-        # image is built locally from packages/dagster-pipelines/Dockerfile
-        # and pushed only to the host's local docker daemon, so we scan its
-        # base image instead — that's where 99% of the CVE surface lives.
+        # Mirrors the `image:` lines in docker-compose.yml. The `dagster` and
+        # `api` images are built locally from the root Dockerfile (multi-stage,
+        # `dagster` / `api` targets) and pushed only to the host's local docker
+        # daemon, so we scan their base image instead — that's where 99% of the
+        # CVE surface lives.
         image:
           - clickhouse/clickhouse-server:24-alpine
           - litellm/litellm:v1.81.14-stable

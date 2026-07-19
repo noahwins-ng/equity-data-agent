@@ -173,12 +173,20 @@ def _check_qdrant() -> str:
     try:
         from qdrant_client import QdrantClient
 
-        QdrantClient(
+        # Close the client each probe: /health is the hottest path and a leaked
+        # client leaves an open httpx connection pool to churn sockets until GC.
+        # QdrantClient exposes .close() but no context-manager protocol (1.18.x),
+        # so close in a finally rather than `with`.
+        client = QdrantClient(
             url=settings.QDRANT_URL,
             api_key=settings.QDRANT_API_KEY,
             timeout=3,
-        ).get_collections()
-        return "ok"
+        )
+        try:
+            client.get_collections()
+            return "ok"
+        finally:
+            client.close()
     except Exception:
         return "down"
 

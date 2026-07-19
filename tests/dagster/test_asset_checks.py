@@ -42,7 +42,7 @@ def test_blocking_checks_are_marked_blocking() -> None:
 
 
 def test_expected_asset_check_count() -> None:
-    """All 4 target assets have at least one check registered."""
+    """All 8 target assets have at least one check registered."""
     asset_keys_with_checks = {
         spec.asset_key.to_user_string()
         for check_def in ALL_ASSET_CHECKS
