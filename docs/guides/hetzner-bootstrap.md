@@ -226,14 +226,14 @@ sudo chmod 600 /etc/postfix/sasl/sasl_passwd.db
 sudo systemctl restart postfix
 ```
 
-**Free-tier caveat**: without domain verification, Resend only accepts mail **to** the email associated with your Resend account. For us that's `noahwins.dev@gmail.com`, which matches our `Unattended-Upgrade::Mail` target below - so it works. Domain verification lifts both the sender-rewrite requirement and the single-recipient restriction, and is worth doing once a project domain is available.
+**Free-tier caveat**: without domain verification, Resend only accepts mail **to** the email associated with your Resend account. For us that's `your-email@example.com`, which matches our `Unattended-Upgrade::Mail` target below - so it works. Domain verification lifts both the sender-rewrite requirement and the single-recipient restriction, and is worth doing once a project domain is available.
 
 ### 10.4 Enable unattended-upgrades mail
 
 In `/etc/apt/apt.conf.d/50unattended-upgrades`, uncomment + set:
 
 ```
-Unattended-Upgrade::Mail "noahwins.dev@gmail.com";
+Unattended-Upgrade::Mail "your-email@example.com";
 Unattended-Upgrade::MailReport "on-change";
 ```
 
@@ -242,10 +242,10 @@ Unattended-Upgrade::MailReport "on-change";
 ### 10.5 Verify delivery end-to-end
 
 ```bash
-echo "test from $(hostname) at $(date -u +%FT%TZ)" | mail -s "hetzner mail test" noahwins.dev@gmail.com
+echo "test from $(hostname) at $(date -u +%FT%TZ)" | mail -s "hetzner mail test" your-email@example.com
 
 # Expected in /var/log/mail.log (the key string is "status=sent"):
-#   postfix/smtp[...]: <queue-id>: to=<noahwins.dev@gmail.com>,
+#   postfix/smtp[...]: <queue-id>: to=<your-email@example.com>,
 #     relay=smtp.resend.com[...]:587, status=sent (250 <resend-message-id>)
 sudo tail -5 /var/log/mail.log
 ```

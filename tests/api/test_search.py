@@ -747,3 +747,61 @@ def test_news_rerank_floor_is_conservative(
     headlines = [row["headline"] for row in r.json()]
     # 0.41 hit kept (above news 0.30 floor), 0.12 hit dropped.
     assert headlines == ["NVDA inks SK Hynix HBM supply deal"]
+
+
+# ─── QNT-388: per-IP rate limit (each call bills a Qdrant Cloud embed) ──────
+
+
+def _search_per_minute_cap() -> int:
+    """Read the per-minute slice out of ``SEARCH_RATE_LIMIT`` so a cap change
+    doesn't silently desync these tests (mirrors the chat-limit test)."""
+    for part in search_module.settings.SEARCH_RATE_LIMIT.split(";"):
+        if "minute" in part:
+            return int(part.strip().split("/")[0])
+    msg = "no per-minute slice in SEARCH_RATE_LIMIT"
+    raise ValueError(msg)
+
+
+def test_search_news_rate_limit_returns_429_past_cap(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TestClient's peer is ``testclient`` (not loopback / private), so its
+    requests are keyed like public traffic; the request past the per-minute
+    cap must 429 with Retry-After."""
+    _install_fake(monkeypatch, _FakeClient())
+    cap = _search_per_minute_cap()
+    for _ in range(cap):
+        r = client.get("/api/v1/search/news", params={"query": "earnings"})
+        assert r.status_code == 200, "pre-cap request should succeed"
+    over = client.get("/api/v1/search/news", params={"query": "earnings"})
+    assert over.status_code == 429
+    assert over.headers.get("Retry-After")
+
+
+def test_search_earnings_rate_limit_returns_429_past_cap(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The earnings endpoint carries the same limit (its own SlowAPI bucket —
+    scope is per-endpoint)."""
+    _install_fake(monkeypatch, _FakeClient())
+    cap = _search_per_minute_cap()
+    for _ in range(cap):
+        r = client.get("/api/v1/search/earnings", params={"query": "guidance"})
+        assert r.status_code == 200, "pre-cap request should succeed"
+    over = client.get("/api/v1/search/earnings", params={"query": "guidance"})
+    assert over.status_code == 429
+
+
+def test_search_rate_limit_exempts_internal_loopback_caller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The agent's tools fetch these endpoints over loopback on every chat
+    run — they must never consume (or be throttled by) a rate-limit bucket.
+    A loopback peer without ``CF-Connecting-IP`` maps to an empty limit key,
+    which SlowAPI treats as skip-this-limit (QNT-388)."""
+    _install_fake(monkeypatch, _FakeClient())
+    cap = _search_per_minute_cap()
+    with TestClient(app, client=("127.0.0.1", 9999)) as c:
+        for _ in range(cap + 5):
+            r = c.get("/api/v1/search/news", params={"query": "earnings"})
+            assert r.status_code == 200, "internal caller must never 429"

@@ -56,6 +56,9 @@ run_launcher:
       - ONLINE_EVAL_LANGFUSE_SECRET_KEY
       - SENTRY_DSN
       - FINNHUB_API_KEY
+      # QNT-388: the code default is a placeholder (public repo carries no
+      # personal contact); prod .env MUST set a real contact for SEC fair-use.
+      - SEC_EDGAR_USER_AGENT
       - VERCEL_DEPLOY_HOOK_URL
     # Run-worker containers must see the SAME SQLite-backed run storage the
     # daemon wrote to, or `dagster api execute_run` errors with

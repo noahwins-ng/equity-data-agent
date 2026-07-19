@@ -63,10 +63,11 @@ DAEMON_CONTEXT_SETTINGS = frozenset(
 # prod .env carries no lines for them (verified against .env.sops at the time
 # of writing) — so listing them in env_vars would drop runs at dequeue
 # (QNT-125), and passing an empty .env value through would OVERRIDE a good
-# code default with "" (e.g. SEC_EDGAR_USER_AGENT= would blank the User-Agent
-# SEC requires). To make one of these operator-tunable in prod, move it out
+# code default with "" (e.g. CONTEXT_MODEL= would blank the contextual-embed
+# model selector). To make one of these operator-tunable in prod, move it out
 # of this set AND add it to env_vars AND add a non-empty line to .env.sops in
-# the same change.
+# the same change (QNT-388 did exactly this for SEC_EDGAR_USER_AGENT when its
+# code default became a placeholder).
 DEFAULTS_ONLY_SETTINGS = frozenset(
     {
         # earnings_embeddings asset (contextual-embedding switches).
@@ -76,8 +77,6 @@ DEFAULTS_ONLY_SETTINGS = frozenset(
         "EARNINGS_CONTEXTUAL",
         # run_online_eval @op — launched via online_eval_job → run-worker.
         "ONLINE_EVAL_SAMPLE_RATE",
-        # edgar_feeds fetch path, called from the earnings ingest asset.
-        "SEC_EDGAR_USER_AGENT",
     }
 )
 

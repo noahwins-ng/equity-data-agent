@@ -170,24 +170,37 @@ class TokenUsageTracker:
     tracker. The SSE handler reads ``total`` after the graph completes and
     debits the per-IP + global budgets in one shot. We sum total_tokens
     (prompt + completion) because that's what Groq counts against TPD.
+
+    QNT-388: calls whose response carried NO usage block (the LiteLLM proxy
+    strips ``usage`` on some structured-output paths) are counted in
+    ``zero_usage_calls`` instead of being dropped — the SSE handler charges a
+    conservative per-call estimate for them so the cost breakers still
+    advance when the proxy goes silent.
     """
 
-    __slots__ = ("_lock", "_total")
+    __slots__ = ("_lock", "_total", "_zero_usage_calls")
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._total = 0
+        self._zero_usage_calls = 0
 
     def add(self, tokens: int) -> None:
-        if tokens <= 0:
-            return
         with self._lock:
-            self._total += tokens
+            if tokens <= 0:
+                self._zero_usage_calls += 1
+            else:
+                self._total += tokens
 
     @property
     def total(self) -> int:
         with self._lock:
             return self._total
+
+    @property
+    def zero_usage_calls(self) -> int:
+        with self._lock:
+            return self._zero_usage_calls
 
 
 # Per-request context-local. The SSE handler does
@@ -221,8 +234,9 @@ class _UsageCallback(BaseCallbackHandler):
     is: provider → LiteLLM proxy → langchain_openai → ``response.llm_output``
     on the ``on_llm_end`` hook. ``total_tokens`` is what counts against
     Groq's TPD ceiling; we sum that. When the proxy strips the usage block
-    (rare, but observed on some structured-output paths) we silently record 0
-    — the budget isn't perfectly tight but it never under-bills.
+    (rare, but observed on some structured-output paths) we record the call
+    as zero-usage (QNT-388) — the SSE handler charges a conservative
+    per-call estimate for those so the budget never silently under-bills.
     """
 
     def __init__(self, tracker: TokenUsageTracker) -> None:

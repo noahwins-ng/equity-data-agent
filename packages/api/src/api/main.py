@@ -335,10 +335,11 @@ async def rate_limit_exceeded_handler(
         status_code=429,
         content={
             "detail": (
-                "You've hit the demo rate limit for this IP. This portfolio "
-                "demo runs on a free LLM tier; the limit protects daily uptime "
-                "for other visitors. Try again in a moment, or fork the repo "
-                "to run the agent against your own keys."
+                "You've hit the demo rate limit. If you're on a shared or "
+                "mobile network, others on the same connection count toward "
+                "the same limit. The cap protects daily uptime for other "
+                "visitors. Try again in a moment, or fork the repo to run "
+                "the agent against your own keys."
             ),
             "code": "rate-limited",
             "retry_after": retry_after,

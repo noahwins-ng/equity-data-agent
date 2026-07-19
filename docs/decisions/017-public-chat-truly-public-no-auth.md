@@ -3,6 +3,18 @@
 **Date**: 2026-05-02
 **Status**: Accepted
 
+> **Addendum (2026-07-19, QNT-388)**: The decision itself (truly public, no
+> auth, defense-in-depth) stands, but the concrete numbers below are
+> historical. ADR-025 moved the primary model to paid DeepSeek via OpenRouter,
+> so the "FAIL CLOSED to free tier" invariant and the Groq-TPD-derived sizing
+> no longer apply. The live limits are authoritative in
+> `packages/shared/src/shared/config.py`: `CHAT_RATE_LIMIT` (5/minute;20/day),
+> `CHAT_TOKENS_PER_IP_PER_DAY` (280K), `CHAT_TOKENS_GLOBAL_PER_DAY` (20M,
+> sized in paid economics per ADR-025). QNT-388 also extended the same per-IP
+> limiter to the search endpoints (`SEARCH_RATE_LIMIT`) and added an
+> estimated-usage fallback so the token breakers advance even when the LiteLLM
+> proxy strips the `usage` block.
+
 ## Context
 
 QNT-75 makes the chat panel reachable to anyone who lands on the deployed Vercel frontend. The panel hits `POST /api/v1/agent/chat` on the Hetzner FastAPI directly via `NEXT_PUBLIC_API_URL`. Pre-QNT-161, that endpoint had:
