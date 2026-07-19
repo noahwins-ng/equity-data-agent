@@ -141,6 +141,28 @@ removed ticker goes invisible the moment the API restarts. Dormant data is
 zero-risk and fully reversible (re-add the string to restore it instantly - no
 re-backfill). This is the default.
 
+**That "goes invisible" claim is load-bearing, and it was false for Qdrant until
+QNT-387.** The no-ticker semantic-search path (`GET /api/v1/search/news` and
+`/search/earnings` with no `ticker` param) sent `query_filter=None`, so points
+for a removed ticker stayed *reachable* by thematic query long after the registry
+edit - the QNT-237 swap left 117 such points in `equity_news` (JPM 58, V 44,
+UNH 15), and a no-ticker "bank earnings" query returned 8 of them in a top-25.
+`_ticker_filter()` in `packages/api/src/api/routers/search.py` is what now makes
+the claim true: it is the single filter-construction site for every Qdrant query
+in that module and substitutes a registry-wide `MatchAny` over `TICKERS` when no
+ticker is supplied. **If a future change removes or bypasses that guard, this
+section's premise silently breaks again** - the residue does not announce itself.
+
+**Qdrant residue never ages out - unlike ClickHouse, "dormant" does not mean
+"will eventually disappear."** The rolling 7-day GC lives in the `news_embeddings`
+asset, which is partitioned on `TICKERS` and deletes through
+`aged_ticker_filter(ticker, cutoff_ts)`. It therefore only ever visits registry
+tickers: the moment a symbol leaves `TICKERS`, its points stop being swept and
+persist indefinitely (they become the oldest content in the collection). Leaving
+them is still the right default - they are unreachable and cost negligible
+space - but treat the point-delete below as the only thing that removes them,
+not as an optimisation the GC would get to on its own.
+
 **Only when you actually want the space back:** the data is partitioned by
 ticker, so removal is instant -
 
@@ -154,7 +176,8 @@ ALTER TABLE equity_raw.ohlcv_raw DROP PARTITION '<T>';
 For Qdrant, do a **filtered point-delete** scoped to the ticker payload - the
 sibling pattern of `scripts/drop_qdrant_news_collection.py` (which drops the
 whole collection; for a single ticker, delete by the `ticker` payload filter
-instead, the same filter `ticker_filter()` builds in `news_embeddings.py`).
+instead, the same filter `ticker_filter()` builds in `news_embeddings.py` - the
+ingest-side helper, not the serving-side `_ticker_filter()` in `search.py`).
 
 ### 4. Eval-golden SWEEP - the step nobody remembers
 
