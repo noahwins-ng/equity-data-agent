@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException, Query
 from shared.config import settings
@@ -27,6 +27,9 @@ from shared.retrieval import bm25_ranking, cohere_rerank, reciprocal_rank_fusion
 from shared.tickers import TICKERS
 
 from api.qdrant import get_client
+
+if TYPE_CHECKING:
+    from qdrant_client.models import Filter
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +86,28 @@ _MIN_SCORE = 0.30
 # is set low enough that it should not bind on real news queries (AC2).
 _EARNINGS_RERANK_FLOOR = 0.50
 _NEWS_RERANK_FLOOR = 0.30
+
+
+def _ticker_filter(ticker: str | None) -> Filter:
+    """Build the ticker constraint every Qdrant query in this module carries.
+
+    With a ticker, an exact match (the caller has already validated it against
+    ``TICKERS``). Without one, a registry ``MatchAny`` over the whole universe --
+    never an unfiltered query.
+
+    QNT-387: the no-ticker path used to send ``query_filter=None``. The QNT-237
+    ticker swap left off-registry points in ``equity_news`` (JPM/V/UNH), and the
+    rolling news cleanup iterates registry tickers only, so those points are
+    never pruned and persist indefinitely. An unfiltered thematic search ("bank
+    earnings") could therefore surface delisted-ticker coverage to the frontend
+    or agent as if it were live. Guarding the query path -- rather than purging
+    the residue -- makes leftovers from this and any future ticker swap
+    permanently unreachable through search.
+    """
+    from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
+
+    match = MatchValue(value=ticker) if ticker is not None else MatchAny(any=TICKERS)
+    return Filter(must=[FieldCondition(key="ticker", match=match)])
 
 
 def _apply_relevance_filter(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -200,9 +225,9 @@ def _hybrid_search_collection(
     """
     import httpx
     from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
-    from qdrant_client.models import Document, FieldCondition, Filter, MatchValue
+    from qdrant_client.models import Document
 
-    flt = Filter(must=[FieldCondition(key="ticker", match=MatchValue(value=ticker))])
+    flt = _ticker_filter(ticker)
     # Wide candidate pool so the reranker / fusion can pull a buried hit into the
     # returned top-k (4-8). RERANK_CANDIDATES is the fused-set width; cap the
     # dense fetch so a large `limit` (public endpoint, up to 50) can't drive an
@@ -320,7 +345,7 @@ def search_news(
     """
     import httpx
     from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
-    from qdrant_client.models import Document, FieldCondition, Filter, MatchValue
+    from qdrant_client.models import Document
 
     if ticker is not None:
         ticker = ticker.upper()
@@ -333,15 +358,11 @@ def search_news(
     if hybrid and settings.HYBRID_SEARCH_ENABLED and ticker is not None:
         return _hybrid_search(query, ticker, limit, rerank)
 
-    query_filter: Filter | None = None
-    if ticker is not None:
-        query_filter = Filter(must=[FieldCondition(key="ticker", match=MatchValue(value=ticker))])
-
     try:
         response = get_client().query_points(
             collection_name=COLLECTION,
             query=Document(text=query, model=EMBED_MODEL),
-            query_filter=query_filter,
+            query_filter=_ticker_filter(ticker),
             limit=limit,
             with_payload=True,
         )
@@ -479,7 +500,7 @@ def search_earnings(
     """
     import httpx
     from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
-    from qdrant_client.models import Document, FieldCondition, Filter, MatchValue
+    from qdrant_client.models import Document
 
     if ticker is not None:
         ticker = ticker.upper()
@@ -492,15 +513,11 @@ def search_earnings(
     if hybrid and settings.HYBRID_SEARCH_ENABLED and ticker is not None:
         return _earnings_hybrid_search(query, ticker, limit, rerank)
 
-    query_filter: Filter | None = None
-    if ticker is not None:
-        query_filter = Filter(must=[FieldCondition(key="ticker", match=MatchValue(value=ticker))])
-
     try:
         response = get_client().query_points(
             collection_name=EARNINGS_COLLECTION,
             query=Document(text=query, model=EMBED_MODEL),
-            query_filter=query_filter,
+            query_filter=_ticker_filter(ticker),
             limit=limit,
             with_payload=True,
         )

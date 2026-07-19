@@ -18,6 +18,7 @@ from api.main import app
 from api.routers import search as search_module
 from fastapi.testclient import TestClient
 from qdrant_client.models import Document, FieldCondition, Filter
+from shared.tickers import TICKERS
 
 
 class _FakeScoredPoint:
@@ -262,15 +263,76 @@ def test_ticker_filter_is_applied(client: TestClient, monkeypatch: pytest.Monkey
     assert getattr(condition.match, "value", None) == "AAPL"
 
 
-def test_omitted_ticker_sends_no_filter(
+def _assert_registry_filter(query_filter: Filter | None) -> None:
+    """The no-ticker guard: a MatchAny over exactly the registry universe."""
+    assert query_filter is not None
+    must = query_filter.must
+    assert isinstance(must, list) and len(must) == 1
+    condition = must[0]
+    assert isinstance(condition, FieldCondition)
+    assert condition.key == "ticker"
+    assert condition.match is not None
+    assert sorted(getattr(condition.match, "any", [])) == sorted(TICKERS)
+
+
+def test_omitted_ticker_sends_registry_filter(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # QNT-387: a no-ticker query must still be registry-scoped. It previously
+    # sent query_filter=None, which made off-registry residue (JPM/V/UNH left by
+    # the QNT-237 swap, never pruned by the registry-iterating rolling cleanup)
+    # reachable from a thematic search. Pins the filter construction so a point
+    # whose ticker payload is outside TICKERS cannot be returned.
     fake = _FakeClient(_FakeQueryResponse(points=[]))
     _install_fake(monkeypatch, fake)
 
     r = client.get("/api/v1/search/news", params={"query": "rate cut"})
     assert r.status_code == 200
-    assert fake.last_filter is None
+    _assert_registry_filter(fake.last_filter)
+    # A delisted ticker is genuinely excluded by the constraint we send.
+    match = fake.last_filter.must[0].match  # type: ignore[union-attr,index]
+    assert "JPM" not in getattr(match, "any", [])
+
+
+def test_hybrid_path_stays_scoped_to_the_single_ticker(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # QNT-387 regression guard. The hybrid path's inline filter was folded into
+    # the shared _ticker_filter helper, which returns the registry MatchAny when
+    # handed None. The hybrid path is only reachable with a validated ticker, so
+    # it must still send the narrow MatchValue -- if a future change loosened
+    # _hybrid_search_collection's `ticker: str` to `str | None`, the BM25 corpus
+    # scroll would silently widen from one ticker to all ten. Pin the narrow form.
+    corpus = [_point(111, "alpha"), _point(222, "beta")]
+    fake = _FakeClient(_FakeQueryResponse(points=corpus), scroll_points=corpus)
+    _install_fake(monkeypatch, fake)
+
+    r = client.get(
+        "/api/v1/search/news",
+        params={"query": "alpha", "ticker": "NVDA", "hybrid": True},
+    )
+    assert r.status_code == 200
+    assert fake.scroll_calls == 1
+    assert fake.last_filter is not None
+    condition = fake.last_filter.must[0]  # type: ignore[index]
+    assert isinstance(condition, FieldCondition)
+    assert condition.match is not None
+    # Exact-match on the one ticker -- not a registry-wide MatchAny.
+    assert getattr(condition.match, "value", None) == "NVDA"
+    assert getattr(condition.match, "any", None) is None
+
+
+def test_earnings_omitted_ticker_sends_registry_filter(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # QNT-387 AC2: the earnings corpus shares the guard -- every Qdrant query in
+    # the module carries a ticker constraint, not just the news path.
+    fake = _FakeClient(_FakeQueryResponse(points=[]))
+    _install_fake(monkeypatch, fake)
+
+    r = client.get("/api/v1/search/earnings", params={"query": "guidance"})
+    assert r.status_code == 200
+    _assert_registry_filter(fake.last_filter)
 
 
 def test_unknown_ticker_returns_404(client: TestClient) -> None:
