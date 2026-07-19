@@ -808,3 +808,131 @@ def test_sentry_capture_exception_swallows_sdk_failure(
         with patch.dict("sys.modules", {"sentry_sdk": fake_sdk}):
             security_module.sentry_capture_exception(RuntimeError("boom"))
     assert "sentry exception capture failed" in caplog.text
+
+
+# ─── QNT-388: search rate-limit key (internal-caller exemption) ─────────────
+
+
+def test_search_rate_key_exempts_loopback_without_cf_header() -> None:
+    """The agent's tool calls hit the search endpoints via loopback on every
+    chat run and never transit Cloudflare — empty key = SlowAPI skips the
+    limit (``if all(args)`` guard around the storage hit)."""
+    from api.security import search_rate_key
+
+    req = _FakeRequest(headers={}, client_host="127.0.0.1")
+    assert search_rate_key(req) == ""  # type: ignore[arg-type]
+
+
+def test_search_rate_key_exempts_docker_bridge_without_cf_header() -> None:
+    """Intra-compose callers (another container on the bridge network) are
+    internal to the deploy — exempt like loopback."""
+    from api.security import search_rate_key
+
+    req = _FakeRequest(headers={}, client_host="172.18.0.7")
+    assert search_rate_key(req) == ""  # type: ignore[arg-type]
+
+
+def test_search_rate_key_keys_tunnel_traffic_by_cf_ip() -> None:
+    """Public traffic always transits the Cloudflare edge: the direct peer is
+    the cloudflared container (a PRIVATE bridge IP) but ``CF-Connecting-IP``
+    is present — the private peer must NOT grant the exemption."""
+    from api.security import search_rate_key
+
+    req = _FakeRequest(
+        headers={"CF-Connecting-IP": "203.0.113.5"},
+        client_host="172.18.0.2",
+    )
+    assert search_rate_key(req) == "203.0.113.5"  # type: ignore[arg-type]
+
+
+def test_search_rate_key_keys_public_peer_without_cf_header() -> None:
+    """Defense-closed: only provably internal peers are exempt — a non-private
+    peer without the CF header is keyed like any public caller."""
+    from api.security import search_rate_key
+
+    req = _FakeRequest(headers={}, client_host="198.51.100.9")
+    assert search_rate_key(req) == "198.51.100.9"  # type: ignore[arg-type]
+
+
+# ─── QNT-388: usage-stripped runs still charge the budget ───────────────────
+
+
+def test_token_tracker_counts_zero_usage_calls() -> None:
+    """``add(<=0)`` must count the call instead of dropping it — the SSE
+    handler charges an estimate per zero-usage call so the breakers advance
+    even when the LiteLLM proxy strips the ``usage`` block."""
+    from agent.llm import TokenUsageTracker
+
+    t = TokenUsageTracker()
+    t.add(0)
+    t.add(500)
+    t.add(-1)
+    assert t.total == 500
+    assert t.zero_usage_calls == 2
+
+
+@pytest.fixture
+def _stub_usage_stripped_graph(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Stub graph whose three LLM calls ALL lost their usage block — the
+    tracker sees ``add(0)`` three times and ``total`` stays 0. Pre-QNT-388
+    this run debited nothing and the cost breakers silently never advanced."""
+    from agent import llm as llm_module
+
+    def _fake_build(tools: dict[str, Any], **_kwargs: Any) -> Any:  # noqa: ARG001
+        graph = MagicMock()
+
+        def invoke(state: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+            tracker = llm_module._TOKEN_TRACKER.get()
+            if tracker is not None:
+                for _ in range(3):
+                    tracker.add(0)
+            return {
+                "ticker": state["ticker"],
+                "intent": "thesis",
+                "plan": [],
+                "reports": {"technical": "stub"},
+                "errors": {},
+                "answer": _stub_thesis(),
+                "confidence": 0.5,
+            }
+
+        graph.invoke.side_effect = invoke
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+    yield
+
+
+def test_usage_stripped_run_charges_estimated_tokens_to_global(
+    client: TestClient,
+    _stub_usage_stripped_graph: None,
+) -> None:
+    """A run whose calls all lost usage must debit the GLOBAL counter by the
+    per-call estimate × call count, not zero."""
+    del _stub_usage_stripped_graph
+    pre = budget.snapshot()
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": ""})
+    assert r.status_code == 200
+    post = budget.snapshot()
+    expected = 3 * security_module.settings.CHAT_TOKENS_USAGE_FALLBACK_PER_CALL
+    assert post["global"] - pre["global"] == expected
+
+
+def test_usage_stripped_run_advances_per_ip_counter(
+    client: TestClient,
+    _stub_usage_stripped_graph: None,
+) -> None:
+    """Seed the per-IP counter so the estimated charge lands exactly on the
+    cap — ``can_serve`` flipping to (False, "per_ip") proves the PER-IP
+    counter advanced, not just the global one."""
+    del _stub_usage_stripped_graph
+    per_ip_cap = security_module.settings.CHAT_TOKENS_PER_IP_PER_DAY
+    expected = 3 * security_module.settings.CHAT_TOKENS_USAGE_FALLBACK_PER_CALL
+    budget.record("testclient", per_ip_cap - expected)
+    assert budget.can_serve("testclient")[0] is True
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": ""})
+    assert r.status_code == 200
+    allowed, reason = budget.can_serve("testclient")
+    assert allowed is False
+    assert reason == "per_ip"

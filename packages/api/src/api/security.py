@@ -115,6 +115,34 @@ limiter = Limiter(
 )
 
 
+# QNT-388: hosts that identify a request as INTERNAL to the deploy — loopback
+# (the agent's tool calls hit API_BASE_URL=http://localhost:8000 in-process)
+# or the RFC1918 / Docker-bridge ranges (intra-compose networking). Public
+# traffic can only arrive via the Cloudflare tunnel and therefore ALWAYS
+# carries ``CF-Connecting-IP`` (set by the edge, unspoofable through the
+# tunnel — see ``client_ip``); the exemption below requires BOTH the header's
+# absence AND a private peer, so a tunnel request can never qualify.
+_PRIVATE_HOST = re.compile(r"^(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)")
+
+
+def search_rate_key(request: Request) -> str:
+    """Rate-limit key for the search endpoints (QNT-388).
+
+    Public callers are keyed by ``client_ip``. Internal callers — the agent's
+    own search tools, which fetch these endpoints over loopback / the Docker
+    bridge on every chat run — return ``""``, which SlowAPI treats as "skip
+    this limit" (``extension.py`` guards the storage hit with
+    ``if all([limit_key, limit_scope])``). Without the exemption every
+    concurrent chat run would share ONE private-IP bucket and the limiter
+    would throttle the agent's tools before it ever throttled a scraper.
+    """
+    if "cf-connecting-ip" not in request.headers:
+        host = request.client.host if request.client else ""
+        if host in ("::1", "localhost") or _PRIVATE_HOST.match(host):
+            return ""
+    return client_ip(request)
+
+
 # ─── In-memory token budgets ────────────────────────────────────────────────
 
 
@@ -177,10 +205,12 @@ class TokenBudget:
     def record(self, ip: str, tokens: int) -> None:
         """Charge ``tokens`` to both the per-IP and global counters.
 
-        Tokens may be 0 (the LangChain callback couldn't extract usage from
-        the LiteLLM proxy response — known to happen when the proxy strips
-        the ``usage`` block). We still call ``record`` so a future debug
-        hook can see the request landed; the counters just don't advance.
+        Tokens may be 0 on paths that never reached an LLM (budget redirects,
+        early validation failures) — those legitimately charge nothing. The
+        usage-stripped case (the LiteLLM proxy dropped the ``usage`` block
+        from a real LLM call) is handled UPSTREAM: the SSE handler charges
+        ``CHAT_TOKENS_USAGE_FALLBACK_PER_CALL`` per zero-usage call (QNT-388)
+        so the breaker still advances.
         """
         if tokens <= 0:
             return
@@ -388,6 +418,7 @@ __all__ = [
     "limiter",
     "record_breaker_trip",
     "record_burst_alert",
+    "search_rate_key",
     "sentry_capture_exception",
     "validate_chat_message",
 ]

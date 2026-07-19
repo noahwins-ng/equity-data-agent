@@ -89,8 +89,10 @@ class Settings(BaseSettings):
     # SEC EDGAR 8-K earnings-release ingestion (QNT-260). SEC fair-use requires
     # a declared User-Agent carrying a contact address; there is no API key.
     # https://www.sec.gov/os/webmaster-faq#developers — keep the email current so
-    # SEC can reach us before rate-limiting. Override via env in prod.
-    SEC_EDGAR_USER_AGENT: str = "equity-data-agent noahwins.dev@gmail.com"
+    # SEC can reach us before rate-limiting. QNT-388: the repo is public, so the
+    # code default is a placeholder — prod MUST set a real contact via env (the
+    # field is passed through to Dagster run-workers via dagster.yaml env_vars).
+    SEC_EDGAR_USER_AGENT: str = "equity-data-agent contact@example.com"
 
     # Provenance strip values surfaced by /api/v1/health (QNT-132).
     # Single source of truth for the data-driven UI bottom strip — vendor swap
@@ -154,6 +156,16 @@ class Settings(BaseSettings):
     # guard so those 20 can't be fired in one scripted spray.
     CHAT_RATE_LIMIT: str = "5/minute;20/day"
 
+    # QNT-388: per-IP request rate limit for GET /api/v1/search/{news,earnings}.
+    # Each call bills a Qdrant Cloud Inference embedding (plus an optional
+    # Cohere rerank), so unthrottled public access is a cost vector even though
+    # no LLM is involved. Generous for a human exploring the API by hand;
+    # bounds a scripted scraper. Internal agent-tool calls (loopback / Docker
+    # bridge, never transited Cloudflare) are exempt via ``search_rate_key`` —
+    # see api/security.py — so concurrent chat runs can't starve each other
+    # through a shared internal bucket.
+    SEARCH_RATE_LIMIT: str = "30/minute;1000/day"
+
     # Per-IP daily token budget. Soft cap orthogonal to request count — a
     # chatty user can stay under the request cap yet run up cost by triggering
     # many tool runs. Sized so the 20/day request cap is the one that actually
@@ -180,6 +192,15 @@ class Settings(BaseSettings):
     # Still FAIL CLOSED — once exceeded, every request gets the friendly
     # demo-limit redirect until UTC midnight (see api/security.py).
     CHAT_TOKENS_GLOBAL_PER_DAY: int = 20_000_000
+
+    # QNT-388: estimated tokens charged per LLM call whose response carried no
+    # usage block (the LiteLLM proxy is known to strip ``usage`` on some
+    # structured-output paths). Without this, a run whose calls ALL lost their
+    # usage would debit zero and the budgets above would silently never
+    # advance — the cost breaker would be fiction. A substantive thesis chat
+    # is ~14K tokens across ~4 LLM calls (~3.5K/call); 5K over-charges on
+    # purpose — a budget breaker must fail toward tripping early, not late.
+    CHAT_TOKENS_USAGE_FALLBACK_PER_CALL: int = 5_000
 
     # Burst-alert threshold: if a single IP receives N 429s within
     # CHAT_BURST_WINDOW_SECONDS, fire a Sentry capture_message. Defaults are

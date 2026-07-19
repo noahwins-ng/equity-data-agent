@@ -60,11 +60,11 @@ Beyond the two pillars above:
 |---|---|
 | Product engineering | Next.js 16 app: watchlist, ticker detail, charting, fundamentals, news, persistent SSE chat panel |
 | Production ops | Hetzner Docker Compose + Vercel + Cloudflare tunnel; deploy gates with auto-rollback, autoheal, alerts, runbooks |
-| Engineering process | 27 ADRs, 7 phase retros, 1,700+ tests, security scanners, model-bench history |
+| Engineering process | 28 ADRs, 7 phase retros, 1,700+ tests, security scanners, model-bench history |
 
 ![Phases](https://img.shields.io/badge/phases-7%2F7%20complete-2ea44f)
 ![Tests](https://img.shields.io/badge/tests-1700%2B%20passing-2ea44f)
-![ADRs](https://img.shields.io/badge/ADRs-27-1f6feb)
+![ADRs](https://img.shields.io/badge/ADRs-28-1f6feb)
 ![Golden set](https://img.shields.io/badge/golden__set-44%20questions-1f6feb)
 ![Prod](https://img.shields.io/badge/prod-live-success)
 

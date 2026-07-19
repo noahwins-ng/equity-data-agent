@@ -21,12 +21,13 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from shared.config import settings
 from shared.retrieval import bm25_ranking, cohere_rerank, reciprocal_rank_fusion
 from shared.tickers import TICKERS
 
 from api.qdrant import get_client
+from api.security import limiter, search_rate_key
 
 if TYPE_CHECKING:
     from qdrant_client.models import Filter
@@ -315,7 +316,9 @@ def _hybrid_search(query: str, ticker: str, limit: int, rerank: bool) -> list[di
 
 
 @router.get("/news")
+@limiter.limit(settings.SEARCH_RATE_LIMIT, key_func=search_rate_key)
 def search_news(
+    request: Request,
     query: str = Query(
         ...,
         min_length=1,
@@ -466,7 +469,9 @@ def _earnings_hybrid_search(
 
 
 @router.get("/earnings")
+@limiter.limit(settings.SEARCH_RATE_LIMIT, key_func=search_rate_key)
 def search_earnings(
+    request: Request,
     query: str = Query(
         ...,
         min_length=1,

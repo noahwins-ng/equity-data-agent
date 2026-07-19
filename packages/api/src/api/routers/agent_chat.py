@@ -725,20 +725,25 @@ _ERROR_DETAIL_AGENT_FAILED = "Agent run failed. Try again or rephrase."
 _ERROR_DETAIL_AGENT_TIMEOUT = "Agent run timed out. Try again in a moment."
 
 # QNT-161: friendly redirect copy when the per-IP daily token budget OR the
-# global daily Groq TPD breaker has been exhausted. The conversational card
+# global daily token breaker has been exhausted. The conversational card
 # renders this prose + the same suggestion list ``domain_redirect`` produces,
 # so the panel surface is identical to "I don't know what you asked" — no
 # scary error text, no exposed internals. Each reason is digit-free so the
-# QNT-156 ``has_numeric_claims`` guardrail accepts it.
+# QNT-156 ``has_numeric_claims`` guardrail accepts it. QNT-388: the per-IP
+# copy names the shared-network case — limits are keyed by network address
+# (CF-Connecting-IP), so carrier-grade NAT can exhaust one bucket across
+# many real visitors and the message must not read as the app breaking.
 _BUDGET_REDIRECT_PER_IP = (
-    "You've hit today's per-visitor demo limit. This portfolio site runs on a "
-    "free LLM tier; the cap protects daily uptime for other visitors. Try "
-    "again tomorrow, or fork the repo to run the agent against your own keys."
+    "You've hit today's per-visitor demo limit. If you're browsing from a "
+    "shared or mobile network, others on the same connection may have used "
+    "it up — the limit is keyed by network address. It resets overnight; "
+    "try again tomorrow, or fork the repo to run the agent against your own "
+    "keys."
 )
 _BUDGET_REDIRECT_GLOBAL = (
     "Today's shared demo budget is exhausted. This portfolio site runs on a "
-    "free LLM tier with a hard daily ceiling; the cap resets overnight. Try "
-    "again tomorrow, or fork the repo to run the agent against your own keys."
+    "capped daily LLM budget; the cap resets overnight. Try again tomorrow, "
+    "or fork the repo to run the agent against your own keys."
 )
 
 # QNT-161: track whether we've fired the breaker-trip Sentry alert for the
@@ -1566,6 +1571,21 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
         # lands at the moment of trip, not on subsequent requests.
         try:
             spent = tracker.total
+            # QNT-388: charge a conservative estimate for LLM calls whose
+            # response lost its usage block (the LiteLLM proxy strips
+            # ``usage`` on some structured-output paths). Without this, a run
+            # whose calls ALL lost usage would debit zero and the per-IP +
+            # global cost breakers would silently never advance.
+            zero_usage = tracker.zero_usage_calls
+            if zero_usage > 0:
+                estimated = zero_usage * settings.CHAT_TOKENS_USAGE_FALLBACK_PER_CALL
+                logger.warning(
+                    "usage block missing on %d LLM call(s): charging estimated %d tokens (ip=%s)",
+                    zero_usage,
+                    estimated,
+                    client_ip,
+                )
+                spent += estimated
             budget.record(client_ip, spent)
             if spent > 0:
                 snap = budget.snapshot()
