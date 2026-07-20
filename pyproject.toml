@@ -13,7 +13,7 @@ members = [
 
 [dependency-groups]
 dev = [
-    "ruff>=0.15.21",
+    "ruff>=0.15.22",
     "pyright>=1.1.411",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
@@ -32,7 +32,7 @@ dev = [
     # suite (agent.evals.deepeval_eval) runs nightly / on-dispatch / locally,
     # never on the prod runtime path, and pulls a large judged-eval dependency
     # tree we don't want in the `uv sync --no-dev` prod image.
-    "deepeval>=4.1.0",
+    "deepeval>=4.1.1",
 ]
 
 [tool.ruff]
