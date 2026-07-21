@@ -41,7 +41,7 @@ The hero shot (top of the README, reused in the "Screenshots" section): the thre
 
 **⚠ Needs refresh (captured 2026-05-09).** Predates the mid-June ticker swap, so the watchlist still shows V/JPM/UNH instead of MU/AMD/INTC (contradicts the universe listed in the README), and it predates the RAG retrieved-sources + earnings chat cards. Capture from the live site rather than local dev for a fully populated view:
 
-1. Open the live app: https://equity-data-agent-ynr2.vercel.app
+1. Open the live app: https://terminal.noahng.dev
 2. Select a ticker with a full detail view (AAPL or NVDA) so the quote header, chart, and all three cards render.
 3. Optionally run a chat prompt that triggers RAG (e.g. `What's the latest on TSLA litigation?`) so the retrieved-sources provenance is visible in the chat panel.
 4. Screenshot the full browser viewport at 1600 px wide minimum and save as `docs/screenshots/terminal-live.png`.
@@ -54,7 +54,7 @@ The chat panel rendering retrieved-sources provenance (citation links/chips unde
 
 Capture from the live site:
 
-1. Open the live app: https://equity-data-agent-ynr2.vercel.app
+1. Open the live app: https://terminal.noahng.dev
 2. Ask a targeted-event prompt that fires RAG, e.g. `What's the latest on TSLA litigation?` or `Any buyback news on AAPL?`
 3. Once the answer streams with the retrieved-sources list, screenshot the chat panel (1200 px wide minimum) and save as `docs/screenshots/rag-provenance.png`.
 
