@@ -78,6 +78,8 @@ Updated automatically by `/ship` and `/sync-docs`.
 - [x] Calibrate Quarterly fundamentals tab to use TTM for P/E, ROE, ROA, FCF yield - QNT-180
 - [x] Replace ephemeral cloudflared quick-tunnel with named Cloudflare tunnel - QNT-177
 - [x] Right-size grafana mem_limit 256m → 384m (steady-state 87% trips ContainerMemoryHigh) - QNT-306
+- [x] Order the frontend deploy behind backend CD + fail the build on build-time API outages - QNT-424
+    - **Triggered by**: 2026-07-25 incident (twice in one hour, commits 805af23 and 9dad518) - a push to main fanned out to the Vercel build and Hetzner CD simultaneously; the prerender pass landed inside the ~31s API container restart and baked "Ticker not found" into 8 of 10 static pages for 46 min, with every signal green. Two layers: `vercel.json` disables git auto-deploy on main and CD fires the deploy hook after the API is verified healthy; and a build-time fetch that fails for any reason other than a genuine 404 now fails the production build instead of degrading to `notFound()`.
 
 ---
 

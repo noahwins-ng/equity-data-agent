@@ -1,7 +1,7 @@
 # ADR-014: Next.js rendering mode per page (SSG / SSR / CSR / ISR) + cache strategy
 
 **Date**: 2026-04-27
-**Status**: Accepted (revised 2026-05-04 -- §1 Watchlist cache + §3 `/ticker/[symbol]` rendering mode superseded by QNT-168; see Revisions)
+**Status**: Accepted (revised 2026-05-04 -- §1 Watchlist cache + §3 `/ticker/[symbol]` rendering mode superseded by QNT-168; revised 2026-07-25 -- build-time failure handling + deploy ordering, QNT-424; see Revisions)
 
 ## Revisions
 
@@ -29,6 +29,23 @@ What this supersedes vs preserves from the original sections:
 | Failure-mode rules (anti-pattern #5, error.tsx fallback) | Unchanged | Unchanged |
 
 Status indicators (provenance strip, watchlist next-ingest label) were detached from server fetches in the same change -- they are per-request status, not first-paint-critical content, and fit client components with `cache: "no-store"`.
+
+### 2026-07-25 -- QNT-424: build-time fetch failures must fail the build
+
+The SSG model above has an implicit precondition nobody wrote down: **the API must be up for the whole duration of the build.** Under ISR a bad render self-repairs on the next revalidate; under SSG the build output *is* the served artifact, so anything a fetch returns during the build is frozen until the next deploy.
+
+That precondition was violated on 2026-07-25. A push to main fanned out to two independent deploys -- the Vercel build and the Hetzner CD run -- which both started at 09:36:08 UTC. The prerender pass ran 09:36:24-09:36:34; `docker compose up -d` recreated the API container at 09:36:29 (Healthy again at 09:37:00). Eight of ten ticker pages baked "Ticker not found" and served it for 46 min. Every signal was green: the Vercel build listed all 10 paths, CI passed, `/health` returned 200 with the right SHA.
+
+Two changes, one per layer:
+
+- **Ordering.** `frontend/vercel.json` sets `git.deploymentEnabled.main=false`; the Deploy workflow fires `VERCEL_DEPLOY_HOOK_URL` after the backend is verified healthy at the merged SHA. The frontend build now *follows* the backend deploy instead of racing it. Branch previews are unaffected (unspecified branches default to `true`). Do not substitute the legacy `github.enabled=false` -- it also disables Deploy Hooks, which would leave the frontend with no trigger at all.
+- **Fail-loud.** `loadQuote` distinguishes a genuine 404 (the API answering "no such ticker") from an outage (connection refused, 5xx). During a Vercel *production* build the latter now throws and fails the build; preview builds keep degrading gracefully via `IS_PRERENDER`. `generateStaticParams` likewise refuses to return an empty universe in production, which under `dynamicParams = false` would ship a deploy with zero ticker routes.
+
+Accepted trade-off: the two pipelines are now **coupled**. Any backend CD failure -- a ClickHouse migration flake, an obs-smoke rollback, the Dagster asset-graph check -- blocks the frontend deploy as well, including for frontend-only commits, which was not true when the pipelines ran independently. That is the intended direction of failure: a frontend built against a backend that failed to deploy (or was rolled back to a previous SHA) is precisely the artifact this ADR does not want shipped, and the previous frontend stays live in the meantime. The cost is that frontend release cadence now inherits backend CD health and latency (~2.5 min). `docs/guides/ops-runbook.md` carries the manual hook-fire command for the case where the backend is healthy but CD failed for an unrelated reason.
+
+One non-declarative dependency is worth naming. The fail-loud guard keys off `VERCEL_ENV`, which Vercel injects only when the project has **Enable access to System Environment Variables** checked -- a dashboard toggle, not something this repo can declare (cf. `feedback_runtime_state_must_be_declarative`). It is currently on: 805af23 touched no `frontend/` files, so the `ignoreCommand`'s `git diff --quiet` clause would have skipped that build, yet it ran -- which only happens if `[ "$VERCEL_ENV" = "production" ]` matched. That same coupling is the safety net: unchecking the box would start skipping production builds of non-frontend commits, so the setting fails loudly (frontend stops updating) before it could silently disarm the guard. `generateStaticParams` also prints `[QNT-424] build-time guard ARMED|not armed` into every build log so the state is never assumed.
+
+This adds anti-pattern #7 below. It does **not** reopen the SSG decision -- QNT-168's reasoning holds; this closes a failure mode it left implicit.
 
 ## Context
 
@@ -147,6 +164,8 @@ These are the specific traps this ADR prevents -- name them so a future contribu
 5. **Treating "200 with empty array" as success.** Per QNT-55: `/search/news` and similar endpoints degrade to `[]` with a 200 when the upstream is unreachable, so "no results" and "service unavailable" look identical at the API boundary. The frontend must render them identically too -- empty state copy, no toast, no error banner. Differentiating them client-side requires extra signal the backend doesn't currently emit and probably never will.
 
 6. **Chat panel as a route.** It tears down on every ticker navigation. Chat is part of `app/layout.tsx`, observes `usePathname()` to learn which ticker is active, and never owns the URL.
+
+7. **Swallowing a build-time fetch failure into a rendered "empty" or "not found" state.** (QNT-424.) This is anti-pattern #5's rule -- render service-down the same as no-data -- applied one layer too far. At *runtime* it is right: the next request re-renders, so a degraded page is transient. At *build time under SSG* it is exactly wrong, because there is no next request: whatever the build renders is the artifact, served until someone deploys again. A `catch { return null }` around a build-time fetch converts a 30-second backend blip into a permanently broken page, and the build still exits 0. So: during a production prerender, a fetch that fails for any reason other than the API positively answering (a real 404) must throw and fail the build. A failed build is recoverable in minutes; a green build serving 404s is discovered by a user. Preview builds keep the forgiving behaviour -- they have no backend to reach and never become the production artifact.
 
 ## Consequences
 
