@@ -7,7 +7,7 @@
 > retrieved reports. Strip that grounding from the same model and it invents
 > **86.9%** of its figures; with it, **0.0%**.
 
-[![Live demo](https://img.shields.io/badge/live%20demo-equity--data--agent--ynr2.vercel.app-success?style=for-the-badge)](https://equity-data-agent-ynr2.vercel.app)
+[![Live demo](https://img.shields.io/badge/live%20demo-terminal.noahng.dev-success?style=for-the-badge)](https://terminal.noahng.dev)
 
 ![Equity Data Agent live terminal](docs/screenshots/terminal-live.png)
 
@@ -24,7 +24,7 @@ A 30-second scan across both disciplines. The lead is AI engineering (the ground
 
 ## Try It
 
-Live app: **[equity-data-agent-ynr2.vercel.app](https://equity-data-agent-ynr2.vercel.app)**. What you can ask:
+Live app: **[terminal.noahng.dev](https://terminal.noahng.dev)**. What you can ask:
 
 | Scope | Example question |
 |---|---|
