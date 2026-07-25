@@ -71,6 +71,57 @@ ssh hetzner "docker inspect equity-data-agent-api-1 --format '{{.Image}} {{.Crea
 
 ---
 
+### Frontend baked a 404 (ticker pages 404 while the API is healthy)
+
+The first entry here about the *Vercel* deploy rather than the Hetzner one. Everything below is invisible to `make check-prod`, Grafana, and the uptime probe, because none of them watch the frontend.
+
+**Symptoms**:
+
+- One or more `/ticker/<SYMBOL>` pages render "Ticker not found", while the watchlist rail beside them shows live prices for those same tickers. (The rail is a client component fetching from the browser, so it proves only that the API is up *now* — not that it was up during the build.)
+- `/api/v1/health` is 200 with the correct `git_sha`; `make check-prod` is green.
+- The Vercel build for that commit is green and its log lists all 10 generated ticker paths.
+- The breakage does not self-heal. `/ticker/[symbol]` is `force-static` with no ISR, so the bad HTML is served until the next deploy.
+
+**Diagnosis**:
+
+```bash
+# Which pages are actually broken? (grep for the chart canvas — the string
+# "Ticker not found" appears in every page's RSC payload and is NOT a
+# reliable discriminator.)
+for t in NVDA AAPL MSFT GOOGL AMZN META TSLA MU AMD INTC; do
+  curl -s "https://terminal.noahng.dev/ticker/$t" | grep -q price-chart-canvas \
+    && echo "$t OK" || echo "$t NOT-FOUND"
+done
+
+# Did the Vercel build overlap the API container restart?
+# Compare the build's "Generating static pages" window against the container's
+# Recreate -> Healthy window for the same commit.
+gh run list --workflow=Deploy --limit 5 --json headSha,createdAt,updatedAt
+gh run view <run-id> --log | grep -E "Recreate|Recreated|Healthy"
+```
+
+A partial break (some tickers fine, others not) is the signature: the prerender pass walked into the outage part-way through. A total break means the API was unreachable when `generateStaticParams` ran.
+
+**Response**:
+
+1. Confirm the API is healthy *now* (`make check-prod`). If it is not, fix that first — a rebuild against a sick API just re-bakes the problem.
+2. Redeploy the frontend. Fire the deploy hook from prod:
+   ```bash
+   ssh hetzner "cd /opt/equity-data-agent && curl -fsS -X POST \$(grep -E '^VERCEL_DEPLOY_HOOK_URL=' .env | cut -d= -f2-) > /dev/null && echo triggered"
+   ```
+3. Wait for the build to reach READY, then re-run the diagnosis loop above. All 10 must return OK.
+4. If the rebuild fails with `[QNT-424] ... failed (attempt N/5)`, that is the guard working as designed — the API is genuinely unreachable from Vercel. Fix the backend, then redeploy.
+
+**Prevention**:
+
+- [QNT-424](https://linear.app/noahwins/issue/QNT-424) — two layers. `frontend/vercel.json` sets `git.deploymentEnabled.main=false` so a push to main no longer triggers a Vercel build in parallel with CD; the Deploy workflow fires the deploy hook itself, only after the SHA gate, API healthcheck, and Dagster asset-graph check pass. And a build-time quote fetch that fails for any reason other than a genuine 404 now fails the production build instead of degrading to `notFound()`.
+- The hook (`VERCEL_DEPLOY_HOOK_URL`, named "Dagster ingest" in the Vercel dashboard) is shared by CD and the three Dagster ingest schedules. If the frontend ever stops updating entirely, check that step in the Deploy workflow first — it is now the *only* trigger for a production frontend build.
+- Confirm the guard is armed by grepping the Vercel build log for `[QNT-424] build-time guard`. It should read `ARMED (VERCEL_ENV=production)`. If it says `not armed`, the Vercel project setting **Enable access to System Environment Variables** has been unchecked — re-check it, because without `VERCEL_ENV` the build silently reverts to degrading instead of failing. (The same toggle feeds the `ignoreCommand` in `frontend/vercel.json`, so the usual first symptom is production builds being skipped for commits that don't touch `frontend/`.)
+
+**Last occurred**: 2026-07-25 (twice in one hour — commits 805af23 and 9dad518)
+
+---
+
 ### Host reboot outage (containers exit cleanly, never restart)
 
 **Symptoms**:

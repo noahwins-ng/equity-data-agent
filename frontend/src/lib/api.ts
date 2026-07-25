@@ -115,6 +115,26 @@ export const IS_PRERENDER =
   process.env.NEXT_PHASE === "phase-production-build" ||
   process.env.NEXT_PHASE === "phase-export";
 
+/**
+ * QNT-424: true only for a Vercel *production* prerender.
+ *
+ * `IS_PRERENDER` above is deliberately forgiving — a preview build for a
+ * frontend-only PR must not fail just because it cannot reach the API. But
+ * that same forgiveness applied to the production build is what let a
+ * transient backend outage get baked into the deployed HTML: on 2026-07-25 a
+ * push to main fanned out to this build *and* the Hetzner CD run that
+ * recreates the API container, the prerender pass landed inside the ~31 s
+ * restart hole, and 8 of 10 ticker pages shipped as a permanent 404 with a
+ * fully green build.
+ *
+ * So the two cases are split. Preview keeps degrading gracefully; production
+ * must fail loudly, because a static page has no second chance — there is no
+ * ISR or revalidate to repair it, only the next deploy. A failed build is
+ * recoverable; a green build serving 404s is not.
+ */
+export const IS_PRODUCTION_PRERENDER =
+  IS_PRERENDER && process.env.VERCEL_ENV === "production";
+
 // ─── Typed response shapes ──────────────────────────────────────────────────
 //
 // These mirror packages/api/src/api/routers/data.py. Field names + nullability

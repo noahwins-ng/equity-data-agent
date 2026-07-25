@@ -364,6 +364,52 @@ jobs:
             print(f'OK: assets={n} checks={c} schedules={s}')
             "
 
+      - name: Trigger Vercel production build (backend verified at this SHA)
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HETZNER_HOST }}
+          username: ${{ secrets.HETZNER_USER }}
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          script: |
+            # QNT-424: the frontend deploy is now *ordered after* the backend
+            # deploy instead of racing it.
+            #
+            # A push to main used to fan out to two independent pipelines: this
+            # workflow and Vercel's own git integration. On 2026-07-25 the
+            # Vercel build prerendered /ticker/[symbol] from 09:36:24-09:36:34
+            # while `docker compose up -d` recreated the API container at
+            # 09:36:29 (Healthy again only at 09:37:00). Eight of ten ticker
+            # pages baked "Ticker not found" into static HTML and stayed broken
+            # for 46 min, with every signal green. Because the pages are
+            # force-static there is no ISR to repair them — only a new deploy.
+            #
+            # `frontend/vercel.json` sets git.deploymentEnabled.main=false, so
+            # main no longer auto-deploys; this step is the only trigger for a
+            # production frontend build, and it runs only after the SHA gate,
+            # the API healthcheck, and the Dagster asset-graph check have all
+            # passed. Branch previews are unaffected (unspecified branches
+            # default to true). Note: do NOT switch to the legacy
+            # `github.enabled=false` — that key is documented to disable Deploy
+            # Hooks too, which would leave the frontend with no trigger at all.
+            #
+            # The hook URL is a secret (it is its own auth), so it is read from
+            # the prod .env that the SOPS step above installs — no second copy
+            # in GitHub secrets to rotate — and never echoed.
+            set -euo pipefail
+            cd /opt/equity-data-agent
+            # `|| true` matters: under `set -e` a failing command substitution
+            # aborts the step, so without it a missing key would kill the run
+            # here with a bare exit-1 and the actionable message below would
+            # never print. The runbook points at this step by name; it should
+            # say what is wrong.
+            HOOK=$(grep -E '^VERCEL_DEPLOY_HOOK_URL=' .env | head -1 | cut -d= -f2- | tr -d '"' || true)
+            if [ -z "$HOOK" ]; then
+              echo "::error::VERCEL_DEPLOY_HOOK_URL missing from prod .env — the frontend would never deploy. Add it to .env.sops."
+              exit 1
+            fi
+            curl -fsS -X POST "$HOOK" > /dev/null
+            echo "Vercel production build triggered (backend healthy at this SHA)"
+
       - name: Push prompts to Langfuse Prompt Management
         continue-on-error: true
         uses: appleboy/ssh-action@v1
