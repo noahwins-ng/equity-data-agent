@@ -108,17 +108,17 @@ events-notify-test: ## Kill litellm to fire a Discord notification (then bring i
 	@echo "docker kill as 'manually stopped' and skips the restart: unless-stopped policy."
 	@echo "Restart with: ssh hetzner 'cd /opt/equity-data-agent && docker compose --profile prod up -d litellm'"
 
-prune-build-cache: ## Reclaim Docker build cache older than 7 days on prod (one-shot)
+prune-build-cache: ## Cap prod Docker build cache to 5 GB (one-shot)
 	@echo "=== Before ==="
 	@ssh hetzner "docker system df"
-	@ssh hetzner "docker builder prune -f --filter unused-for=168h"
+	@ssh hetzner "docker builder prune -f --max-used-space=5GB"
 	@echo ""
 	@echo "=== After ==="
 	@ssh hetzner "docker system df"
 
-prune-build-cache-install: ## Install weekly build-cache prune cron on Hetzner (Sundays 04:00 UTC)
-	ssh hetzner '(crontab -l 2>/dev/null | grep -v "docker builder prune"; echo "0 4 * * 0 /usr/bin/docker builder prune -f --filter unused-for=168h >> /var/log/docker-builder-prune.log 2>&1") | crontab -'
-	@echo "Build-cache prune installed — runs weekly at Sun 04:00 UTC."
+prune-build-cache-install: ## Install daily build-cache prune cron on Hetzner (04:00 UTC, caps cache to 5 GB)
+	ssh hetzner '(crontab -l 2>/dev/null | grep -v "docker builder prune"; echo "0 4 * * * /usr/bin/docker builder prune -f --max-used-space=5GB >> /var/log/docker-builder-prune.log 2>&1") | crontab -'
+	@echo "Build-cache prune installed — runs daily at 04:00 UTC, caps build cache to 5 GB."
 	@echo "Inspect log: ssh hetzner 'tail /var/log/docker-builder-prune.log'"
 
 # ─── Observability (QNT-103) ─────────────────────────────────
