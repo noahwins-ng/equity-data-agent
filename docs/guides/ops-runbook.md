@@ -672,10 +672,12 @@ ssh hetzner '
 make obs-status
 ```
 
+The `--filter unused-for=24h` above is a deliberately aggressive one-shot purge for digging out of an active incident (drop everything unused for a day). It is *not* the steady-state guard - that is the daily `docker builder prune -f --max-used-space=5GB` cron in Prevention below (QNT-405). Use the age filter to recover now; rely on the size cap to stay bounded day to day.
+
 **Prevention**:
 
 - [QNT-167](https://linear.app/noahwins/issue/QNT-167) - `auto_remove: true` on `DockerRunLauncher.container_kwargs` in `dagster.yaml`. Every run-worker container is removed by Docker the moment it exits, eliminating the accumulation at the source. Logs + event log are persisted in the SQLite store on the `dagster_home` volume, so removing the container loses no debugging signal.
-- [QNT-167](https://linear.app/noahwins/issue/QNT-167) - `make prune-build-cache-install` lays down a weekly cron (Sun 04:00 UTC) that runs `docker builder prune --filter unused-for=168h`. Build cache grows ~1-2 GB per CD `--build`; weekly hygiene keeps it bounded.
+- [QNT-167](https://linear.app/noahwins/issue/QNT-167) / [QNT-405](https://linear.app/noahwins/issue/QNT-405) - `make prune-build-cache-install` lays down a daily cron (04:00 UTC) that runs `docker builder prune -f --max-used-space=5GB`. Build cache grows ~1-2 GB per CD `--build`. QNT-167's original lever was **age-based** (`--filter unused-for=168h`), but that spares every entry younger than 7 days - and because CD rebuilds on each merge to main, fresh cache accumulated faster than a weekly age-based prune could reclaim it, so 15+ GB of sub-7-day "reclaimable" cache rode permanently. QNT-405 switched to a **size bound**: `--max-used-space=5GB` evicts least-recently-used cache until under the cap regardless of age, and daily cadence keeps it there. (Docker 29 removed `--keep-storage`; the size-cap flag is now `--max-used-space`.) Note: `docker system df` reports the build-cache figure a bit above the cap (e.g. ~6 GB against a 5 GB bound) because df sums nominal per-record sizes while `--max-used-space` meters BuildKit's deduplicated on-disk usage; steady state is confirmed when a re-run reclaims 0 B, not by df reading below the cap exactly.
 - [QNT-103](https://linear.app/noahwins/issue/QNT-103) - `HostDiskHigh` Grafana alert (>80% for 10 min) gives early warning long before the kernel ENOSPCs writes.
 
 **Last occurred**: 2026-05-03 - surfaced by `HostDiskHigh` after QNT-103 landed; 1080 stopped run-worker containers + 53 GB build cache, /dev/sda1 at 85%.
