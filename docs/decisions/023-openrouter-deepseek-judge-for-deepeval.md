@@ -69,3 +69,35 @@ pennies per run, never on the prod request path. Prod inference stays free.
 - The free-tier ceiling finding is retained in agent memory
   (`reference-deepeval-tpd-ceiling`) as the rationale for why a paid judge was
   worth it.
+
+## Amendment (QNT-442, 2026-08-16): judge moved to the 0731 GA build
+
+`equity-agent/bench-deepseek-v4-flash` moved from the undated preview slug to
+`openrouter/deepseek/deepseek-v4-flash-0731`, in lockstep with the
+`equity-agent/default` primary (ADR-025 amendment) -- a judge/primary version
+split would make prod behavior and DeepEval scores diverge silently.
+
+**Re-baseline (55 records, `deepeval_history.csv`) vs the 2026-06-25
+baseline (n=55, same judge model family, old build) -- every metric
+improved:**
+
+| metric | 06-25 baseline | 0731 | floor |
+|---|---|---|---|
+| faithfulness | 0.8309 | 0.9657 | 0.70 |
+| answer_relevancy | 0.8728 | 0.8976 | 0.75 |
+| context_precision | 0.7029 | 0.8727 | 0.60 |
+| context_recall | 0.9667 | 0.9909 | 0.85 |
+| geval | 0.78 | 0.8509 | 0.65 |
+
+All five pass their floor with room. `number-grounding` (deterministic,
+separate from the RAGAS metrics): 51/55 clean.
+
+**Failure modes during the run, all pre-existing categories, none new**:
+~5-6 of ~750+ judge calls (~1%) hit either a request timeout or the same
+`Truths`-schema malformed-JSON shape QNT-258 first documented on the 0423
+build. The bench alias has no fallback by design (a bench judge must be one
+fixed model for reproducible scores), so these calls failed outright rather
+than silently substituting a different model; `deepeval_eval.py` catches the
+per-metric exception and records that one metric as NaN for that case,
+which is why the run still completed cleanly at n=55. 0731 is not immune to
+the failure mode QNT-258 found, but it is not more frequent either.
