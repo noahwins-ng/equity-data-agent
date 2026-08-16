@@ -153,10 +153,47 @@ def _fetch_logo_data_url(ticker: str, client: httpx.Client) -> str | None:
 
         try:
             image = client.get(url)
+        except httpx.HTTPError as exc:
+            last_exc = exc  # transient — retry
+            continue
+
+        # QNT-443: Finnhub load-rebalances the CDN across staticN shards via
+        # a 302 (e.g. static2 -> static9). Validate the redirect target
+        # BEFORE issuing the follow-up GET, not after: letting httpx
+        # auto-follow (``follow_redirects=True``) would fire the actual
+        # network request to whatever the Location header says first, and
+        # only reject the bytes afterward -- that still lets a compromised
+        # Finnhub CDN make us hit an arbitrary host (e.g. a cloud metadata
+        # endpoint), which is exactly what the pre-fetch host check above
+        # exists to prevent. Bounded to a single hop -- a redirect target
+        # that value is itself a redirect just exhausts retries above.
+        if image.is_redirect:
+            location = image.headers.get("location")
+            if not location:
+                return None
+            redirect_url = httpx.URL(url).join(location)
+            redirect_host = redirect_url.host or ""
+            if redirect_url.scheme != "https" or not _FINNHUB_CDN_HOST_PATTERN.fullmatch(
+                redirect_host
+            ):
+                logger.warning(
+                    "finnhub logo CDN redirected to disallowed host for %s: %r",
+                    ticker,
+                    redirect_host,
+                )
+                return None
+            try:
+                image = client.get(redirect_url)
+            except httpx.HTTPError as exc:
+                last_exc = exc  # transient — retry
+                continue
+
+        try:
             image.raise_for_status()
         except httpx.HTTPError as exc:
             last_exc = exc  # transient — retry
             continue
+
         body = image.content
         if not body or len(body) > _MAX_LOGO_BYTES:
             return None

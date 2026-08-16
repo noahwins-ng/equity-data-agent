@@ -87,10 +87,11 @@ def test_max_logo_bytes_accommodates_observed_real_logos() -> None:
 
 
 class _FakeResponse:
-    def __init__(self, *, json_data=None, content=b"", headers=None):
+    def __init__(self, *, json_data=None, content=b"", headers=None, is_redirect=False):
         self._json = json_data
         self.content = content
         self.headers = headers or {"content-type": "image/png"}
+        self.is_redirect = is_redirect
 
     def raise_for_status(self) -> None:
         return None
@@ -149,3 +150,46 @@ def test_hard_failure_does_not_burn_retries(monkeypatch: pytest.MonkeyPatch) -> 
 
     assert _fetch_logo_data_url("XYZ", client) is None  # type: ignore[arg-type]
     assert client.calls == 1
+
+
+def test_cdn_shard_redirect_is_followed_and_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QNT-443: Finnhub load-rebalances the CDN via 302 (e.g. static2 ->
+    static9). The fetch must follow that redirect (after validating it) and
+    accept the bytes since the redirect target is still a real Finnhub
+    shard."""
+    monkeypatch.setattr(logos_module.settings, "FINNHUB_API_KEY", "test-key")
+    png = b"\x89PNG\r\n\x1a\nfake-bytes"
+    profile_url = "https://static2.finnhub.io/file/stock_logo/NVDA.png"
+    redirected_url = "https://static9.finnhub.io/file/stock_logo/NVDA.png"
+    client = _ScriptedClient(
+        [
+            _FakeResponse(json_data={"logo": profile_url}),
+            _FakeResponse(is_redirect=True, headers={"location": redirected_url}),
+            _FakeResponse(content=png),
+        ]
+    )
+
+    result = _fetch_logo_data_url("NVDA", client)  # type: ignore[arg-type]
+
+    expected = f"data:image/png;base64,{base64.b64encode(png).decode()}"
+    assert result == expected
+    assert client.calls == 3
+
+
+def test_cdn_redirect_to_non_finnhub_host_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A redirect landing on a non-Finnhub host must still fail closed —
+    and, critically, the malicious redirect target must never actually be
+    fetched. Validating only the response *after* following the redirect
+    would already have leaked the request to that host; the guard has to
+    run before the follow-up GET is issued."""
+    monkeypatch.setattr(logos_module.settings, "FINNHUB_API_KEY", "test-key")
+    profile_url = "https://static2.finnhub.io/file/stock_logo/NVDA.png"
+    client = _ScriptedClient(
+        [
+            _FakeResponse(json_data={"logo": profile_url}),
+            _FakeResponse(is_redirect=True, headers={"location": "https://evil.com/x.png"}),
+        ]
+    )
+
+    assert _fetch_logo_data_url("NVDA", client) is None  # type: ignore[arg-type]
+    assert client.calls == 2  # the disallowed host is never actually fetched, no retry burned
