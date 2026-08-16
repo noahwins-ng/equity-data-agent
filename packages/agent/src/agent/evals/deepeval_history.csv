@@ -1,3 +1,4 @@
 run_id,git_sha,prompt_version,suite,eval_type,deepeval_faithfulness,deepeval_answer_relevancy,deepeval_context_precision,deepeval_context_recall,deepeval_geval,deepeval_n
 20260621T042449Z-b07f37-deepeval,b0d2ccb,dc79f7ab0c,deepeval,deepeval,0.9688,0.7571,0.875,0.2875,0.925,4
 20260625T072005Z-39fc33-deepeval,e142283,4e7aaa24ad,deepeval,deepeval,0.8309,0.8728,0.7029,0.9667,0.78,55
+20260815T182212Z-41bdbb-deepeval,d7b9f75,7d2ca36037,deepeval,deepeval,0.9657,0.8976,0.8727,0.9909,0.8509,55

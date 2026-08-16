@@ -2341,7 +2341,7 @@ def test_runtime_grounding_score_pushed_when_present(
         trace_id="test-trace-id",
         tags=[
             "intent:conversational",
-            "model:openrouter/deepseek/deepseek-v4-flash",
+            "model:openrouter/deepseek/deepseek-v4-flash-0731",
             "runtime_grounding:miss",
             "runtime_grounding_rate:0.50",
         ],
@@ -2407,7 +2407,7 @@ def test_intent_and_model_tags_pushed_to_trace(
     # QNT-258: default provider -> equity-agent/default -> DeepSeek V4 Flash.
     fake_lf._create_trace_tags_via_ingestion.assert_called_once_with(
         trace_id="test-trace-id",
-        tags=["intent:thesis", "model:openrouter/deepseek/deepseek-v4-flash"],
+        tags=["intent:thesis", "model:openrouter/deepseek/deepseek-v4-flash-0731"],
     )
 
 
@@ -2579,7 +2579,7 @@ def test_current_model_info_returned_for_default_provider() -> None:
     info = current_model_info()
     # QNT-258: default provider -> equity-agent/default -> DeepSeek V4 Flash.
     assert info["alias"] == "equity-agent/default"
-    assert info["resolved_model"] == "openrouter/deepseek/deepseek-v4-flash"
+    assert info["resolved_model"] == "openrouter/deepseek/deepseek-v4-flash-0731"
 
 
 def test_current_model_info_returns_unknown_for_unmapped_alias(

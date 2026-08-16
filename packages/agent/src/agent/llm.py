@@ -64,7 +64,7 @@ SMALL_NODE_ALIAS = "equity-agent/small"
 # follow-up.
 _RESOLVED_MODEL_BY_ALIAS: dict[str, str] = {
     # QNT-258 / ADR-025: paid launch primary (was groq/llama-3.3-70b-versatile).
-    "equity-agent/default": "openrouter/deepseek/deepseek-v4-flash",
+    "equity-agent/default": "openrouter/deepseek/deepseek-v4-flash-0731",  # QNT-442
     "equity-agent/fallback-nemotron-ultra": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
     # QNT-317 / ADR-026: fallback-llama4scout / fallback-groq-gptoss120b and the
     # bench-llama4scout / bench-qwen3-32b / bench-llama3-70b aliases were retired
@@ -73,7 +73,7 @@ _RESOLVED_MODEL_BY_ALIAS: dict[str, str] = {
     "equity-agent/small": "groq/openai/gpt-oss-20b",
     "equity-agent/bench-gptoss120b": "groq/openai/gpt-oss-120b",
     "equity-agent/bench-cerebras-gptoss120b": "cerebras/gpt-oss-120b",
-    "equity-agent/bench-deepseek-v4-flash": "openrouter/deepseek/deepseek-v4-flash",
+    "equity-agent/bench-deepseek-v4-flash": "openrouter/deepseek/deepseek-v4-flash-0731",  # QNT-442
     "equity-agent/bench-gptoss20b": "groq/openai/gpt-oss-20b",
     "equity-agent/bench-gemma4-31b": "gemini/gemma-4-31b-it",
     "equity-agent/bench-gemma3-27b": "gemini/gemma-3-27b-it",

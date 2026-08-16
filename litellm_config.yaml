@@ -41,8 +41,15 @@ model_list:
     # exercised as the QNT-275 DeepEval judge). The whole Groq chain ADR-021
     # calibrated is being retired by Groq's 2026-06-17 decommission (scout
     # 07/17, 70b 08/16), so a same-provider billing flip was not available.
+    # QNT-442: moved from the undated preview slug (deepseek-v4-flash, resolves
+    # to the 0423 preview build) to the 0731 GA release -- a re-post-trained
+    # revision of the same 284B/13B-active MoE with substantially improved
+    # agentic/coding/tool-use performance, not a new model generation. OpenRouter
+    # pricing moved with it: $0.08/$0.252 per M in/out (was $0.089/$0.224) --
+    # input cheaper, output ~12% pricier; net roughly flat given the input-
+    # dominated ~12:1 prod traffic skew measured in QNT-292. See ADR-025.
     litellm_params:
-      model: openrouter/deepseek/deepseek-v4-flash
+      model: openrouter/deepseek/deepseek-v4-flash-0731
       api_key: os.environ/OPENROUTER_API_KEY
       # QNT-258: DeepSeek V4 Flash on OpenRouter defaults to REASONING ON (emits
       # 37-89 CoT tokens/call even at reasoning_effort:low), which the ticket's
@@ -64,6 +71,26 @@ model_list:
       # Also inherited by the recursive equity-agent/small -> equity-agent/default
       # fallback (classify/plan on Groq throttle), but those outputs are tiny
       # (classify ~11 tokens, ThesisPlan 2-4 tool names) so 1500 never binds there.
+      # QNT-442 (AC3, re-derived): left at 1500, unchanged. First pass of this
+      # ticket wrongly re-derived this value against Thesis output (median 1514,
+      # above 1500) and bumped it to 2000 -- WRONG target. Since QNT-383,
+      # `_structured_call` (graph.py) sizes every structured schema's ceiling
+      # from its own dedicated `_OUTPUT_BUDGET` entry (Thesis=2500,
+      # ComparisonAnswer=3000, etc.), which overrides this alias default via
+      # per-request `extra_body.max_tokens` -- so this key was NEVER what bounds
+      # Thesis, and the 1500-vs-1514 finding was a false read from a probe that
+      # bypassed `_structured_call`. This key's only PRODUCTION-PATH consumer
+      # is `narrate_node` (nodes/narrate.py), a free-text stream with no
+      # override -- every structured caller passes its own budget. (Two
+      # offline eval-only scripts, evals/baseline_eval.py and
+      # evals/history_budget_sample.py, also call get_llm() with no override,
+      # but neither is production traffic or needs >1500 tokens.) Live-sampled 8 real
+      # narrate calls on 0731 (real report payloads, real `build_narrate_prompt`,
+      # max_tokens temporarily overridden to 3000 to observe the true uncapped
+      # length): completion_tokens min=143 median=211 p90=273 max=319 -- nowhere
+      # near 1500, no verbosity-growth pressure on the shape this parameter
+      # actually gates. Re-check narrate's real distribution (not Thesis's) if a
+      # future model swap ever needs this re-derived.
       max_tokens: 1500
       extra_body:
         reasoning:
@@ -208,9 +235,13 @@ model_list:
   # sink (verdict tasks don't need it). Used ONLY by the DeepEval judge
   # (agent.evals.deepeval_eval); the dialogue / golden judge stays on the free
   # bench-cerebras alias above. Pinned for reproducible scores (ADR-023).
+  # QNT-442: moved to the 0731 GA build alongside equity-agent/default -- kept
+  # in lockstep deliberately, since a judge-vs-primary version mismatch would
+  # make prod behavior and DeepEval scores diverge silently. Re-baselined against
+  # the 2026-06-25 scores (n=55) as part of this ticket; see deepeval_history.csv.
   - model_name: equity-agent/bench-deepseek-v4-flash
     litellm_params:
-      model: openrouter/deepseek/deepseek-v4-flash
+      model: openrouter/deepseek/deepseek-v4-flash-0731
       api_key: os.environ/OPENROUTER_API_KEY
       temperature: 0.0
       # QNT-258: fully disable reasoning (was reasoning_effort: low, which still
