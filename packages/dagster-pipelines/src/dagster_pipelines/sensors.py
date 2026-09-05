@@ -74,6 +74,7 @@ def _build_materialization_sensor(
     asset_key: AssetKey,
     job: Any,
     skip_partitions: tuple[str, ...] = (),
+    minimum_interval_seconds: int = 300,
 ):
     """Build a sensor that watches for materialization events on a partitioned asset
     and triggers a downstream job for each partition that materialized.
@@ -83,9 +84,23 @@ def _build_materialization_sensor(
     silently advances the cursor past partitions that have no downstream
     pipeline (e.g. benchmark tickers — SPY rides the OHLCV daily schedule
     but has no aggregation / indicators / fundamentals materialization).
+
+    QNT-472: ``minimum_interval_seconds`` defaults to 300 (5 min) instead of
+    Dagster's 30s default. These are always-on sensors (DefaultSensorStatus.RUNNING);
+    a ~100 MB/day native-heap growth in the dagster-code-server gRPC process (tracked
+    at 2 GiB) coincided with their combined 30s-cadence call volume and is the leading
+    hypothesis under test by this ticket (a grpcio call-churn leak — see QNT-472 for
+    the investigation and the 48h post-deploy observation this default is meant to
+    validate). 300s still keeps same-day freshness for these daily/weekly pipelines.
+    news_raw_sensor overrides this default — see its call site below.
     """
 
-    @sensor(name=name, job=job, default_status=DefaultSensorStatus.RUNNING)
+    @sensor(
+        name=name,
+        job=job,
+        default_status=DefaultSensorStatus.RUNNING,
+        minimum_interval_seconds=minimum_interval_seconds,
+    )
     def _sensor(context: SensorEvaluationContext):
         cursor = int(context.cursor) if context.cursor else None
 
@@ -134,6 +149,11 @@ news_raw_sensor = _build_materialization_sensor(
     name="news_raw_sensor",
     asset_key=AssetKey("news_raw"),
     job=news_downstream_job,
+    # QNT-472: kept at 60s (below the 300s default) rather than a full 10x cut —
+    # news_embeddings_checks._COUNT_DELTA_TOLERANCE (=5) is calibrated on this
+    # sensor firing "within seconds" of a news_raw materialization; widening the
+    # in-flight divergence window to 5 min risks spurious WARNs on that check.
+    minimum_interval_seconds=60,
 )
 
 earnings_releases_sensor = _build_materialization_sensor(
