@@ -17,7 +17,7 @@ A 30-second scan across both disciplines. The lead is AI engineering (the ground
 
 | Data engineering | AI engineering |
 |---|---|
-| Medallion ClickHouse warehouse (`equity_raw` -> `equity_derived`), 28 idempotent migrations, `ReplacingMergeTree` + `FINAL`/`argMax` reads | LangGraph agent: 9 response shapes, a router with a deterministic clarify step, multi-turn continuity via a checkpointer |
+| Medallion ClickHouse warehouse (`equity_raw` -> `equity_derived`), 39 idempotent migrations, `ReplacingMergeTree` + `FINAL`/`argMax` reads | LangGraph agent: 9 response shapes, a router with a deterministic clarify step, multi-turn continuity via a checkpointer |
 | Dagster asset graph: 17 indicator columns across three timeframes, 20+ fundamental ratios, two RAG embedding corpora (news + SEC 8-K) | Grounded RAG over news + SEC-8K corpora: hybrid dense+BM25, Cohere reranking, targeted-event routing, streamed provenance |
 | 38 domain-bounded asset checks (dbt-test equivalent) **plus Pandera source contracts** routing bad rows to an auditable reject sink | Layered evals: numeric grounding, golden regression, tool-call, dialogue, IR retrieval metrics (recall@k / MRR / nDCG), LLM-judged RAGAS/G-Eval |
 | Data observability: per-ticker freshness, volume/distribution + anomaly checks on a Grafana dashboard, Dagster asset graph as lineage | LiteLLM provider routing + fallback chain + per-node model tiering; every request a Langfuse trace with a prompt-version hash |
