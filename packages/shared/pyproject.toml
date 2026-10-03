@@ -3,7 +3,7 @@ name = "shared"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "pydantic>=2.13.4",
+    "pydantic>=2.13.5",
     "pydantic-settings>=2.7.0",
     "pandera>=0.32.1",
     # QNT-262: client-side BM25 for hybrid retrieval (pure-python, no re-index).
