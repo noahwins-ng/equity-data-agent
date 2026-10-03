@@ -9,6 +9,7 @@ Living documentation for the equity-data-agent codebase. This is the shared cont
 - [AC-templates.md](AC-templates.md) - Default acceptance criteria for common PR classes (infra/CI, etc.)
 - [design-frontend-plan.md](design-frontend-plan.md) - Phase 6 frontend feasibility assessment + scope cuts against the canonical mock
 - [model-bench-2026-04.md](model-bench-2026-04.md) - Free-tier LLM bench results: Llama-3.3-70B default, Llama-4-Scout fallback
+- [model-bench-2026-07.md](model-bench-2026-07.md) - Paid launch-primary bench: DeepSeek V4 Flash (reasoning off) promoted over Llama-3.3-70B
 
 ## Structure
 
@@ -48,6 +49,7 @@ Architecture Decision Records (ADRs). Read these to understand **why** we chose 
 - [025-paid-launch-primary-and-breaker-recalibration.md](decisions/025-paid-launch-primary-and-breaker-recalibration.md)
 - [026-paid-synthesis-economics-and-free-tier-simplification-dividend.md](decisions/026-paid-synthesis-economics-and-free-tier-simplification-dividend.md)
 - [027-prompt-caching-enabled-via-provider-pin.md](decisions/027-prompt-caching-enabled-via-provider-pin.md)
+- [028-focus-from-axis-comparison-shape.md](decisions/028-focus-from-axis-comparison-shape.md)
 
 ### [guides/](guides/)
 How to do common tasks. Operational runbooks.
@@ -61,6 +63,7 @@ How to do common tasks. Operational runbooks.
 - [uptime-monitoring.md](guides/uptime-monitoring.md) - UptimeRobot probe + Healthchecks.io heartbeat setup against the named-tunnel API URL
 - [ticker-lifecycle.md](guides/ticker-lifecycle.md) - How to add/remove a ticker: the four registry structures + backfill surfaces + eval-golden sweep
 - [load-test-baseline.md](guides/load-test-baseline.md) - Endpoint latency baseline capture (`scripts/load_test_baseline.py`)
+- [teardown-and-revival.md](guides/teardown-and-revival.md) - One-time full teardown checklist + what to read first when reviving after a long gap
 
 ### [retros/](retros/)
 End-of-phase retrospectives. What shipped, what was hard, lessons learned.
