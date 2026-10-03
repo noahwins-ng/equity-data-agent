@@ -22,6 +22,14 @@
 commit_msg_file="$1"
 commit_msg=$(cat "$commit_msg_file")
 
+# No AI co-author trailers, anywhere in the message (owner preference).
+if echo "$commit_msg" | grep -qiE "^co-authored-by:.*(claude|anthropic)"; then
+    echo ""
+    echo "ERROR: Remove the 'Co-Authored-By: Claude' trailer - not allowed in this repo."
+    echo ""
+    exit 1
+fi
+
 # Allow merge commits and revert commits
 if echo "$commit_msg" | grep -qE "^(Merge|Revert) "; then
     exit 0
