@@ -1,309 +1,211 @@
 # Equity Data Agent
 
-> Production-deployed AI/data engineering project for US equities. The agent
-> writes an investment thesis but is **not allowed to invent or calculate numbers**:
-> Dagster computes them, FastAPI prints them into report strings, and LangGraph
-> reasons over those reports. An eval checks every number in the answer against the
-> retrieved reports. Strip that grounding from the same model and it invents
-> **86.9%** of its figures; with it, **0.0%**.
+An equity research platform for 10 US tech stocks: a daily data pipeline, a research terminal (charts, technicals, fundamentals, news), and an AI analyst that writes investment theses **without being allowed to invent or calculate a single number**. The pipeline does all the math; the LLM only reasons over pre-computed reports, and an eval checks every number it outputs.
 
 [![Live demo](https://img.shields.io/badge/live%20demo-terminal.noahng.dev-success?style=for-the-badge)](https://terminal.noahng.dev)
+![Tests](https://img.shields.io/badge/tests-1700%2B%20passing-2ea44f)
+![ADRs](https://img.shields.io/badge/ADRs-28-1f6feb)
+![Prod](https://img.shields.io/badge/prod-live-success)
 
 ![Equity Data Agent live terminal](docs/screenshots/terminal-live.png)
 
-## Highlights
+## Features
 
-A 30-second scan across both disciplines. The lead is AI engineering (the grounded, eval-guarded agent), resting on a data platform built to make that grounding guarantee possible. Every cell is backed by a section below.
-
-| Data engineering | AI engineering |
+| | |
 |---|---|
-| Medallion ClickHouse warehouse (`equity_raw` -> `equity_derived`), 39 idempotent migrations, `ReplacingMergeTree` + `FINAL`/`argMax` reads | LangGraph agent: 9 response shapes, a router with a deterministic clarify step, multi-turn continuity via a checkpointer |
-| Dagster asset graph: 17 indicator columns across three timeframes, 20+ fundamental ratios, two RAG embedding corpora (news + SEC 8-K) | Grounded RAG over news + SEC-8K corpora: hybrid dense+BM25, Cohere reranking, targeted-event routing, streamed provenance |
-| 38 domain-bounded asset checks (dbt-test equivalent) **plus Pandera source contracts** routing bad rows to an auditable reject sink | Layered evals: numeric grounding, golden regression, tool-call, dialogue, IR retrieval metrics (recall@k / MRR / nDCG), LLM-judged RAGAS/G-Eval |
-| Data observability: per-ticker freshness, volume/distribution + anomaly checks on a Grafana dashboard, Dagster asset graph as lineage | LiteLLM provider routing + fallback chain + per-node model tiering; every request a Langfuse trace with a prompt-version hash |
+| **Watchlist** | All 10 tickers with latest price, daily change, sparkline, and next data refresh |
+| **Price charts** | Daily / weekly / monthly candles with SMA 20/50/200, Bollinger bands, RSI, MACD |
+| **Technicals & fundamentals** | 17 indicators and 20+ ratios (P/E, margins, growth, balance-sheet health) per ticker |
+| **News & filings** | Latest company news with sentiment; SEC 8-K earnings releases searchable from chat |
+| **AI analyst chat** | Theses, comparisons, quick facts, event lookups, and open-ended "what's interesting?", with follow-ups |
+| **Provenance** | Every chat answer shows which reports and sources it used; any number not found in them is marked † |
 
-## Try It
+## The Idea
 
-Live app: **[terminal.noahng.dev](https://terminal.noahng.dev)**. What you can ask:
+LLMs write well but are unreliable at arithmetic: one invented P/E ruins an otherwise plausible thesis. So the system is split into three roles that never overlap:
 
-| Scope | Example question |
-|---|---|
-| Investment thesis | `Give me a balanced thesis on NVDA` |
-| Quick fact | `What's AMD's P/E?` |
-| Comparison | `Compare MSFT and GOOGL` |
-| Technicals | `Is MU overbought?` |
-| Fundamentals | `How healthy is META's balance sheet?` |
-| News sentiment | `What's the news sentiment on TSLA?` |
-| Targeted events (litigation, buybacks, M&A, guidance) | `Anything on the INTC lawsuit?` |
-| Open-ended exploration | `What looks interesting right now?` |
-| Follow-ups | `And how does that compare to last quarter?` |
-
-The universe is 10 semis/tech-concentrated US equities (NVDA, AAPL, MSFT, GOOGL, AMZN, META, TSLA, MU, AMD, INTC), a scope choice that keeps every ticker in sectors the agent can reason about with shared context (AI/data-center demand, the semi cycle). Data ingests daily after market close.
-
-## Why This Exists
-
-LLMs synthesize well but are unreliable at arithmetic: a fabricated RSI or an invented P/E poisons an otherwise plausible thesis. This project treats that as an architecture problem:
-
-| Role | Layer | Responsibility |
+| Role | Layer | Does |
 |---|---|---|
-| Worker | Dagster | Fetch data; compute indicators, ratios, aggregations, embeddings |
-| Interpreter | FastAPI | Query ClickHouse/Qdrant, format human-readable report strings |
-| Executive | LangGraph | Read reports, choose a response shape, synthesize the answer |
+| Worker | Dagster | Fetches data, computes every indicator, ratio, and embedding |
+| Interpreter | FastAPI | Turns database rows into plain-text reports |
+| Executive | LangGraph | Reads the reports and writes the answer |
 
-The agent has no database client, no calculator tool, and no access to raw tables. It only sees the report text FastAPI gives it.
+The agent has no database access and no calculator. It only sees report text.
 
-## What This Demonstrates
+**Does it matter?** Running the same model on the same 44 questions without the reports, it invents **87% of its numbers**. With them: **0%** (0 of 619). Reproduce with `uv run python -m agent.evals.baseline_eval`.
 
-Beyond the two pillars above:
+```mermaid
+graph LR
+    SRC[yfinance · Finnhub · SEC 8-K] --> DG[Dagster<br/>compute]
+    DG --> CH[(ClickHouse)]
+    DG --> QD[(Qdrant)]
+    CH --> API[FastAPI<br/>reports]
+    QD --> API
+    API --> AG[LangGraph<br/>agent]
+    AG --> UI[Next.js terminal]
+    API --> UI
+```
 
-| Area | Proof |
-|---|---|
-| Product engineering | Next.js 16 app: watchlist, ticker detail, charting, fundamentals, news, persistent SSE chat panel |
-| Production ops | Hetzner Docker Compose + Vercel + Cloudflare tunnel; deploy gates with auto-rollback, autoheal, alerts, runbooks |
-| Engineering process | 28 ADRs, 7 phase retros, 1,700+ tests, security scanners, model-bench history |
+Full data flow: [`docs/architecture/system-overview.md`](docs/architecture/system-overview.md).
 
-![Phases](https://img.shields.io/badge/phases-7%2F7%20complete-2ea44f)
-![Tests](https://img.shields.io/badge/tests-1700%2B%20passing-2ea44f)
-![ADRs](https://img.shields.io/badge/ADRs-28-1f6feb)
-![Golden set](https://img.shields.io/badge/golden__set-44%20questions-1f6feb)
-![Prod](https://img.shields.io/badge/prod-live-success)
+## AI Engineering
 
-## Architecture
+The agent is a LangGraph state machine, not one big prompt. Each question takes the cheapest path that can answer it:
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> classify
+    classify --> clarify: ambiguous<br/>(no ticker)
+    classify --> synthesize: greeting /<br/>follow-up
+    classify --> explore: "what's interesting?"
+    classify --> plan: thesis, comparison,<br/>quick fact, focused
+    plan --> gather: pick reports
+    gather --> synthesize: call report +<br/>search tools
+    explore --> synthesize
+    clarify --> narrate
+    synthesize --> narrate: structured card
+    narrate --> [*]: streamed to UI
+```
+
+- **Routing.** `classify` sorts each question into 9 answer types. Ambiguous asks get a clarifying question instead of a guess; greetings and follow-ups skip data fetching entirely.
+- **RAG over news + SEC filings.** Hybrid search (vector + keyword) with reranking, triggered only for event questions (lawsuits, buybacks, M&A); sources stream to the UI.
+- **Memory.** A checkpointer keeps the conversation, so follow-ups reuse earlier reports instead of re-fetching.
+- **Evals in CI.** Every number traced back to a report, a 44-question regression set, retrieval quality metrics, and LLM-judged answer quality.
+- **Model routing + tracing.** LiteLLM with automatic fallback between providers and a smaller model for routing steps; every request traced in Langfuse. About $0.002 per thesis.
+
+## Data Engineering
+
+A Dagster asset graph runs daily after market close. Raw data lands in `equity_raw`, everything computed lands in `equity_derived`, and text is embedded for search:
 
 ```mermaid
 graph LR
     subgraph Sources
         YF[yfinance]
-        NEWS[Finnhub /company-news]
-        EDGAR[SEC Edgar 8-K]
+        FH[Finnhub]
+        SEC[SEC EDGAR]
     end
-
-    subgraph Dagster
+    subgraph "equity_raw"
         OHLCV[ohlcv_raw]
         FUND[fundamentals]
-        AGG[weekly/monthly bars]
-        TECH[technical indicators]
-        FSUM[fundamental summary]
-        NRAW[news_raw]
-        EMB[news embeddings]
-        ERAW[earnings_releases_raw]
-        EEMB[earnings embeddings]
+        CAL[earnings_calendar]
+        NEWS[news_raw]
+        ER[earnings_releases_raw]
     end
-
-    subgraph Storage
-        CH[(ClickHouse)]
-        QD[(Qdrant Cloud)]
+    subgraph "equity_derived"
+        AGG[weekly / monthly bars]
+        TECH[technical_indicators<br/>daily · weekly · monthly]
+        FS[fundamental_summary]
     end
-
-    subgraph FastAPI
-        REP[report endpoints]
-        DATA[data endpoints]
-        SEARCH[search endpoints]
-        SSE[agent chat SSE]
+    subgraph "Qdrant"
+        NE[news_embeddings]
+        EE[earnings_embeddings]
     end
-
-    subgraph Agent
-        GRAPH[classify -> route -> synthesize -> narrate]
-        TOOLS[HTTP report + search tools]
-    end
-
-    subgraph Frontend
-        UI[Next.js terminal UI]
-    end
-
-    YF --> OHLCV --> CH
-    YF --> FUND --> CH
-    NEWS --> NRAW --> CH
-    NRAW --> EMB --> QD
-    EDGAR --> ERAW --> CH
-    ERAW --> EEMB --> QD
-    OHLCV --> AGG --> CH
-    CH --> TECH --> CH
-    OHLCV --> FSUM
-    FUND --> FSUM
-    FSUM --> CH
-    CH --> REP
-    CH --> DATA
-    QD --> SEARCH
-    QD --> REP
-    REP --> TOOLS --> GRAPH
-    SEARCH --> TOOLS
-    GRAPH --> SSE --> UI
-    DATA --> UI
-    SEARCH --> UI
+    YF --> OHLCV & FUND & CAL
+    FH --> NEWS
+    SEC --> ER
+    OHLCV --> AGG --> TECH
+    OHLCV --> TECH
+    OHLCV & FUND --> FS
+    NEWS --> NE
+    ER --> EE
 ```
 
-The agentic boundary is the load-bearing constraint: the agent only calls HTTP tools that return report text. No database client, no raw tables, no calculator. Fuller description in [`docs/architecture/system-overview.md`](docs/architecture/system-overview.md).
+- **Layered warehouse.** Everything in `equity_derived` can be rebuilt from `equity_raw`, so only the raw layer has to be durable.
+- **Tests on the data.** 38 asset checks with real financial bounds (RSI 0-100, P/E band, MACD coherence), not just "not null". They caught two P/E formula bugs that passed code review, including a P/E of 28,545.
+- **Input contracts.** Each source is schema-validated (Pandera) before writing; bad rows go to an auditable reject table instead of disappearing.
+- **Idempotent by design.** Every table and migration is safe to re-run; a monthly full re-fetch heals stock-split and dividend adjustments through the same dedup path.
+- **Data observability.** Per-ticker freshness checks and a Grafana data-health dashboard.
 
-## AI Engineering
+## Production
 
-The agent is a controllable graph, not a single prompt: routing, retrieval, and evaluation are each first-class.
+- Hetzner (Docker Compose) backend + Vercel frontend, behind a Cloudflare tunnel.
+- Deploys verify the running commit and auto-rollback on failure; unhealthy services restart themselves.
+- Monitoring with Sentry, Grafana, Langfuse and Discord alerts, plus a [failure runbook](docs/guides/ops-runbook.md).
 
-```mermaid
-flowchart TD
-    classify --> router{route}
-    router -->|ambiguous ask| clarify
-    router -->|greeting / warm follow-up| synthesize
-    router -->|broad exploratory| explore_supervisor
-    router -->|analytical request| plan
-    plan --> gather --> synthesize
-    explore_supervisor --> synthesize
-    clarify --> narrate
-    synthesize --> narrate
-    narrate --> END
-```
+## Results
 
-- **Intent routing.** `classify` sorts each question into 9 response shapes; the router sends ambiguous asks (missing ticker, no prior turn) to a deterministic clarify step, greetings straight to synthesis, and broad exploratory asks to a zero-LLM exploration supervisor.
-- **Grounded RAG.** Two Qdrant corpora (news + SEC 8-K). Query-time hybrid retrieval (dense MiniLM + BM25, RRF-fused) with optional Cohere rerank; a keyword gate fires RAG only for targeted events (litigation, buybacks, M&A, …), and retrieved sources stream to the UI as provenance.
-- **Provider routing & tracing.** LiteLLM behind one alias: one-line model swap, automatic fallback chain (paid `deepseek-v4-flash` -> free `nemotron-3-ultra` anchor -> deterministic degrade), and per-node tiering (a small model runs classify/plan). Every request is a Langfuse trace with a prompt-version hash.
-- **Multi-turn continuity.** A checkpointer carries a compact transcript with per-intent history budgets, so follow-ups reuse prior reports without re-fetching.
-
-### Evaluation & hallucination resistance
-
-The guarantee is deliberately narrow:
-
-> The agent must not introduce numeric claims absent from the reports it retrieved.
-
-Two concerns, kept separate: **provenance** (numbers are copied from reports, not computed by the LLM) and **correctness** (evals + an LLM judge check the cited numbers actually answer the question). Enforcement is layered. Architecture ([ADR-003](docs/decisions/003-intelligence-vs-math.md)) keeps arithmetic out of the agent, the prompt requires every number to cite its report, and a CI eval suite guards it:
-
-- numeric grounding ([`hallucination.py`](packages/agent/src/agent/evals/hallucination.py)): every numeric literal traced to a report;
-- golden-set regression ([`golden_set.py`](packages/agent/src/agent/evals/golden_set.py)): 44 questions across all 10 tickers;
-- tool-call ([`tool_calls.py`](packages/agent/src/agent/evals/tool_calls.py)) and dialogue ([`dialogue_eval.py`](packages/agent/src/agent/evals/dialogue_eval.py), a 5-axis LLM judge);
-- retrieval IR metrics ([`retrieval_eval.py`](packages/agent/src/agent/evals/retrieval_eval.py): recall@k / MRR / nDCG);
-- LLM-judged RAGAS + G-Eval ([`deepeval_eval.py`](packages/agent/src/agent/evals/deepeval_eval.py), off the hot path) and RAG routing ([`news_search_eval.py`](packages/agent/src/agent/evals/news_search_eval.py)).
-
-**Results.** Latest clean-window run on the current primary (`deepseek-v4-flash` via OpenRouter, [ADR-025](docs/decisions/025-paid-launch-primary-and-breaker-recalibration.md)); full history in [`docs/model-bench-2026-04.md`](docs/model-bench-2026-04.md):
-
-| Suite | Latest | Per-PR CI gate |
-|---|---|---|
-| Golden regression (2026-07-04): tool-call / grounding | 40/41 · 40/41 | dev harness (directional) |
-| Retrieval (hybrid + Cohere rerank): recall@5 / recall@20 (share of labeled relevant sources in top k) | 0.53 / 0.76 | blocking (floors 0.45 / 0.68) |
-| Retrieval: MRR / nDCG@10 | 0.94 / 0.79 | blocking (floors 0.85 / 0.70) |
-| Number grounding (frozen artifacts) | pass | blocking (red on any unsupported numeric) |
-| Grounding ablation (2026-07-11): fabricated-number rate, grounding on → off | 0.0% → 86.9% | illustrative (not gated) |
-
-**What grounding buys.** Strip report-grounding from the *same* model over the same 44-question set (no report injection, no cite-every-number rule) and it invents **299 of 344** figures (86.9%) against reports it never saw, versus the constrained agent's **0 of 619** (0.0%): only 1 of 44 unconstrained answers is fully clean, against all 44 constrained. The intelligence-vs-math split isn't decoration; it's the gap between 0 and 87% invented numbers. Reproduce: `uv run python -m agent.evals.baseline_eval` ([`baseline_eval.py`](packages/agent/src/agent/evals/baseline_eval.py)).
-
-Economics: ~`$0.002` per thesis on the paid DeepSeek primary ([ADR-026](docs/decisions/026-paid-synthesis-economics-and-free-tier-simplification-dividend.md)). The suite earns its keep by disqualifying production-candidate models (Qwen3-32B fabrications and leaked `<think>` blocks; GPT-OSS-120B once the golden set grew).
-
-### Where this breaks at scale
-
-- **Bench breadth.** One prompt revision × 44 questions is directional, not a leaderboard.
-- **Fallback on free tiers.** The primary is paid (DeepSeek), but the Nemotron fallback anchor and the Groq small-tier still inherit RPD/TPD caps; sustained load leans further into paid inference or self-hosting.
-- **Retrieval depth.** Reranking is query-time only, and one MiniLM-384 embedder serves both corpora.
-- **No fine-tuning.** Behaviour is prompt- and routing-shaped.
-
-## Data Engineering
-
-Standard data-engineering patterns under Dagster-native names:
-
-- **Tests on the data (dbt-test equivalent).** 38 domain-bounded [asset checks](packages/dagster-pipelines/src/dagster_pipelines/asset_checks) assert real financial bounds (not just non-null) plus z-score volume/price anomaly detection. They earn their keep: the `pe_in_band` check caught two P/E formula bugs that both passed human review: a near-zero-EPS blowup to P/E 28,545, and a quarterly ratio dividing full market cap by single-quarter income instead of TTM. Declining dbt at this scale was deliberate ([ADR-022](docs/decisions/022-decline-dbt-adoption-at-current-scale.md)).
-- **Source-boundary contracts.** Each ingestion source has a [Pandera schema](packages/shared/src/shared/contracts.py) validated before any DB write. Schema drift hard-fails the partition; out-of-range cells route to the reject sink while clean rows proceed. Evolving a contract is a diff-visible commit, same discipline as a migration.
-- **Medallion layering.** `equity_raw` (OHLCV, fundamentals, news, SEC 8-K) → `equity_derived` (multi-timeframe bars, 17 indicator columns, 20+ ratios). Every derived table rebuilds from raw, so only the raw layer must be durable.
-- **Data observability.** Per-ticker freshness/staleness checks, volume/distribution trends on a [Grafana data-health dashboard](observability/grafana/dashboards/data-health.json), and the Dagster asset graph as lineage. Dropped rows land in `equity_raw.ingest_rejects` (reason, payload, 90-day TTL), so failures stay auditable instead of silent.
-- **Idempotency.** All tables `ReplacingMergeTree` with `FINAL`/`argMax` reads and re-runnable migrations; a daily incremental OHLCV pull plus a monthly full 2-year re-fetch heals split/dividend splices through the same dedup path.
-
-### Where this breaks at scale
-
-- **Partition cardinality.** `PARTITION BY ticker` is ideal at 10-15 values but degrades past ~100; a larger universe would switch to `toYYYYMM(date)`.
-- **Market-data vendor.** yfinance carries no SLA; production means a paid feed (Polygon, databento).
-- **Incremental / streaming.** Transforms full-rebuild today; higher volume or intraday data would need incremental models and a streaming path.
-- **Single-node ClickHouse.** One node serves this comfortably; growth means a sharded cluster.
-
-## Screenshots
-
-**Grounded RAG provenance.** A targeted-event answer streaming with its retrieved-source citations in the chat panel.
-
-<img src="docs/screenshots/rag-provenance.png" alt="RAG provenance" width="420">
-
-
-**Langfuse trace.** Request-level trace with LangGraph spans, model metadata, token usage, and eval scores.
-
-![Langfuse trace](docs/screenshots/langfuse-trace.png)
-
-**Dagster asset graph.** Asset lineage from raw OHLCV to derived indicators.
-
-![Dagster lineage](docs/screenshots/dagster-lineage.svg)
-
-**Dagster asset checks.** Domain-bounded data tests (RSI 0-100, P/E band, MACD coherence) with pass/fail status.
-
-![Dagster asset checks](docs/screenshots/dagster-asset-checks.png)
-
-## Stack
-
-| Tier | Technology |
+| Check | Result |
 |---|---|
-| Frontend | Next.js 16, React 19, Tailwind, TradingView Lightweight Charts, Vercel |
-| API | FastAPI, SSE, Pydantic settings, SlowAPI rate limits, Sentry |
-| Agent | LangGraph, LangChain, LiteLLM, paid DeepSeek primary, Groq small-tier, Nemotron fallback, Cohere rerank, Langfuse |
-| Data | Dagster, ClickHouse, Qdrant Cloud, Pandera, yfinance, Finnhub, SEC Edgar |
-| Eval | pytest harness, ir-measures, DeepEval (RAGAS + G-Eval), LLM-as-judge |
-| Infra | uv workspaces, Docker Compose, Hetzner CX41, Cloudflare named tunnel |
-| Quality | Ruff, Pyright, npm lint/typecheck, pip-audit, bandit, gitleaks, Trivy |
+| Invented numbers (grounded vs. ungrounded) | 0% vs. 87% |
+| Golden-set regression (correct tools / grounded answer) | 40 of 41 |
+| Retrieval: right source ranked first (MRR) | 0.94 |
 
-## Production Notes
+Full benchmark history: [`docs/model-bench-2026-04.md`](docs/model-bench-2026-04.md).
 
-Backend on a Hetzner VPS (Docker Compose); frontend on Vercel. FastAPI is reached through a Cloudflare named tunnel at a stable `api.<domain>` hostname; port 8000 is not public.
+## Known Limits
 
-- **Deploy gates.** SHA, Dagster-load, and observability-smoke checks, with auto-rollback to the previous SHA on smoke failure; idempotent ClickHouse migrations on every deploy.
-- **Self-healing.** Health checks (API, ClickHouse, Qdrant, service identity) + an autoheal container that restarts services that go unhealthy without exiting.
-- **Observability & alerts.** UptimeRobot, Sentry, Langfuse, Prometheus/Grafana, cAdvisor, node_exporter, Dozzle; Discord alerts for Dagster failures, container events, and infra. Failure-mode [runbook](docs/guides/ops-runbook.md).
-- **Secrets.** SOPS-encrypted, decrypted at deploy time.
+- **Small universe.** 10 tickers; past ~100 the warehouse partitioning would need to change.
+- **Free data source.** yfinance has no SLA; real use needs a paid feed.
+- **Batch only.** Transforms rebuild daily; intraday data would need incremental and streaming paths.
+- **Small benchmark.** 44 questions is a directional signal, not a leaderboard.
+- **No fine-tuning.** Behaviour comes from prompts and routing.
 
-Key tradeoffs: [ADR-003 Intelligence vs. Math](docs/decisions/003-intelligence-vs-math.md) · [ADR-025 Paid Inference Primary](docs/decisions/025-paid-launch-primary-and-breaker-recalibration.md) · [ADR-017 Public Chat, No Auth](docs/decisions/017-public-chat-truly-public-no-auth.md) · [ADR-018 Cloudflare Tunnel](docs/decisions/018-cloudflare-quick-tunnel-for-https-ingress.md).
+## Try It
 
-## Quick Start
+At **[terminal.noahng.dev](https://terminal.noahng.dev)**, ask things like:
 
-Prerequisites: Python 3.12+, [`uv`](https://docs.astral.sh/uv/), Docker, Node.
+- `Give me a balanced thesis on NVDA`
+- `Compare MSFT and GOOGL`
+- `Is MU overbought?`
+- `Anything on the INTC lawsuit?`
+- `What looks interesting right now?`
 
-Minimum keys to run a thesis: an `OPENROUTER_API_KEY` (the DeepSeek primary) is the only required LLM key; RAG news search additionally needs a Qdrant Cloud URL/key and a Cohere key.
+Tickers: NVDA, AAPL, MSFT, GOOGL, AMZN, META, TSLA, MU, AMD, INTC. Data updates daily after market close.
+
+## Run Locally
+
+Needs Python 3.12+, [`uv`](https://docs.astral.sh/uv/), Docker, Node, and an `OPENROUTER_API_KEY` (news search also needs Qdrant Cloud and Cohere keys).
 
 ```bash
 git clone https://github.com/noahwins-ng/equity-data-agent.git
 cd equity-data-agent
 make setup && $EDITOR .env
-```
 
-The warehouse is reachable two ways: tunnel to a running ClickHouse, or start a throwaway local one (the `.env.example` default assumes the maintainer's SSH tunnel, so a fresh clone should take the local path):
-
-```bash
+# local ClickHouse + sample data (30 days, 3 tickers)
 docker run -d -p 8123:8123 clickhouse/clickhouse-server:24-alpine
-make migrate && make seed   # DDL + a fast 30-day x 3-ticker seed
-```
+make migrate && make seed
 
-```bash
-# terminals
+# one terminal each
 make dev-litellm
 make dev-api
 make dev-dagster
 make dev-frontend
 
-# run a local thesis against available data
 uv run python -m agent analyze NVDA
 ```
 
-Checks: `make lint` · `make test` · `npm --prefix frontend run lint` · `uv run python -m agent.evals`
+Checks: `make lint` · `make test` · `uv run python -m agent.evals`
 
 ## Where to Look in the Code
 
-Straight to the load-bearing work:
-
 | What | Where |
 |---|---|
-| Agent graph (classify -> route -> synthesize -> narrate) | [`packages/agent/src/agent/graph.py`](packages/agent/src/agent/graph.py) |
-| Intent router + deterministic clarify gate | [`packages/agent/src/agent/intent.py`](packages/agent/src/agent/intent.py) |
-| Number-grounding / hallucination scorer | [`packages/agent/src/agent/evals/hallucination.py`](packages/agent/src/agent/evals/hallucination.py) |
-| Retrieval pipeline (hybrid dense+BM25 RRF, rerank) | [`packages/shared/src/shared/retrieval.py`](packages/shared/src/shared/retrieval.py) |
-| Data asset checks (dbt-test equivalent) | [`packages/dagster-pipelines/.../asset_checks/`](packages/dagster-pipelines/src/dagster_pipelines/asset_checks) |
-| Pandera source contracts | [`packages/shared/src/shared/contracts.py`](packages/shared/src/shared/contracts.py) |
+| Agent graph | [`packages/agent/src/agent/graph.py`](packages/agent/src/agent/graph.py) |
+| Intent router + clarify step | [`packages/agent/src/agent/intent.py`](packages/agent/src/agent/intent.py) |
+| Number-grounding check | [`packages/agent/src/agent/evals/hallucination.py`](packages/agent/src/agent/evals/hallucination.py) |
+| Retrieval (hybrid search + rerank) | [`packages/shared/src/shared/retrieval.py`](packages/shared/src/shared/retrieval.py) |
+| Data asset checks | [`packages/dagster-pipelines/.../asset_checks/`](packages/dagster-pipelines/src/dagster_pipelines/asset_checks) |
+| Source contracts | [`packages/shared/src/shared/contracts.py`](packages/shared/src/shared/contracts.py) |
 
-## Documentation
+## Screenshots
 
-- [`docs/INDEX.md`](docs/INDEX.md) - documentation map.
-- [`docs/project-requirement.md`](docs/project-requirement.md) - current requirements and architecture spec.
-- [`docs/architecture/system-overview.md`](docs/architecture/system-overview.md) - system boundaries and data flow.
-- [`docs/decisions/`](docs/decisions/) - ADRs · [`docs/retros/`](docs/retros/) - phase retrospectives · [`docs/guides/ops-runbook.md`](docs/guides/ops-runbook.md) - failure-mode catalog.
+| RAG answer with sources | Langfuse trace |
+|---|---|
+| <img src="docs/screenshots/rag-provenance.png" alt="RAG provenance" width="380"> | <img src="docs/screenshots/langfuse-trace.png" alt="Langfuse trace" width="380"> |
+| **Dagster lineage** | **Data checks** |
+| <img src="docs/screenshots/dagster-lineage.svg" alt="Dagster lineage" width="380"> | <img src="docs/screenshots/dagster-asset-checks.png" alt="Dagster asset checks" width="380"> |
+
+## Stack
+
+Next.js · FastAPI · LangGraph · LiteLLM · Dagster · ClickHouse · Qdrant · Langfuse · Docker Compose · Hetzner · Vercel
+
+## Docs
+
+- [`docs/INDEX.md`](docs/INDEX.md): map of all docs
+- [`docs/decisions/`](docs/decisions/): why X over Y (start with [ADR-003](docs/decisions/003-intelligence-vs-math.md))
+- [`docs/retros/`](docs/retros/): phase retrospectives
 
 ---
 
-Built by Noah Ng. Licensed under [MIT](LICENSE).
+Built by Noah Ng. [MIT](LICENSE).
