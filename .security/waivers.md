@@ -109,6 +109,16 @@ right posture.
 ships a release whose bundled postcss is ≥8.5.10. Re-audit when public chat
 (QNT-75) adds any user-supplied content rendered through a CSS pipeline.
 
+**Gate narrowed to prod deps (2026-10-03).** `braces <=3.0.3`
+(GHSA-vfj7-8cjw-p6xm, stack-exhaustion DoS) has no patched release, and
+3.0.3 is the latest. It is reachable only through the lint toolchain
+(`eslint-config-next` -> `@next/eslint-plugin-next` -> `fast-glob` ->
+`micromatch` -> `braces`), which globs our own source paths and never
+ships. The blocking gate is now `npm audit --omit=dev --audit-level=high`.
+A second step runs the full `npm audit` as a non-blocking report, so
+dev-tool findings stay visible in the CI log. Revisit when `braces` ships a
+fix, then decide whether to restore the full gate.
+
 ### pip-audit
 
 No active waivers. `langsmith==0.7.30` (GHSA-rr7j-v2q5-chgv) was bumped to
