@@ -183,6 +183,7 @@ from shared.config import settings
 from shared.tickers import TICKERS
 
 from api.security import (
+    _sentry_capture,
     budget,
     client_ip,
     limiter,
@@ -1047,6 +1048,16 @@ async def _stream(request: ChatRequest, client_ip: str) -> AsyncIterator[str]:  
             # QNT-182: push deterministic eval scores onto this trace.
             # Safe no-op when Langfuse keys are unset OR ``trace_id`` is None.
             push_eval_scores(state_obj, trace_id)
+            # QNT-492: a primary-to-fallback switch alerts, independent of
+            # Langfuse. The trace tag below alone let a 100% conversational
+            # fallback run unnoticed for weeks.
+            for alias, info in served_tracker.info().items():
+                if info.fallback_fired:
+                    _sentry_capture(
+                        f"llm fallback fired: {alias} -> "
+                        f"{info.served_model or 'unverified-fallback'} "
+                        f"(intent={state_obj.get('intent')})"
+                    )
             # QNT-182 follow-up: tag the trace with the resolved intent so
             # the Tracing list is filterable by shape ("show me only
             # conversational redirects" / "thesis-shape only") without

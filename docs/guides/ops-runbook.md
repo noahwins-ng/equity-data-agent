@@ -789,6 +789,19 @@ ssh hetzner 'docker exec equity-data-agent-clickhouse-1 clickhouse-client --quer
 
 ---
 
+### Chat turns slow because the primary silently fell back (QNT-492)
+
+**Symptoms**: a trivial turn ("Hi") takes 10-40 s. In Langfuse the synthesize generation's `model` is `nvidia/nemotron-3-ultra-550b-a55b:free` instead of `equity-agent/default`, and the trace carries `model_fallback:fired`. Sentry shows `llm fallback fired: equity-agent/default -> <served model> (intent=<intent>)`. LiteLLM logs show only `POST /chat/completions 200` - the primary's failure is swallowed by the in-proxy fallback.
+**Diagnosis**: the fallback fires when OpenRouter has no eligible provider for the request. The primary alias sets `provider.require_parameters: true` with a fixed `order` allowlist (`litellm_config.yaml`), so any request param an allowlisted provider does not advertise drops it. Reproduce the 404 directly against OpenRouter with the alias's `provider` block plus the suspect request params - the error body names every filter ("Filter by Parameters removed ..."). Then compare against the live param support:
+```bash
+curl -s https://openrouter.ai/api/v1/models/<model-slug>/endpoints \
+  | jq '.data.endpoints[] | {provider_name, supported_parameters}'
+```
+QNT-492 instance: LangChain `with_structured_output(method="function_calling")` (conversational + clarify) binds `parallel_tool_calls=False`; no DeepSeek V4 Flash 0731 provider advertised it -> 404 in ~0.3 s -> 100% of conversational/clarify turns served by the free fallback.
+**Response**: stop sending the unsupported param from the agent (`disabled_params` on the `ChatOpenAI` in `agent/llm.py:get_llm`), or widen the provider `order` if a capable provider exists. Do NOT drop `require_parameters` - it guards structured-output enforcement (QNT-258). Verify by re-running the request shape through the proxy and checking `x-litellm-attempted-fallbacks: 0`.
+**Prevention**: Sentry warning on every fallback fire (`agent_chat.py`, QNT-492) + `test_function_calling_payload_omits_parallel_tool_calls`. Re-check provider param support whenever the model slug or provider `order` changes (QNT-442 moved the slug and opened this gap).
+**Last occurred**: 2026-08-16 .. 2026-10-03 (fixed by QNT-492)
+
 ### Where are the logs / dashboards?
 
 | What | URL (via SSH tunnel) | Auth | Purpose |

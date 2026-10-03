@@ -2488,6 +2488,69 @@ def test_fallback_served_model_tagged_on_trace(
     )
 
 
+def test_fallback_fire_raises_sentry_alert(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-492: a primary-to-fallback switch must alert, not only tag the trace.
+    Every conversational turn fell back to Nemotron for weeks with only a
+    Langfuse tag nobody filtered on. The alert fires independent of Langfuse."""
+    alerts: list[str] = []
+    monkeypatch.setattr(
+        chat_module, "_sentry_capture", lambda msg, *a, **k: alerts.append(msg), raising=False
+    )
+
+    def _fake_build(_tools: dict[str, Any], **_kwargs: Any) -> Any:
+        graph = MagicMock()
+
+        def invoke(state: dict[str, Any], **_kw: Any) -> dict[str, Any]:
+            from agent.llm import _SERVED_MODEL_TRACKER
+
+            served = _SERVED_MODEL_TRACKER.get()
+            if served is not None:
+                served.record(
+                    "equity-agent/default",
+                    fallback_fired=True,
+                    served_model="nvidia/nemotron-3-ultra-550b-a55b:free",
+                )
+            return {
+                "ticker": state["ticker"],
+                "intent": "conversational",
+                "plan": [],
+                "reports": {},
+                "errors": {},
+                "confidence": 0.0,
+            }
+
+        graph.invoke.side_effect = invoke
+        return graph
+
+    monkeypatch.setattr(chat_module, "build_graph", _fake_build)
+    monkeypatch.setattr(chat_module, "default_report_tools", lambda: {})
+
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "hi"})
+    assert r.status_code == 200
+    assert len(alerts) == 1
+    assert "equity-agent/default" in alerts[0]
+    assert "nvidia/nemotron-3-ultra-550b-a55b:free" in alerts[0]
+    assert "intent=conversational" in alerts[0]
+
+
+def test_no_sentry_alert_without_fallback(
+    client: TestClient,
+    stub_graph: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QNT-492: a clean primary-served run raises no fallback alert."""
+    alerts: list[str] = []
+    monkeypatch.setattr(
+        chat_module, "_sentry_capture", lambda msg, *a, **k: alerts.append(msg), raising=False
+    )
+    r = client.post("/api/v1/agent/chat", json={"ticker": "NVDA", "message": "thesis?"})
+    assert r.status_code == 200
+    assert alerts == []
+
+
 def test_intent_tag_skipped_when_intent_missing(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
