@@ -1,0 +1,42 @@
+name: Attribution Guard
+
+# Fails a PR whose title, description, or any commit message carries an AI
+# attribution line. Server-side complement to .githooks/commit-msg, which
+# only sees local commits - never PR text or GitHub-side squash merges
+# (the squash commit is built from PR_TITLE/PR_BODY, so the body is the gate).
+# Separate from ci.yml so a description edit re-runs only this check.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  no-ai-attribution:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Scan PR title, description, and commit messages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          pattern='co-authored-by:.*(claude|anthropic)|generated with \[?claude code'
+          fail=0
+          check() {
+            if printf '%s\n' "$2" | grep -qiE "$pattern"; then
+              echo "::error::AI attribution found in $1:"
+              printf '%s\n' "$2" | grep -iE "$pattern"
+              fail=1
+            fi
+          }
+          check "PR title" "$PR_TITLE"
+          check "PR description" "$PR_BODY"
+          commits=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/commits" \
+            --jq '.[] | "\(.sha[0:7])\t\(.commit.message)"')
+          check "commit messages" "$commits"
+          exit $fail
