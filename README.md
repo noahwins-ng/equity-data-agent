@@ -1,6 +1,6 @@
 # Equity Data Agent
 
-An AI analyst for 10 US tech equities that writes investment theses **without being allowed to invent or calculate a single number**. The data pipeline does all the math; the LLM only reasons over pre-computed reports, and an eval checks every number it outputs.
+An equity research platform for 10 US tech stocks: a daily data pipeline, a research terminal (charts, technicals, fundamentals, news), and an AI analyst that writes investment theses **without being allowed to invent or calculate a single number**. The pipeline does all the math; the LLM only reasons over pre-computed reports, and an eval checks every number it outputs.
 
 [![Live demo](https://img.shields.io/badge/live%20demo-terminal.noahng.dev-success?style=for-the-badge)](https://terminal.noahng.dev)
 ![Tests](https://img.shields.io/badge/tests-1700%2B%20passing-2ea44f)
@@ -8,6 +8,17 @@ An AI analyst for 10 US tech equities that writes investment theses **without be
 ![Prod](https://img.shields.io/badge/prod-live-success)
 
 ![Equity Data Agent live terminal](docs/screenshots/terminal-live.png)
+
+## Features
+
+| | |
+|---|---|
+| **Watchlist** | All 10 tickers with latest price, daily change, sparkline, and next data refresh |
+| **Price charts** | Daily / weekly / monthly candles with SMA 20/50/200, Bollinger bands, RSI, MACD |
+| **Technicals & fundamentals** | 17 indicators and 20+ ratios (P/E, margins, growth, balance-sheet health) per ticker |
+| **News & filings** | Latest company news with sentiment; SEC 8-K earnings releases searchable from chat |
+| **AI analyst chat** | Theses, comparisons, quick facts, event lookups, and open-ended "what's interesting?", with follow-ups |
+| **Provenance** | Every chat answer shows which reports and sources it used; any number not found in them is marked † |
 
 ## The Idea
 
@@ -23,8 +34,6 @@ The agent has no database access and no calculator. It only sees report text.
 
 **Does it matter?** Running the same model on the same 44 questions without the reports, it invents **87% of its numbers**. With them: **0%** (0 of 619). Reproduce with `uv run python -m agent.evals.baseline_eval`.
 
-## Architecture
-
 ```mermaid
 graph LR
     SRC[yfinance · Finnhub · SEC 8-K] --> DG[Dagster<br/>compute]
@@ -33,27 +42,83 @@ graph LR
     CH --> API[FastAPI<br/>reports]
     QD --> API
     API --> AG[LangGraph<br/>agent]
-    AG --> UI[Next.js UI]
+    AG --> UI[Next.js terminal]
     API --> UI
 ```
 
 Full data flow: [`docs/architecture/system-overview.md`](docs/architecture/system-overview.md).
 
-## What's Inside
+## AI Engineering
 
-**AI engineering**
-- **Routed agent graph.** Questions are classified into 9 answer types (thesis, comparison, quick fact, ...); ambiguous ones get a clarifying question instead of a guess.
-- **RAG over news + SEC filings.** Hybrid search (vector + keyword) with reranking, triggered only for event questions (lawsuits, buybacks, M&A); sources are shown in the UI.
+The agent is a LangGraph state machine, not one big prompt. Each question takes the cheapest path that can answer it:
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> classify
+    classify --> clarify: ambiguous<br/>(no ticker)
+    classify --> synthesize: greeting /<br/>follow-up
+    classify --> explore: "what's interesting?"
+    classify --> plan: thesis, comparison,<br/>quick fact, focused
+    plan --> gather: pick reports
+    gather --> synthesize: call report +<br/>search tools
+    explore --> synthesize
+    clarify --> narrate
+    synthesize --> narrate: structured card
+    narrate --> [*]: streamed to UI
+```
+
+- **Routing.** `classify` sorts each question into 9 answer types. Ambiguous asks get a clarifying question instead of a guess; greetings and follow-ups skip data fetching entirely.
+- **RAG over news + SEC filings.** Hybrid search (vector + keyword) with reranking, triggered only for event questions (lawsuits, buybacks, M&A); sources stream to the UI.
+- **Memory.** A checkpointer keeps the conversation, so follow-ups reuse earlier reports instead of re-fetching.
 - **Evals in CI.** Every number traced back to a report, a 44-question regression set, retrieval quality metrics, and LLM-judged answer quality.
-- **Model routing + tracing.** LiteLLM with automatic fallback between providers; every request traced in Langfuse. About $0.002 per thesis.
+- **Model routing + tracing.** LiteLLM with automatic fallback between providers and a smaller model for routing steps; every request traced in Langfuse. About $0.002 per thesis.
 
-**Data engineering**
-- **Layered warehouse.** Raw tables feed derived tables (17 technical indicators, 20+ fundamental ratios); everything derived can be rebuilt from raw.
-- **Tests on the data.** 38 asset checks with real financial bounds, not just "not null". They caught two P/E formula bugs that passed code review, including a P/E of 28,545.
-- **Input contracts.** Each source is schema-validated before writing; bad rows go to an auditable reject table instead of disappearing.
-- **Idempotent by design.** Every table and migration is safe to re-run.
+## Data Engineering
 
-**Production**
+A Dagster asset graph runs daily after market close. Raw data lands in `equity_raw`, everything computed lands in `equity_derived`, and text is embedded for search:
+
+```mermaid
+graph LR
+    subgraph Sources
+        YF[yfinance]
+        FH[Finnhub]
+        SEC[SEC EDGAR]
+    end
+    subgraph "equity_raw"
+        OHLCV[ohlcv_raw]
+        FUND[fundamentals]
+        CAL[earnings_calendar]
+        NEWS[news_raw]
+        ER[earnings_releases_raw]
+    end
+    subgraph "equity_derived"
+        AGG[weekly / monthly bars]
+        TECH[technical_indicators<br/>daily · weekly · monthly]
+        FS[fundamental_summary]
+    end
+    subgraph "Qdrant"
+        NE[news_embeddings]
+        EE[earnings_embeddings]
+    end
+    YF --> OHLCV & FUND & CAL
+    FH --> NEWS
+    SEC --> ER
+    OHLCV --> AGG --> TECH
+    OHLCV --> TECH
+    OHLCV & FUND --> FS
+    NEWS --> NE
+    ER --> EE
+```
+
+- **Layered warehouse.** Everything in `equity_derived` can be rebuilt from `equity_raw`, so only the raw layer has to be durable.
+- **Tests on the data.** 38 asset checks with real financial bounds (RSI 0-100, P/E band, MACD coherence), not just "not null". They caught two P/E formula bugs that passed code review, including a P/E of 28,545.
+- **Input contracts.** Each source is schema-validated (Pandera) before writing; bad rows go to an auditable reject table instead of disappearing.
+- **Idempotent by design.** Every table and migration is safe to re-run; a monthly full re-fetch heals stock-split and dividend adjustments through the same dedup path.
+- **Data observability.** Per-ticker freshness checks and a Grafana data-health dashboard.
+
+## Production
+
 - Hetzner (Docker Compose) backend + Vercel frontend, behind a Cloudflare tunnel.
 - Deploys verify the running commit and auto-rollback on failure; unhealthy services restart themselves.
 - Monitoring with Sentry, Grafana, Langfuse and Discord alerts, plus a [failure runbook](docs/guides/ops-runbook.md).
