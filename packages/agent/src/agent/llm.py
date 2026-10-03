@@ -571,6 +571,14 @@ def get_llm(
         # x-litellm-attempted-fallbacks counter. response.model only ever echoes
         # the requested alias (QNT-182), so the body can't reveal a fallback.
         include_response_headers=True,
+        # QNT-492: never send ``parallel_tool_calls``. LangChain's
+        # ``function_calling`` structured output (conversational + clarify,
+        # QNT-258) binds ``parallel_tool_calls=False``; the primary alias's
+        # OpenRouter ``require_parameters: true`` then drops every DeepSeek
+        # provider (none advertise the param) -> 404 in ~0.3s -> silent fallback
+        # to the slow free Nemotron anchor on 100% of those turns. A single
+        # forced tool call needs no parallelism control anyway.
+        disabled_params={"parallel_tool_calls": None},
         callbacks=callbacks or None,
     )
 

@@ -357,3 +357,22 @@ def test_served_model_tracker_fallback_is_sticky():
     info = tracker.info()["equity-agent/default"]
     assert info.fallback_fired is True
     assert info.served_model == "scout"
+
+
+def test_function_calling_payload_omits_parallel_tool_calls():
+    """QNT-492: LangChain's ``function_calling`` structured output binds
+    ``parallel_tool_calls=False``; with the primary alias's OpenRouter
+    ``require_parameters: true`` no DeepSeek provider advertises that param, so
+    the request 404s and every conversational/clarify call silently fell back to
+    the slow free Nemotron anchor. ``get_llm`` must strip it from the payload."""
+    from agent.conversational import ConversationalAnswer
+    from langchain_core.messages import HumanMessage
+
+    llm = get_llm()
+    structured = llm.with_structured_output(ConversationalAnswer, method="function_calling")
+    binding = structured.first  # pyright: ignore[reportAttributeAccessIssue]
+    payload = llm._get_request_payload([HumanMessage("hi")], **binding.kwargs)  # noqa: SLF001
+
+    assert "parallel_tool_calls" not in payload
+    # The forced tool call itself must survive -- it is the QNT-258 fix.
+    assert payload["tool_choice"]["function"]["name"] == "ConversationalAnswer"
