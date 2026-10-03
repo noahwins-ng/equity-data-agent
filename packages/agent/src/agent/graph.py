@@ -1,42 +1,42 @@
-"""LangGraph research agent: classify -> plan -> gather -> synthesize (ADR-007, QNT-149, QNT-156).
+"""LangGraph research agent -- the executive layer (ADR-003, ADR-007).
 
-The graph is the executive layer of the three-role architecture: it reasons
-over pre-computed report strings returned by FastAPI tools and never does
-arithmetic or touches the database.
+The graph reasons over pre-computed report strings returned by FastAPI tools.
+It never does arithmetic and never touches the database. Tools are injected
+at build time as ``{name: callable}``, so tests run the graph offline against
+mock callables while production passes real HTTP tools.
 
-Tools are injected at build time via a ``{name: callable}`` mapping. Tests
-pass mock callables; production wiring (QNT-60) passes real HTTP tools.
-Keeping tools outside the module makes the graph unit-testable offline.
+Topology::
 
-Pipeline:
+    classify --+--> clarify ------------------------------+
+               +--> synthesize (conversational / followup) |
+               +--> explore_supervisor --> synthesize      +--> narrate --> END
+               +--> plan --> gather --> synthesize --------+
 
-1. ``classify`` — pick a response shape from the user's question. Four
-   shapes are supported: ``thesis`` (Setup / Bull / Bear / Verdict),
-   ``quick_fact`` (short prose + single cited value), ``comparison``
-   (per-ticker sections + differences paragraph), and ``conversational``
-   (greetings / capability asks / off-domain redirect). Defaults to
-   ``thesis`` on any classifier failure so existing eval contracts
-   (QNT-67, QNT-128) cannot regress.
-2. ``plan`` — pick which report tools to fetch. Bias depends on intent:
-   thesis over-fetches, quick_fact narrows, comparison reuses the thesis
-   bias for both tickers, conversational skips entirely (no tools needed).
-3. ``gather`` — drive the planned tools, retry transient failures, drop
-   optional-tool failures silently. For comparison, gathers reports for
-   each of the (capped) two tickers.
-4. ``synthesize`` — branch on intent. Each path produces its structured
-   answer; ANY synthesize-path failure (empty payload, no reports gathered,
-   structured-output crash) falls back to a deterministic conversational
-   redirect via :func:`agent.conversational.domain_redirect` so the panel
-   never sees a stack trace or a blank state.
+* ``classify`` -- picks one of nine response shapes (:data:`agent.intent.Intent`)
+  and computes ``state['route']``. Classifier failure defaults to ``thesis``.
+* ``clarify`` -- asks back on an ambiguous question (missing ticker, a compare
+  with one ticker) instead of guessing.
+* ``plan`` / ``gather`` -- choose and fetch report tools per the intent's
+  :class:`agent.policy.IntentPolicy`; optional-tool failures are dropped.
+  Comparisons take 2 tickers (rich four-aspect bundle) or 3-4 (lean metrics
+  table); 5+ redirect.
+* ``explore_supervisor`` -- bounded iterative report selection for broad
+  exploratory asks; produces the internal-only ``exploration`` shape.
+* ``synthesize`` -- produces the structured answer for the shape. Any failure
+  (no reports, empty payload, structured-output crash) becomes a deterministic
+  redirect via :func:`agent.conversational.domain_redirect`, so the panel never
+  sees a stack trace or a blank state.
+* ``narrate`` -- streams a short analyst-voice paragraph above the card; it
+  short-circuits internally for shapes whose answer is already prose.
 
-The synthesized shape lives in a single discriminated-union ``state['answer']``
-field (QNT-294) -- a single slot holds exactly one payload per run, so the
-"exactly one of" contract is enforced by the type rather than convention.
-QNT-307 retired the seven legacy read-compat slots QNT-294 kept during the
-migration; the followup path now reads a dedicated ``prior_answer`` channel.
-Nodes are module-level functions in ``agent.nodes`` (bound to build-time
-``GraphDeps`` here); pure helpers live in ``agent.policy`` / ``agent.structured``
-/ ``agent.support`` and are re-exported from this module.
+The answer lives in a single discriminated-union ``state['answer']`` slot, so
+"exactly one payload per run" is enforced by the type. Follow-up turns read the
+previous answer from ``prior_answer`` via the checkpointer.
+
+Nodes are module-level functions in ``agent.nodes`` bound to ``GraphDeps``
+here; pure helpers live in ``agent.policy`` / ``agent.structured`` /
+``agent.support`` and are re-exported from this module for existing callers
+(see ADR-024).
 """
 
 from __future__ import annotations

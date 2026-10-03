@@ -1,44 +1,37 @@
-"""Intent classification for the agent (QNT-149, QNT-156).
+"""Intent classification: map a user question to a response shape.
 
-The agent used to force every input through the same four-section thesis
-template. A user asking "what's the RSI right now?" got the same heavy
-treatment as a user asking "is this a buy?" — rigid, ignores the question,
-every answer looked the same.
+Shapes the classifier can emit (:data:`ClassifierIntent`):
 
-This module classifies an inbound question into one of four response shapes:
+* ``thesis`` -- balanced multi-source thesis with a verdict. The default for
+  open-ended asks ("should I be cautious about META?").
+* ``quick_fact`` -- short answer plus one cited value ("what's NVDA's P/E?").
+* ``comparison`` -- multi-ticker side-by-side ("compare NVDA vs AAPL").
+* ``fundamental`` / ``technical`` / ``news`` -- a focused deeper read on one
+  domain ("walk me through META's fundamentals").
+* ``followup`` -- a continuation of the previous turn ("and last quarter?").
+* ``conversational`` -- greetings, capability asks, and off-domain inputs,
+  answered with a redirect rather than invented knowledge.
 
-* ``thesis`` — a balanced, multi-source investment thesis (Setup / Bull /
-  Bear / Verdict). Default for open-ended asks ("should I be cautious about
-  META?", "give me a balanced thesis on V").
-* ``quick_fact`` — a short prose answer plus a single cited value, no
-  thesis card. For single-metric lookups ("what's NVDA's P/E?",
-  "what's the volume?").
-* ``comparison`` — a side-by-side ComparisonAnswer for multi-ticker asks
-  ("Compare NVDA vs AAPL", "How does META stack up against GOOGL?"). The
-  graph clips to 2 tickers; 3+ falls back to a conversational redirect.
-* ``conversational`` — a short ConversationalAnswer for greetings ("hi"),
-  capability asks ("what can you do?"), meta questions, and clearly
-  off-domain inputs ("what's the weather?", "tell me a joke"). The agent
-  must never pretend to know things outside its domain.
+:data:`Intent` adds ``exploration``, which only ``explore_supervisor_node``
+sets after routing; the classifier is never offered it.
 
-Two-layer design:
+Resolution (:func:`classify_intent_with_source`), reported as ``source``:
 
-1. A keyword heuristic short-circuits the obvious cases (single ``?``
-   ending, tokens like 'rsi'/'p/e', length under N words, multi-ticker
-   asks, greetings). This keeps the classifier free for the common case and
-   degrades gracefully when the LLM misbehaves.
-2. The LLM picks via ``with_structured_output(IntentDecision)`` on the
-   ambiguous middle. Failures bias toward ``thesis`` — the existing path is
-   the safe default; the eval golden set (QNT-67, QNT-128) was built
-   against it, so a misclassification toward thesis cannot regress those
-   contracts. The conversational redirect is a SEPARATE path triggered by
-   a positive classifier signal, not a fall-through.
+1. ``heuristic`` -- a keyword matcher decides the obvious cases (greetings,
+   single-metric tokens, comparison phrasing) without an LLM call.
+2. ``llm`` -- otherwise a small model picks via structured output.
+3. ``fallback`` -- if that call fails, the answer is ``thesis``, the safe
+   default the golden eval set is built against.
 
-The classifier keeps shape-picking mostly stateless. QNT-216 relaxes that
-rule only for continuation detection: recent transcript turns may be supplied
-so an elliptical follow-up can route to ``followup`` instead of an off-domain
-conversational redirect. Ticker choice and tool planning still belong outside
-this module.
+Alongside the shape, the classifier returns two search flags
+(``needs_news_search`` / ``needs_earnings_search``) and a self-contained
+retrieval query. The flags are semantic on the ``llm`` path, OR-ed with a
+deterministic keyword floor that is also the only signal on the other two
+paths. The query is sanitised by :func:`sanitize_search_query`.
+
+Recent transcript turns may be passed in, but only to detect follow-ups and
+resolve pronouns in the search query. Ticker choice and tool planning live
+outside this module.
 """
 
 from __future__ import annotations
