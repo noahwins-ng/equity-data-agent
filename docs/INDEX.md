@@ -50,6 +50,7 @@ Architecture Decision Records (ADRs). Read these to understand **why** we chose 
 - [026-paid-synthesis-economics-and-free-tier-simplification-dividend.md](decisions/026-paid-synthesis-economics-and-free-tier-simplification-dividend.md)
 - [027-prompt-caching-enabled-via-provider-pin.md](decisions/027-prompt-caching-enabled-via-provider-pin.md)
 - [028-focus-from-axis-comparison-shape.md](decisions/028-focus-from-axis-comparison-shape.md)
+- [029-json-mode-client-validation-to-reach-caching-provider.md](decisions/029-json-mode-client-validation-to-reach-caching-provider.md)
 
 ### [guides/](guides/)
 How to do common tasks. Operational runbooks.

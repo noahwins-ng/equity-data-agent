@@ -68,7 +68,7 @@ def _thesis(summary: str, supports: list[str] | None = None) -> Thesis:
         supports=supports if supports is not None else [],
         challenges=[],
         verdict="Neutral",
-        verdict_rationale="Premium paired with Uptrend (source: technical).",
+        verdict_rationale="A rich multiple against a rising trend (source: technical).",
     )
 
 
@@ -280,7 +280,7 @@ class TestRunRecord:
                         " (source: technical)"
                     ],
                     challenges=["RSI pulling back from overbought territory (source: technical)"],
-                    verdict_rationale="Premium plus Uptrend tension (source: technical).",
+                    verdict_rationale="A rich multiple against the uptrend (source: technical).",
                 ),
                 "reports": {"technical": "RSI is 71.6 overbought territory today"},
                 "errors": {},
@@ -311,7 +311,7 @@ class TestRunRecord:
                 "answer": make_thesis(
                     supports=["Uptrend intact (source: technical)"],
                     challenges=["RSI pulling back from overbought territory (source: technical)"],
-                    verdict_rationale="Uptrend label with overbought caution (source: technical).",
+                    verdict_rationale="Trend is up; overbought caution (source: technical).",
                 ),
                 "reports": {"technical": "RSI is 71.6 overbought territory today"},
                 "errors": {},
@@ -326,6 +326,49 @@ class TestRunRecord:
             forbidden_aspect_support_substrings={"technical": ("overbought",)},
         )
         outcome = run_record(record)
+        assert outcome.hallucination_ok, outcome.hallucination_reason
+
+    def test_raw_label_token_in_verdict_rationale_fails(
+        self,
+        stub_graph: Callable[[dict[str, Any]], None],
+        stub_judge: MagicMock,  # noqa: ARG002
+    ) -> None:
+        """QNT-359 contract (re-aligned in QNT-493): the rationale translates the
+        closed-vocab labels to prose; a raw token is scaffolding leaking out."""
+        stub_graph(
+            {
+                "answer": make_thesis(
+                    verdict_rationale="Premium paired with Uptrend (source: technical)."
+                ),
+                "reports": {},
+                "errors": {},
+            }
+        )
+        outcome = run_record(_record())
+        assert not outcome.hallucination_ok
+        assert outcome.hallucination_reason.startswith("verdict_consistency")
+        assert "Premium" in outcome.hallucination_reason
+
+    def test_translated_verdict_rationale_passes_with_plain_english_word(
+        self,
+        stub_graph: Callable[[dict[str, Any]], None],
+        stub_judge: MagicMock,  # noqa: ARG002
+    ) -> None:
+        """Lowercase 'premium' / 'sideways' are ordinary analyst words, not the
+        capitalized label tokens -- they must not trip the check."""
+        stub_graph(
+            {
+                "answer": make_thesis(
+                    verdict_rationale=(
+                        "Shares trade at a premium to peers while price drifts "
+                        "sideways (source: technical)."
+                    )
+                ),
+                "reports": {},
+                "errors": {},
+            }
+        )
+        outcome = run_record(_record())
         assert outcome.hallucination_ok, outcome.hallucination_reason
 
     def test_quick_fact_with_unsupported_number_fails_hallucination(

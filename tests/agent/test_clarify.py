@@ -416,15 +416,15 @@ def test_clarify_routes_followup_without_prior_turn(
     assert sum(t.call_count for t in tools.values()) == 0
 
 
-# ─── QNT-258 follow-up: conversational schema forces function_calling ───────
+# ─── QNT-493: conversational schema rides the default json_mode ─────────────
 
 
-def test_clarify_uses_function_calling_method(monkeypatch: pytest.MonkeyPatch) -> None:
-    """QNT-258 follow-up: the clarify ConversationalAnswer call must pass
-    ``method="function_calling"`` so the paid DeepSeek primary cannot return the
-    clarify question as bare prose (json_invalid on the default json_schema path
-    -- the observed Sentry EQUITY-DATA-AGENT-8). Records the method kwarg the
-    node hands to ``with_structured_output`` for the ConversationalAnswer schema.
+def test_clarify_uses_json_mode_method(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QNT-493: the clarify ConversationalAnswer call goes out as json_mode
+    (response_format json_object), which forces JSON -- so the QNT-258 bare-prose
+    failure cannot recur -- and reaches first-party DeepSeek, which forced
+    function_calling (QNT-258) filtered out. Records the method kwarg the node
+    hands to ``with_structured_output`` for the ConversationalAnswer schema.
     """
     seen: dict[type, object] = {}
 
@@ -447,8 +447,8 @@ def test_clarify_uses_function_calling_method(monkeypatch: pytest.MonkeyPatch) -
 
     build_graph(_default_tools()).invoke({"ticker": "NVDA", "question": "what do you think?"})
 
-    assert seen.get(ConversationalAnswer) == "function_calling", (
-        "clarify must request function_calling for the ConversationalAnswer schema"
+    assert seen.get(ConversationalAnswer) == "json_mode", (
+        "clarify must request json_mode for the ConversationalAnswer schema"
     )
 
 

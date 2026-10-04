@@ -1,7 +1,7 @@
 # ADR-025: Paid inference primary for public launch - DeepSeek V4 Flash via OpenRouter + breaker recalibration
 
 **Date**: 2026-07-04
-**Status**: Accepted
+**Status**: Accepted - **primary slug, fallback chain, and unit economics partially superseded by [ADR-029](029-json-mode-client-validation-to-reach-caching-provider.md) (QNT-493)**
 **Supersedes/extends**: [ADR-021](021-synthesis-model-and-tail-routing.md) (synthesize/narrate model choice - the "stays on llama-3.3-70b" decision is superseded for the launch config) and [ADR-011](011-llm-routing-groq-default-gemini-override.md) (routing topology - the groq-default provider slot is repointed; the gemini override stands). Relaxes the "free-tier only on the chat path" cost model of [ADR-017](017-public-chat-truly-public-no-auth.md).
 
 ## Context
