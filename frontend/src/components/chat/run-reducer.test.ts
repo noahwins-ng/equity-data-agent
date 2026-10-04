@@ -168,3 +168,42 @@ test("no path leaves a run streaming: settleRun always returns terminal", () => 
     }
   }
 });
+
+// ─── QNT-494: card_partial ──────────────────────────────────────────────────
+
+const partialEvent = {
+  slot: "thesis",
+  card: { company: { label: null, summary: "Leader in AI compute.", supports: [], challenges: [] } },
+};
+
+test("card_partial stores the latest partial card", () => {
+  let r = reduceRunEvent(run(), "card_partial", partialEvent);
+  assert.deepEqual(r.partialCard, partialEvent);
+  const next = { slot: "thesis", card: { ...partialEvent.card, verdict_rationale: "Balanced." } };
+  r = reduceRunEvent(r, "card_partial", next);
+  assert.deepEqual(r.partialCard, next);
+});
+
+test("the final validated card replaces the partial", () => {
+  let r = reduceRunEvent(run(), "card_partial", partialEvent);
+  r = reduceRunEvent(r, "thesis", { verdict: "Neutral" });
+  assert.equal(r.partialCard, null);
+  assert.deepEqual(r.thesis, { verdict: "Neutral" });
+});
+
+test("a conversational fallback clears the partial (stream ended in invalid JSON)", () => {
+  let r = reduceRunEvent(run(), "card_partial", partialEvent);
+  r = reduceRunEvent(r, "conversational", { answer: "I had trouble.", suggestions: [] });
+  assert.equal(r.partialCard, null);
+});
+
+test("done clears any partial left behind", () => {
+  let r = reduceRunEvent(run(), "card_partial", partialEvent);
+  r = reduceRunEvent(r, "done", doneEvent());
+  assert.equal(r.partialCard, null);
+});
+
+test("a partial card alone is not an answer surface", () => {
+  const r = reduceRunEvent(run(), "card_partial", partialEvent);
+  assert.equal(settleRun(r, "eof").status, "errored");
+});

@@ -10,6 +10,7 @@
 // TS loader (`npm test`) as well as the bundler.
 
 import type {
+  CardPartialEvent,
   ChatErrorEvent,
   ComparisonPayload,
   ConversationalPayload,
@@ -51,6 +52,7 @@ export function initialRun(fields: {
     proseChunks: [],
     narrative: "",
     planRationale: null,
+    partialCard: null,
     thesis: null,
     quickFact: null,
     comparison: null,
@@ -91,26 +93,31 @@ export function reduceRunEvent(run: ChatRun, event: string, data: unknown): Chat
     const ev = data as IntentEvent;
     return { ...run, intent: ev.intent };
   }
+  // QNT-494: a partial is display-only; every final card (and the
+  // conversational fallback) replaces it.
+  if (event === "card_partial") {
+    return { ...run, partialCard: data as CardPartialEvent };
+  }
   if (event === "thesis") {
-    return { ...run, thesis: data as ThesisPayload };
+    return { ...run, partialCard: null, thesis: data as ThesisPayload };
   }
   if (event === "quick_fact") {
-    return { ...run, quickFact: data as QuickFactPayload };
+    return { ...run, partialCard: null, quickFact: data as QuickFactPayload };
   }
   if (event === "comparison") {
-    return { ...run, comparison: data as ComparisonPayload };
+    return { ...run, partialCard: null, comparison: data as ComparisonPayload };
   }
   if (event === "comparison_lean") {
-    return { ...run, comparisonLean: data as LeanComparisonPayload };
+    return { ...run, partialCard: null, comparisonLean: data as LeanComparisonPayload };
   }
   if (event === "conversational") {
-    return { ...run, conversational: data as ConversationalPayload };
+    return { ...run, partialCard: null, conversational: data as ConversationalPayload };
   }
   if (event === "focused") {
-    return { ...run, focused: data as FocusedAnalysisPayload };
+    return { ...run, partialCard: null, focused: data as FocusedAnalysisPayload };
   }
   if (event === "exploration") {
-    return { ...run, exploration: data as ExplorationAnswerPayload };
+    return { ...run, partialCard: null, exploration: data as ExplorationAnswerPayload };
   }
   if (event === "retrieved_sources") {
     const ev = data as RetrievedSourcesEvent;
@@ -122,6 +129,7 @@ export function reduceRunEvent(run: ChatRun, event: string, data: unknown): Chat
     return {
       ...run,
       stats: ev,
+      partialCard: null,
       narrative: annotateUnsupportedNumbers(run.narrative, unsupported),
       // Annotate the JOINED prose once (QNT-361 follow-up 5): SSE
       // chunks split on token boundaries, so per-chunk annotation

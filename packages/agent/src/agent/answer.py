@@ -86,6 +86,12 @@ def answer_slot(payload: object) -> str | None:
     return None if payload is None else _EVENT_BY_TYPE.get(type(payload))
 
 
+def answer_slot_for_type(schema: type) -> str | None:
+    """SSE event name for an answer shape's TYPE (QNT-494: names a partial card
+    before any instance exists), or None for a foreign type."""
+    return _EVENT_BY_TYPE.get(schema)
+
+
 def project_answer(payload: AnswerPayload | None) -> dict[str, object]:
     """State-write projection for a synthesized answer (QNT-294 / QNT-307).
 
@@ -102,5 +108,6 @@ __all__ = [
     "ANALYTICAL_ANSWER_TYPES",
     "AnswerPayload",
     "answer_slot",
+    "answer_slot_for_type",
     "project_answer",
 ]

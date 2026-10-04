@@ -16,6 +16,7 @@ import { ConversationalCard } from "./conversational-card";
 import { ExplorationCard } from "./exploration-card";
 import { FocusedAnalysisCard } from "./focused-analysis-card";
 import { LeanComparisonCard } from "./lean-comparison-card";
+import { PartialCard } from "./partial-card";
 import { NarrativeBubble } from "./narrative-bubble";
 import { ProseBlock } from "./prose-block";
 import { QuickFactCard } from "./quick-fact-card";
@@ -150,6 +151,13 @@ export const RunBlock = memo(function RunBlock({
 
       {/* Streamed prose (only when no card has arrived yet) */}
       {showStandaloneProse && <ProseBlock text={proseText} sources={anchorSources} />}
+
+      {/* QNT-494: the card in progress -- completed fields streamed while
+        synthesize generates. The final validated card replaces it (the reducer
+        clears partialCard), so the two never render together. */}
+      {run.partialCard && !hasCard && (
+        <PartialCard ticker={run.ticker} partial={run.partialCard} sources={anchorSources} />
+      )}
 
       {/* QNT-156: comparison card — renders when intent=comparison */}
       {run.comparison && (
