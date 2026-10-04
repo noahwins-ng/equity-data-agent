@@ -174,9 +174,10 @@ def test_stream_usage_enabled(monkeypatch):
 # ─── QNT-230 #10: pinned judge alias ────────────────────────────────────────
 
 
-def test_judge_alias_is_cerebras_gptoss120b():
-    """The structured judge pins the same model the dialogue judge already uses."""
-    assert JUDGE_ALIAS == "equity-agent/bench-cerebras-gptoss120b"
+def test_judge_alias_is_openrouter_gpt6luna():
+    """The structured judge pins the same model the dialogue judge already uses.
+    QNT-495: moved off bench-cerebras-gptoss120b (Cerebras 402 on every call)."""
+    assert JUDGE_ALIAS == "equity-agent/judge-gpt6luna"
 
 
 def test_get_judge_llm_resolves_pinned_alias():

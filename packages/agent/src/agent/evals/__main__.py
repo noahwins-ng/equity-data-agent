@@ -10,7 +10,8 @@ maps ``failed`` to the process exit code, uniformly.
 Runs the golden-set against the live agent and exits non-zero if any record
 fails the hallucination or tool-call contracts (see ``golden_set.is_failing``).
 Judge score is a soft signal -- set ``EVAL_MIN_JUDGE`` to gate on it once
-history.csv shows a stable baseline.
+history.csv shows a stable baseline. A run where NO record got a judge score
+(judge provider down) exits non-zero (QNT-495).
 
 Examples::
 
@@ -41,6 +42,7 @@ from agent.evals.golden_set import (  # noqa: E402
     GOLDEN_HISTORY_PATH,
     fail_threshold_from_env,
     is_failing,
+    judge_outage,
     run_all,
     summarise,
 )
@@ -76,6 +78,12 @@ def _run_golden(args: argparse.Namespace) -> SuiteResult:
     summary = f"run_id: {run_id}\n{summarise(outcomes)}"
     failed = is_failing(outcomes)
     warning = ""
+
+    if judge_outage(outcomes):
+        # QNT-495: every judge call failed -- the judge columns are empty, so
+        # the run measured nothing on the judge axes. Gate instead of exiting 0.
+        warning = "\n[fail] judge outage: no record got a judge score (check JUDGE_ALIAS)"
+        failed = True
 
     if not failed:
         threshold = fail_threshold_from_env()

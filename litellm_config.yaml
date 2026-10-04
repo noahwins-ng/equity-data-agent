@@ -277,14 +277,29 @@ model_list:
       extra_headers:
         User-Agent: equity-data-agent-litellm/1.0
 
+  # QNT-495: the golden + dialogue judge (agent.llm.JUDGE_ALIAS /
+  # dialogue_judge.JUDGE_MODEL_ALIAS). Replaces bench-cerebras-gptoss120b, which
+  # started returning 402 "Payment required" on every call (2026-10-03, seen in
+  # QNT-493 AC4) and left both evals with empty judge columns. gpt-6-luna on
+  # OpenRouter: different family from the DeepSeek agent (no self-preference),
+  # structured outputs, ~$0.10/$0.50 per M in/out. reasoning_effort: low strips
+  # the CoT sink (verdict tasks don't need it, ADR-023). Pinned for comparable
+  # scores -- history rows judged by Cerebras are NOT comparable to these.
+  - model_name: equity-agent/judge-gpt6luna
+    litellm_params:
+      model: openrouter/openai/gpt-6-luna
+      api_key: os.environ/OPENROUTER_API_KEY
+      reasoning_effort: low
+      temperature: 0.0
+
   # QNT-275: paid OpenRouter judge for the DeepEval RAGAS suite. The free-tier
   # judges have a ~1M-token/day ceiling that caps a fixed-judge run at ~20-35
   # records; DeepSeek V4 Flash on OpenRouter removes it -- a >=50-record baseline
   # runs in one clean window for ~$0.18 ($0.089/$0.224 per M in/out, 1M ctx,
   # structured-outputs + reproducible). reasoning_effort: low strips the CoT token
   # sink (verdict tasks don't need it). Used ONLY by the DeepEval judge
-  # (agent.evals.deepeval_eval); the dialogue / golden judge stays on the free
-  # bench-cerebras alias above. Pinned for reproducible scores (ADR-023).
+  # (agent.evals.deepeval_eval); the dialogue / golden judge is the separate
+  # judge-gpt6luna alias above (QNT-495). Pinned for reproducible scores (ADR-023).
   # QNT-442: moved to the 0731 GA build alongside equity-agent/default -- kept
   # in lockstep deliberately, since a judge-vs-primary version mismatch would
   # make prod behavior and DeepEval scores diverge silently. Re-baselined against

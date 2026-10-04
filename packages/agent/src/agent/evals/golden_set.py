@@ -617,6 +617,20 @@ def is_failing(outcomes: list[EvalOutcome]) -> bool:
     return any(not o.hallucination_ok or not o.tool_call_ok for o in measured)
 
 
+def judge_outage(outcomes: list[EvalOutcome]) -> bool:
+    """Return True if every measured record came back without a judge score.
+
+    QNT-495: the judge is a soft signal per row (one ``None`` is a blip), but
+    ALL rows unjudged means the judge provider is down -- Cerebras returned 402
+    on every call from 2026-10-03 and the suite kept exiting 0 with empty judge
+    columns. ``__main__`` gates on this so an outage is loud. Provider-error
+    rows never reach the judge and are excluded; an empty or all-provider run
+    already gates via :func:`is_failing`.
+    """
+    measured = [o for o in outcomes if not o.provider_error]
+    return bool(measured) and all(o.judge_score is None for o in measured)
+
+
 def fail_threshold_from_env() -> float | None:
     """Optional minimum average judge score, configured via ``EVAL_MIN_JUDGE``.
 

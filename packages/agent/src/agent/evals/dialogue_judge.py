@@ -19,8 +19,9 @@ from shared.config import settings
 
 logger = logging.getLogger(__name__)
 
-JUDGE_MODEL_ALIAS = "equity-agent/bench-cerebras-gptoss120b"
-JUDGE_RESOLVED_MODEL = "cerebras/gpt-oss-120b"
+# QNT-495: was bench-cerebras-gptoss120b until Cerebras started returning 402.
+JUDGE_MODEL_ALIAS = "equity-agent/judge-gpt6luna"
+JUDGE_RESOLVED_MODEL = "openrouter/openai/gpt-6-luna"
 AGENT_UNDER_TEST_ALIAS = "equity-agent/default"
 AGENT_UNDER_TEST_RESOLVED_MODEL = "groq/llama-3.3-70b-versatile"
 

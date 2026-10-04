@@ -101,3 +101,24 @@ than silently substituting a different model; `deepeval_eval.py` catches the
 per-metric exception and records that one metric as NaN for that case,
 which is why the run still completed cleanly at n=55. 0731 is not immune to
 the failure mode QNT-258 found, but it is not more frequent either.
+
+## Amendment (QNT-495, 2026-10-05): golden + dialogue judge also moved to OpenRouter
+
+The "dialogue / golden judge stays on the free `JUDGE_ALIAS`" scoping above no
+longer holds. On 2026-10-03 every call to `equity-agent/bench-cerebras-gptoss120b`
+returned Cerebras 402 "Payment required", so the golden judge axes and the whole
+dialogue eval produced no scores. The golden suite logged the errors as warnings
+and still exited 0.
+
+`JUDGE_ALIAS` and `dialogue_judge.JUDGE_MODEL_ALIAS` now point to a new alias,
+`equity-agent/judge-gpt6luna` -> `openrouter/openai/gpt-6-luna` (~$0.10/$0.50 per
+M in/out, structured outputs, `reasoning_effort: low`, `temperature: 0`). The
+same reasoning as this ADR applies: these evals run off the hot path and cost
+pennies per run, so a paid judge is fine. It is deliberately not the DeepSeek
+judge, because the agent under test is DeepSeek and a judge must be a different
+family (QNT-230 #10). The DeepEval suite keeps `DEEPEVAL_JUDGE_ALIAS`.
+
+Golden and dialogue were re-baselined under the new judge (see the evals README,
+"Judge model"). Earlier rows judged by Cerebras are not comparable. A golden run
+where no record got a judge score now exits non-zero, so the next judge outage
+fails the run instead of passing quietly.

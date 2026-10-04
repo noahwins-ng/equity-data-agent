@@ -253,7 +253,7 @@ def test_no_chat_alias_references_forbidden_provider_directly() -> None:
 def test_litellm_config_has_no_anthropic_or_openai_string() -> None:
     """Defence-in-depth string scan: an active YAML reference to a paid
     provider — `anthropic/...` anywhere, or `openai/...` not under
-    `groq/openai/...` — is forbidden on the chat path. Comments are
+    `groq/openai/...` or `openrouter/openai/...` — is forbidden on the chat path. Comments are
     allowed (a contributor referencing a provider in a `# why we don't use
     X` comment shouldn't trip CI), so the regex anchors on lines that
     don't start with `#`.
@@ -275,10 +275,13 @@ def test_litellm_config_has_no_anthropic_or_openai_string() -> None:
         if provider == "openai":
             # Permit "groq/openai/..." — Groq hosts an OpenAI-compatible
             # namespace; the model is still a Groq inference. Inspect the
-            # 5 chars immediately preceding THIS match's "openai/".
+            # chars immediately preceding THIS match's "openai/".
+            # QNT-495: also permit "openrouter/openai/..." (the eval judge) —
+            # billed through the already-permitted OpenRouter key, never a
+            # direct OpenAI key.
             start = match.start("provider")
-            preceding = text[max(0, start - len("groq/")) : start]
-            if preceding.endswith("groq/"):
+            preceding = text[max(0, start - len("openrouter/")) : start]
+            if preceding.endswith(("groq/", "openrouter/")):
                 continue
         # Capture the surrounding line for a useful failure message.
         line_start = text.rfind("\n", 0, match.start()) + 1
@@ -288,7 +291,7 @@ def test_litellm_config_has_no_anthropic_or_openai_string() -> None:
         real_violations.append(text[line_start:line_end].strip())
     assert not real_violations, (
         "litellm_config.yaml contains an active reference to a paid "
-        f"provider (anthropic anywhere, or openai not under groq/): "
+        f"provider (anthropic anywhere, or openai not under groq/ or openrouter/): "
         f"{real_violations}"
     )
 

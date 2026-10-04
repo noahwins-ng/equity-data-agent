@@ -1050,3 +1050,47 @@ run_id,git_sha,prompt_version,suite,eval_type,ticker,question_id,question,faithf
 20260816T043548Z-db81e1-bench-deepseek-v4-flash,4490d87,7d2ca36037,golden,structured,GOOGL,googl-technical-deepdive,"Give me a detailed technical analysis on GOOGL -- trend, momentum, and chart setup.",10,0,5,4,5,0.4032,1,1,,12370
 20260816T043548Z-db81e1-bench-deepseek-v4-flash,4490d87,7d2ca36037,golden,structured,TSLA,tsla-news-sentiment,What's the news on TSLA -- any notable headlines?,0,0,0,0,0,0.4288,1,1,,17969
 20260816T043548Z-db81e1-bench-deepseek-v4-flash,4490d87,7d2ca36037,golden,structured,META,meta-news-sentiment,What's the news on META right now -- anything worth flagging?,10,0,3,2,4,0.4777,1,1,,16729
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,NVDA,nvda-technical,Is NVDA overbought right now? Walk me through the technical setup.,10,0,5,8,6,0.5633,1,1,,7640
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,NVDA,nvda-fundamental,What does NVDA's most recent fundamental picture look like?,8,0,3,8,5,0.5468,1,1,,7205
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,AAPL,aapl-fundamental,How is AAPL valued relative to its earnings?,6,0,4,10,5,0.53,1,1,,7690
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,AAPL,aapl-technical,Where is AAPL on the price chart -- is the trend intact?,7,0,8,10,6,0.5075,1,1,,7212
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,MSFT,msft-news,What's the recent news flow around MSFT?,2,0,4,8,4,0.4066,1,1,,7055
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,GOOGL,googl-technical,How is GOOGL trending technically over the recent window?,10,0,8,10,7,0.5109,1,1,,7590
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,GOOGL,googl-combined,Give me a balanced thesis on GOOGL -- fundamentals plus technicals.,8,8,7,7,8,0.2581,1,1,1,13075
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,AMZN,amzn-fundamental,What's the fundamental case for AMZN at the moment?,5,1,4,7,4,0.4592,1,1,,8278
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,META,meta-combined,Should I be cautious about META based on the latest data?,2,9,7,8,6,0.4505,1,1,1,14873
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,META,meta-news,What's driving recent META headlines?,10,0,8,8,6,0.4278,1,1,,9137
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,TSLA,tsla-technical,Is TSLA breaking out or breaking down on the charts?,3,0,3,10,4,0.5254,1,1,,7329
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,TSLA,tsla-news,What's the recent news flow around TSLA?,10,0,3,7,5,0.3559,1,1,,7857
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,MU,mu-fundamental,How is MU valued versus its latest earnings?,2,0,2,8,3,0.4778,1,1,,7505
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,AMD,amd-combined,Give me a balanced thesis on AMD right now.,10,8,9,8,9,0.2998,1,1,1,12637
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,AMD,amd-fundamental,What is AMD's current fundamental health?,10,0,3,7,5,0.4708,1,1,,7438
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,INTC,intc-news,What's the latest news on INTC -- any notable headlines?,6,0,5,7,4,0.4462,1,1,,7326
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,NVDA,nvda-quickfact-rsi,What's NVDA's RSI right now?,10,0,8,10,7,0.4149,1,1,,3754
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,NVDA,nvda-quickfact-revenue,What's NVDA's revenue?,10,0,10,10,8,0.4183,1,1,,3376
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,NVDA,nvda-quickfact-market-cap,What's NVDA's market cap?,10,0,8,7,6,0.4775,1,1,,2122
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,NVDA,nvda-vs-aapl-fundamental,Compare NVDA vs AAPL on valuation and fundamentals.,4,0,2,5,3,0.3901,1,1,,12041
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,NVDA,conversational-off-domain-weather,What's the weather like today?,10,0,8,7,6,0.3379,1,1,,1984
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,MU,mu-fundamental-deepdive,Walk me through MU's fundamentals -- valuation deep dive.,5,0,4,8,4,0.4765,1,1,,7285
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,INTC,intc-technical-analysis,Give me a technical analysis of INTC -- chart setup and indicators.,8,0,8,7,6,0.5849,1,1,,7203
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,INTC,intc-news-sentiment,What's the news on INTC -- recent headlines and catalysts?,3,0,6,7,4,0.5131,1,1,,7868
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,TSLA,tsla-overbought-rsi-regime,Give me a thesis on TSLA -- is the technical setup bullish?,2,0,2,10,4,0.506,1,1,,6498
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,TSLA,tsla-focused-technical-no-signal-quote,Give me a technical analysis on TSLA.,8,0,6,10,6,0.473,1,1,,6956
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,NVDA,nvda-msft-rsi-regime-contrast,Compare NVDA vs MSFT on technical momentum.,2,1,5,8,4,0.3563,1,1,,8811
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,NVDA,nvda-rsi-momentum-delta,Give me a balanced thesis on NVDA -- is the technical momentum supporting further upside?,4,8,4,5,5,0.559,1,1,0,15928
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,AMZN,amzn-verdict-shape,Give me a thesis on AMZN -- what's the right trade action here?,10,8,9,8,9,0.4633,1,1,1,12698
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,NVDA,nvda-rsi-neutral-trending-down,Give me a thesis on NVDA -- what does the RSI trend say about near-term momentum?,2,5,2,10,5,0.451,1,1,1,9734
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,AAPL,aapl-quickfact-pe,What's AAPL's P/E ratio?,2,0,2,7,3,0.4512,1,1,,2950
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,MSFT,msft-quickfact-close,What is MSFT's most recent closing price?,5,0,8,7,5,0.4577,1,1,,3908
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,MU,mu-quickfact-eps,What's MU's latest EPS?,10,0,7,7,6,0.4169,1,1,,2564
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,AMZN,amzn-meta-fundamental,Compare AMZN vs META -- which has the stronger fundamental case?,8,2,6,8,6,0.3819,1,1,,11621
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,TSLA,tsla-amd-technical,Compare TSLA vs AMD on technical momentum -- who has the stronger chart setup?,9,2,9,5,6,0.3889,1,1,,9771
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,NVDA,nvda-amd-news-comparison,Compare NVDA vs AMD on recent news and catalysts -- who has the stronger story?,4,2,5,6,4,0.5923,1,1,,10437
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,NVDA,conversational-off-domain-coding,Can you help me debug a Python function that's throwing a KeyError?,10,0,8,7,6,0.1779,1,1,,1569
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,AAPL,conversational-capability-ask,What can you actually help me with?,10,0,9,7,6,0.3913,1,1,,1108
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,AAPL,aapl-fundamental-analysis,Walk me through AAPL's fundamentals -- how is the business valued?,2,0,3,7,3,0.5163,1,1,,7487
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,AMZN,amzn-fundamental-analysis,Break down AMZN's fundamentals -- what does the earnings picture look like?,5,0,4,7,4,0.4872,1,1,,6080
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,MSFT,msft-technical-analysis,Give me a technical read on MSFT -- what do the indicators say?,5,0,7,7,5,0.4482,1,1,,6814
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,GOOGL,googl-technical-deepdive,"Give me a detailed technical analysis on GOOGL -- trend, momentum, and chart setup.",2,0,6,8,4,0.3893,1,1,,7774
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,TSLA,tsla-news-sentiment,What's the news on TSLA -- any notable headlines?,10,0,8,7,6,0.4823,1,1,,7431
+20261004T172158Z-4f2110,bf88d52,7d2ca36037,golden,structured,META,meta-news-sentiment,What's the news on META right now -- anything worth flagging?,6,0,7,8,5,0.4624,1,1,,8392

@@ -10,6 +10,7 @@ covered by tests/agent/test_graph.py and the live wiring is exercised by
 from __future__ import annotations
 
 import csv
+import dataclasses
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ from agent.evals.golden_set import (
     GoldenRecord,
     append_history,
     is_failing,
+    judge_outage,
     provider_pressure_warning,
     run_all,
     run_record,
@@ -684,3 +686,56 @@ class TestProviderPressure:
         assert rows[0]["question_id"] == "clean"
         # The clean row passed, so the mixed run does not gate on the provider row.
         assert not is_failing(returned)
+
+
+# ─── QNT-495: a judge outage must gate, not record empty judge columns ──────
+
+
+def _judged_outcome(rid: str = "rec") -> EvalOutcome:
+    return dataclasses.replace(_outcome(rid=rid), judge_score=_judge(8))
+
+
+class TestJudgeOutage:
+    def test_all_measured_rows_unjudged_is_an_outage(self) -> None:
+        assert judge_outage([_outcome(rid="a"), _outcome(rid="b")])
+
+    def test_one_judged_row_is_not_an_outage(self) -> None:
+        assert not judge_outage([_outcome(rid="a"), _judged_outcome(rid="b")])
+
+    def test_provider_rows_are_excluded(self) -> None:
+        # A provider-error row never reaches the judge, so it must not count
+        # toward (or against) the outage verdict.
+        provider = _outcome(rid="p", provider_error=True, reason="provider: timeout")
+        assert not judge_outage([provider, _judged_outcome(rid="b")])
+        assert judge_outage([provider, _outcome(rid="c")])
+
+    def test_empty_or_all_provider_is_not_a_judge_outage(self) -> None:
+        # Those cases already gate via is_failing; the judge was never asked.
+        assert not judge_outage([])
+        assert not judge_outage([_outcome(provider_error=True, reason="provider: timeout")])
+
+
+def test_cli_exits_nonzero_when_every_judge_call_errors(
+    stub_graph: Callable[[dict[str, Any]], None],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """QNT-495 AC2: a golden run whose judge provider is down (Cerebras 402)
+    used to exit 0 with empty judge columns. With a failing judge stub and an
+    otherwise clean record, the CLI now exits 1 and names the outage."""
+    from agent.evals import __main__ as cli
+    from agent.evals import judge
+
+    failing = MagicMock()
+    failing.with_structured_output.return_value.invoke.side_effect = RuntimeError(
+        "402 Payment required"
+    )
+    monkeypatch.setattr(judge, "get_judge_llm", lambda: failing)
+    monkeypatch.setattr(golden_set, "load_goldens", lambda: [_record()])
+
+    rc = cli.main(["--history-path", str(tmp_path / "history.csv")])
+
+    assert rc == 1
+    assert failing.with_structured_output.return_value.invoke.called
+    assert "judge outage" in capsys.readouterr().err

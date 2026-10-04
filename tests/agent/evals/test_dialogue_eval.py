@@ -368,3 +368,32 @@ def test_contamination_warning_flags_judge_failure() -> None:
 
 def test_contamination_warning_clean_run_is_none() -> None:
     assert contamination_warning([_outcome(_judge(0.8), elapsed_ms=25_000)]) is None
+
+
+def test_cli_exits_nonzero_when_every_judge_call_errors(monkeypatch: Any, tmp_path: Path) -> None:
+    """QNT-495 AC2: a dialogue run whose judge provider is down exits 1 rather
+    than reporting success over empty judge columns. The stub fails at the LLM
+    boundary, so the real ``dialogue_judge.score`` error path is exercised."""
+    from agent.evals import dialogue_judge
+
+    failing = MagicMock()
+    failing.with_structured_output.return_value.invoke.side_effect = RuntimeError(
+        "402 Payment required"
+    )
+    monkeypatch.setattr(dialogue_judge, "build_judge_llm", lambda: failing)
+    monkeypatch.setattr(dialogue_eval, "build_graph", lambda *a, **kw: _FakeGraph())
+    monkeypatch.setattr(dialogue_eval, "default_report_tools", lambda: {})
+    fixture_id = load_dialogues()[0].id
+
+    rc = dialogue_eval.main(
+        [
+            "--skip-precheck",
+            "--only",
+            fixture_id,
+            "--history-path",
+            str(tmp_path / "history.csv"),
+        ]
+    )
+
+    assert rc == 1
+    assert failing.with_structured_output.return_value.invoke.called
