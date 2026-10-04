@@ -325,14 +325,14 @@ not eval"`) nor the deterministic RAG gate (`-m eval`) collects it. It runs in a
 `workflow_dispatch`, stack/judge credentials as job-scoped secrets) and locally.
 The per-PR RAG gate stays the deterministic one (eval (f), QNT-261).
 
-**Judge routing + budget (AC2).** The judge is the SAME pinned free model the
-dialogue judge uses (`equity-agent/bench-cerebras-gptoss120b` →
-`cerebras/gpt-oss-120b`), reached through the LiteLLM proxy via `get_judge_llm()`
-- no new provider key. A custom `LiteLLMJudge(DeepEvalBaseLLM)` wraps it;
+**Judge routing + budget (AC2).** The judge is `DEEPEVAL_JUDGE_ALIAS`
+(`equity-agent/bench-deepseek-v4-flash`, paid OpenRouter DeepSeek, ADR-023),
+reached through the LiteLLM proxy via `get_judge_llm(model_alias=...)`. It is
+separate from the golden / dialogue judge ("Judge model" below). A custom `LiteLLMJudge(DeepEvalBaseLLM)` wraps it;
 `generate` honours DeepEval's optional `schema` kwarg via LangChain
 `with_structured_output`. Gated to a **SAMPLE** (`DEEPEVAL_SAMPLE`, default 4
 records) on a clean window: each record costs **~8-12 judge calls** across the
-five metrics, so a 4-record run is **~32-48 calls** - inside the free tier. Metrics
+five metrics, so a 4-record run is **~32-48 calls** (a few cents). Metrics
 run `async_mode=False` so the calls serialise rather than burst the rate limit.
 
 **Coexistence, not replacement (AC4).** The in-house number-grounding check (eval
@@ -585,7 +585,7 @@ Golden and dialogue share one pinned judge: `JUDGE_ALIAS` /
 must stay a different model family from the agent under test (DeepSeek) so the
 judge never scores its own output (QNT-230 #10).
 
-Until 2026-10-03 the judge was `equity-agent/bench-cerebras-gptoss120b`. Cerebras
+Until 2026-10-03 the judge was a Cerebras gpt-oss-120b alias (now removed). Cerebras
 then started returning 402 "Payment required" on every call (seen in QNT-493
 AC4). The golden suite treats a judge error as a soft per-row `None`, so it kept
 exiting 0 with empty judge columns. Two changes came out of that:

@@ -73,7 +73,6 @@ _RESOLVED_MODEL_BY_ALIAS: dict[str, str] = {
     "equity-agent/gemini": "gemini/gemini-2.5-flash",
     "equity-agent/small": "groq/openai/gpt-oss-20b",
     "equity-agent/bench-gptoss120b": "groq/openai/gpt-oss-120b",
-    "equity-agent/bench-cerebras-gptoss120b": "cerebras/gpt-oss-120b",
     "equity-agent/judge-gpt6luna": "openrouter/openai/gpt-6-luna",  # QNT-495
     "equity-agent/bench-deepseek-v4-flash": "openrouter/deepseek/deepseek-v4-flash-0731",  # QNT-442
     "equity-agent/bench-gptoss20b": "groq/openai/gpt-oss-20b",
