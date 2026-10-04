@@ -50,6 +50,7 @@ from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ValidationError
@@ -59,6 +60,7 @@ from agent.answer import (  # noqa: F401
     ANALYTICAL_ANSWER_TYPES,
     AnswerPayload,
     answer_slot,
+    answer_slot_for_type,
     project_answer,
 )
 from agent.citations import strip_bad_anchors_in_obj  # noqa: F401
@@ -126,11 +128,13 @@ from agent.prompts import (  # noqa: F401
 from agent.quick_fact import QuickFactAnswer
 from agent.structured import (  # noqa: F401
     _PROMPT_VERSION,
+    PartialCardTracker,
     ThesisPlan,
     _build_plan_prompt,
     _build_thesis_plan_prompt,
     _coerce,
     _linked_invoke,
+    _linked_stream,
     _prompt_version,
 )
 from agent.support import (  # noqa: F401
@@ -271,6 +275,7 @@ def _structured_call[T: BaseModel](
     *,
     llm: Any | None = None,
     linked: bool = True,
+    on_partial: Callable[[dict[str, Any]], None] | None = None,
 ) -> T | None:
     """Run one structured-output LLM call with the shared retry/coerce ladder (AC5).
 
@@ -298,6 +303,16 @@ def _structured_call[T: BaseModel](
     still forces JSON, so the QNT-258 bare-prose failure cannot recur. A caller
     that passes its own ``llm`` (the small-alias planner, a different provider)
     keeps LangChain's default method and its prompt untouched.
+
+    QNT-494: with ``on_partial`` set (the synthesize card shapes, when an SSE
+    emitter is wired), the default-alias call STREAMS the same json_object
+    request and hands ``on_partial`` each partial card of completed fields
+    (:class:`PartialCardTracker`) so the panel fills in while the model writes.
+    The full text is then validated by the same Pydantic parser json_mode uses,
+    so a partial never stands in for validation. A stream that raises or ends in
+    invalid JSON falls through to the unchanged non-streamed ladder below, and
+    from there to the caller's fallback -- streaming adds one attempt, it never
+    removes the existing two.
     """
     # QNT-383: size the output ceiling from the per-shape ``_OUTPUT_BUDGET`` table
     # (the default ``llm=None`` path). A caller that passes its own ``llm`` -- the
@@ -307,6 +322,12 @@ def _structured_call[T: BaseModel](
         base = get_llm(max_tokens=_OUTPUT_BUDGET.get(schema))
         structured = base.with_structured_output(schema, method="json_mode")
         prompt = _with_json_schema_instruction(prompt, schema)
+        if on_partial is not None:
+            streamed = _streamed_json_call(
+                base, schema, prompt, config, prompt_name, linked=linked, on_partial=on_partial
+            )
+            if streamed is not None:
+                return streamed
     else:
         structured = llm.with_structured_output(schema)
     structured_llm = structured.with_retry(
@@ -327,6 +348,55 @@ def _structured_call[T: BaseModel](
         )
         return None
     return _coerce(response, schema)
+
+
+def _streamed_json_call[T: BaseModel](
+    base: Any,
+    schema: type[T],
+    prompt: list[Any],
+    config: RunnableConfig,
+    prompt_name: str,
+    *,
+    linked: bool,
+    on_partial: Callable[[dict[str, Any]], None],
+) -> T | None:
+    """One streamed json_object attempt for :func:`_structured_call` (QNT-494).
+
+    Returns the validated model, or ``None`` when the stream raised or its text
+    did not parse into ``schema`` -- the caller then runs the non-streamed ladder.
+    """
+    tracker: PartialCardTracker | None = PartialCardTracker()
+    parts: list[str] = []
+    try:
+        runnable = base.bind(response_format={"type": "json_object"})
+        chunks = (
+            _linked_stream(runnable, prompt, config, prompt_name)
+            if linked
+            else runnable.stream(prompt, config=config)
+        )
+        for chunk in chunks:
+            delta = chunk.content if isinstance(chunk.content, str) else ""
+            parts.append(delta)
+            if tracker is None:
+                continue
+            # Partials are display-only: a tracker/emit failure stops the
+            # partials but never voids the in-flight stream or its final parse.
+            try:
+                partial = tracker.feed(delta)
+                if partial is not None:
+                    on_partial(partial)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("%s: partial card failed: %s (continuing)", prompt_name, exc)
+                tracker = None
+        return PydanticOutputParser(pydantic_object=schema).parse("".join(parts))
+    except Exception as exc:  # noqa: BLE001 — the non-streamed ladder is the fallback
+        logger.warning(
+            "%s: streamed structured output failed, retrying unstreamed: %s: %s",
+            prompt_name,
+            type(exc).__name__,
+            exc,
+        )
+        return None
 
 
 class AgentState(TypedDict):

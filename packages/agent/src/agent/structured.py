@@ -10,9 +10,11 @@ graph.py because it calls the ``get_llm`` seam the tests monkeypatch on
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
+from langchain_core.utils.json import parse_partial_json
 from pydantic import BaseModel, Field, field_validator
 
 from agent.intent import Intent
@@ -73,13 +75,38 @@ def _linked_invoke(
 ) -> Any:
     """Invoke ``runnable`` with prompt version metadata + native Langfuse prompt link.
 
+    See :func:`_linked_runnable` for the linking contract.
+    """
+    chain, chain_input, cfg = _linked_runnable(runnable, prompt, config, prompt_name)
+    return chain.invoke(chain_input, config=cfg)
+
+
+def _linked_stream(
+    runnable: Any,
+    prompt: list[Any] | str,
+    config: RunnableConfig,
+    prompt_name: str,
+) -> Iterator[Any]:
+    """Stream ``runnable`` with the same prompt link as :func:`_linked_invoke` (QNT-494)."""
+    chain, chain_input, cfg = _linked_runnable(runnable, prompt, config, prompt_name)
+    return chain.stream(chain_input, config=cfg)
+
+
+def _linked_runnable(
+    runnable: Any,
+    prompt: list[Any] | str,
+    config: RunnableConfig,
+    prompt_name: str,
+) -> tuple[Any, Any, RunnableConfig]:
+    """Return ``(chain, input, config)`` carrying prompt version + Langfuse prompt link.
+
     When Langfuse Prompt Management is available, wraps the pre-built message list
     in a ChatPromptTemplate (via MessagesPlaceholder — no template expansion, safe
     for report content with curly braces) with ``langfuse_prompt`` metadata, then
     chains to ``runnable``. The CallbackHandler reads ``langfuse_prompt`` from the
     PromptTemplate step and creates a native trace → Prompt panel link in Langfuse.
 
-    Falls back to direct invoke when Langfuse keys are unset (CI, local dev).
+    Returns ``runnable`` unwrapped when Langfuse keys are unset (CI, local dev).
     Always sets ``prompt_version`` so the version is visible in trace metadata
     regardless of whether native linking is active.
     """
@@ -96,10 +123,65 @@ def _linked_invoke(
         template = ChatPromptTemplate.from_messages(
             [MessagesPlaceholder(variable_name="messages")]
         ).with_config(metadata={"langfuse_prompt": prompt_obj})
-        chain = template | runnable
-        return chain.invoke({"messages": prompt}, config=cfg)
+        return template | runnable, {"messages": prompt}, cfg
 
-    return runnable.invoke(prompt, config=cfg)
+    return runnable, prompt, cfg
+
+
+class PartialCardTracker:
+    """Turn a streamed JSON object into partial cards of COMPLETED fields (QNT-494).
+
+    Fed the raw text deltas of a json_mode stream. A value is complete once the
+    stream passes the ``,`` / ``]`` / ``}`` that follows it outside a string, so
+    the tracker scans each delta once (in/out-of-string state carried across
+    deltas), and only at such a boundary re-parses the prefix up to it with
+    ``parse_partial_json``. A partial therefore never carries a half-written
+    string or number, and a parse runs once per completed field rather than once
+    per token. Text before the first ``{`` (e.g. a stray code fence) is skipped.
+    """
+
+    def __init__(self) -> None:
+        self._text = ""
+        self._start = -1
+        self._scanned = 0
+        self._in_string = False
+        self._escaped = False
+        self._boundary = 0
+        self._parsed_to = 0
+        self._last: dict[str, Any] | None = None
+
+    def feed(self, delta: str) -> dict[str, Any] | None:
+        """Consume ``delta``; return a new partial card when a field completed."""
+        self._text += delta
+        text = self._text
+        for i in range(self._scanned, len(text)):
+            ch = text[i]
+            if self._start < 0:
+                if ch == "{":
+                    self._start = i
+                continue
+            if self._in_string:
+                if self._escaped:
+                    self._escaped = False
+                elif ch == "\\":
+                    self._escaped = True
+                elif ch == '"':
+                    self._in_string = False
+            elif ch == '"':
+                self._in_string = True
+            elif ch == ",":
+                self._boundary = i
+            elif ch in "]}":
+                self._boundary = i + 1
+        self._scanned = len(text)
+        if self._boundary <= self._parsed_to:
+            return None
+        self._parsed_to = self._boundary
+        parsed = parse_partial_json(text[self._start : self._boundary])
+        if not isinstance(parsed, dict) or not parsed or parsed == self._last:
+            return None
+        self._last = parsed
+        return parsed
 
 
 def _coerce[T: BaseModel](response: object, schema: type[T]) -> T | None:

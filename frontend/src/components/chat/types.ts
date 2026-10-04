@@ -8,6 +8,7 @@
 // the streamed prose deltas, the final thesis (if any), and terminal stats.
 
 import type {
+  CardPartialEvent,
   ChatErrorEvent,
   ComparisonPayload,
   ConversationalPayload,
@@ -48,6 +49,10 @@ export type ChatRun = {
   // means "no rationale streamed" (quick_fact/focused/comparison plans
   // carry none, or the event hasn't arrived).
   planRationale: string | null;
+  // QNT-494: the latest card_partial frame -- completed fields of the card
+  // synthesize is still generating. Cleared when the final card (or the
+  // conversational fallback) lands, and on done.
+  partialCard: CardPartialEvent | null;
   thesis: ThesisPayload | null;
   quickFact: QuickFactPayload | null;
   comparison: ComparisonPayload | null;

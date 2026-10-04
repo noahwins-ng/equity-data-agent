@@ -177,3 +177,56 @@ def test_payloads_are_the_agents_json_mode_and_stream_shapes() -> None:
         assert key not in structured
     assert stream["stream"] is True
     assert "response_format" not in stream
+    # QNT-494: synthesize streams its json_mode call, so that shape is probed too.
+    structured_stream = payloads["structured_stream"]
+    assert structured_stream["stream"] is True
+    assert structured_stream["response_format"] == {"type": "json_object"}
+    stream_keys = ("stream", "stream_options")
+    assert {k: v for k, v in structured_stream.items() if k not in stream_keys} == {
+        k: v for k, v in structured.items() if k not in stream_keys
+    }
+
+
+# ─── QNT-494: streamed json_mode shape (synthesize) ─────────────────────────
+
+STREAM_PAYLOADS: dict[str, dict[str, Any]] = {
+    **PAYLOADS,
+    "structured_stream": {
+        "model": "equity-agent/default",
+        "response_format": {"type": "json_object"},
+        "stream": True,
+    },
+}
+
+
+def _fake_create_streamed_json(stream_id: str = PRIMARY_ID, json_text: str = '{"r": 1}') -> Any:
+    base = _fake_create()
+
+    def create(**payload: Any) -> SimpleNamespace:
+        if payload.get("stream") and payload.get("response_format"):
+            return _raw({"x-litellm-model-id": stream_id}, _chunks(json_text))
+        return base(**payload)
+
+    return create
+
+
+def test_structured_stream_healthy_passes() -> None:
+    _, failures = check_llm_route(_fake_create_streamed_json(), STREAM_PAYLOADS, clock=_clock(0.5))
+    assert failures == []
+
+
+def test_structured_stream_served_by_other_deployment_fails() -> None:
+    _, failures = check_llm_route(
+        _fake_create_streamed_json(stream_id=FALLBACK_ID), STREAM_PAYLOADS, clock=_clock(0.5)
+    )
+    assert failures == [
+        f"structured_stream: served by deployment {FALLBACK_ID}, not the primary {PRIMARY_ID}"
+        " -- a fallback fired"
+    ]
+
+
+def test_structured_stream_non_json_fails() -> None:
+    _, failures = check_llm_route(
+        _fake_create_streamed_json(json_text="pong"), STREAM_PAYLOADS, clock=_clock(0.5)
+    )
+    assert any(f.startswith("structured_stream:") and "not JSON" in f for f in failures)

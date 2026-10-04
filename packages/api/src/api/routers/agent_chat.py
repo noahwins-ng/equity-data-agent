@@ -45,6 +45,21 @@ Event contract
                     or when the narrate LLM call failed (the structured card
                     still renders; bubble degrades).
 
+``card_partial``  — ``{slot, card}`` (QNT-494) streamed by synthesize WHILE the
+                    structured card generates, one frame per completed field.
+                    ``slot`` names the card event that will follow (``thesis`` /
+                    ``quick_fact`` / ``comparison`` / ``focused`` /
+                    ``exploration``); ``card`` is the partial JSON object holding
+                    ONLY finished fields (never a half-written value; any field
+                    may be absent), anchor-stripped like the final card. Each
+                    frame supersedes the previous one. Display-only: the final
+                    card event below is the validated model and replaces it, and
+                    the verdict / label pills render only from that final card.
+                    A stream that ends in invalid JSON is retried unstreamed; if
+                    that fails too the turn ends in the ``conversational``
+                    redirect, which also replaces the partial. Not emitted for
+                    ``comparison_lean`` (no LLM) or ``conversational``.
+
 The structured card events below (``thesis`` / ``quick_fact`` / ``comparison`` /
 ``comparison_lean`` / ``focused`` / ``exploration``) are emitted TWICE by
 contract (QNT-229 #2b): once early, from ``synthesize_node`` via the

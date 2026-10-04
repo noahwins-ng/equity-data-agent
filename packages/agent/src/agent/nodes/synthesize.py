@@ -10,7 +10,8 @@ Build-time wiring comes in via ``deps`` (:class:`agent.nodes.deps.GraphDeps`).
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
@@ -24,7 +25,11 @@ if TYPE_CHECKING:
     from agent.nodes.deps import GraphDeps
 
 
-def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, object]:
+def _synthesize_payload(
+    state: AgentState,
+    config: RunnableConfig,
+    on_partial: Callable[[type, dict[str, Any]], None] | None = None,
+) -> dict[str, object]:
     ticker = state["ticker"]
     question = state.get("question", "")
     reports = state.get("reports", {})
@@ -52,6 +57,14 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
             "confidence": confidence,
             "narrative_substrate": None,
         }
+
+    # QNT-494: bind the card shape to the partial-card callback so each card
+    # call streams its fields; None (no emitter) keeps the unstreamed call.
+    def _partial(schema: type) -> Callable[[dict[str, Any]], None] | None:
+        emit = on_partial
+        if emit is None:
+            return None
+        return lambda card: emit(schema, card)
 
     # Helper: deterministic fallback when a path can't produce its
     # primary payload. Used by every branch below — the panel never
@@ -118,7 +131,13 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
                 state.get("messages"), question, max_turns=history_budget
             ),
         )
-        followup = graph._structured_call(graph.QuickFactAnswer, prompt, config, "followup-prompt")
+        followup = graph._structured_call(
+            graph.QuickFactAnswer,
+            prompt,
+            config,
+            "followup-prompt",
+            on_partial=_partial(graph.QuickFactAnswer),
+        )
         if followup is None:
             return _fallback("I had trouble building a follow-up answer for that.")
         # plan is empty on followup runs, so the report-coverage
@@ -232,6 +251,7 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
             prompt,
             config,
             "comparison-prompt",
+            on_partial=_partial(graph.ComparisonAnswer),
         )
         if comparison is None:
             return _fallback("I had trouble building that comparison.")
@@ -259,7 +279,11 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
             errors=errors,
         )
         exploration = graph._structured_call(
-            graph.ExplorationAnswer, prompt, config, "exploration-prompt"
+            graph.ExplorationAnswer,
+            prompt,
+            config,
+            "exploration-prompt",
+            on_partial=_partial(graph.ExplorationAnswer),
         )
         if exploration is None:
             return _fallback("I had trouble pulling that scan together.")
@@ -311,7 +335,13 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
                 state.get("messages"), question, max_turns=history_budget
             ),
         )
-        focused = graph._structured_call(graph.FocusedAnalysis, prompt, config, "focused-prompt")
+        focused = graph._structured_call(
+            graph.FocusedAnalysis,
+            prompt,
+            config,
+            "focused-prompt",
+            on_partial=_partial(graph.FocusedAnalysis),
+        )
         if focused is None:
             return _fallback("I had trouble pulling that focused analysis together.")
         # Re-assert the focus discriminator from intent — defends against
@@ -344,7 +374,11 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
             errors=errors,
         )
         quick_fact = graph._structured_call(
-            graph.QuickFactAnswer, prompt, config, "quick-fact-prompt"
+            graph.QuickFactAnswer,
+            prompt,
+            config,
+            "quick-fact-prompt",
+            on_partial=_partial(graph.QuickFactAnswer),
         )
         if quick_fact is None:
             return _fallback("I had trouble pulling a single answer to that.")
@@ -382,6 +416,7 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
         prompt,
         config,
         "system-prompt",
+        on_partial=_partial(graph.Thesis),
     )
     if thesis is None:
         return _fallback("I had trouble pulling a thesis together for that.")
@@ -404,17 +439,41 @@ def synthesize_node(
     fallback-redirect shapes carry no card slot, so nothing is emitted
     early for them -- their prose still streams via ``prose_chunk``.
     """
-    result = _synthesize_payload(state, config)
-    if deps.event_emitter is not None and isinstance(result, dict):
-        # QNT-305 follow-up: strip untrustworthy retrieved anchors (out of
-        # range OR wrong-corpus) from the EARLY card emit too, with the same
-        # gate as the post-graph strip in agent_chat (``intent_path`` already
-        # carries "gather" here, appended by the node wrapper before synthesize
-        # runs). Without this the early card renders a bad anchor that the
-        # stripped post-graph emit then removes -- the card's own flicker, the
-        # twin of the narrate one.
-        intent_path = state.get("intent_path") or []
-        anchor_sources = state.get("retrieved_sources") or [] if "gather" in intent_path else []
+    emitter = deps.event_emitter
+    # QNT-305 follow-up: strip untrustworthy retrieved anchors (out of range OR
+    # wrong-corpus) from the EARLY card emit too, with the same gate as the
+    # post-graph strip in agent_chat (``intent_path`` already carries "gather"
+    # here, appended by the node wrapper before synthesize runs). Without this
+    # the early card renders a bad anchor that the stripped post-graph emit then
+    # removes -- the card's own flicker, the twin of the narrate one. QNT-494:
+    # the streamed partial cards take the same strip.
+    intent_path = state.get("intent_path") or []
+    anchor_sources = state.get("retrieved_sources") or [] if "gather" in intent_path else []
+
+    # QNT-494: stream each completed field as a ``card_partial`` event so the
+    # panel fills in during generation. Display-only: the validated card emitted
+    # below stays authoritative, and the post-graph grounding check runs on it.
+    def _emit_partial(schema: type, card: dict[str, Any]) -> None:
+        assert emitter is not None
+        try:
+            emitter(
+                "card_partial",
+                {
+                    "slot": graph.answer_slot_for_type(schema),
+                    "card": graph.strip_bad_anchors_in_obj(card, anchor_sources),
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 — never let SSE plumbing crash synthesize
+            logger.warning(
+                "synthesize %s: card_partial emit failed: %s (continuing)",
+                state.get("ticker", "?"),
+                exc,
+            )
+
+    result = _synthesize_payload(
+        state, config, on_partial=_emit_partial if emitter is not None else None
+    )
+    if emitter is not None and isinstance(result, dict):
         # QNT-294 (AC2): read the single answer union; its shape's slot name
         # is the SSE event name. conversational carries no card (streams as
         # prose_chunk), so it is skipped.
@@ -423,7 +482,7 @@ def synthesize_node(
             slot = graph.answer_slot(payload)
             if slot is not None and slot != "conversational":
                 try:
-                    deps.event_emitter(
+                    emitter(
                         slot, graph.strip_bad_anchors_in_obj(payload.model_dump(), anchor_sources)
                     )
                 except Exception as exc:  # noqa: BLE001 — never let SSE plumbing crash synthesize

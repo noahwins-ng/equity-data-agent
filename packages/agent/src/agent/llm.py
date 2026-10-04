@@ -257,10 +257,30 @@ class _UsageCallback(BaseCallbackHandler):
             llm_output = getattr(response, "llm_output", None) or {}
             usage = llm_output.get("token_usage") or {}
             total = int(usage.get("total_tokens") or 0)
+            if not total:
+                total = _streamed_total_tokens(response)
         except Exception as exc:  # noqa: BLE001 — never let telemetry crash the request
             logger.warning("token-usage callback failed: %s", exc)
             total = 0
         self._tracker.add(total)
+
+
+def _streamed_total_tokens(response: Any) -> int:
+    """Total tokens of a STREAMED call (QNT-494).
+
+    ``.stream()`` ends with an ``LLMResult`` that has no ``llm_output``; with
+    ``stream_usage=True`` the usage lands on the aggregated message's
+    ``usage_metadata`` instead (verified live against the proxy). Without this
+    every streamed call (narrate, and synthesize since QNT-494) recorded zero
+    and the SSE handler charged the flat per-call estimate instead of real usage.
+    """
+    for gen_list in getattr(response, "generations", None) or []:
+        for gen in gen_list:
+            meta = getattr(getattr(gen, "message", None), "usage_metadata", None) or {}
+            total = int(meta.get("total_tokens") or 0)
+            if total:
+                return total
+    return 0
 
 
 # ─── Served-model tracking (QNT-230 #14) ────────────────────────────────────

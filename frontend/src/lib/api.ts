@@ -325,6 +325,20 @@ export type PlanRationaleEvent = {
   text: string;
 };
 
+// QNT-494: a card in progress, streamed while synthesize generates. ``slot``
+// names the final card event that will follow; ``card`` holds ONLY the fields
+// that finished generating so far (never a half-written value), as the raw
+// partial JSON object -- any field may be absent. Display-only: the final
+// ``thesis`` / ``focused`` / ... event carries the validated card and replaces
+// it, and a verdict / label pill renders only from that final card. Not emitted
+// for comparison_lean (built without an LLM) or conversational.
+export type CardPartialSlot = "thesis" | "quick_fact" | "comparison" | "focused" | "exploration";
+
+export type CardPartialEvent = {
+  slot: CardPartialSlot;
+  card: Record<string, unknown>;
+};
+
 // QNT-208 v2: final verdict is a closed three-state set.
 export type Verdict = "Overweight" | "Neutral" | "Underweight";
 

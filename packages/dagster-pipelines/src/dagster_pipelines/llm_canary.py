@@ -18,6 +18,11 @@ any param the real call carries (the QNT-492 failure class) is exercised too:
   ``x-litellm-attempted-fallbacks`` on streamed responses, so this asserts the
   stream was served by the same deployment (``x-litellm-model-id``) as the
   zero-fallback structured probe.
+* structured_stream -- ``json_mode`` streamed, the shape the synthesize card
+  calls use since QNT-494 (partial cards over SSE). Checked like ``stream``
+  (same deployment as the structured probe) plus a JSON-parse check. The
+  per-turn QNT-492 tripwire cannot see a fallback on this shape (no
+  attempted-fallbacks header on streams), so this probe is its route coverage.
 
 Debugging a red run: docs/guides/ops-runbook.md ("LLM canary failed").
 """
@@ -87,12 +92,15 @@ def _build_requests() -> tuple[CreateFn, dict[str, dict[str, Any]]]:
     )
     # LangChain strips this tracing-only kwarg before the request leaves.
     structured.pop("ls_structured_output_format", None)
+    stream_kwargs: dict[str, Any] = {"stream": True, "stream_options": {"include_usage": True}}
     stream = llm._get_request_payload(  # noqa: SLF001
-        convert_to_messages(_STREAM_MESSAGES),
-        stream=True,
-        stream_options={"include_usage": True},
+        convert_to_messages(_STREAM_MESSAGES), **stream_kwargs
     )
-    return llm.client.with_raw_response.create, {"structured": structured, "stream": stream}
+    return llm.client.with_raw_response.create, {
+        "structured": structured,
+        "stream": stream,
+        "structured_stream": {**structured, **stream_kwargs},
+    }
 
 
 def _probe(
@@ -146,32 +154,36 @@ def check_llm_route(
             failures.append(f"{r.shape}: empty completion")
 
     structured = by_shape["structured"]
-    if structured.status_code == 200:
-        if structured.attempted_fallbacks != "0":
-            failures.append(
-                f"structured: x-litellm-attempted-fallbacks={structured.attempted_fallbacks}"
-                " (expected 0) -- the primary did not serve it"
-            )
-        try:
-            json.loads(structured.content)
-        except ValueError:
-            failures.append(f"structured: json_mode reply is not JSON: {structured.content!r}")
+    if structured.status_code == 200 and structured.attempted_fallbacks != "0":
+        failures.append(
+            f"structured: x-litellm-attempted-fallbacks={structured.attempted_fallbacks}"
+            " (expected 0) -- the primary did not serve it"
+        )
 
-    # Streams carry no attempted-fallbacks header; a fallback shows as a different
-    # deployment id than the primary that served the zero-fallback structured probe.
-    # Only comparable when the structured probe itself succeeded, and a missing id
-    # must fail -- otherwise None == None would pass a stream fallback silently.
-    stream = by_shape["stream"]
-    if stream.status_code == 200 and structured.status_code == 200:
-        if not structured.model_id or not stream.model_id:
-            failures.append(
-                "x-litellm-model-id missing -- cannot verify the stream used the primary"
-            )
-        elif stream.model_id != structured.model_id:
-            failures.append(
-                f"stream: served by deployment {stream.model_id}, not the primary"
-                f" {structured.model_id} -- a fallback fired"
-            )
+    for shape, payload in payloads.items():
+        r = by_shape[shape]
+        if r.status_code != 200:
+            continue
+        if payload.get("response_format") == {"type": "json_object"}:
+            try:
+                json.loads(r.content)
+            except ValueError:
+                failures.append(f"{shape}: json_mode reply is not JSON: {r.content!r}")
+        # Streams carry no attempted-fallbacks header; a fallback shows as a
+        # different deployment id than the primary that served the zero-fallback
+        # structured probe. Only comparable when the structured probe itself
+        # succeeded, and a missing id must fail -- otherwise None == None would
+        # pass a stream fallback silently.
+        if payload.get("stream") and structured.status_code == 200:
+            if not structured.model_id or not r.model_id:
+                failures.append(
+                    f"x-litellm-model-id missing -- cannot verify {shape} used the primary"
+                )
+            elif r.model_id != structured.model_id:
+                failures.append(
+                    f"{shape}: served by deployment {r.model_id}, not the primary"
+                    f" {structured.model_id} -- a fallback fired"
+                )
     return results, failures
 
 

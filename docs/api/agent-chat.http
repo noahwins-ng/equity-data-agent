@@ -1,0 +1,24 @@
+### Agent chat (SSE) - thesis turn
+# Streams `event: <name>\ndata: <json>\n\n` frames. Full event contract: the
+# module docstring of packages/api/src/api/routers/agent_chat.py; frontend
+# types: frontend/src/lib/api.ts.
+#
+# Typical thesis-turn order:
+#   intent -> plan_rationale -> tool_call/tool_result ... ->
+#   card_partial* (QNT-494: completed card fields while synthesize generates) ->
+#   thesis (final validated card; replaces the partial) ->
+#   narrative_chunk* -> thesis (idempotent re-emit) -> done
+#
+# card_partial: {"slot": "thesis", "card": {<only finished fields>}}
+#   Display-only; verdict / label pills render only from the final card.
+#
+# Timing receipt (curl prints each frame with seconds since start):
+#   curl -sN -X POST localhost:8000/api/v1/agent/chat -H 'content-type: application/json' \
+#     -d '{"ticker":"NVDA","message":"Give me a balanced thesis on NVDA"}' \
+#     | while IFS= read -r l; do case "$l" in event:*) echo "$SECONDS $l";; esac; done
+POST http://localhost:8000/api/v1/agent/chat
+Content-Type: application/json
+
+{"ticker": "NVDA", "message": "Give me a balanced thesis on NVDA"}
+
+###
