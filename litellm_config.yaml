@@ -269,16 +269,8 @@ model_list:
       rpm: 25       # ~80% of Groq published 30 RPM (rounded to nearest 5)
       tpm: 6500     # ~80% of Groq published 8K TPM (rounded to nearest 500)
 
-  - model_name: equity-agent/bench-cerebras-gptoss120b
-    litellm_params:
-      model: cerebras/gpt-oss-120b
-      api_key: os.environ/CEREBRAS_API_KEY
-      reasoning_effort: low
-      extra_headers:
-        User-Agent: equity-data-agent-litellm/1.0
-
   # QNT-495: the golden + dialogue judge (agent.llm.JUDGE_ALIAS /
-  # dialogue_judge.JUDGE_MODEL_ALIAS). Replaces bench-cerebras-gptoss120b, which
+  # dialogue_judge.JUDGE_MODEL_ALIAS). Replaced the Cerebras gpt-oss-120b alias (removed), which
   # started returning 402 "Payment required" on every call (2026-10-03, seen in
   # QNT-493 AC4) and left both evals with empty judge columns. gpt-6-luna on
   # OpenRouter: different family from the DeepSeek agent (no self-preference),

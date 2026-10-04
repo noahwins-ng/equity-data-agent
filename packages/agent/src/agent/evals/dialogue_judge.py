@@ -17,13 +17,16 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 from shared.config import settings
 
+from agent.llm import _RESOLVED_MODEL_BY_ALIAS
+
 logger = logging.getLogger(__name__)
 
-# QNT-495: was bench-cerebras-gptoss120b until Cerebras started returning 402.
+# QNT-495: moved off Cerebras (402 on every call). Resolved models come from the
+# llm alias map so the labels stamped into dialogue_history.csv can't go stale.
 JUDGE_MODEL_ALIAS = "equity-agent/judge-gpt6luna"
-JUDGE_RESOLVED_MODEL = "openrouter/openai/gpt-6-luna"
+JUDGE_RESOLVED_MODEL = _RESOLVED_MODEL_BY_ALIAS[JUDGE_MODEL_ALIAS]
 AGENT_UNDER_TEST_ALIAS = "equity-agent/default"
-AGENT_UNDER_TEST_RESOLVED_MODEL = "groq/llama-3.3-70b-versatile"
+AGENT_UNDER_TEST_RESOLVED_MODEL = _RESOLVED_MODEL_BY_ALIAS[AGENT_UNDER_TEST_ALIAS]
 
 
 class DialogueAxisScore(BaseModel):

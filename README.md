@@ -70,9 +70,10 @@ stateDiagram-v2
 
 - **Routing.** `classify` sorts each question into 9 answer types. Ambiguous asks get a clarifying question instead of a guess; greetings and follow-ups skip data fetching entirely.
 - **RAG over news + SEC filings.** Hybrid search (vector + keyword) with reranking, triggered only for event questions (lawsuits, buybacks, M&A); sources stream to the UI.
+- **Streaming.** The answer card fills in field by field as it's written, so content appears about 2 seconds after the data is in, not after the whole answer.
 - **Memory.** A checkpointer keeps the conversation, so follow-ups reuse earlier reports instead of re-fetching.
 - **Evals in CI.** Every number traced back to a report, a 44-question regression set, retrieval quality metrics, and LLM-judged answer quality.
-- **Model routing + tracing.** LiteLLM with automatic fallback between providers and a smaller model for routing steps; every request traced in Langfuse. About $0.002 per thesis.
+- **Model routing + tracing.** LiteLLM routes to DeepSeek with prompt caching, a fallback chain, and a small model for routing steps. An hourly canary alerts if requests quietly fall back. Every request is traced in Langfuse. About $0.002 per thesis.
 
 ## Data Engineering
 
@@ -128,7 +129,7 @@ graph LR
 | Check | Result |
 |---|---|
 | Invented numbers (grounded vs. ungrounded) | 0% vs. 87% |
-| Golden-set regression (correct tools / grounded answer) | 40 of 41 |
+| Golden-set regression (correct tools / grounded answer) | 44 of 44 |
 | Retrieval: right source ranked first (MRR) | 0.94 |
 
 Full benchmark history: [`docs/model-bench-2026-04.md`](docs/model-bench-2026-04.md).

@@ -80,7 +80,7 @@ DIALOGUE_FIELDS = (
 # sampling variance stops polluting the measurement. Judge is already temp 0.
 EVAL_AGENT_TEMPERATURE = 0.0
 
-# QNT-218: a clean dialogue sweep runs each fixture in ~25-30s. Groq throttling
+# QNT-218: a clean dialogue sweep runs each fixture in ~25-30s. Provider throttling
 # pushes that to 45-62s with scattered judge failures. Flag a run whose median
 # fixture latency clears this so a contaminated aggregate is never trusted.
 CONTAMINATION_LATENCY_MS = 40_000
@@ -624,7 +624,7 @@ def contamination_warning(outcomes: list[DialogueOutcome]) -> str | None:
         f"CONTAMINATED RUN -- do not trust this aggregate. median latency "
         f"{int(med)}ms (clean ~25-30s, contamination threshold "
         f"{CONTAMINATION_LATENCY_MS}ms); {failures} judge failure(s). "
-        "Likely Groq throttling; rerun on a clean rate-limit window."
+        "Likely provider throttling; rerun on a clean rate-limit window."
     )
 
 
