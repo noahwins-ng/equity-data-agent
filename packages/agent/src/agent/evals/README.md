@@ -35,7 +35,7 @@ For every thesis the agent produces, regex every numeric claim out of the text a
 Per run, for each record:
 1. Invoke `build_graph(...).invoke(...)` in-process with recording-wrapped tools (so the tool-call eval can see what was actually called).
 2. Score the generated thesis against the reference thesis via:
-   - **LLM-as-judge** per-axis scores (0-10 each) using the agent's own LLM via the LiteLLM proxy at `temperature=0.0`. Four axes: `faithfulness`, `structure`, `correctness`, `analyst_logic`. A `composite` column holds the rounded average of all four.
+   - **LLM-as-judge** per-axis scores (0-10 each) from the pinned judge (`JUDGE_ALIAS` = `equity-agent/judge-gpt6luna`, see "Judge model" below) via the LiteLLM proxy at `temperature=0.0`. Four axes: `faithfulness`, `structure`, `correctness`, `analyst_logic`. A `composite` column holds the rounded average of all four.
    - **Cosine similarity** over normalised term-frequency vectors. The original spec called for `all-MiniLM-L6-v2` embeddings; we ship the lighter zero-dep equivalent (same operation in a different vector space) to keep the harness portable. Swap `similarity.cosine` for an embedding-backed implementation behind the same signature when MiniLM is on the path.
 3. Append one row per record to `golden_history.csv` (envelope + `GOLDEN_FIELDS`):
    `run_id, git_sha, prompt_version, suite, eval_type, ticker, question_id, question, faithfulness, structure, correctness, analyst_logic, composite, cosine, tool_call_ok, hallucination_ok, verdict_label_consistent, elapsed_ms`.
@@ -50,8 +50,9 @@ For each record, assert every tool in `expected_tools` was actually called. Over
 12+ hand-written multi-turn fixtures replay the agent through the same
 in-process graph path as the structured goldens. The judge is deliberately a
 different LiteLLM alias from the agent under test:
-`equity-agent/bench-cerebras-gptoss120b` (`cerebras/gpt-oss-120b`) scores the
-production default (`groq/llama-3.3-70b-versatile`). Python still owns the
+`equity-agent/judge-gpt6luna` (`openrouter/openai/gpt-6-luna`, the same pinned
+judge as the golden set) scores the production default (DeepSeek, see "Judge
+model" below). Python still owns the
 objective numeric-support check for the narrative bubble; the judge scores the
 subjective dialogue axes: `analyst_likeness`, `helpfulness`,
 `non_hallucination`, `exploration_quality`, and `voice_match`.
@@ -572,9 +573,42 @@ uv run python -m agent.evals.news_search_eval --flag-only   # skip live Qdrant
 
 Exit codes:
 - `0` - every record passed the hallucination + tool-call contracts.
-- `1` - any record failed a hard contract, OR (if `EVAL_MIN_JUDGE` is set) the average judge score fell below the threshold.
+- `1` - any record failed a hard contract, OR no measured record got a judge score (judge outage, QNT-495), OR (if `EVAL_MIN_JUDGE` is set) the average judge score fell below the threshold.
 
 The judge score is treated as a **soft** signal by default - the gate is on hard contracts (hallucination, tool-call). Set `EVAL_MIN_JUDGE=7` once `history.csv` shows enough baseline runs to trust a number.
+
+## Judge model (QNT-495)
+
+Golden and dialogue share one pinned judge: `JUDGE_ALIAS` /
+`dialogue_judge.JUDGE_MODEL_ALIAS` = `equity-agent/judge-gpt6luna` ->
+`openrouter/openai/gpt-6-luna` (`reasoning_effort: low`, `temperature: 0`). It
+must stay a different model family from the agent under test (DeepSeek) so the
+judge never scores its own output (QNT-230 #10).
+
+Until 2026-10-03 the judge was `equity-agent/bench-cerebras-gptoss120b`. Cerebras
+then started returning 402 "Payment required" on every call (seen in QNT-493
+AC4). The golden suite treats a judge error as a soft per-row `None`, so it kept
+exiting 0 with empty judge columns. Two changes came out of that:
+
+- The judge moved to OpenRouter (same paid key as the DeepEval judge, ADR-023).
+- A golden run where **no** measured record got a judge score now exits 1
+  (`golden_set.judge_outage`). The dialogue CLI already exited 1 on any missing
+  judge score.
+
+**Rows judged by Cerebras are not comparable to gpt-6-luna rows.** Compare judge
+axes only against runs at or after the QNT-495 re-baseline (`run_id`s below).
+
+Re-baseline under gpt-6-luna (agent code = main @ `491c89a`):
+
+| suite | run_id | result |
+|---|---|---|
+| golden | `20261004T172158Z-4f2110` | 44/44 hallucination + tool-call, 44/44 judged; composite 5.3 (F 6.48, S 1.23, C 5.77, A 7.75) |
+| dialogue | `20261004T173536Z-9de330-dialogue` | 15/15 numeric-support, 15/15 judged; avg 0.781 (analyst 0.736, helpful 0.781, non-halluc 0.937, explore 0.675, voice 0.773) |
+
+Compared with the last Cerebras-judged golden runs, gpt-6-luna scores
+faithfulness lower (6.48 vs ~8-8.8) and analyst_logic higher (7.75 vs ~4.5-5.3).
+That is a judge shift, not an agent change. The structure axis stays near 1-2
+under both judges.
 
 ## Judge axes (QNT-191)
 

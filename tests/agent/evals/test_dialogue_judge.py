@@ -120,9 +120,19 @@ def test_dedicated_judge_alias_rejects_self_judging() -> None:
         build_judge_llm(agent_model_alias=JUDGE_MODEL_ALIAS)
 
 
-def test_dialogue_judge_uses_cerebras_gptoss120b_alias() -> None:
-    assert JUDGE_MODEL_ALIAS == "equity-agent/bench-cerebras-gptoss120b"
-    assert JUDGE_RESOLVED_MODEL == "cerebras/gpt-oss-120b"
+def test_dialogue_judge_uses_openrouter_gpt6luna_alias() -> None:
+    """QNT-495: moved off Cerebras (402 on every call) to OpenRouter gpt-6-luna."""
+    assert JUDGE_MODEL_ALIAS == "equity-agent/judge-gpt6luna"
+    assert JUDGE_RESOLVED_MODEL == "openrouter/openai/gpt-6-luna"
+
+
+def test_dialogue_judge_matches_structured_judge_and_resolved_map() -> None:
+    """One pinned judge for both evals, and the label stamped into history rows
+    matches the alias->model map the trace metadata reads."""
+    from agent.llm import _RESOLVED_MODEL_BY_ALIAS, JUDGE_ALIAS
+
+    assert JUDGE_MODEL_ALIAS == JUDGE_ALIAS
+    assert _RESOLVED_MODEL_BY_ALIAS[JUDGE_MODEL_ALIAS] == JUDGE_RESOLVED_MODEL
 
 
 def test_dialogue_judge_unaffected_by_model_override(monkeypatch) -> None:

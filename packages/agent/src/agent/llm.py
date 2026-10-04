@@ -74,6 +74,7 @@ _RESOLVED_MODEL_BY_ALIAS: dict[str, str] = {
     "equity-agent/small": "groq/openai/gpt-oss-20b",
     "equity-agent/bench-gptoss120b": "groq/openai/gpt-oss-120b",
     "equity-agent/bench-cerebras-gptoss120b": "cerebras/gpt-oss-120b",
+    "equity-agent/judge-gpt6luna": "openrouter/openai/gpt-6-luna",  # QNT-495
     "equity-agent/bench-deepseek-v4-flash": "openrouter/deepseek/deepseek-v4-flash-0731",  # QNT-442
     "equity-agent/bench-gptoss20b": "groq/openai/gpt-oss-20b",
     "equity-agent/bench-gemma4-31b": "gemini/gemma-4-31b-it",
@@ -90,14 +91,17 @@ _RESOLVED_MODEL_BY_ALIAS: dict[str, str] = {
 # directly, independent of the override, so the judge is constant across a
 # sweep. Same model the dialogue judge already pins
 # (``dialogue_judge.JUDGE_MODEL_ALIAS``).
-JUDGE_ALIAS = "equity-agent/bench-cerebras-gptoss120b"
+# QNT-495: moved off ``bench-cerebras-gptoss120b`` (Cerebras 402 on every call
+# from 2026-10-03) to gpt-6-luna on OpenRouter -- a different family from the
+# DeepSeek agent, so the no-self-judging property holds.
+JUDGE_ALIAS = "equity-agent/judge-gpt6luna"
 
 # QNT-275 / ADR-023: the DeepEval RAGAS suite's judge. A judged record fires ~12
 # judge calls, so a free-tier judge's daily token ceiling caps a run at ~20-35
 # records. This paid OpenRouter alias (DeepSeek V4 Flash) has no such ceiling --
 # a >=50-record baseline runs in one window for ~$0.18 -- so the DeepEval suite
-# pins THIS judge while the dialogue / golden evals stay on the free
-# ``JUDGE_ALIAS`` above. Reach it via ``get_judge_llm(model_alias=...)``.
+# pins THIS judge while the dialogue / golden evals stay on ``JUDGE_ALIAS``
+# above. Reach it via ``get_judge_llm(model_alias=...)``.
 DEEPEVAL_JUDGE_ALIAS = "equity-agent/bench-deepseek-v4-flash"
 
 # QNT-129 bench harness override. When set, every ``get_llm()`` call returns a
@@ -481,12 +485,12 @@ def resolve_trace_model_tag(
 def get_judge_llm(temperature: float = 0.0, model_alias: str | None = None) -> ChatOpenAI:
     """Return a ChatOpenAI pinned to a judge alias for LLM-as-judge scoring.
 
-    Defaults to :data:`JUDGE_ALIAS` (the free bench-cerebras judge the dialogue /
-    golden evals use). ``model_alias`` overrides it for a suite that needs a
+    Defaults to :data:`JUDGE_ALIAS` (the OpenRouter gpt-6-luna judge the dialogue /
+    golden evals use, QNT-495). ``model_alias`` overrides it for a suite that needs a
     different judge -- the DeepEval RAGAS suite passes
     :data:`DEEPEVAL_JUDGE_ALIAS` (the paid OpenRouter DeepSeek judge, QNT-275) so
-    its ~12-call/record budget isn't bound by the free-tier daily token ceiling,
-    WITHOUT moving the dialogue/golden judge off the free model.
+    its ~12-call/record budget isn't bound by a daily token ceiling, WITHOUT
+    moving the dialogue/golden judge.
 
     Deliberately bypasses both ``_MODEL_OVERRIDE`` and ``_TEMPERATURE_OVERRIDE``:
     the judge must NOT move when a bench sweep re-routes the agent-under-test
