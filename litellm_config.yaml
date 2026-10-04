@@ -145,8 +145,8 @@ model_list:
         # advertise structured_outputs, but QNT-258 proved advertise != enforce).
         #
         # QNT-493: pinned to first-party DeepSeek ONLY. The curated resilience
-        # list above is superseded by the equity-agent/default-any-provider hop
-        # (same model, any provider), so a DeepSeek outage or filter miss now
+        # list above is superseded by the equity-agent/default-backup hop
+        # (same model, pinned backup providers), so a DeepSeek outage or filter miss now
         # surfaces as a counted litellm fallback (x-litellm-attempted-fallbacks,
         # which the LLM canary alerts on) instead of silently serving uncached.
         provider:
@@ -166,11 +166,24 @@ model_list:
   # QNT-493 / ADR-029: same-model fallback hop. Before this, the first hop was
   # a different, free, slow model (Nemotron, p50 13s) -- QNT-492 served 7 weeks
   # of conversational turns from it after a request param filtered the primary.
-  # This hop is the SAME v4.1-flash on any provider that honors the request's
-  # params (require_parameters kept: json_object must still be enforced), so a
-  # pin / filter / first-party outage degrades only cache hits, not the model.
+  # This hop is the SAME v4.1-flash on a pinned backup set (require_parameters
+  # kept: json_object must still be enforced), so a pin / filter / first-party
+  # outage degrades only cache hits, not the model.
   # Reasoning off and max_tokens / timeout mirror the primary.
-  - model_name: equity-agent/default-any-provider
+  #
+  # QNT-493 follow-up: pinned instead of any-provider. Unpinned, OpenRouter's
+  # price-weighted routing lands on the cheapest endpoints -- fp4 builds and
+  # providers we never measured -- so a primary failure would silently change
+  # output quality. Order = the top token-share providers for this model, ranked
+  # by a pinned benchmark on the real Thesis json_mode prompt (2026-10-04/05,
+  # 3 calls each, all schema-valid): together median 3.2-3.9s / 193-260 tok/s
+  # (fastest, stable across two runs) -> parasail 7.6s / 116 tok/s, full-length
+  # output -> deepinfra 8.3-11.7s / 65-87 tok/s, slowest but the highest-volume
+  # provider. Excluded: fp4 builds (quantizations filter), inference-net (slow,
+  # quantization undisclosed), baseten (fast but returned a 429), gmicloud /
+  # siliconflow (~35% shorter theses on the same prompt), digitalocean (14s).
+  # allow_fallbacks false: if all three fail, the Nemotron anchor fires.
+  - model_name: equity-agent/default-backup
     litellm_params:
       model: openrouter/deepseek/deepseek-v4.1-flash
       api_key: os.environ/OPENROUTER_API_KEY
@@ -179,7 +192,15 @@ model_list:
         reasoning:
           enabled: false
         provider:
-          allow_fallbacks: true
+          order:
+            - together
+            - parasail
+            - deepinfra
+          quantizations:
+            - fp8
+            - bf16
+            - unknown
+          allow_fallbacks: false
           data_collection: allow
           require_parameters: true
       timeout: 45
@@ -330,7 +351,7 @@ litellm_settings:
   # QNT-493: default -> same-model any-provider hop -> Nemotron anchor.
   fallbacks:
     - equity-agent/default:
-        - equity-agent/default-any-provider
+        - equity-agent/default-backup
         - equity-agent/fallback-nemotron-ultra
     # QNT-220 (#7): small tier (Groq gpt-oss-20b, survives the decommission)
     # falls back to the default on provider throttle so classify/plan stay
