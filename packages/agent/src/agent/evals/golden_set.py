@@ -25,6 +25,7 @@ History is the source of truth:
 from __future__ import annotations
 
 import logging
+import re
 import time
 import uuid
 from collections.abc import Iterator
@@ -218,6 +219,11 @@ def load_goldens(path: Path = GOLDENS_PATH) -> list[GoldenRecord]:
     return records
 
 
+# QNT-493: the closed-vocab aspect label tokens (QNT-207 report templates) that
+# must not appear verbatim in a verdict_rationale (QNT-359 contract).
+_LABEL_TOKEN_RE = re.compile(r"\b(Premium|Inline|Discounted|Uptrend|Sideways|Downtrend)\b")
+
+
 def run_record(record: GoldenRecord, *, llm_for_judge: Any | None = None) -> EvalOutcome:
     """Run a single record through the agent and score it.
 
@@ -328,19 +334,24 @@ def run_record(record: GoldenRecord, *, llm_for_judge: Any | None = None) -> Eva
             hallucination_ok = False
             hallucination_reason = f"forbidden in supports: {', '.join(aspect_violations)}"
 
-    # QNT-208: verdict_consistency — the v2 verdict_rationale must mention
-    # at least one aspect label verbatim (Premium, Inline, Discounted,
-    # Uptrend, Sideways, Downtrend). Folded into hallucination_ok so any
-    # rationale that drifts off-vocabulary gates the same exit code.
+    # QNT-208 -> QNT-359: verdict_consistency. QNT-208 required the rationale to
+    # quote an aspect label verbatim; QNT-359 reversed that contract (prompt +
+    # Thesis.verdict_rationale description): the rationale TRANSLATES the labels
+    # to analyst prose and the raw tokens live only in each aspect's ``label``
+    # field. QNT-493 re-aligned this check, which still enforced the QNT-208
+    # rule and so failed exactly the rationales that obeyed the prompt. Matches
+    # the capitalized tokens on word boundaries, so ordinary words ("a premium
+    # to peers", "drifting sideways") stay allowed. Known edge: the same word
+    # capitalized at a sentence start ("Sideways trading ...") also matches.
+    # Folded into hallucination_ok so scaffolding leaking into the prose gates
+    # the same exit code.
     if hallucination_ok and isinstance(thesis_obj, Thesis):
-        rationale_lower = thesis_obj.verdict_rationale.lower()
-        aspect_labels = ("premium", "inline", "discounted", "uptrend", "sideways", "downtrend")
-        if not any(label in rationale_lower for label in aspect_labels):
+        leaked = sorted(set(_LABEL_TOKEN_RE.findall(thesis_obj.verdict_rationale)))
+        if leaked:
             hallucination_ok = False
             hallucination_reason = (
-                "verdict_consistency: verdict_rationale must mention at least "
-                "one aspect label verbatim (Premium/Inline/Discounted/"
-                "Uptrend/Sideways/Downtrend)"
+                f"verdict_consistency: verdict_rationale must translate aspect "
+                f"labels to prose, found raw token(s): {', '.join(leaked)}"
             )
 
     # QNT-302: advisory verdict-vs-labels tripwire. Recorded per structured

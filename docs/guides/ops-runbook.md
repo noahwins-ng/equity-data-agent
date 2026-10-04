@@ -802,6 +802,22 @@ QNT-492 instance: LangChain `with_structured_output(method="function_calling")` 
 **Prevention**: Sentry warning on every fallback fire (`agent_chat.py`, QNT-492) + `test_function_calling_payload_omits_parallel_tool_calls`. Re-check provider param support whenever the model slug or provider `order` changes (QNT-442 moved the slug and opened this gap).
 **Last occurred**: 2026-08-16 .. 2026-10-03 (fixed by QNT-492)
 
+### LLM canary failed (`llm_canary_job`, QNT-493)
+
+**Symptoms**: Discord alert `llm_canary_job` failed (posted by `dagster_run_failure_alert_sensor`). The run's `Failure` description lists each failed check, e.g. `structured: x-litellm-attempted-fallbacks=1 (expected 0)`, `stream: served by deployment <id>, not the primary <id>`, `<shape>: 17.2s > 15s bound`, or `<shape>: request failed (404): ...`. No user has to be affected yet - the canary probes hourly so a route regression is caught before real traffic pays the slow path (prod traffic is ~1 turn/day).
+**Diagnosis**: the canary sends the agent's own request payloads (`get_llm()`, json_mode structured + streamed narrate) through LiteLLM on `equity-agent/default`. Re-run it on demand from the prod Dagster UI (`http://localhost:3100` via `make tunnel`, launch `llm_canary_job`) and read the op log line per shape (`status / latency / fallbacks / model_id`). Then classify:
+- **fallbacks > 0 or stream on another deployment** = first-party DeepSeek did not serve the request. Check the endpoint list and param support (the request is json_object, so DeepSeek must advertise `response_format`):
+```bash
+curl -s https://openrouter.ai/api/v1/models/deepseek/deepseek-v4.1-flash/endpoints \
+  | jq '.data.endpoints[] | select(.tag=="deepseek") | {status, uptime_last_30m, supported_parameters}'
+```
+DeepSeek missing or degraded = provider outage (turns are still served by the same model via `equity-agent/default-any-provider`, just uncached). DeepSeek present but filtered = a request param regression - see "Chat turns slow because the primary silently fell back" above.
+- **latency over bound with 0 fallbacks** = DeepSeek is slow, not down. Check `throughput_last_30m` in the same endpoint listing.
+- **request failed** = proxy down (`docker compose ps litellm`) or the whole chain failed (OpenRouter outage / key revoked).
+**Response**: provider outage - no action needed while the any-provider hop serves; watch for recovery. Param regression - fix the request shape (never drop `require_parameters`, ADR-029). Sustained DeepSeek loss - temporarily add a structured-outputs-free provider to the primary `order` in `litellm_config.yaml` (it must advertise `response_format`).
+**Prevention**: this canary (`dagster_pipelines/llm_canary.py`) + the per-turn fallback Sentry tripwire (QNT-492). Unit tests in `tests/dagster/test_llm_canary.py` cover each failure check.
+**Last occurred**: not yet occurred - preventative
+
 ### Where are the logs / dashboards?
 
 | What | URL (via SSH tunnel) | Auth | Purpose |

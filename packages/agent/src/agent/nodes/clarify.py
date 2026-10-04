@@ -54,9 +54,6 @@ def clarify_node(state: AgentState, config: RunnableConfig, deps: GraphDeps) -> 
         prompt,
         config,
         "clarify-prompt",
-        # QNT-258 follow-up: force function_calling so DeepSeek cannot return the
-        # clarify question as bare prose (json_invalid on the default json_schema).
-        method="function_calling",
     )
     if conversational is None:
         fallback = graph.domain_redirect(

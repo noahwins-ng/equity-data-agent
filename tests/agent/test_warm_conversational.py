@@ -277,4 +277,5 @@ def test_bare_hi_after_nvda_thesis_uses_neutral_prompt_no_tools(
 
     assert stub.conversational_prompts, "conversational synthesize must have fired"
     last_prompt = stub.conversational_prompts[-1]
-    assert _system_text(last_prompt) == NEUTRAL_GREETING_SYSTEM_PROMPT
+    # QNT-493: json_mode appends the response schema to the system prompt.
+    assert _system_text(last_prompt).startswith(NEUTRAL_GREETING_SYSTEM_PROMPT)

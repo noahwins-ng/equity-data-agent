@@ -1,7 +1,7 @@
 # ADR-027: Prompt caching enabled on the paid synthesize call via an ordered OpenRouter provider pin
 
 **Date**: 2026-07-05 (amended 2026-07-08, QNT-351)
-**Status**: Accepted - **provider order and privacy scope amended by QNT-351 (see the amendment at the end)**
+**Status**: Accepted - **provider order and privacy scope amended by QNT-351 (see the amendment at the end); the ordered pin and server-side strict json_schema partially superseded by [ADR-029](029-json-mode-client-validation-to-reach-caching-provider.md) (QNT-493)**
 **Extends**: [ADR-026](026-paid-synthesis-economics-and-free-tier-simplification-dividend.md) (the QNT-318 follow-up it filed - "the single biggest remaining cost lever"). Closes [ADR-021](021-synthesis-model-and-tail-routing.md) #11 (declined on the free 8K-TPM wall). Relaxes, for one alias only, the hot-path data-privacy boundary of [ADR-025](025-paid-launch-primary-and-breaker-recalibration.md).
 
 > **Correction (same-day).** The first version of this ADR *declined* caching, concluding "no privacy-compliant OpenRouter provider prefix-caches `deepseek-v4-flash`." That was wrong - it rested on an under-powered two-call cold test that stopped **before the provider's cache warmed**. The OpenRouter dashboard (aggregate hit rates: Novita 83.5%, DeepInfra 54.5%, …) prompted a re-measurement that reversed the finding. This is the corrected record; the decision is now **enable**. The methodological lesson (don't conclude from a cold, too-short cache probe) is the real takeaway.

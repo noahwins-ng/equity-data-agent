@@ -154,9 +154,6 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
             prompt,
             config,
             "conversational-prompt",
-            # QNT-258 follow-up: force function_calling so DeepSeek cannot return
-            # the reply as bare prose (json_invalid on the default json_schema).
-            method="function_calling",
         )
         if conversational is None:
             # Deterministic redirect when the LLM itself fails — the
@@ -225,14 +222,11 @@ def _synthesize_payload(state: AgentState, config: RunnableConfig) -> dict[str, 
         # ``_OUTPUT_BUDGET`` table that ``_structured_call`` consults by schema, so
         # this call site no longer passes a one-off ``max_tokens`` constant.
         #
-        # QNT-358 (AC3): the comparison call keeps the DEFAULT strict json_schema
-        # method. Verified live against the pinned DeepSeek/OpenRouter provider:
-        # the optional (nullable) AspectView fields compile to anyOf-with-null and
-        # the provider fills exactly the supplied aspects on both tickers,
-        # consistently. function_calling was tested as the ticket's fallback and
-        # FAILED THE OTHER WAY -- it dropped the nullable axis aspect (rendering
-        # company only) or returned incomplete tool-call args -- so json_schema is
-        # the correct choice here, not function_calling.
+        # QNT-493 / ADR-029: like every default-alias call this now rides json_mode
+        # (schema in the prompt, client-side validation) -- the QNT-358 strict
+        # json_schema choice filtered out first-party DeepSeek, the only caching
+        # provider. QNT-358's function_calling failure (dropped nullable axis
+        # aspect) is covered by the AC4 comparison goldens.
         comparison = graph._structured_call(
             graph.ComparisonAnswer,
             prompt,

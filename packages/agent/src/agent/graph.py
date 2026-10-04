@@ -41,13 +41,15 @@ here; pure helpers live in ``agent.policy`` / ``agent.structured`` /
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections.abc import Callable
 from datetime import date
-from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 from langchain_core.exceptions import OutputParserException
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ValidationError
@@ -217,8 +219,15 @@ logger = logging.getLogger(__name__)
 # carries no budget (None); it is a key only so the guard test covers every
 # registered shape. Re-derive from the live distribution if a shape starts
 # pressing its ceiling (Langfuse default-alias generations by intent).
+# QNT-493 re-derivation on deepseek-v4.1-flash + json_mode (golden + dialogue
+# eval run C, 2026-10-03; completion tokens per shape):
+#   thesis         med 1774 / p90 1911 / max 2192 (n=11) -> 3500 (was 2500: 1.1x)
+#   comparison     med 1610 / p90 1801 / max 1962 (n= 6) -> 3000 unchanged (1.5x)
+#   focused        med  634 / p90  779 / max  908 (n=29) -> 1500 unchanged (1.7x)
+#   exploration    max  536 / quick_fact max 59 / conversational max 179 -> unchanged
+# v4.1 writes longer theses; only Thesis fell below the ~1.7x headroom policy.
 _OUTPUT_BUDGET: dict[type, int | None] = {
-    Thesis: 2500,
+    Thesis: 3500,
     QuickFactAnswer: 1500,
     ComparisonAnswer: 3000,
     LeanComparisonAnswer: None,
@@ -226,6 +235,32 @@ _OUTPUT_BUDGET: dict[type, int | None] = {
     FocusedAnalysis: 1500,
     ExplorationAnswer: 1500,
 }
+
+
+def _with_json_schema_instruction(prompt: list[Any] | str, schema: type[BaseModel]) -> list[Any]:
+    """Carry ``schema`` in the system prompt for a json_mode call (QNT-493).
+
+    json_mode sends only ``response_format: json_object`` -- no schema on the wire
+    -- so the model learns the shape from the prompt and Pydantic validates it
+    client-side. The block is merged into the FIRST system message (the stable
+    SYSTEM_PROMPT) so it sits in the cacheable prefix ahead of the per-turn
+    history/reports. It also satisfies DeepSeek's json_object rule that the
+    prompt contain the word "json".
+    """
+    instruction = (
+        "Respond with a single JSON object that conforms to this JSON Schema. "
+        "Output only the JSON object, no prose or code fences.\n"
+        + json.dumps(schema.model_json_schema(), separators=(",", ":"))
+    )
+    messages: list[Any] = (
+        [HumanMessage(content=prompt)] if isinstance(prompt, str) else list(prompt)
+    )
+    first = messages[0] if messages else None
+    if isinstance(first, SystemMessage) and isinstance(first.content, str):
+        messages[0] = SystemMessage(content=f"{first.content}\n\n{instruction}")
+    else:
+        messages.insert(0, SystemMessage(content=instruction))
+    return messages
 
 
 def _structured_call[T: BaseModel](
@@ -236,7 +271,6 @@ def _structured_call[T: BaseModel](
     *,
     llm: Any | None = None,
     linked: bool = True,
-    method: Literal["function_calling", "json_mode", "json_schema"] | None = None,
 ) -> T | None:
     """Run one structured-output LLM call with the shared retry/coerce ladder (AC5).
 
@@ -254,27 +288,27 @@ def _structured_call[T: BaseModel](
     link) for the prompt-registered synthesize/clarify calls; the planner passes
     ``linked=False`` for a plain ``invoke`` (no registered prompt).
 
-    ``method`` overrides LangChain's default structured-output method. QNT-258
-    follow-up: the paid DeepSeek V4 Flash primary occasionally returns bare prose
-    instead of the JSON envelope on the conversational ``ConversationalAnswer``
-    schema (an inherently conversational task), tripping a json_invalid
-    ValidationError that the ladder recovers via the deterministic fallback but
-    that Sentry still captures. The conversational/clarify calls pass
-    ``method="function_calling"`` so the structured data comes back as tool-call
-    args -- a channel the model cannot fill with prose -- eliminating the failure
-    mode at the source. ``None`` keeps LangChain's default (json_schema), so the
-    validated ``Thesis``/synthesize path is unchanged.
+    QNT-493 / ADR-029: every default-alias call (``llm=None``) uses
+    ``method="json_mode"`` -- ``response_format: json_object`` with the schema in
+    the system prompt (:func:`_with_json_schema_instruction`) and validation
+    client-side in this ladder. First-party DeepSeek, the primary's only
+    implicit-caching provider, rejects both ``json_schema`` (no
+    structured_outputs) and forced-tool ``function_calling``, so under
+    ``require_parameters`` either shape 404s to the fallback chain. json_object
+    still forces JSON, so the QNT-258 bare-prose failure cannot recur. A caller
+    that passes its own ``llm`` (the small-alias planner, a different provider)
+    keeps LangChain's default method and its prompt untouched.
     """
     # QNT-383: size the output ceiling from the per-shape ``_OUTPUT_BUDGET`` table
     # (the default ``llm=None`` path). A caller that passes its own ``llm`` -- the
     # small-alias planner -- owns its budget; its schema is not an answer shape and
     # carries no table entry, so the table never touches it.
-    base = llm if llm is not None else get_llm(max_tokens=_OUTPUT_BUDGET.get(schema))
-    structured = (
-        base.with_structured_output(schema, method=method)
-        if method is not None
-        else base.with_structured_output(schema)
-    )
+    if llm is None:
+        base = get_llm(max_tokens=_OUTPUT_BUDGET.get(schema))
+        structured = base.with_structured_output(schema, method="json_mode")
+        prompt = _with_json_schema_instruction(prompt, schema)
+    else:
+        structured = llm.with_structured_output(schema)
     structured_llm = structured.with_retry(
         stop_after_attempt=2,
         retry_if_exception_type=(ValidationError, OutputParserException),

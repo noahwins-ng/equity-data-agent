@@ -48,8 +48,15 @@ model_list:
     # pricing moved with it: $0.08/$0.252 per M in/out (was $0.089/$0.224) --
     # input cheaper, output ~12% pricier; net roughly flat given the input-
     # dominated ~12:1 prod traffic skew measured in QNT-292. See ADR-025.
+    # QNT-493 / ADR-029: moved to deepseek-v4.1-flash. First-party DeepSeek (the
+    # only implicit-caching provider, QNT-351) is absent from the 0731 endpoint
+    # list, so prod ran uncached on Baidu ($0.44/$1.32 per M). v4.1-flash lists
+    # it: $0.15/$0.60 per M, cache reads $0.003 per M (endpoints probe 2026-10-03).
+    # DeepSeek advertises response_format but NOT structured_outputs and fails
+    # forced tool_choice, so every structured call now uses json_mode (graph.py
+    # _structured_call) -- the one shape require_parameters lets through to it.
     litellm_params:
-      model: openrouter/deepseek/deepseek-v4-flash-0731
+      model: openrouter/deepseek/deepseek-v4.1-flash
       api_key: os.environ/OPENROUTER_API_KEY
       # QNT-258: DeepSeek V4 Flash on OpenRouter defaults to REASONING ON (emits
       # 37-89 CoT tokens/call even at reasoning_effort:low), which the ticket's
@@ -136,14 +143,15 @@ model_list:
         # fires. `require_parameters: true` makes OpenRouter route only to
         # endpoints that honor the request's response_format/json_schema (all 16
         # advertise structured_outputs, but QNT-258 proved advertise != enforce).
+        #
+        # QNT-493: pinned to first-party DeepSeek ONLY. The curated resilience
+        # list above is superseded by the equity-agent/default-any-provider hop
+        # (same model, any provider), so a DeepSeek outage or filter miss now
+        # surfaces as a counted litellm fallback (x-litellm-attempted-fallbacks,
+        # which the LLM canary alerts on) instead of silently serving uncached.
         provider:
           order:
             - deepseek
-            - baidu
-            - alibaba
-            - novita
-            - gmicloud
-            - deepinfra
           allow_fallbacks: false
           data_collection: allow
           require_parameters: true
@@ -153,6 +161,27 @@ model_list:
       # bounding worst-case turn wall-clock to ~48s (< the 60s client timeout,
       # so no client retry). 45s sits well above normal synthesize/narrate
       # (~5-20s) so only genuine throttle trips it. Bench aliases set no timeout.
+      timeout: 45
+
+  # QNT-493 / ADR-029: same-model fallback hop. Before this, the first hop was
+  # a different, free, slow model (Nemotron, p50 13s) -- QNT-492 served 7 weeks
+  # of conversational turns from it after a request param filtered the primary.
+  # This hop is the SAME v4.1-flash on any provider that honors the request's
+  # params (require_parameters kept: json_object must still be enforced), so a
+  # pin / filter / first-party outage degrades only cache hits, not the model.
+  # Reasoning off and max_tokens / timeout mirror the primary.
+  - model_name: equity-agent/default-any-provider
+    litellm_params:
+      model: openrouter/deepseek/deepseek-v4.1-flash
+      api_key: os.environ/OPENROUTER_API_KEY
+      max_tokens: 1500
+      extra_body:
+        reasoning:
+          enabled: false
+        provider:
+          allow_fallbacks: true
+          data_collection: allow
+          require_parameters: true
       timeout: 45
 
   # ─── QNT-258 / ADR-025: OpenRouter fallback anchor ──────────
@@ -298,8 +327,10 @@ litellm_settings:
   # fallback (fail-closed). (Laguna M.1 was dropped in review — see the anchor
   # comment above.) `equity-agent/gemini` and the bench aliases stay direct so
   # opting in is always an explicit choice.
+  # QNT-493: default -> same-model any-provider hop -> Nemotron anchor.
   fallbacks:
     - equity-agent/default:
+        - equity-agent/default-any-provider
         - equity-agent/fallback-nemotron-ultra
     # QNT-220 (#7): small tier (Groq gpt-oss-20b, survives the decommission)
     # falls back to the default on provider throttle so classify/plan stay

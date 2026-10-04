@@ -64,7 +64,8 @@ SMALL_NODE_ALIAS = "equity-agent/small"
 # follow-up.
 _RESOLVED_MODEL_BY_ALIAS: dict[str, str] = {
     # QNT-258 / ADR-025: paid launch primary (was groq/llama-3.3-70b-versatile).
-    "equity-agent/default": "openrouter/deepseek/deepseek-v4-flash-0731",  # QNT-442
+    "equity-agent/default": "openrouter/deepseek/deepseek-v4.1-flash",  # QNT-493
+    "equity-agent/default-any-provider": "openrouter/deepseek/deepseek-v4.1-flash",  # QNT-493
     "equity-agent/fallback-nemotron-ultra": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
     # QNT-317 / ADR-026: fallback-llama4scout / fallback-groq-gptoss120b and the
     # bench-llama4scout / bench-qwen3-32b / bench-llama3-70b aliases were retired
@@ -577,7 +578,9 @@ def get_llm(
         # OpenRouter ``require_parameters: true`` then drops every DeepSeek
         # provider (none advertise the param) -> 404 in ~0.3s -> silent fallback
         # to the slow free Nemotron anchor on 100% of those turns. A single
-        # forced tool call needs no parallelism control anyway.
+        # forced tool call needs no parallelism control anyway. QNT-493 moved
+        # the default alias to json_mode (no tools at all); this stays as the
+        # guard for any caller that still binds tools on the default alias.
         disabled_params={"parallel_tool_calls": None},
         callbacks=callbacks or None,
     )

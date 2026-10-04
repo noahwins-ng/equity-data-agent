@@ -165,12 +165,47 @@ def test_chat_default_falls_back_to_openrouter_anchor() -> None:
         for alias, fallback_aliases in fb_entry.items()
     }
 
+    # QNT-493: a same-model any-provider hop sits before the free anchor, so a
+    # filtered / down first-party route degrades to the SAME model, not Nemotron.
     assert fallback_map["equity-agent/default"] == [
+        "equity-agent/default-any-provider",
         "equity-agent/fallback-nemotron-ultra",
     ]
     # Cerebras must not appear as a chain target anywhere.
     for alias, fallback_aliases in fallback_map.items():
         assert "equity-agent/fallback-cerebras-gptoss120b" not in fallback_aliases, alias
+
+
+def _litellm_params(alias: str) -> dict[str, Any]:
+    for entry in _load_config()["model_list"]:
+        if entry["model_name"] == alias:
+            return entry["litellm_params"]
+    raise KeyError(alias)
+
+
+def test_primary_is_v41_flash_deepseek_first() -> None:
+    """QNT-493 (AC1): the primary is deepseek-v4.1-flash pinned DeepSeek-first --
+    first-party DeepSeek is the only implicit-caching endpoint -- with reasoning
+    off and require_parameters kept (json_object is a param DeepSeek advertises)."""
+    params = _litellm_params("equity-agent/default")
+    assert params["model"] == "openrouter/deepseek/deepseek-v4.1-flash"
+    provider = params["extra_body"]["provider"]
+    assert provider["order"][0] == "deepseek"
+    assert provider["require_parameters"] is True
+    assert params["extra_body"]["reasoning"] == {"enabled": False}
+
+
+def test_any_provider_hop_is_same_model_unpinned() -> None:
+    """QNT-493 (AC1): the first fallback hop is the SAME model on a looser route --
+    no provider order, OpenRouter fallbacks allowed -- so a pin/filter failure on
+    the primary lands on v4.1-flash elsewhere instead of the slow free anchor."""
+    primary = _litellm_params("equity-agent/default")
+    hop = _litellm_params("equity-agent/default-any-provider")
+    assert hop["model"] == primary["model"]
+    provider = hop["extra_body"]["provider"]
+    assert "order" not in provider
+    assert provider["allow_fallbacks"] is True
+    assert hop["extra_body"]["reasoning"] == {"enabled": False}
 
 
 def test_no_chat_alias_references_forbidden_provider_directly() -> None:

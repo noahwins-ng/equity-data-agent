@@ -563,7 +563,7 @@ def test_synthesize_node_invokes_llm_with_system_message(
     llm.invoke = MagicMock(return_value=AIMessage(content="technical, fundamental, news"))
     llm.stream = MagicMock(return_value=iter([]))
 
-    def _structured(schema: object) -> MagicMock:
+    def _structured(schema: object, **_kw: object) -> MagicMock:
         if schema is ThesisPlan:
             return plan_runnable
         return structured_runnable
@@ -599,7 +599,8 @@ def test_synthesize_node_invokes_llm_with_system_message(
     )
     assert len(synthesize_prompt) == 2
     assert isinstance(synthesize_prompt[0], SystemMessage)
-    assert synthesize_prompt[0].content == SYSTEM_PROMPT
+    # QNT-493: json_mode appends the Thesis schema to the system prompt.
+    assert str(synthesize_prompt[0].content).startswith(SYSTEM_PROMPT)
     assert isinstance(synthesize_prompt[1], HumanMessage)
     # The structured-output runnables were constructed for plan, then synthesize.
     schema_args = [call.args[0] for call in llm.with_structured_output.call_args_list]
