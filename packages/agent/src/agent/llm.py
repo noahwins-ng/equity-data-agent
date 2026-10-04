@@ -65,7 +65,7 @@ SMALL_NODE_ALIAS = "equity-agent/small"
 _RESOLVED_MODEL_BY_ALIAS: dict[str, str] = {
     # QNT-258 / ADR-025: paid launch primary (was groq/llama-3.3-70b-versatile).
     "equity-agent/default": "openrouter/deepseek/deepseek-v4.1-flash",  # QNT-493
-    "equity-agent/default-any-provider": "openrouter/deepseek/deepseek-v4.1-flash",  # QNT-493
+    "equity-agent/default-backup": "openrouter/deepseek/deepseek-v4.1-flash",  # QNT-493
     "equity-agent/fallback-nemotron-ultra": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
     # QNT-317 / ADR-026: fallback-llama4scout / fallback-groq-gptoss120b and the
     # bench-llama4scout / bench-qwen3-32b / bench-llama3-70b aliases were retired

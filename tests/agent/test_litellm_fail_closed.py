@@ -168,7 +168,7 @@ def test_chat_default_falls_back_to_openrouter_anchor() -> None:
     # QNT-493: a same-model any-provider hop sits before the free anchor, so a
     # filtered / down first-party route degrades to the SAME model, not Nemotron.
     assert fallback_map["equity-agent/default"] == [
-        "equity-agent/default-any-provider",
+        "equity-agent/default-backup",
         "equity-agent/fallback-nemotron-ultra",
     ]
     # Cerebras must not appear as a chain target anywhere.
@@ -195,16 +195,22 @@ def test_primary_is_v41_flash_deepseek_first() -> None:
     assert params["extra_body"]["reasoning"] == {"enabled": False}
 
 
-def test_any_provider_hop_is_same_model_unpinned() -> None:
-    """QNT-493 (AC1): the first fallback hop is the SAME model on a looser route --
-    no provider order, OpenRouter fallbacks allowed -- so a pin/filter failure on
-    the primary lands on v4.1-flash elsewhere instead of the slow free anchor."""
+def test_backup_hop_is_same_model_pinned_without_fp4() -> None:
+    """QNT-493 follow-up: the first fallback hop is the SAME model pinned to a
+    measured provider set. Unpinned, OpenRouter's price-weighted routing lands on
+    the cheapest endpoints -- fp4 builds and providers we never measured -- so a
+    primary failure would silently change output quality. The order is the
+    benchmarked top token-share providers (Together, Parasail, DeepInfra), fp4 is
+    excluded, and the hop never falls through to an unlisted provider."""
     primary = _litellm_params("equity-agent/default")
-    hop = _litellm_params("equity-agent/default-any-provider")
+    hop = _litellm_params("equity-agent/default-backup")
     assert hop["model"] == primary["model"]
     provider = hop["extra_body"]["provider"]
-    assert "order" not in provider
-    assert provider["allow_fallbacks"] is True
+    assert provider["order"] == ["together", "parasail", "deepinfra"]
+    assert "deepseek" not in provider["order"]
+    assert provider["allow_fallbacks"] is False
+    assert provider["require_parameters"] is True
+    assert "fp4" not in provider["quantizations"]
     assert hop["extra_body"]["reasoning"] == {"enabled": False}
 
 

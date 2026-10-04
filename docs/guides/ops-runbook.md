@@ -811,7 +811,7 @@ QNT-492 instance: LangChain `with_structured_output(method="function_calling")` 
 curl -s https://openrouter.ai/api/v1/models/deepseek/deepseek-v4.1-flash/endpoints \
   | jq '.data.endpoints[] | select(.tag=="deepseek") | {status, uptime_last_30m, supported_parameters}'
 ```
-DeepSeek missing or degraded = provider outage (turns are still served by the same model via `equity-agent/default-any-provider`, just uncached). DeepSeek present but filtered = a request param regression - see "Chat turns slow because the primary silently fell back" above.
+DeepSeek missing or degraded = provider outage (turns are still served by the same model via `equity-agent/default-backup` -- Together, then Parasail, then DeepInfra -- just uncached). DeepSeek present but filtered = a request param regression - see "Chat turns slow because the primary silently fell back" above.
 - **latency over bound with 0 fallbacks** = DeepSeek is slow, not down. Check `throughput_last_30m` in the same endpoint listing.
 - **request failed** = proxy down (`docker compose ps litellm`) or the whole chain failed (OpenRouter outage / key revoked).
 **Response**: provider outage - no action needed while the any-provider hop serves; watch for recovery. Param regression - fix the request shape (never drop `require_parameters`, ADR-029). Sustained DeepSeek loss - temporarily add a structured-outputs-free provider to the primary `order` in `litellm_config.yaml` (it must advertise `response_format`).

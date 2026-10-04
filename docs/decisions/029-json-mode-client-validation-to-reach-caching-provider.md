@@ -24,7 +24,7 @@ Three failures and one missed saving traced back to the request shape the primar
 ## Decision
 
 1. **The primary is `openrouter/deepseek/deepseek-v4.1-flash`, pinned to first-party `deepseek` only.** Reasoning stays off, `require_parameters` stays true, and `allow_fallbacks` is false. The curated six-provider resilience list from ADR-027 is removed. Its job moves to the next item.
-2. **The first fallback hop is the same model on any provider.** `equity-agent/default-any-provider` uses v4.1-flash with no `order`, `allow_fallbacks: true`, and `require_parameters` kept. The chain is now `default -> default-any-provider -> fallback-nemotron-ultra`. A pin miss or a DeepSeek outage now costs cache hits only; the model doesn't change.
+2. **The first fallback hop is the same model on a pinned backup set.** `equity-agent/default-backup` serves v4.1-flash from `together`, then `parasail`, then `deepinfra`. It excludes fp4 builds (`quantizations: [fp8, bf16, unknown]`), sets `allow_fallbacks: false`, and keeps `require_parameters`. The chain is now `default -> default-backup -> fallback-nemotron-ultra`. A pin miss or a DeepSeek outage now costs cache hits only; neither the model nor its output quality changes. (This hop first shipped unpinned as `default-any-provider`. The QNT-493 follow-up pinned it, because OpenRouter's price-weighted routing would otherwise land on the cheapest endpoints, which are fp4 builds and providers we had never measured.)
 3. **Every default-alias structured call uses `json_mode`.** That covers thesis, quick-fact, comparison, conversational, clarify, focused, and exploration (`graph._structured_call`). The model no longer gets the schema on the wire, so `_with_json_schema_instruction` appends the Pydantic JSON Schema to the **first system message**. That puts it in the stable, cacheable prefix, and it also satisfies DeepSeek's rule that json_object prompts contain the word "json". Strict validation happens client-side in the existing retry/coerce ladder (`with_retry` on `ValidationError`/`OutputParserException`, then the deterministic fallback). The small-alias planner, which passes its own `llm`, keeps its default method.
 4. **An hourly canary checks every request shape.** `llm_canary_job` (Dagster) sends the agent's own json_mode and streamed-narrate payloads through LiteLLM. It fails on any fallback (`x-litellm-attempted-fallbacks != 0`; for streams, a different `x-litellm-model-id`), on latency over 15s, on empty output, or on non-JSON output. A failed run alerts Discord through `dagster_run_failure_alert_sensor`.
 
@@ -52,6 +52,30 @@ Three failures and one missed saving traced back to the request shape the primar
 - **A timed-out primary still cannot reach the end of the chain within one client call.** Each OpenRouter hop has a 45s timeout and the client gives up at 60s (`LLM_REQUEST_TIMEOUT`), so after a primary timeout the any-provider hop has about 15s before the client aborts and retries the whole chain. This was already true of the old 45s-plus-Nemotron chain; the extra hop just makes it one step longer. The hop's main job is the fast failures (a 404 from a filtered or missing provider, 5xx, 429), which take well under a second to fall through. Re-tune the per-hop timeouts against the v4.1 latency distribution if timeouts show up in the fallback tripwire.
 - **The DeepEval judge (`bench-deepseek-v4-flash`) stays on 0731.** It no longer moves in lockstep with the agent (QNT-442 did that), so judge scores stay comparable across this change.
 - **`_OUTPUT_BUDGET`** (graph.py): Thesis rises from 2500 to 3500. v4.1 writes longer theses (completion median 1774, max 2192 tokens in the AC4 golden run, up from a 1304 median on the old model), which left only 1.1x headroom against the table's ~1.7x policy. Every other shape keeps its ceiling with at least 1.5x headroom (see the table comment).
+
+## Backup hop selection (QNT-493 follow-up)
+
+The backup providers were chosen from the model's top token-share providers on OpenRouter (DeepInfra, Together, DeepSeek, Inference.net, Parasail), measured with v4.1-flash pinned to one provider at a time on the real `Thesis` json_mode prompt (~4k input tokens, 3 calls each, 2026-10-04/05). Every provider returned schema-valid JSON. Speed and output behavior differed:
+
+| Provider | Median latency | Output tok/s | Output tokens | Decision |
+|---|---|---|---|---|
+| together | 3.2-3.9s (two runs) | 193-260 | 759-940 | backup #1 |
+| parasail/fp8 | 7.6s | 116 | 885-977 | backup #2 |
+| deepinfra/fp8 | 8.3-11.7s (two runs) | 65-87 | 690-781 | backup #3 (highest volume) |
+| inference-net | 10.9s | 75 | 818-962 | excluded: slow, quantization undisclosed |
+| baseten/fp8 | 3.2s | 295 | 862-988 | excluded: returned a 429 |
+| gmicloud/fp8, siliconflow/fp8 | 5.8s, 6.3s | 83-100 | 518-610 | excluded: ~35% shorter theses |
+| digitalocean | 14.0s | 63 | 866-906 | excluded: too slow |
+
+Quality check through the pinned hop (golden subset AAPL/NVDA/MSFT, n=20, same temporary judge as AC4):
+
+| | primary (DeepSeek) | backup (pinned) |
+|---|---|---|
+| hallucination_ok | 19/20 | 19/20 (the miss is the MSFT `$1. 4 trillion` ingestion artifact) |
+| tool_call_ok | 20/20 | 20/20 |
+| judge composite / faithfulness | 5.4 / 7.05 | 5.4 / 7.0 |
+| cosine | 0.461 | 0.466 |
+| median latency | 8.5s | 6.9s |
 
 ## Eval evidence (QNT-493 AC4)
 
