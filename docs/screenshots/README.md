@@ -4,7 +4,7 @@ This directory holds the five screenshots embedded in the repo `README.md` (the 
 
 Each screenshot has a single canonical filename and a single canonical capture command - pick a representative ticker (NVDA is the default for the bench) and follow the recipe.
 
-> **Refresh status (2026-07-11):** all five embedded screenshots are current - `terminal-live.png`, `rag-provenance.png`, `langfuse-trace.png`, `dagster-lineage.svg`, and `dagster-asset-checks.png` were captured/refreshed 2026-07-11. The former `cli-thesis.png` was dropped from the README (redundant with the hero terminal shot).
+> **Refresh status (2026-10-05):** all five embedded screenshots are current - `terminal-live.png` and `langfuse-trace.png` were refreshed 2026-10-05 (QNT-495); `rag-provenance.png`, `dagster-lineage.svg`, and `dagster-asset-checks.png` were captured 2026-07-11. The former `cli-thesis.png` was dropped from the README (redundant with the hero terminal shot).
 
 ## 1. `langfuse-trace.png`
 
