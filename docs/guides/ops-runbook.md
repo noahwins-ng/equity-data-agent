@@ -943,21 +943,20 @@ unbounded. No manual cleanup needed.
 
 ## Weekly online eval schedule (QNT-192)
 
-**What it does**: every Sunday at 04:00 ET a Dagster job (`online_eval_job`) pulls the previous 7 days of Langfuse traces (`name="agent-chat"`), samples `ONLINE_EVAL_SAMPLE_RATE` of them (default 5%), and pushes four per-axis judge scores back to each sampled trace via `langfuse.create_score()`.
+**What it does**: every Sunday at 04:00 ET a Dagster job (`online_eval_job`) pulls the previous 7 days of Langfuse traces (`name="agent-chat"`), keeps the thesis-intent ones, samples `ONLINE_EVAL_SAMPLE_RATE` of them (default 5%), and pushes two per-axis judge scores back to each sampled trace via `langfuse.create_score()`.
 
-**Score names**: `faithfulness`, `structure`, `correctness`, `analyst_logic` (each 0-10). The same axes the offline golden-set harness uses, so trend lines across both loops are directly comparable.
+**Score names**: `structure`, `analyst_logic` (each 0-10), on thesis traces only. Same axis names as the offline golden-set harness, so those two trend lines are comparable across both loops.
 
-**Important caveat - `correctness` axis**: prod traces carry no golden reference thesis. The `correctness` score reflects whether the generated answer is internally consistent (coherent conclusions, no contradictions), NOT fidelity to a vetted reference. Treat it as a soft signal. `faithfulness`, `structure`, and `analyst_logic` are the actionable axes for production-quality trend detection.
+**Why only two axes (QNT-360 follow-up)**: the judge scores `faithfulness` and `correctness` against a REFERENCE thesis (QNT-230 #9), and prod traces carry none - with an empty reference those axes are arbitrary (the first prod run, 2026-10-05, scored a well-grounded fundamental answer faithfulness 0). `structure` scores the four thesis aspect blocks, so non-thesis answers always score 0 on it. Online eval therefore scores thesis traces only and pushes only the two axes that hold without a reference. Fabricated-number detection lives in the offline golden set and the deterministic hallucination check, not here.
 
 **Interpreting a score drop**:
-- `faithfulness` drop → agent is producing numbers that weren't in the fetched reports; inspect recent traces in Langfuse for fabricated figures. Root cause is usually a prompt regression or a new report-field format the synthesis prompt isn't handling correctly.
 - `structure` drop → one or more required sections (Setup, Bull case, Bear case, Verdict) are missing or stub-length. Check if the synthesis prompt changed or if a structured-output schema field gained a new constraint.
 - `analyst_logic` drop → the four analyst-logic rules (B-1 overbought/bull placement, B-2 no signal-aggregate footers, B-3 prior-session delta characterisation, B-8 conditional verdict verb) are being violated more often. Filter Langfuse traces by the `intent:thesis` tag and read a few verbatim answers to find the pattern.
-- All axes drop together → likely a model change (fallback model swap via LiteLLM) or a major prompt regression. Cross-reference the `model:*` Langfuse tag against the drop window.
+- Both axes drop together → likely a model change (fallback model swap via LiteLLM) or a major prompt regression. Cross-reference the `model:*` Langfuse tag against the drop window.
 
 **Checking schedule health**: in the Dagster UI (`http://localhost:3000` via SSH tunnel), open the `online_eval_weekly_schedule` schedule. Confirm the most recent tick shows "Success" and the run log shows `Online eval complete: scored=N`. A "Skipped" tick with `ONLINE_EVAL_LANGFUSE keys not set` means `ONLINE_EVAL_LANGFUSE_PUBLIC_KEY` / `ONLINE_EVAL_LANGFUSE_SECRET_KEY` are not set in the environment.
 
-**Low-traffic bump**: if `Total traces: N  Sampled: M` in the run log shows M < 20 for two consecutive weeks, set `ONLINE_EVAL_SAMPLE_RATE=1.0` in `.env` on the Hetzner host and restart `dagster-daemon` (`docker compose restart dagster-daemon`). The schedule will then score every trace in the 7-day window.
+**Low-traffic bump**: if `Total traces: N  Thesis: T  Sampled: M` in the run log shows M < 20 for two consecutive weeks, set `ONLINE_EVAL_SAMPLE_RATE=1.0` in `.env` on the Hetzner host and restart `dagster-daemon` (`docker compose restart dagster-daemon`). The schedule will then score every thesis trace in the 7-day window.
 
 **Implementation**: `packages/dagster-pipelines/src/dagster_pipelines/online_eval.py`. Keys: `ONLINE_EVAL_LANGFUSE_PUBLIC_KEY`, `ONLINE_EVAL_LANGFUSE_SECRET_KEY`, `ONLINE_EVAL_SAMPLE_RATE` (in `.env` / SOPS prod secrets).
 
