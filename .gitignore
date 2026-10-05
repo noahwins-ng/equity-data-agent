@@ -73,3 +73,6 @@ CLAUDE.md
 # RAG corpus snapshot export (QNT-265) — default local --out dir. NEVER commit:
 # news rows carry vendor-sourced (Finnhub) article bodies; the durable home is S3.
 /rag-snapshot/
+
+# Local backups of replaced screenshots (originals live in git history)
+docs/screenshots/*_old.png
