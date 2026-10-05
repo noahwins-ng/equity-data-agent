@@ -122,10 +122,12 @@ class Settings(BaseSettings):
 
     # ─── QNT-192: Weekly online eval ─────────────────────────────────────────
     #
-    # Sample rate for the weekly online eval Dagster schedule. Default 5% —
-    # bump to 1.0 if the first month produces < 20 sampled traces / week.
-    # Configurable without a deploy: update .env and restart dagster-daemon.
-    ONLINE_EVAL_SAMPLE_RATE: float = 0.05
+    # Sample rate for the weekly online eval Dagster schedule. Default 1.0 --
+    # score every thesis trace (~26/week at 2026-10 traffic, so 5% left ~1
+    # scored trace per week, too few for a trend line; QNT-360 follow-up).
+    # Lower it via .env + dagster-daemon restart only if traffic grows enough
+    # that judge cost matters.
+    ONLINE_EVAL_SAMPLE_RATE: float = 1.0
     # Separate Langfuse keys for the online eval schedule. In practice these
     # point at the same Langfuse project as LANGFUSE_PUBLIC_KEY / SECRET_KEY
     # (to read prod traces and push scores back), but isolating them as
