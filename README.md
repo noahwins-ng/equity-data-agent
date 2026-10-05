@@ -132,12 +132,6 @@ graph LR
 
 Latest model benchmark: [`docs/model-bench-2026-07.md`](docs/model-bench-2026-07.md) (earlier: [2026-04](docs/model-bench-2026-04.md)).
 
-## Problems I Hit
-
-- **Green checks, wrong model.** A hidden LangChain parameter made OpenRouter filter out every provider, so LiteLLM silently served the fallback model with a 200. Fixed the parameter, and now every fallback fire raises a Sentry alert plus an hourly canary.
-- **The "hallucination" was the scorer's.** The eval flagged the agent for inventing numbers on news questions. The real cause: the scorer couldn't read `$2.5T` in the report, so the agent's correct "$2.5 trillion" looked unsupported. Fixed the scorer, not the prompt.
-- **A deploy that never ran.** A GitHub outage dropped the merge's push event: zero deploy runs, no red signal, prod one commit behind. Caught only because shipping asserts the running commit SHA on the server.
-
 ## Known Limits
 
 - **Small universe.** 10 tickers; past ~100 the warehouse partitioning would need to change.
