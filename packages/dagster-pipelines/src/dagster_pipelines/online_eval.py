@@ -2,20 +2,23 @@
 
 Runs every Sunday at 04:00 ET. Pulls the previous 7 days of Langfuse traces
 (name="agent-chat", read via the v2 observations API -- QNT-360), samples
-ONLINE_EVAL_SAMPLE_RATE of them (default 5%), and pushes 4 per-axis judge
-scores (faithfulness, structure, correctness, analyst_logic) back via
+ONLINE_EVAL_SAMPLE_RATE of the thesis-intent ones (default 5%), and pushes 2
+per-axis judge scores (structure, analyst_logic) back via
 langfuse.create_score().
 
-Why no reference thesis?
-    Prod traces have no golden reference stored alongside them. The
-    ``correctness`` axis therefore scores internal consistency of the
-    generated text, not fidelity to a vetted reference — treat it as a soft
-    signal. ``faithfulness``, ``structure``, and ``analyst_logic`` remain
-    fully meaningful and are the primary trend signals.
+Why only thesis traces, and only 2 axes?
+    The judge rubric scores ``faithfulness`` and ``correctness`` against a
+    REFERENCE thesis (QNT-230 #9), and prod traces have no golden reference
+    stored alongside them -- with an empty reference those two axes are
+    arbitrary (the first prod run scored a well-grounded fundamental answer
+    faithfulness 0), so they are not pushed. ``structure`` scores the four
+    thesis aspect blocks, so it only means something on thesis answers.
+    ``structure`` and ``analyst_logic`` on thesis traces hold without a
+    reference (QNT-360 follow-up).
 
 Online vs offline comparability:
     Both loops call the same ``agent.evals.judge.score()`` at temperature=0
-    and push the same four axis names to Langfuse. Offline golden-set results
+    and use the same axis names in Langfuse. Offline golden-set results
     live in ``history.csv``; online results live as Langfuse scores so
     dashboard trend lines require no CSV exports.
 
@@ -108,6 +111,12 @@ def _parse_io(raw: Any) -> Any:
         except json.JSONDecodeError:
             return raw
     return raw
+
+
+def _intent(run: Any) -> str | None:
+    """Return the classified intent recorded in a ``langgraph-run`` output state."""
+    output = _parse_io(run.output)
+    return output.get("intent") if isinstance(output, dict) else None
 
 
 def _extract_question(trace_input: Any) -> str:
@@ -207,26 +216,31 @@ def run_online_eval(context) -> None:
     )
 
     try:
-        traces = _fetch_agent_chat_runs(client, from_ts, now)
+        runs = _fetch_agent_chat_runs(client, from_ts, now)
     except Exception:
         # QNT-360: re-raise so the run goes red -- returning here made every weekly
         # run report SUCCESS while scoring nothing (v1 rejected limit=500 for months).
         context.log.exception("Failed to fetch traces from Langfuse")
         raise
 
+    # QNT-360 follow-up: the judge rubric is thesis-shaped (structure = the four
+    # aspect blocks), so only thesis-intent traces are scored.
+    traces = [r for r in runs if _intent(r) == "thesis"]
     sampled = [t for t in traces if random.random() < sample_rate]
-    context.log.info("Total traces: %d  Sampled: %d", len(traces), len(sampled))
+    context.log.info(
+        "Total traces: %d  Thesis: %d  Sampled: %d", len(runs), len(traces), len(sampled)
+    )
 
     if len(traces) < 20:
         context.log.warning(
-            "Only %d traces in the last 7 days. "
+            "Only %d thesis traces in the last 7 days. "
             "Set ONLINE_EVAL_SAMPLE_RATE=1.0 to score every trace.",
             len(traces),
         )
     elif len(sampled) < 20:
         needed = min(1.0, math.ceil(20 / len(traces) * 100) / 100)
         context.log.warning(
-            "Only %d traces sampled this week (< 20, from %d total). "
+            "Only %d traces sampled this week (< 20, from %d thesis traces). "
             "Set ONLINE_EVAL_SAMPLE_RATE=%.2f to produce >=20 samples.",
             len(sampled),
             len(traces),
@@ -251,10 +265,10 @@ def run_online_eval(context) -> None:
             continue
 
         try:
+            # faithfulness / correctness are scored against a REFERENCE thesis
+            # (QNT-230 #9) and prod traces carry none, so they are not pushed.
             for axis, value in [
-                ("faithfulness", js.faithfulness),
                 ("structure", js.structure),
-                ("correctness", js.correctness),
                 ("analyst_logic", js.analyst_logic),
             ]:
                 client.create_score(

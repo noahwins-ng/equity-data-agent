@@ -139,3 +139,42 @@ def test_fetch_failure_fails_the_run(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(RuntimeError, match="langfuse 400"):
         online_eval.run_online_eval(build_op_context())
+
+
+def test_scores_only_thesis_traces_on_reference_free_axes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QNT-360 follow-up: the judge scores faithfulness/correctness against a
+    REFERENCE thesis and structure against the thesis aspect blocks, but prod
+    traces carry no reference and span every intent. The first prod run scored a
+    well-grounded fundamental answer faithfulness 0 / structure 0. Score only
+    thesis-intent traces, and push only the axes that hold without a reference."""
+    from agent.evals import judge
+
+    def run(trace_id: str, intent: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            trace_id=trace_id,
+            input=json.dumps({"question": f"q {trace_id}"}),
+            output=json.dumps({"intent": intent, "answer": _thesis().model_dump()}),
+        )
+
+    runs = [run("t-thesis", "thesis"), run("t-conv", "conversational")]
+    scores: list[tuple[str, str]] = []
+    client = SimpleNamespace(
+        api=SimpleNamespace(
+            observations=SimpleNamespace(
+                get_many=lambda **_k: SimpleNamespace(data=runs, meta=SimpleNamespace(cursor=None))
+            )
+        ),
+        create_score=lambda trace_id, name, **_k: scores.append((trace_id, name)),
+        flush=lambda: None,
+    )
+    monkeypatch.setattr(online_eval, "_build_langfuse_client", lambda: client)
+    monkeypatch.setattr(online_eval.settings, "ONLINE_EVAL_SAMPLE_RATE", 1.0)
+    monkeypatch.setattr(
+        judge,
+        "score",
+        lambda **_k: judge.JudgeScore(faithfulness=1, structure=9, correctness=1, analyst_logic=8),
+    )
+
+    online_eval.run_online_eval(build_op_context())
+
+    assert scores == [("t-thesis", "structure"), ("t-thesis", "analyst_logic")]
