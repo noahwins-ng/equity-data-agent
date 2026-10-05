@@ -2,7 +2,7 @@
 
 Runs every Sunday at 04:00 ET. Pulls the previous 7 days of Langfuse traces
 (name="agent-chat", read via the v2 observations API -- QNT-360), samples
-ONLINE_EVAL_SAMPLE_RATE of the thesis-intent ones (default 5%), and pushes 2
+ONLINE_EVAL_SAMPLE_RATE of the thesis-intent ones (default 100%), and pushes 2
 per-axis judge scores (structure, analyst_logic) back via
 langfuse.create_score().
 
@@ -233,8 +233,7 @@ def run_online_eval(context) -> None:
 
     if len(traces) < 20:
         context.log.warning(
-            "Only %d thesis traces in the last 7 days. "
-            "Set ONLINE_EVAL_SAMPLE_RATE=1.0 to score every trace.",
+            "Only %d thesis traces in the last 7 days -- the trend signal is thin.",
             len(traces),
         )
     elif len(sampled) < 20:

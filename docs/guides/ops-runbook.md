@@ -943,7 +943,7 @@ unbounded. No manual cleanup needed.
 
 ## Weekly online eval schedule (QNT-192)
 
-**What it does**: every Sunday at 04:00 ET a Dagster job (`online_eval_job`) pulls the previous 7 days of Langfuse traces (`name="agent-chat"`), keeps the thesis-intent ones, samples `ONLINE_EVAL_SAMPLE_RATE` of them (default 5%), and pushes two per-axis judge scores back to each sampled trace via `langfuse.create_score()`.
+**What it does**: every Sunday at 04:00 ET a Dagster job (`online_eval_job`) pulls the previous 7 days of Langfuse traces (`name="agent-chat"`), keeps the thesis-intent ones, samples `ONLINE_EVAL_SAMPLE_RATE` of them (default 1.0 = all), and pushes two per-axis judge scores back to each sampled trace via `langfuse.create_score()`.
 
 **Score names**: `structure`, `analyst_logic` (each 0-10), on thesis traces only. Same axis names as the offline golden-set harness, so those two trend lines are comparable across both loops.
 
@@ -956,7 +956,7 @@ unbounded. No manual cleanup needed.
 
 **Checking schedule health**: in the Dagster UI (`http://localhost:3000` via SSH tunnel), open the `online_eval_weekly_schedule` schedule. Confirm the most recent tick shows "Success" and the run log shows `Online eval complete: scored=N`. A "Skipped" tick with `ONLINE_EVAL_LANGFUSE keys not set` means `ONLINE_EVAL_LANGFUSE_PUBLIC_KEY` / `ONLINE_EVAL_LANGFUSE_SECRET_KEY` are not set in the environment.
 
-**Low-traffic bump**: if `Total traces: N  Thesis: T  Sampled: M` in the run log shows M < 20 for two consecutive weeks, set `ONLINE_EVAL_SAMPLE_RATE=1.0` in `.env` on the Hetzner host and restart `dagster-daemon` (`docker compose restart dagster-daemon`). The schedule will then score every thesis trace in the 7-day window.
+**Sample rate**: the default `ONLINE_EVAL_SAMPLE_RATE=1.0` scores every thesis trace in the 7-day window (the old 5% default left about one scored trace per week at 2026-10 traffic). The run log line `Total traces: N  Thesis: T  Sampled: M` shows the pool; a `trend signal is thin` warning means T < 20 that week. Only if traffic grows enough that judge cost matters, set a lower rate in `.env.sops` and restart `dagster-daemon` (`docker compose restart dagster-daemon`); the warning then prints the rate needed for >= 20 samples.
 
 **Implementation**: `packages/dagster-pipelines/src/dagster_pipelines/online_eval.py`. Keys: `ONLINE_EVAL_LANGFUSE_PUBLIC_KEY`, `ONLINE_EVAL_LANGFUSE_SECRET_KEY`, `ONLINE_EVAL_SAMPLE_RATE` (in `.env` / SOPS prod secrets).
 
