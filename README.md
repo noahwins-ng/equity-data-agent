@@ -3,8 +3,6 @@
 An equity research platform for 10 US tech stocks: a daily data pipeline, a research terminal (charts, technicals, fundamentals, news), and an AI analyst that writes investment theses **without being allowed to invent or calculate a single number**. The pipeline does all the math; the LLM only reasons over pre-computed reports, and an eval checks every number it outputs.
 
 [![Live demo](https://img.shields.io/badge/live%20demo-terminal.noahng.dev-success?style=for-the-badge)](https://terminal.noahng.dev)
-![Tests](https://img.shields.io/badge/tests-1700%2B%20passing-2ea44f)
-![ADRs](https://img.shields.io/badge/ADRs-28-1f6feb)
 ![Prod](https://img.shields.io/badge/prod-live-success)
 
 ![Equity Data Agent live terminal](docs/screenshots/terminal-live.png)
@@ -68,12 +66,12 @@ stateDiagram-v2
     narrate --> [*]: streamed to UI
 ```
 
-- **Routing.** `classify` sorts each question into 9 answer types. Ambiguous asks get a clarifying question instead of a guess; greetings and follow-ups skip data fetching entirely.
-- **RAG over news + SEC filings.** Hybrid search (vector + keyword) with reranking, triggered only for event questions (lawsuits, buybacks, M&A); sources stream to the UI.
-- **Streaming.** The answer card fills in field by field as it's written, so content appears about 2 seconds after the data is in, not after the whole answer.
-- **Memory.** A checkpointer keeps the conversation, so follow-ups reuse earlier reports instead of re-fetching.
-- **Evals in CI.** Every number traced back to a report, a 44-question regression set, retrieval quality metrics, and LLM-judged answer quality.
-- **Model routing + tracing.** LiteLLM routes to DeepSeek with prompt caching, a fallback chain, and a small model for routing steps. An hourly canary alerts if requests quietly fall back. Every request is traced in Langfuse. About $0.002 per thesis.
+- **Routing.** `classify` sorts each question into 9 answer types. Ambiguous asks get a **clarifying question instead of a guess**; greetings and follow-ups **skip data fetching entirely**.
+- **RAG over news + SEC filings.** Hybrid search (vector + keyword) with reranking, triggered only for event questions (lawsuits, buybacks, M&A); **retrieval MRR 0.94**.
+- **Streaming.** The answer card fills in field by field as it's written, so **content appears ~2 seconds after the data is in**, not after the whole answer.
+- **Memory.** A checkpointer keeps the conversation, so **follow-ups reuse earlier reports** instead of re-fetching.
+- **Evals in CI.** **Every number traced back to a report**, a 44-question regression set, retrieval quality metrics, and LLM-judged answer quality.
+- **Model routing + tracing.** LiteLLM routes to DeepSeek with prompt caching, a fallback chain, and a small model for routing steps. An hourly canary alerts if requests quietly fall back. Every request is traced in Langfuse. **About $0.002 per thesis.**
 
 ## Data Engineering
 
@@ -132,7 +130,13 @@ graph LR
 | Golden-set regression (correct tools / grounded answer) | 44 of 44 |
 | Retrieval: right source ranked first (MRR) | 0.94 |
 
-Full benchmark history: [`docs/model-bench-2026-04.md`](docs/model-bench-2026-04.md).
+Latest model benchmark: [`docs/model-bench-2026-07.md`](docs/model-bench-2026-07.md) (earlier: [2026-04](docs/model-bench-2026-04.md)).
+
+## Problems I Hit
+
+- **Green checks, wrong model.** A hidden LangChain parameter made OpenRouter filter out every provider, so LiteLLM silently served the fallback model with a 200. Fixed the parameter, and now every fallback fire raises a Sentry alert plus an hourly canary.
+- **The "hallucination" was the scorer's.** The eval flagged the agent for inventing numbers on news questions. The real cause: the scorer couldn't read `$2.5T` in the report, so the agent's correct "$2.5 trillion" looked unsupported. Fixed the scorer, not the prompt.
+- **A deploy that never ran.** A GitHub outage dropped the merge's push event: zero deploy runs, no red signal, prod one commit behind. Caught only because shipping asserts the running commit SHA on the server.
 
 ## Known Limits
 
