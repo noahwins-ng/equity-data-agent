@@ -11,7 +11,7 @@ observations over an arbitrary window and prints two tables:
   (the gather/overhead estimate).
 
 This is the before/after instrument for QNT-220. It is **read-only** — it issues
-``GET`` requests against ``/api/public/observations`` and adds zero new Langfuse
+``GET`` requests against ``/api/public/v2/observations`` and adds zero new Langfuse
 spans or observations (ADR-019 holds).
 
 Examples::
@@ -115,30 +115,29 @@ def fetch_generations(
     """Page through all GENERATION observations in the window (read-only)."""
     auth = base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
     headers = {"Authorization": f"Basic {auth}"}
-    url = f"{base_url.rstrip('/')}/api/public/observations"
+    # QNT-360: v1 /api/public/observations is removed after 2026-11-16. v2 returns
+    # only the requested field groups and paginates by cursor, not page number.
+    url = f"{base_url.rstrip('/')}/api/public/v2/observations"
     rows: list[dict] = []
-    page = 1
+    cursor: str | None = None
     with httpx.Client(timeout=_REQUEST_TIMEOUT) as client:
         while True:
-            resp = client.get(
-                url,
-                headers=headers,
-                params={
-                    "type": "GENERATION",
-                    "fromStartTime": from_time.isoformat(),
-                    "toStartTime": to_time.isoformat(),
-                    "page": page,
-                    "limit": _PAGE_LIMIT,
-                },
-            )
+            params: dict[str, str | int] = {
+                "type": "GENERATION",
+                "fields": "core,basic,metadata,usage,metrics",
+                "fromStartTime": from_time.isoformat(),
+                "toStartTime": to_time.isoformat(),
+                "limit": _PAGE_LIMIT,
+            }
+            if cursor:
+                params["cursor"] = cursor
+            resp = client.get(url, headers=headers, params=params)
             resp.raise_for_status()
             body = resp.json()
-            batch = body.get("data") or []
-            rows.extend(batch)
-            total_pages = (body.get("meta") or {}).get("totalPages") or 0
-            if page >= total_pages or not batch:
+            rows.extend(body.get("data") or [])
+            cursor = (body.get("meta") or {}).get("cursor")
+            if not cursor:
                 break
-            page += 1
     return rows
 
 

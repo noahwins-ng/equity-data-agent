@@ -1,9 +1,10 @@
 """Weekly online eval loop — sample prod traces and push judge scores (QNT-192).
 
 Runs every Sunday at 04:00 ET. Pulls the previous 7 days of Langfuse traces
-(name="agent-chat"), samples ONLINE_EVAL_SAMPLE_RATE of them (default 5%),
-and pushes 4 per-axis judge scores (faithfulness, structure, correctness,
-analyst_logic) back via langfuse.create_score().
+(name="agent-chat", read via the v2 observations API -- QNT-360), samples
+ONLINE_EVAL_SAMPLE_RATE of them (default 5%), and pushes 4 per-axis judge
+scores (faithfulness, structure, correctness, analyst_logic) back via
+langfuse.create_score().
 
 Why no reference thesis?
     Prod traces have no golden reference stored alongside them. The
@@ -30,6 +31,7 @@ See docs/guides/ops-runbook.md for how to interpret a score drop.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import random
@@ -56,6 +58,56 @@ def _build_langfuse_client():
         secret_key=sk,
         base_url=settings.LANGFUSE_BASE_URL,
     )
+
+
+def _fetch_agent_chat_runs(client: Any, from_ts: datetime, to_ts: datetime) -> list[Any]:
+    """Fetch the ``langgraph-run`` observation of every ``agent-chat`` trace in the window.
+
+    QNT-360: the v1 ``trace.list`` endpoint is removed after 2026-11-16, so read the
+    v2 observations API instead. Filter on the ``langgraph-run`` span rather than the
+    root: the root span is named ``agent-chat`` on the API path but not on every code
+    path, while the LangGraph CallbackHandler's ``langgraph-run`` span carries the
+    graph's input/output state on every trace -- the same payload v1 exposed as trace
+    input/output.
+    """
+    flt = json.dumps(
+        [
+            {"type": "string", "column": "traceName", "operator": "=", "value": "agent-chat"},
+            {"type": "string", "column": "name", "operator": "=", "value": "langgraph-run"},
+            {
+                "type": "datetime",
+                "column": "startTime",
+                "operator": ">=",
+                "value": from_ts.isoformat(),
+            },
+            {
+                "type": "datetime",
+                "column": "startTime",
+                "operator": "<",
+                "value": to_ts.isoformat(),
+            },
+        ]
+    )
+    runs: list[Any] = []
+    cursor: str | None = None
+    while True:
+        resp = client.api.observations.get_many(
+            fields="core,basic,io", filter=flt, limit=1000, cursor=cursor
+        )
+        runs.extend(resp.data)
+        cursor = resp.meta.cursor
+        if not cursor:
+            return runs
+
+
+def _parse_io(raw: Any) -> Any:
+    """Decode a v2 observation input/output, which the API returns as a raw JSON string."""
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return raw
+    return raw
 
 
 def _extract_question(trace_input: Any) -> str:
@@ -155,23 +207,12 @@ def run_online_eval(context) -> None:
     )
 
     try:
-        traces: list[Any] = []
-        page = 1
-        while True:
-            resp = client.api.trace.list(
-                name="agent-chat",
-                from_timestamp=from_ts,
-                to_timestamp=now,
-                limit=500,
-                page=page,
-            )
-            traces.extend(resp.data)
-            if page >= resp.meta.total_pages:
-                break
-            page += 1
+        traces = _fetch_agent_chat_runs(client, from_ts, now)
     except Exception:
+        # QNT-360: re-raise so the run goes red -- returning here made every weekly
+        # run report SUCCESS while scoring nothing (v1 rejected limit=500 for months).
         context.log.exception("Failed to fetch traces from Langfuse")
-        return
+        raise
 
     sampled = [t for t in traces if random.random() < sample_rate]
     context.log.info("Total traces: %d  Sampled: %d", len(traces), len(sampled))
@@ -194,17 +235,18 @@ def run_online_eval(context) -> None:
 
     scored = 0
     skipped = 0
-    for trace in sampled:
-        question = _extract_question(trace.input)
-        generated = _extract_generated(trace.output)
+    for run in sampled:
+        trace_id = run.trace_id
+        question = _extract_question(_parse_io(run.input))
+        generated = _extract_generated(_parse_io(run.output))
         if not generated:
-            context.log.warning("Skipping trace %s: no generated text extracted", trace.id)
+            context.log.warning("Skipping trace %s: no generated text extracted", trace_id)
             skipped += 1
             continue
 
         js = judge_score(question=question, generated=generated, reference="")
         if js is None:
-            context.log.warning("Judge returned None for trace %s", trace.id)
+            context.log.warning("Judge returned None for trace %s", trace_id)
             skipped += 1
             continue
 
@@ -216,14 +258,14 @@ def run_online_eval(context) -> None:
                 ("analyst_logic", js.analyst_logic),
             ]:
                 client.create_score(
-                    trace_id=trace.id,
+                    trace_id=trace_id,
                     name=axis,
                     value=float(value),
                     data_type="NUMERIC",
                 )
             scored += 1
         except Exception:
-            context.log.exception("Score push failed for trace %s", trace.id)
+            context.log.exception("Score push failed for trace %s", trace_id)
             skipped += 1
 
     context.log.info("Online eval complete: scored=%d skipped=%d", scored, skipped)
