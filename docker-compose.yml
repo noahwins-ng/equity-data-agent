@@ -332,7 +332,7 @@ services:
     # Pin to a specific version (matches the litellm pin pattern in this file).
     # Bump deliberately by editing this tag — no operational consequence beyond
     # a connector reconnect.
-    image: cloudflare/cloudflared:2026.3.0
+    image: cloudflare/cloudflared:2026.10.7
     restart: unless-stopped
     # Token is passed via TUNNEL_TOKEN env var (not the --token flag) so the
     # ciphertext doesn't end up in `docker inspect .Config.Cmd` or
